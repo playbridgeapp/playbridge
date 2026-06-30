@@ -3,6 +3,12 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] — 2026-06-30 (versionCode 214)
+
+### Added
+- **User Agent Presets**: Added custom User Agent presets sheet supporting Android/Desktop/TV browser spoofing and settings repository persistence.
+- **User Agent Selection UI**: Built the `UserAgentSheet` component and menu integration to allow hot-swapping web browser layouts.
+
 ## [0.6.1] — 2026-06-29 (versionCode 213)
 
 ### Fixed

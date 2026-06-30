@@ -3,9 +3,12 @@ package com.playbridge.sender.data.settings
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
+import com.playbridge.sender.browser.CustomUserAgent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.IOException
 
 class SettingsRepository(
@@ -34,6 +37,10 @@ class SettingsRepository(
         val IPTV_ACTIVE_FIRST = booleanPreferencesKey("iptv_active_first")
         val SEND_SUBTITLES_TO_TV = booleanPreferencesKey("send_subtitles_to_tv")
         val LOGS_EXCLUDE_FILTERS = stringSetPreferencesKey("logs_exclude_filters")
+        /** A built-in [com.playbridge.sender.browser.UserAgentPresets] preset id, or a "custom:&lt;id&gt;" selection. */
+        val USER_AGENT_PRESET = stringPreferencesKey("user_agent_preset")
+        /** JSON array of saved {id, name, value} custom user agents the person has added. */
+        val CUSTOM_USER_AGENTS = stringPreferencesKey("custom_user_agents")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -61,6 +68,9 @@ class SettingsRepository(
     val iptvActiveFirst: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_ACTIVE_FIRST] ?: true }
     val sendSubtitlesToTv: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.SEND_SUBTITLES_TO_TV] ?: true }
     val logsExcludeFilters: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.LOGS_EXCLUDE_FILTERS] ?: emptySet() }
+    val userAgentPreset: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.USER_AGENT_PRESET] ?: "default" }
+    val customUserAgents: Flow<List<CustomUserAgent>> = dataStore.data.catch { handleException(it) }
+        .map { decodeCustomUserAgents(it[Keys.CUSTOM_USER_AGENTS] ?: "[]") }
 
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
@@ -80,7 +90,52 @@ class SettingsRepository(
     suspend fun setIptvActiveFirst(value: Boolean) = write { it[Keys.IPTV_ACTIVE_FIRST] = value }
     suspend fun setSendSubtitlesToTv(value: Boolean) = write { it[Keys.SEND_SUBTITLES_TO_TV] = value }
     suspend fun setLogsExcludeFilters(value: Set<String>) = write { it[Keys.LOGS_EXCLUDE_FILTERS] = value }
-    
+    suspend fun setUserAgentPreset(value: String) = write { it[Keys.USER_AGENT_PRESET] = value }
+
+    /** Append a new saved custom user agent. */
+    suspend fun addCustomUserAgent(agent: CustomUserAgent) = write { prefs ->
+        val current = decodeCustomUserAgents(prefs[Keys.CUSTOM_USER_AGENTS] ?: "[]")
+        prefs[Keys.CUSTOM_USER_AGENTS] = encodeCustomUserAgents(current + agent)
+    }
+
+    /** Remove a saved custom user agent by id. */
+    suspend fun removeCustomUserAgent(id: String) = write { prefs ->
+        val current = decodeCustomUserAgents(prefs[Keys.CUSTOM_USER_AGENTS] ?: "[]")
+        prefs[Keys.CUSTOM_USER_AGENTS] = encodeCustomUserAgents(current.filter { it.id != id })
+    }
+
+    private fun encodeCustomUserAgents(list: List<CustomUserAgent>): String {
+        val arr = JSONArray()
+        list.forEach { agent ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", agent.id)
+                    put("name", agent.name)
+                    put("value", agent.value)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun decodeCustomUserAgents(json: String): List<CustomUserAgent> {
+        return try {
+            val arr = JSONArray(json)
+            (0 until arr.length()).map { i ->
+                val obj = arr.getJSONObject(i)
+                CustomUserAgent(
+                    id = obj.getString("id"),
+                    name = obj.getString("name"),
+                    value = obj.getString("value"),
+                )
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Error decoding custom user agents", e)
+            emptyList()
+        }
+    }
+
+
     suspend fun addPopupWhitelist(host: String) = write { prefs ->
         val current = prefs[Keys.POPUP_WHITELIST] ?: emptySet()
         prefs[Keys.POPUP_WHITELIST] = current + host

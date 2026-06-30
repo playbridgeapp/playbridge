@@ -58,6 +58,18 @@ sealed class IncomingMessage {
     data class UserScript(val name: String, val content: String) : IncomingMessage()
     /** Phone asks the TV which user scripts are installed; TV replies with `user_scripts`. */
     data object UserScriptQuery : IncomingMessage()
+    /**
+     * Select (and optionally save) a TV browser User-Agent override. Mirrors [UserScript]'s
+     * shape: [name] blank means "switch back to default" (clears the active override without
+     * touching saved entries); non-blank [name] with blank [value] removes that saved entry
+     * (and resets to default if it was active); otherwise the TV applies [value] immediately
+     * and, when [save] is true, remembers it under [name] for later reselection. Built-in
+     * presets picked on the phone are sent with `save = false` so they apply without
+     * cluttering the TV's saved list.
+     */
+    data class UserAgent(val name: String, val value: String, val save: Boolean) : IncomingMessage()
+    /** Phone asks the TV which user agent is active + which custom ones are saved. */
+    data object UserAgentQuery : IncomingMessage()
     data class Unknown(val type: String, val raw: String) : IncomingMessage()
 }
 
@@ -191,6 +203,36 @@ fun createUserScriptsJson(names: List<String>): String =
     buildJsonObject {
         put("type", "user_scripts")
         put("names", buildJsonArray { names.forEach { add(it) } })
+    }.toString()
+
+/**
+ * Apply (and, with [save], remember) a TV browser User-Agent. See [IncomingMessage.UserAgent]
+ * for the blank-name / blank-value semantics. Standalone message (not a Wire command).
+ */
+fun createUserAgentJson(name: String, value: String, save: Boolean = true): String =
+    buildJsonObject {
+        put("type", "user_agent")
+        put("name", name)
+        put("value", value)
+        put("save", save)
+    }.toString()
+
+/** Phone → TV: ask which user agent is active + which custom ones are saved. */
+fun createUserAgentQueryJson(): String = """{"type":"user_agent_query"}"""
+
+/** TV → phone: the active selection's name (blank = default) and the saved {name, value} entries. */
+fun createUserAgentsJson(active: String, entries: List<Pair<String, String>>): String =
+    buildJsonObject {
+        put("type", "user_agents")
+        put("active", active)
+        put("entries", buildJsonArray {
+            entries.forEach { (name, value) ->
+                add(buildJsonObject {
+                    put("name", name)
+                    put("value", value)
+                })
+            }
+        })
     }.toString()
 
 fun createContextQueryJson(): String =
@@ -347,6 +389,12 @@ fun parseIncomingMessage(text: String): IncomingMessage {
                 content = root["content"]?.jsonPrimitive?.contentOrNull ?: ""
             )
             "user_script_query" -> IncomingMessage.UserScriptQuery
+            "user_agent" -> IncomingMessage.UserAgent(
+                name = root["name"]?.jsonPrimitive?.contentOrNull ?: "",
+                value = root["value"]?.jsonPrimitive?.contentOrNull ?: "",
+                save = root["save"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
+            )
+            "user_agent_query" -> IncomingMessage.UserAgentQuery
             else -> IncomingMessage.Unknown(type, text)
         }
     } catch (e: Exception) {

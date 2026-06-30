@@ -3,6 +3,16 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## GeckoView Plugin [0.3.0] — 2026-06-30 (versionCode 208)
+
+### Added
+- **Remote User Agent Support**: Added support to parse and apply custom user agent headers dynamically inside the `GeckoViewEngine` instance.
+
+## Player [0.7.0] — 2026-06-30 (versionCode 216)
+
+### Added
+- **Remote User Agent Support**: Integrated message handling and dynamic user agent overriding in `SystemWebViewEngine` based on phone-provided requests.
+
 ## Player [0.6.2] — 2026-06-30 (versionCode 215)
 
 ### Added

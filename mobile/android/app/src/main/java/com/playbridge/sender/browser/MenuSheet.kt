@@ -25,6 +25,7 @@ fun MenuSheet(
     currentScreen: Screen,
     isDesktopMode: Boolean,
     detectVideosEnabled: Boolean,
+    userAgentActive: Boolean = false,
     onDismissRequest: () -> Unit,
     onBookmarksClick: () -> Unit,
     onHistoryClick: () -> Unit,
@@ -34,7 +35,8 @@ fun MenuSheet(
     onExtensionsClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onToggleDesktopMode: () -> Unit,
-    onToggleVideoDetect: () -> Unit
+    onToggleVideoDetect: () -> Unit,
+    onUserAgentClick: () -> Unit = {}
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -110,7 +112,13 @@ fun MenuSheet(
                     modifier = Modifier.weight(1f),
                     onClick = onToggleVideoDetect
                 )
-                Spacer(modifier = Modifier.weight(1f))
+                MenuGridItem(
+                    icon = Icons.Default.Language,
+                    label = "User Agent",
+                    selected = userAgentActive,
+                    modifier = Modifier.weight(1f),
+                    onClick = onUserAgentClick
+                )
             }
         }
     }

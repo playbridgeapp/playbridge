@@ -705,11 +705,18 @@ class BrowserActivity : ComponentActivity() {
             var menuExpanded by remember { mutableStateOf(false) }
             var showMenuSheet by remember { mutableStateOf(false) }
             val sheetState = rememberModalBottomSheetState()
+            var showUserAgentSheet by remember { mutableStateOf(false) }
+            val userAgentSheetState = rememberModalBottomSheetState()
 
             val composeScope = rememberCoroutineScope()
             // User preferences via SettingsRepository
             val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
             val maxAliveTabs by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
+            val userAgentPreset by settingsRepository.userAgentPreset.collectAsState(initial = UserAgentPresets.DEFAULT_ID)
+            val customUserAgents by settingsRepository.customUserAgents.collectAsState(initial = emptyList())
+            val userAgentOverride by remember(userAgentPreset, customUserAgents) {
+                derivedStateOf { UserAgentPresets.resolve(userAgentPreset, customUserAgents) }
+            }
 
             LaunchedEffect(maxAliveTabs) {
                 tabManager.maxAliveSessions = maxAliveTabs
@@ -1204,6 +1211,7 @@ class BrowserActivity : ComponentActivity() {
                 previousUrl = previousUrlState,
                 pendingDownload = pendingDownloadState,
                 isDesktopMode = isDesktopMode,
+                userAgentOverride = userAgentOverride,
                 isSecureConnection = isSecureConnectionState,
                 siteSecurityInfo = siteSecurityInfoState,
                 pendingPopup = pendingPopupState,
@@ -1675,6 +1683,48 @@ class BrowserActivity : ComponentActivity() {
                     },
                     onToggleDesktopMode = { isDesktopMode = !isDesktopMode },
                     onToggleVideoDetect = { composeScope.launch { settingsRepository.setDetectVideos(!detectVideosEnabled) } },
+                    userAgentActive = userAgentPreset != UserAgentPresets.DEFAULT_ID,
+                    onUserAgentClick = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showMenuSheet = false
+                            showUserAgentSheet = true
+                        }
+                    },
+
+                    // User Agent Sheet States
+                    showUserAgentSheet = showUserAgentSheet,
+                    onUserAgentDismiss = { showUserAgentSheet = false },
+                    userAgentSheetState = userAgentSheetState,
+                    userAgentPreset = userAgentPreset,
+                    customUserAgents = customUserAgents,
+                    onSelectUserAgentPreset = { id ->
+                        composeScope.launch { settingsRepository.setUserAgentPreset(id) }
+                        scope.launch { userAgentSheetState.hide() }.invokeOnCompletion {
+                            showUserAgentSheet = false
+                        }
+                    },
+                    onAddCustomUserAgent = { name, value ->
+                        val agent = com.playbridge.sender.browser.CustomUserAgent(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = name,
+                            value = value,
+                        )
+                        composeScope.launch {
+                            settingsRepository.addCustomUserAgent(agent)
+                            settingsRepository.setUserAgentPreset(UserAgentPresets.customSelectionId(agent.id))
+                        }
+                        scope.launch { userAgentSheetState.hide() }.invokeOnCompletion {
+                            showUserAgentSheet = false
+                        }
+                    },
+                    onDeleteCustomUserAgent = { id ->
+                        composeScope.launch {
+                            settingsRepository.removeCustomUserAgent(id)
+                            if (userAgentPreset == UserAgentPresets.customSelectionId(id)) {
+                                settingsRepository.setUserAgentPreset(UserAgentPresets.DEFAULT_ID)
+                            }
+                        }
+                    },
 
                     // Site Info Sheet States
                     showSiteInfoSheet = showSiteInfoSheet,

@@ -32,6 +32,11 @@ private const val CHANNEL_ID_LAUNCH = "playbridge_launch"
 private const val NOTIFICATION_ID = 1
 private const val NOTIFICATION_ID_LAUNCH = 2
 
+// browser_prefs keys for the TV browser User-Agent override (see IncomingMessage.UserAgent).
+private const val KEY_ACTIVE_UA_NAME = "active_user_agent_name"
+private const val KEY_ACTIVE_UA_VALUE = "active_user_agent_value"
+private const val KEY_SAVED_UAS = "saved_user_agents"
+
 class ServerService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
@@ -351,6 +356,10 @@ class ServerService : Service() {
                 val url = msg.payload.url
                 val browserMode = msg.payload.browser_mode ?: "webview"
                 val desktopMode = msg.payload.desktop_mode ?: false
+                // Cold-start case: a freshly launched browser reads its UA override straight
+                // from prefs (live changes while already open go via ACTION_USER_AGENT_CHANGED).
+                val userAgentValue = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                    .getString(KEY_ACTIVE_UA_VALUE, "") ?: ""
 
                 FileLogger.i(TAG, "Browser command: $url (mode: $browserMode)")
 
@@ -365,6 +374,7 @@ class ServerService : Service() {
                             putExtra("extra_url", url)
                             putExtra("extra_browser_mode", browserMode)
                             putExtra("extra_desktop_mode", desktopMode)
+                            putExtra(EXTRA_USER_AGENT_VALUE, userAgentValue)
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         }
                         launchActivityFromBackground(browserIntent, "Opening GeckoView plugin")
@@ -386,6 +396,7 @@ class ServerService : Service() {
                             setPackage(packageName)
                             putExtra("extra_url", url)
                             putExtra("extra_desktop_mode", desktopMode)
+                            putExtra(EXTRA_USER_AGENT_VALUE, userAgentValue)
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                         }
                         launchActivityFromBackground(browserIntent, "Opening internal WebView")
@@ -397,6 +408,7 @@ class ServerService : Service() {
                         setPackage(packageName)
                         putExtra("extra_url", url)
                         putExtra("extra_desktop_mode", desktopMode)
+                        putExtra(EXTRA_USER_AGENT_VALUE, userAgentValue)
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                     }
                     launchActivityFromBackground(browserIntent, "Opening internal WebView")
@@ -561,6 +573,40 @@ class ServerService : Service() {
                 broadcastUserScripts()   // let the phone's manager refresh
             }
             is IncomingMessage.UserScriptQuery -> broadcastUserScripts()
+            is IncomingMessage.UserAgent -> {
+                val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                when {
+                    msg.name.isBlank() -> {
+                        // "Default" selected on the phone — clear the active override only;
+                        // saved entries are untouched so they're still pickable later.
+                        prefs.edit().remove(KEY_ACTIVE_UA_NAME).remove(KEY_ACTIVE_UA_VALUE).apply()
+                        FileLogger.i(TAG, "TV user agent reset to default")
+                    }
+                    msg.value.isBlank() -> {
+                        // Remove a saved entry by name; fall back to default if it was active.
+                        saveSavedUserAgents(prefs, loadSavedUserAgents(prefs).filterNot { it.first == msg.name })
+                        if (prefs.getString(KEY_ACTIVE_UA_NAME, null) == msg.name) {
+                            prefs.edit().remove(KEY_ACTIVE_UA_NAME).remove(KEY_ACTIVE_UA_VALUE).apply()
+                        }
+                        FileLogger.i(TAG, "TV user agent removed: ${msg.name}")
+                    }
+                    else -> {
+                        if (msg.save) {
+                            val updated = loadSavedUserAgents(prefs).filterNot { it.first == msg.name } + (msg.name to msg.value)
+                            saveSavedUserAgents(prefs, updated)
+                        }
+                        prefs.edit()
+                            .putString(KEY_ACTIVE_UA_NAME, msg.name)
+                            .putString(KEY_ACTIVE_UA_VALUE, msg.value)
+                            .apply()
+                        FileLogger.i(TAG, "TV user agent set: ${msg.name} (save=${msg.save})")
+                    }
+                }
+                applyUserAgentLive(prefs)
+                broadcastUserAgents(prefs)
+            }
+            is IncomingMessage.UserAgentQuery ->
+                broadcastUserAgents(getSharedPreferences("browser_prefs", Context.MODE_PRIVATE))
             is IncomingMessage.Unknown -> {
                 FileLogger.w(TAG, "Unknown message: ${msg.type}. Raw: ${msg.raw}")
             }
@@ -585,6 +631,55 @@ class ServerService : Service() {
         scope.launch {
             webSocketServer?.broadcastStatus(
                 com.playbridge.shared.protocol.createUserScriptsJson(names)
+            )
+        }
+    }
+
+    private fun loadSavedUserAgents(prefs: android.content.SharedPreferences): List<Pair<String, String>> {
+        return try {
+            val arr = org.json.JSONArray(prefs.getString(KEY_SAVED_UAS, "[]") ?: "[]")
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                o.getString("name") to o.getString("value")
+            }
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "Failed to load saved user agents: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun saveSavedUserAgents(prefs: android.content.SharedPreferences, entries: List<Pair<String, String>>) {
+        val arr = org.json.JSONArray()
+        entries.forEach { (name, value) ->
+            arr.put(org.json.JSONObject().apply { put("name", name); put("value", value) })
+        }
+        prefs.edit().putString(KEY_SAVED_UAS, arr.toString()).apply()
+    }
+
+    /** Push the active UA to whichever browser is currently on screen, if any. */
+    private fun applyUserAgentLive(prefs: android.content.SharedPreferences) {
+        val value = prefs.getString(KEY_ACTIVE_UA_VALUE, "") ?: ""
+        val pkg = when (activeContext) {
+            "browser_external" -> "com.playbridge.geckoview.plugin"
+            "browser" -> packageName
+            // "idle"/"player": nothing on screen to update live — the next browser launch
+            // reads prefs fresh (see the Browser handler above).
+            else -> return
+        }
+        val intent = Intent(ACTION_USER_AGENT_CHANGED).apply {
+            putExtra(EXTRA_USER_AGENT_VALUE, value)
+            setPackage(pkg)
+        }
+        sendBroadcast(intent)
+    }
+
+    /** Tell the phone's manager the TV's saved user agents + which one (if any) is active. */
+    private fun broadcastUserAgents(prefs: android.content.SharedPreferences) {
+        val active = prefs.getString(KEY_ACTIVE_UA_NAME, "") ?: ""
+        val entries = loadSavedUserAgents(prefs)
+        scope.launch {
+            webSocketServer?.broadcastStatus(
+                com.playbridge.shared.protocol.createUserAgentsJson(active, entries)
             )
         }
     }
@@ -822,6 +917,9 @@ class ServerService : Service() {
         const val EXTRA_MOUSE_DY = "mouse_dy"
         const val ACTION_BROWSER_CONTROL = "com.playbridge.player.ACTION_BROWSER_CONTROL"
         const val EXTRA_BROWSER_ACTION = "browser_action"
+        // Live UA update to whichever browser (internal WebView or GeckoView plugin) is open.
+        const val ACTION_USER_AGENT_CHANGED = "com.playbridge.player.ACTION_USER_AGENT_CHANGED"
+        const val EXTRA_USER_AGENT_VALUE = "extra_user_agent_value"
         const val EXTRA_PLAYLIST = "playlist"
         const val EXTRA_IS_PLAYLIST = "is_playlist"
         const val EXTRA_PLAYLIST_INDEX = "playlist_index"

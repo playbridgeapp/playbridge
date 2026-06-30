@@ -41,6 +41,14 @@
     <uses-feature
         android:name="android.software.leanback"
         android:required="false" />
+    <!-- ACCESS_WIFI_STATE / CHANGE_WIFI_MULTICAST_STATE implicitly mark
+         android.hardware.wifi as REQUIRED, which makes Google Play list the app as
+         "not compatible" on Ethernet-first TV boxes that don't report the Wi-Fi feature
+         (e.g. cheap Allwinner boxes). The app only needs the LAN, not Wi-Fi specifically,
+         so declare the feature optional. See issue #70. -->
+    <uses-feature
+        android:name="android.hardware.wifi"
+        android:required="false" />
 
     <!-- Android 11+ Package Visibility Rules:
          Allow this app to query the system for other apps that can handle video playback intents.

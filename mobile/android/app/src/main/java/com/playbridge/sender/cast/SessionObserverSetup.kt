@@ -71,6 +71,7 @@ fun SessionObserverSetup(
     previousUrl: MutableState<String>,
     pendingDownload: MutableState<PendingDownload?>,
     isDesktopMode: Boolean,
+    userAgentOverride: String? = null,
     isSecureConnection: MutableState<Boolean>,
     siteSecurityInfo: MutableState<SiteSecurityInfo?>,
     pendingPopup: MutableState<PendingPopup?>,
@@ -106,16 +107,32 @@ fun SessionObserverSetup(
         }
     }
 
-    // Apply desktop user agent when the session changes (tab switch) — no reload,
-    // since the page isn't loaded in desktop mode yet anyway.
+    // Apply the user agent when the session changes (tab switch) — no reload,
+    // since the page isn't loaded with the new identity yet anyway. A literal
+    // [userAgentOverride] (preset or custom string, from the User Agent sheet)
+    // takes priority over the plain Desktop Site toggle; clearing it back to
+    // null first (then re-deriving via toggleDesktopMode) keeps that helper's
+    // internal mobile/desktop baseline uncorrupted by a leftover custom string.
     LaunchedEffect(session) {
-        session.toggleDesktopMode(isDesktopMode, reload = false)
+        if (userAgentOverride != null) {
+            session.settings.userAgentString = userAgentOverride
+        } else {
+            session.settings.userAgentString = null
+            session.toggleDesktopMode(isDesktopMode, reload = false)
+        }
     }
-    // Reload when the user actively toggles desktop mode on the current tab.
-    LaunchedEffect(isDesktopMode) {
+    // Reload when the user actively changes desktop mode or the UA override on the current tab.
+    LaunchedEffect(isDesktopMode, userAgentOverride) {
         val shouldReload = currentUrl.value != "about:blank"
-        session.toggleDesktopMode(isDesktopMode, reload = shouldReload)
-        Log.d(TAG, "${if (isDesktopMode) "Enabled" else "Disabled"} Desktop Mode (reload=$shouldReload)")
+        if (userAgentOverride != null) {
+            session.settings.userAgentString = userAgentOverride
+            if (shouldReload) session.reload()
+            Log.d(TAG, "Applied custom user agent override (reload=$shouldReload)")
+        } else {
+            session.settings.userAgentString = null
+            session.toggleDesktopMode(isDesktopMode, reload = shouldReload)
+            Log.d(TAG, "${if (isDesktopMode) "Enabled" else "Disabled"} Desktop Mode (reload=$shouldReload)")
+        }
     }
 
     DisposableEffect(session, selectedTab?.id) {

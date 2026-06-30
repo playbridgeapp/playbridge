@@ -42,6 +42,18 @@ fun SheetOverlayContainer(
     onSettingsClick: () -> Unit,
     onToggleDesktopMode: () -> Unit,
     onToggleVideoDetect: () -> Unit,
+    onUserAgentClick: () -> Unit = {},
+    userAgentActive: Boolean = false,
+
+    // User Agent Sheet States
+    showUserAgentSheet: Boolean = false,
+    onUserAgentDismiss: () -> Unit = {},
+    userAgentSheetState: SheetState? = null,
+    userAgentPreset: String = UserAgentPresets.DEFAULT_ID,
+    customUserAgents: List<CustomUserAgent> = emptyList(),
+    onSelectUserAgentPreset: (String) -> Unit = {},
+    onAddCustomUserAgent: (String, String) -> Unit = { _, _ -> },
+    onDeleteCustomUserAgent: (String) -> Unit = {},
 
     // Site Info Sheet States
     showSiteInfoSheet: Boolean,
@@ -101,7 +113,22 @@ fun SheetOverlayContainer(
                 onExtensionsClick = onExtensionsClick,
                 onSettingsClick = onSettingsClick,
                 onToggleDesktopMode = onToggleDesktopMode,
-                onToggleVideoDetect = onToggleVideoDetect
+                onToggleVideoDetect = onToggleVideoDetect,
+                userAgentActive = userAgentActive,
+                onUserAgentClick = onUserAgentClick
+            )
+        }
+
+        // 1b. User Agent Sheet
+        if (showUserAgentSheet && userAgentSheetState != null) {
+            UserAgentSheet(
+                sheetState = userAgentSheetState,
+                currentPresetId = userAgentPreset,
+                customUserAgents = customUserAgents,
+                onDismissRequest = onUserAgentDismiss,
+                onSelectPreset = onSelectUserAgentPreset,
+                onAddCustom = onAddCustomUserAgent,
+                onDeleteCustom = onDeleteCustomUserAgent,
             )
         }
 
