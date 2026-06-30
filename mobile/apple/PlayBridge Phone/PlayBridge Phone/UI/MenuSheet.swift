@@ -57,10 +57,14 @@ struct MenuSheet: View {
                             tab.findInPage()
                         }
                     )
-
-                    // Spacer cell to keep 5-column alignment with row 2
-                    Spacer()
-                        .frame(maxWidth: .infinity)
+                    menuGridItem(
+                        icon: "scope",
+                        label: "Block Element",
+                        action: {
+                            isPresented = false
+                            tab.startElementPicker()
+                        }
+                    )
                 }
 
                 // Row 2

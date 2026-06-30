@@ -88,6 +88,45 @@ enum ContentBlocker {
             }
         }
 
+        // User cosmetic rules (element-picker "Block").
+        let userText = userRulesText()
+        if !userText.isEmpty {
+            let uid = cacheIdentifier(for: userText)
+            desired.insert(uid)
+            if let cached = await lookup(store: store, identifier: uid) {
+                lists.append(cached)
+            } else {
+                let json = await parseOffMain(userText)
+                if let list = try? await compile(store: store, identifier: uid, json: json, sourceName: "user-cosmetic") {
+                    lists.append(list)
+                }
+            }
+        }
+
+        // User blocked source domains (element-picker "Block source").
+        let domJSON = userDomainsJSON()
+        if !domJSON.isEmpty {
+            let did = cacheIdentifier(for: domJSON)
+            desired.insert(did)
+            if let cached = await lookup(store: store, identifier: did) {
+                lists.append(cached)
+            } else if let list = try? await compile(store: store, identifier: did, json: domJSON, sourceName: "user-domains") {
+                lists.append(list)
+            }
+        }
+
+        // Built-in iframe/srcdoc ad networks (child-frame document blocking).
+        let builtinJSON = builtinIframeAdJSON()
+        if !builtinJSON.isEmpty {
+            let bid = cacheIdentifier(for: builtinJSON)
+            desired.insert(bid)
+            if let cached = await lookup(store: store, identifier: bid) {
+                lists.append(cached)
+            } else if let list = try? await compile(store: store, identifier: bid, json: builtinJSON, sourceName: "builtin-iframe-ads") {
+                lists.append(list)
+            }
+        }
+
         await pruneStaleRuleLists(store: store, keeping: desired)
         return lists
     }
@@ -132,6 +171,31 @@ enum ContentBlocker {
             let json = await parseOffMain(extra)
             let supList = try await compile(store: store, identifier: supId, json: json, sourceName: "playbridge-extra")
             lists.append(supList)
+        }
+
+        let userText = userRulesText()
+        if !userText.isEmpty {
+            let uid = cacheIdentifier(for: userText)
+            desired.insert(uid)
+            let json = await parseOffMain(userText)
+            let userList = try await compile(store: store, identifier: uid, json: json, sourceName: "user-cosmetic")
+            lists.append(userList)
+        }
+
+        let domJSON = userDomainsJSON()
+        if !domJSON.isEmpty {
+            let did = cacheIdentifier(for: domJSON)
+            desired.insert(did)
+            let domList = try await compile(store: store, identifier: did, json: domJSON, sourceName: "user-domains")
+            lists.append(domList)
+        }
+
+        let builtinJSON = builtinIframeAdJSON()
+        if !builtinJSON.isEmpty {
+            let bid = cacheIdentifier(for: builtinJSON)
+            desired.insert(bid)
+            let builtinList = try await compile(store: store, identifier: bid, json: builtinJSON, sourceName: "builtin-iframe-ads")
+            lists.append(builtinList)
         }
 
         await pruneStaleRuleLists(store: store, keeping: desired)
@@ -566,10 +630,6 @@ enum ContentBlocker {
         return []
     }
 
-    /// Generic ad/banner keyword patterns blocked on BOTH first- and third-party
-    /// requests, independent of any downloaded list. These are compound, ad-specific
-    /// tokens (low false-positive risk) plus Flash, covering banner-image ad units
-    /// that domain-anchored rules miss when served from a site's own domain.
     /// Single source of truth for the custom rules: one hosted file on the site
     /// (Cloudflare). Editing the file at this URL updates the rules for all users
     /// without an app release.
@@ -585,6 +645,236 @@ enum ContentBlocker {
         guard let text = try? String(contentsOf: local, encoding: .utf8), !text.isEmpty else { return nil }
         return text
     }
+
+    // MARK: - User element-block rules (in-browser element picker)
+
+    struct UserCosmeticRule: Codable, Identifiable {
+        var id = UUID()
+        var domain: String       // "" = all sites
+        var selector: String
+        var addedAt: Date
+    }
+
+    private static let userRulesKey = "pb_user_cosmetic_rules"
+
+    static func userRules() -> [UserCosmeticRule] {
+        guard let data = UserDefaults.standard.data(forKey: userRulesKey),
+              let rules = try? JSONDecoder().decode([UserCosmeticRule].self, from: data) else { return [] }
+        return rules
+    }
+
+    private static func saveUserRules(_ rules: [UserCosmeticRule]) {
+        if let data = try? JSONEncoder().encode(rules) { UserDefaults.standard.set(data, forKey: userRulesKey) }
+    }
+
+    @discardableResult
+    static func addUserRule(domain: String, selector: String) -> Bool {
+        let sel = selector.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sel.isEmpty, isValidCSSSelector(sel) else { return false }
+        let d = domain.lowercased().trimmingCharacters(in: .whitespaces)
+        var rules = userRules()
+        if rules.contains(where: { $0.domain == d && $0.selector == sel }) { return true }
+        rules.insert(UserCosmeticRule(domain: d, selector: sel, addedAt: Date()), at: 0)
+        saveUserRules(rules)
+        return true
+    }
+
+    static func removeUserRule(_ id: UUID) { saveUserRules(userRules().filter { $0.id != id }) }
+
+    // User-blocked resource domains (from "Block source" in the picker). These block the
+    // ad's image/iframe host at the network layer — robust against random element IDs.
+    private static let userDomainsKey = "pb_user_blocked_domains"
+
+    static func userBlockedDomains() -> [String] {
+        UserDefaults.standard.stringArray(forKey: userDomainsKey) ?? []
+    }
+
+    @discardableResult
+    static func addUserBlockedDomain(_ host: String) -> Bool {
+        let h = host.lowercased().trimmingCharacters(in: .whitespaces)
+        guard isValidRuleDomain(h) else { return false }
+        var list = userBlockedDomains()
+        if list.contains(h) { return true }
+        list.insert(h, at: 0)
+        UserDefaults.standard.set(list, forKey: userDomainsKey)
+        return true
+    }
+
+    static func removeUserBlockedDomain(_ host: String) {
+        UserDefaults.standard.set(userBlockedDomains().filter { $0 != host }, forKey: userDomainsKey)
+    }
+
+    /// User cosmetic rules rendered as EasyList lines for the parser.
+    private static func userRulesText() -> String {
+        userRules().map { $0.domain.isEmpty ? "##\($0.selector)" : "\($0.domain)##\($0.selector)" }
+            .joined(separator: "\n")
+    }
+
+    /// Blocked source domains compiled directly so we can also block them as
+    /// **child-frame documents** (ad iframes) — which the normal rules skip to avoid
+    /// breaking top-level navigation. Top-frame navigation to the domain stays allowed.
+    /// Known ad-network domains blocked aggressively — including as child-frame
+    /// documents — so iframe/srcdoc ads (TrafficJunky/ExoClick/adtng/etc.) are removed
+    /// by default, which plain EasyList rules can't do (they skip the document type).
+    private static let iframeAdDomains = [
+        "adtng.com", "trafficjunky.net", "trafficjunky.com", "trafficfactory.biz",
+        "exoclick.com", "exosrv.com", "exdynsrv.com", "realsrv.com", "magsrv.com",
+        "tsyndicate.com", "trafficstars.com", "juicyads.com", "ero-advertising.com",
+        "plugrush.com", "popcash.net", "popads.net", "clickadu.com", "adsterra.com",
+        "doubleclick.net", "googlesyndication.com",
+    ]
+
+    private static func userDomainsJSON() -> String { domainsBlockJSON(userBlockedDomains()) }
+    private static func builtinIframeAdJSON() -> String { domainsBlockJSON(iframeAdDomains) }
+
+    /// Blocks each domain as sub-resources (any frame) AND as child-frame documents
+    /// (ad iframes), but never the top frame — so navigating to the domain still works.
+    private static func domainsBlockJSON(_ domains: [String]) -> String {
+        guard !domains.isEmpty else { return "" }
+        var rules: [[String: Any]] = []
+        for d in domains {
+            let escaped = d.replacingOccurrences(of: ".", with: "\\.")
+            let filter = "^https?://([^/]+\\.)?\(escaped)"
+            rules.append(["trigger": ["url-filter": filter, "resource-type": blockResourceTypes],
+                          "action": ["type": "block"]])
+            rules.append(["trigger": ["url-filter": filter, "resource-type": ["document"], "load-context": ["child-frame"]],
+                          "action": ["type": "block"]])
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: rules),
+              let json = String(data: data, encoding: .utf8) else { return "" }
+        return json
+    }
+
+    /// Injected on demand to let the user tap an element to block (uBlock-style picker).
+    /// Hides the element immediately and reports its selector to native for persistence.
+    static let elementPickerJS = #"""
+    (function () {
+      if (window.__pb_picker) return;
+      window.__pb_picker = true;
+
+      var target = null, previewing = false, previewEls = [], currentHosts = [];
+
+      var hl = document.createElement('div');
+      hl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;background:rgba(85,101,242,0.28);border:2px solid #5565F2;border-radius:3px;';
+      document.documentElement.appendChild(hl);
+
+      var panel = document.createElement('div');
+      panel.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;z-index:2147483647;background:#181241;color:#E7E2FF;font:13px -apple-system,Helvetica,Arial;padding:12px;border-radius:14px;box-shadow:0 4px 24px rgba(0,0,0,.5);';
+      panel.innerHTML =
+        '<div id="pbsel" style="font:600 12px ui-monospace,Menlo,monospace;color:#B0A8D8;word-break:break-all;margin-bottom:4px;min-height:16px;">Tap an element to block</div>'
+        + '<div id="pbcount" style="font-size:11px;color:#B0A8D8;margin-bottom:8px;"></div>'
+        + '<div id="pbsrc" style="font-size:11px;color:#FF8A80;word-break:break-all;margin-bottom:10px;"></div>'
+        + '<div style="display:flex;gap:8px;">'
+        + '<button id="pbup" style="flex:1;padding:10px;border:none;border-radius:10px;background:#241D54;color:#E7E2FF;font-weight:600;">Up</button>'
+        + '<button id="pbdown" style="flex:1;padding:10px;border:none;border-radius:10px;background:#241D54;color:#E7E2FF;font-weight:600;">Down</button>'
+        + '<button id="pbprev" style="flex:1;padding:10px;border:none;border-radius:10px;background:#241D54;color:#E7E2FF;font-weight:600;">Preview</button>'
+        + '</div>'
+        + '<div style="display:flex;gap:8px;margin-top:8px;">'
+        + '<button id="pbcancel" style="flex:1;padding:11px;border:none;border-radius:10px;background:#3A2330;color:#FF6B6B;font-weight:700;">Cancel</button>'
+        + '<button id="pbblock" style="flex:1;padding:11px;border:none;border-radius:10px;background:#5565F2;color:#fff;font-weight:700;">Block</button>'
+        + '<button id="pbsource" style="flex:1;padding:11px;border:none;border-radius:10px;background:#3A2330;color:#FF8A80;font-weight:700;">Block source</button>'
+        + '</div>';
+      document.documentElement.appendChild(panel);
+
+      function isUI(el){ return el===hl || el===panel || (el && panel.contains(el)); }
+      function elAt(e){ var t=e.changedTouches?e.changedTouches[0]:(e.touches?e.touches[0]:e); return document.elementFromPoint(t.clientX, t.clientY); }
+
+      // Simple, WebKit-compatible selector: #id, or tag.class.class, else tag.
+      function sel(el){
+        if(!el || el.nodeType!==1) return '';
+        if(el.id) return '#'+CSS.escape(el.id);
+        var tag = el.tagName.toLowerCase();
+        if(tag==='body' || tag==='html') return tag;
+        var cls = (typeof el.className==='string') ? el.className.trim().split(/\s+/).filter(function(c){return c && c.length<40;}).slice(0,3) : [];
+        return cls.length ? tag+'.'+cls.map(function(c){return CSS.escape(c);}).join('.') : tag;
+      }
+
+      // Resource hosts (image / background / iframe URLs) inside the element — used to
+      // block the ad's source domain, which survives random element IDs.
+      function resourceHosts(el){
+        var out = [];
+        function add(u){ if(!u) return; try{ var h=new URL(u, location.href).hostname; if(h && h!==location.hostname) out.push(h); }catch(_){} }
+        function urlsIn(text){ if(!text || text.indexOf('http')<0) return; var re=/https?:\/\/[^\s"'<>)\\]+/g, mm; while((mm=re.exec(text))){ add(mm[0]); } }
+        function scan(node){
+          if(!node || node.nodeType!==1) return;
+          if(node.currentSrc) add(node.currentSrc);
+          try { if(node.src) add(node.src); } catch(_){}
+          if(node.attributes){ for(var a=0;a<node.attributes.length;a++){ urlsIn(node.attributes[a].value); } }
+          try { var bg=getComputedStyle(node).backgroundImage; if(bg && bg!=='none'){ var m=bg.match(/url\(["']?([^"')]+)["']?\)/); if(m) add(m[1]); } } catch(_){}
+          // Descend into same-origin (srcdoc) ad iframes to find the inner ad source.
+          if(node.tagName && node.tagName.toLowerCase()==='iframe'){
+            try { var d=node.contentDocument; if(d){ var sub=d.querySelectorAll('*'); for(var j=0;j<sub.length && j<600;j++){ scan(sub[j]); } } } catch(_){}
+          }
+        }
+        scan(el);
+        var kids = el.querySelectorAll('*'); for(var i=0;i<kids.length && i<500;i++){ scan(kids[i]); }
+        return out.filter(function(v,i){ return out.indexOf(v)===i; }).slice(0,8);
+      }
+
+      function updateHL(el){ if(!el) return; var r=el.getBoundingClientRect(); hl.style.top=r.top+'px'; hl.style.left=r.left+'px'; hl.style.width=r.width+'px'; hl.style.height=r.height+'px'; }
+      function clearPreview(){ previewEls.forEach(function(el){ el.style.outline=''; el.style.outlineOffset=''; }); previewEls=[]; }
+      function applyPreview(){
+        clearPreview();
+        if(!previewing || !target) return;
+        try { document.querySelectorAll(sel(target)).forEach(function(el){ if(!isUI(el)){ el.style.outline='2px dashed #FF6B6B'; el.style.outlineOffset='-2px'; previewEls.push(el); } }); } catch(_){}
+      }
+      function refresh(){
+        if(!target) return;
+        var s = sel(target);
+        document.getElementById('pbsel').textContent = s;
+        var n = 0; try { n = document.querySelectorAll(s).length; } catch(_){}
+        document.getElementById('pbcount').textContent = n>1 ? ('matches '+n+' elements') : '';
+        currentHosts = resourceHosts(target);
+        var srcEl = document.getElementById('pbsrc');
+        srcEl.textContent = currentHosts.length ? ('Sources: '+currentHosts.join(', ')) : 'No external source found';
+        var srcBtn = document.getElementById('pbsource');
+        if(srcBtn){ srcBtn.style.opacity = currentHosts.length ? '1' : '0.4'; }
+        updateHL(target);
+        if(previewing) applyPreview();
+      }
+      function cleanup(){
+        window.__pb_picker=false; clearPreview(); hl.remove(); panel.remove();
+        document.removeEventListener('touchmove',hover,true); document.removeEventListener('mousemove',hover,true);
+        document.removeEventListener('click',firstPick,true); document.removeEventListener('touchend',firstPick,true);
+      }
+      function hover(e){ if(target) return; var el=elAt(e); if(el && !isUI(el)) updateHL(el); }
+      function firstPick(e){
+        var el=elAt(e); if(!el || isUI(el)) return;
+        e.preventDefault(); e.stopPropagation();
+        target = el;
+        document.removeEventListener('click',firstPick,true); document.removeEventListener('touchend',firstPick,true);
+        refresh();
+      }
+
+      document.addEventListener('touchmove',hover,true);
+      document.addEventListener('mousemove',hover,true);
+      document.addEventListener('click',firstPick,true);
+      document.addEventListener('touchend',firstPick,true);
+
+      panel.addEventListener('click', function(e){
+        var id = e.target && e.target.id; if(!id) return;
+        e.preventDefault(); e.stopPropagation();
+        if(id==='pbup'){ if(target && target.parentElement && target.parentElement.tagName!=='HTML'){ target=target.parentElement; refresh(); } }
+        else if(id==='pbdown'){ if(target && target.firstElementChild){ target=target.firstElementChild; refresh(); } }
+        else if(id==='pbprev'){ previewing=!previewing; e.target.style.background = previewing ? '#5565F2' : '#241D54'; applyPreview(); }
+        else if(id==='pbcancel'){ cleanup(); }
+        else if(id==='pbblock'){
+          // Cosmetic: hide the selected element by selector.
+          if(!target){ cleanup(); return; }
+          var s = sel(target); clearPreview();
+          try{ document.querySelectorAll(s).forEach(function(el){ if(!isUI(el)) el.style.setProperty('display','none','important'); }); }catch(_){}
+          try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickedElement', selector:s, host:location.hostname}); }catch(_){}
+          cleanup();
+        }
+        else if(id==='pbsource'){
+          // Network: block every source domain found in the element.
+          if(!currentHosts || !currentHosts.length){ return; }
+          try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickedResources', hosts:currentHosts}); }catch(_){}
+          cleanup();
+        }
+      }, true);
+    })();
+    """#
 
     private static func makeCuratedRulesJSON() -> String {
         var rules: [[String: Any]] = blockedDomains.map { domain in

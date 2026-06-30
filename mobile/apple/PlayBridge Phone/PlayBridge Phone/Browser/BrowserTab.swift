@@ -1,6 +1,7 @@
 import Foundation
 import WebKit
 import Combine
+import UIKit
 
 /// One browser tab: owns a persistent `WKWebView`, publishes navigation state, and routes detection
 /// messages to its `VideoDetector`. Rough analogue of an entry in the Android `TabManager`.
@@ -32,6 +33,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     /// Invoked when a page finishes loading — used to record history + persist tabs.
     var onPageFinished: ((URL?, String?) -> Void)?
+
+    /// Invoked when the user picks an element to block: (selector, host).
+    var onElementPicked: ((String, String) -> Void)?
+
+    /// Invoked when the user blocks a resource source domain from the picker.
+    var onResourceBlock: ((String) -> Void)?
+
+    /// Invoked when the user blocks all detected source domains at once.
+    var onResourcesBlock: (([String]) -> Void)?
+
+    /// Invoked from the long-press link menu: (url, openInBackground).
+    var onOpenNewTab: ((URL, Bool) -> Void)?
 
     private var observations: [NSKeyValueObservation] = []
     private var cancellables = Set<AnyCancellable>()
@@ -100,6 +113,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     /// Present the system Find-in-page bar for the current page.
     func findInPage() {
         webView.findInteraction?.presentFindNavigator(showingReplace: false)
+    }
+
+    /// Enter the uBlock-style element picker on the current page.
+    func startElementPicker() {
+        webView.evaluateJavaScript(ContentBlocker.elementPickerJS, completionHandler: nil)
     }
 
     func goBack() { webView.goBack() }
@@ -187,5 +205,30 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             }
         }
         return nil
+    }
+
+    /// Custom long-press menu for links (replaces the default Safari menu), mirroring
+    /// the Android browser's link options.
+    func webView(_ webView: WKWebView,
+                 contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
+                 completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
+        guard let url = elementInfo.linkURL else { completionHandler(nil); return }
+        let config = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
+            guard let self else { return nil }
+            let cast = UIAction(title: "Cast to TV", image: UIImage(systemName: "play.tv")) { _ in
+                self.onPageCast?(["url": url.absoluteString])
+            }
+            let newTab = UIAction(title: "Open in New Tab", image: UIImage(systemName: "plus.square.on.square")) { _ in
+                self.onOpenNewTab?(url, false)
+            }
+            let bgTab = UIAction(title: "Open in Background", image: UIImage(systemName: "square.on.square")) { _ in
+                self.onOpenNewTab?(url, true)
+            }
+            let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { _ in
+                UIPasteboard.general.url = url
+            }
+            return UIMenu(title: url.absoluteString, children: [cast, newTab, bgTab, copy])
+        }
+        completionHandler(config)
     }
 }

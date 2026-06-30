@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2+20] — 2026-06-30
+
+### Fixed
+- **Multiple Senders Pairing**: Corrected the pairing state machine precedence check so the PIN entry screen is visible when a second phone attempts pairing while another is already active.
+
 ## [0.6.1+19] — 2026-06-29
 
 ### Fixed

@@ -25,6 +25,7 @@
 ||trafficjunky.net^
 ||trafficjunky.com^
 ||trafficfactory.biz^
+||adtng.com^
 ! ExoClick / MagSrv
 ||exoclick.com^
 ||exosrv.com^

@@ -3,12 +3,12 @@ package com.playbridge.player
 import android.Manifest
 import android.content.Intent
 import com.playbridge.player.ui.components.DeviceGuard
+import com.playbridge.player.ui.components.OverlayPermissionDialog
+import com.playbridge.player.ui.components.OverlayPermissionGuard
 import com.playbridge.player.ui.components.WrongDeviceDialog
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -78,20 +78,6 @@ class MainActivity : ComponentActivity() {
             ServerService.start(this)
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            if (!Settings.canDrawOverlays(this)) {
-                try {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:$packageName")
-                    )
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    android.util.Log.e("MainActivity", "Failed to launch overlay settings activity", e)
-                }
-            }
-        }
-
         // If launched via ACTION_OPEN_PAIRING (e.g. app was not running when a phone connected),
         // signal MainContent to navigate to PairingScreen on first composition.
         if (intent?.action == ServerService.ACTION_OPEN_PAIRING) {
@@ -101,11 +87,25 @@ class MainActivity : ComponentActivity() {
         setContent {
             val appTheme = remember { mutableStateOf(AppTheme.fromPrefs(this)) }
             var showPhoneWarning by remember { mutableStateOf(DeviceGuard.shouldWarn(this)) }
+            var showOverlayRationale by remember {
+                mutableStateOf(OverlayPermissionGuard.isNeeded(this))
+            }
             if (showPhoneWarning) {
                 WrongDeviceDialog(onDismiss = {
                     DeviceGuard.dismiss(this)
                     showPhoneWarning = false
                 })
+            } else if (showOverlayRationale) {
+                // Explain the "Display over other apps" permission before sending the
+                // user to the bare system toggle. Gated behind the wrong-device dialog so
+                // the two prompts never stack on a sideloaded phone install.
+                OverlayPermissionDialog(
+                    onOpenSettings = {
+                        OverlayPermissionGuard.openSettings(this)
+                        showOverlayRationale = false
+                    },
+                    onDismiss = { showOverlayRationale = false }
+                )
             }
             PlayBridgeTVTheme(theme = appTheme.value) {
                 Surface(

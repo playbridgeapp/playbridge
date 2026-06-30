@@ -10,6 +10,8 @@ struct AdblockSettingsSheet: View {
     @State private var updateMessage = ""
     @State private var showResultAlert = false
     @State private var rulesCountText = ""
+    @State private var userRules: [ContentBlocker.UserCosmeticRule] = ContentBlocker.userRules()
+    @State private var blockedSources: [String] = ContentBlocker.userBlockedDomains()
 
     var body: some View {
         NavigationStack {
@@ -22,6 +24,46 @@ struct AdblockSettingsSheet: View {
                     .tint(Theme.primary)
                 } header: {
                     Text("Adblock Status")
+                }
+
+                if !userRules.isEmpty {
+                    Section {
+                        ForEach(userRules) { rule in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(rule.domain.isEmpty ? "All sites" : rule.domain)
+                                    .font(.system(size: 13, weight: .medium)).foregroundColor(Theme.onSurface)
+                                Text(rule.selector)
+                                    .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.onSurfaceVariant)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .onDelete { offsets in
+                            offsets.map { userRules[$0].id }.forEach { ContentBlocker.removeUserRule($0) }
+                            userRules = ContentBlocker.userRules()
+                            Task { await store.recompileAndApply() }
+                        }
+                    } header: {
+                        Text("Blocked elements")
+                    } footer: {
+                        Text("Elements you blocked with the picker. Swipe to delete.")
+                    }
+                }
+
+                if !blockedSources.isEmpty {
+                    Section {
+                        ForEach(blockedSources, id: \.self) { host in
+                            Text(host).font(.system(size: 13)).foregroundColor(Theme.onSurface)
+                        }
+                        .onDelete { offsets in
+                            offsets.map { blockedSources[$0] }.forEach { ContentBlocker.removeUserBlockedDomain($0) }
+                            blockedSources = ContentBlocker.userBlockedDomains()
+                            Task { await store.recompileAndApply() }
+                        }
+                    } header: {
+                        Text("Blocked sources")
+                    } footer: {
+                        Text("Image/resource domains you blocked from the picker. Swipe to delete.")
+                    }
                 }
 
                 Section {

@@ -3,6 +3,12 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1-alpha] — 2026-06-30 (build 4)
+
+### Added
+- **Visual Element Picker (Cosmetic Blocker)**: Added browser tool enabling users to tap on web elements, preview hiding them, and permanently block ad layouts or block their source domains.
+- **Custom Adblock Rules**: Custom filters and blocked hosts are now persistent.
+
 ## [0.3.0-alpha] — 2026-06-30 (build 3)
 
 ### Added

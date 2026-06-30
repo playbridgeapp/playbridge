@@ -135,8 +135,13 @@ class ReceiverServer extends ChangeNotifier {
   DateTime _lastPlayAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   PairingPhase get phase {
-    if (_authed.isNotEmpty) return PairingPhase.authenticated;
+    // A pending pairing request (its SAS code waiting to be entered) must win over
+    // `authenticated`: when one device is already connected and a *second* device
+    // starts pairing, the code still has to be shown. Checking `_authed` first
+    // would mask it behind the "Connected" view and the user could never pair the
+    // second device.
     if (_pendingPairingRequest != null) return PairingPhase.awaitingCode;
+    if (_authed.isNotEmpty) return PairingPhase.authenticated;
     if (_inProgressHandshakes.isNotEmpty) return PairingPhase.awaitingApproval;
     return PairingPhase.idle;
   }
