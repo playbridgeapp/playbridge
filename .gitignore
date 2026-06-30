@@ -119,3 +119,8 @@ mobile/android/store/icon_variants/*.svg
 .mcp.json
 .opencode.json
 .opencode/
+# Local documentation, guides, and skills reference docs
+*_GUIDE.md
+*_guide.md
+*.local.md
+
