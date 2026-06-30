@@ -83,7 +83,7 @@ struct DashboardScreen: View {
 
     private var cardsGrid: some View {
         VStack(spacing: 12) {
-            // Row 1: Large Cards (Browser, Library)
+            // Row 1: Primary features (Browser, Connection)
             HStack(spacing: 12) {
                 cardView(
                     title: "Browser",
@@ -96,69 +96,49 @@ struct DashboardScreen: View {
                 )
 
                 cardView(
-                    title: "Library",
-                    subtitle: "Your media library",
-                    systemImage: "books.vertical.fill",
-                    gradient: [Color(hex: 0x6A1B9A), Color(hex: 0x8E24AA)],
-                    tall: true,
-                    isActive: false,
-                    comingSoon: true
-                )
-            }
-
-            // Row 2: Connection, Phone Files, Debrid
-            HStack(spacing: 12) {
-                cardView(
                     title: "Connection",
                     subtitle: isConnected ? "Connected" : "Not connected",
                     systemImage: "tv",
                     gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
-                    tall: false,
+                    tall: true,
                     isActive: nav.lastMainScreen == .connection,
                     action: { nav.navigate(to: .connection) }
                 )
+            }
 
+            // Row 2: Phone Files (live), IPTV
+            HStack(spacing: 12) {
                 cardView(
                     title: "Phone Files",
                     subtitle: "Cast videos & audio",
                     systemImage: "folder",
                     gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)],
                     tall: false,
-                    isActive: false,
-                    comingSoon: true
+                    isActive: nav.currentScreen == .phoneFiles,
+                    action: { nav.navigate(to: .phoneFiles) }
                 )
 
-                cardView(
-                    title: "Debrid",
-                    subtitle: "Cloud torrents",
-                    systemImage: "cloud",
-                    gradient: [Color(hex: 0x00838F), Color(hex: 0x00ACC1)],
-                    tall: false,
-                    isActive: false,
-                    comingSoon: true
-                )
-            }
-
-            // Row 3: IPTV, Collections, Cast History
-            HStack(spacing: 12) {
                 cardView(
                     title: "IPTV",
                     subtitle: "Live channels",
                     systemImage: "tv.fill",
                     gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)],
                     tall: false,
-                    isActive: false,
-                    comingSoon: true
+                    isActive: nav.currentScreen == .iptv,
+                    action: { nav.navigate(to: .iptv) }
                 )
+            }
 
+            // Row 3: Collections, Cast History
+            HStack(spacing: 12) {
                 cardView(
                     title: "Collections",
                     subtitle: "Your playlists",
                     systemImage: "play.rectangle.fill",
                     gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)],
                     tall: false,
-                    isActive: false,
-                    comingSoon: true
+                    isActive: nav.currentScreen == .collections,
+                    action: { nav.navigate(to: .collections) }
                 )
 
                 cardView(
@@ -312,7 +292,6 @@ struct DashboardScreen: View {
             }
             Spacer()
         }
-        .ignoresSafeArea()
     }
 }
 

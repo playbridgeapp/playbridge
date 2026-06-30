@@ -433,15 +433,7 @@ struct CastSheet: View {
         loadingQualities = true
         
         Task {
-            let castURL = video.url
-            if let u = URL(string: castURL) {
-                let asset = AVURLAsset(url: u, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
-                let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-                await MainActor.run {
-                    self.player = p
-                }
-            }
-            
+            // Show a parsed thumbnail (like Android) rather than an inline video player.
             let thumb = await Thumbnailer.thumbnail(url: video.url, headers: headers)
             await MainActor.run {
                 self.thumbnail = thumb
@@ -463,17 +455,6 @@ struct CastSheet: View {
 
     private func selectQuality(_ q: VideoQuality?) {
         selectedQuality = q
-        player?.pause()
-        player = nil
-        
-        guard let video = selectedVideo else { return }
-        let headers = VideoDetector.mediaHeaders(for: video)
-        let castURL = q?.url ?? video.url
-        
-        if let u = URL(string: castURL) {
-            let asset = AVURLAsset(url: u, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
-            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-        }
     }
 
     private func playOnPhone(_ video: DetectedVideo) {
@@ -590,8 +571,8 @@ struct VideoCard: View {
                     } else if let thumbnail = thumbnail {
                         Image(uiImage: thumbnail)
                             .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: 140)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: 140)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     } else {
                         ProgressView().tint(Theme.primary)
@@ -600,8 +581,8 @@ struct VideoCard: View {
                     if let localThumbnail = localThumbnail {
                         Image(uiImage: localThumbnail)
                             .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(height: 140)
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: 140)
                             .clipShape(RoundedRectangle(cornerRadius: 10))
                     } else if localLoading {
                         ProgressView().tint(Theme.primary)

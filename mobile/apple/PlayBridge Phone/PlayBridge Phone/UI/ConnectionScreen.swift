@@ -22,7 +22,7 @@ struct ConnectionScreen: View {
             .padding(20)
         }
         .background(Theme.surface.ignoresSafeArea())
-        .onAppear { vm.startDiscovery() }
+        .onAppear { vm.startDiscovery(); vm.pingSavedDevices() }
         .onDisappear { vm.stopDiscovery() }
         .onChange(of: vm.state) { newState in
             // Clear the field after a rejected code so the user retypes fresh.
@@ -141,25 +141,42 @@ struct ConnectionScreen: View {
     // MARK: - Saved
 
     @ViewBuilder private var savedSection: some View {
-        if let saved = vm.pairedDevice {
+        if !vm.savedDevices.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("Saved")
                 HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(saved.name).foregroundColor(Theme.onSurface).font(.headline)
-                        Text(saved.ip).foregroundColor(Theme.onSurfaceVariant).font(.caption)
-                    }
+                    sectionTitle("Your TVs")
                     Spacer()
-                    Button("Reconnect") { vm.reconnectSaved() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Theme.primaryDim)
-                    Button(role: .destructive) { vm.forgetDevice() } label: {
-                        Image(systemName: "trash")
+                    Button { vm.pingSavedDevices() } label: {
+                        Image(systemName: "arrow.clockwise").foregroundColor(Theme.primary)
                     }
                 }
-                .padding(14)
-                .background(Theme.surfaceContainer)
-                .cornerRadius(14)
+                ForEach(vm.savedDevices.indices, id: \.self) { i in
+                    let saved = vm.savedDevices[i]
+                    let online = vm.onlineStatus[vm.deviceKey(saved)] == true
+                    HStack {
+                        ZStack(alignment: .bottomTrailing) {
+                            Image(systemName: "tv").foregroundColor(Theme.primary)
+                            Circle()
+                                .fill(online ? Color(hex: 0x4CAF50) : Theme.onSurfaceVariant.opacity(0.4))
+                                .frame(width: 7, height: 7)
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(saved.name).foregroundColor(Theme.onSurface).font(.headline)
+                            Text(online ? "\(saved.ip) · online" : saved.ip)
+                                .foregroundColor(Theme.onSurfaceVariant).font(.caption)
+                        }
+                        Spacer()
+                        Button("Connect") { vm.connectSaved(saved) }
+                            .buttonStyle(.borderedProminent)
+                            .tint(Theme.primaryDim)
+                        Button(role: .destructive) { vm.forget(saved) } label: {
+                            Image(systemName: "trash")
+                        }
+                    }
+                    .padding(14)
+                    .background(Theme.surfaceContainer)
+                    .cornerRadius(14)
+                }
             }
         }
     }

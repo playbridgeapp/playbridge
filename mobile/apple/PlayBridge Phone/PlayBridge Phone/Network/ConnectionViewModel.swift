@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import Network
 
 /// Top-level glue the UI observes: owns discovery, the socket, the inbound coordinator, and
 /// credential persistence. Mirrors the role of `ConnectionViewModel` on Android.
@@ -10,14 +11,26 @@ final class ConnectionViewModel: ObservableObject {
 
     @Published var state: ConnectionState = .disconnected
     @Published var pairedDevice: PairedDevice?
+    /// All TVs we've paired with (history), most-recent first.
+    @Published var savedDevices: [PairedDevice] = []
+    /// Reachability of saved TVs, keyed by `deviceKey`.
+    @Published var onlineStatus: [String: Bool] = [:]
 
     private let store = PairingStore.shared
     private var cancellables = Set<AnyCancellable>()
     /// The device we're currently bringing up, so we can persist a full record once paired.
     private var connectingDevice: DiscoveredDevice?
 
+    func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
+
     init() {
         pairedDevice = store.loadPairedDevice()
+        savedDevices = store.loadSavedDevices()
+        // Migrate a pre-existing single paired device into the history list.
+        if savedDevices.isEmpty, let p = pairedDevice {
+            savedDevices = [p]
+            store.saveSavedDevices(savedDevices)
+        }
 
         ws.onMessage = { [weak self] text in self?.coordinator.handle(text) }
         ws.onCredentials = { [weak self] creds in self?.persistCredentials(creds) }
@@ -82,15 +95,87 @@ final class ConnectionViewModel: ObservableObject {
         )
     }
 
+    /// Connect to a specific saved TV from the history list.
+    func connectSaved(_ device: PairedDevice) {
+        pairedDevice = device
+        connectingDevice = DiscoveredDevice(ip: device.ip, port: device.port, name: device.name,
+                                            uuid: device.uuid, wssPort: device.wssPort)
+        ws.connect(
+            ip: device.ip,
+            port: device.port,
+            token: device.token ?? "",
+            serverName: device.name,
+            deviceName: store.localDeviceName,
+            deviceUUID: store.localDeviceUUID,
+            wssPort: device.wssPort,
+            certFingerprint: device.certFingerprint
+        )
+    }
+
+    /// Remove one saved TV from history (and disconnect if it's the active one).
+    func forget(_ device: PairedDevice) {
+        var list = store.loadSavedDevices()
+        list.removeAll { deviceKey($0) == deviceKey(device) }
+        store.saveSavedDevices(list)
+        savedDevices = list
+        onlineStatus[deviceKey(device)] = nil
+        if let active = pairedDevice, deviceKey(active) == deviceKey(device) {
+            ws.disconnect()
+            store.clearPairedDevice()
+            pairedDevice = nil
+            connectingDevice = nil
+        }
+    }
+
+    /// Best-effort TCP reachability check of each saved TV, updating `onlineStatus`.
+    func pingSavedDevices() {
+        for d in savedDevices {
+            let key = deviceKey(d)
+            let port = UInt16(d.wssPort ?? d.port)
+            ConnectionViewModel.isReachable(host: d.ip, port: port) { [weak self] ok in
+                DispatchQueue.main.async { self?.onlineStatus[key] = ok }
+            }
+        }
+    }
+
+    private static func isReachable(host: String, port: UInt16, timeout: TimeInterval = 2.0, completion: @escaping (Bool) -> Void) {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { completion(false); return }
+        let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
+        var finished = false
+        func finish(_ ok: Bool) {
+            if finished { return }
+            finished = true
+            conn.cancel()
+            completion(ok)
+        }
+        conn.stateUpdateHandler = { state in
+            switch state {
+            case .ready: finish(true)
+            case .failed, .cancelled: finish(false)
+            default: break
+            }
+        }
+        conn.start(queue: .global(qos: .utility))
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { finish(false) }
+    }
+
+    private func upsertSaved(_ device: PairedDevice) {
+        var list = store.loadSavedDevices()
+        list.removeAll { deviceKey($0) == deviceKey(device) }
+        list.insert(device, at: 0)
+        store.saveSavedDevices(list)
+        DispatchQueue.main.async { self.savedDevices = list }
+    }
+
     func disconnect() { ws.disconnect() }
 
     /// Submit the 6-digit SAS code the user read off the TV during pairing.
     func submitPairingCode(_ code: String) { ws.submitPairingCode(code) }
 
     func forgetDevice() {
+        if let active = pairedDevice { forget(active); return }
         ws.disconnect()
         store.clearPairedDevice()
-        pairedDevice = nil
         connectingDevice = nil
     }
 
@@ -102,6 +187,21 @@ final class ConnectionViewModel: ObservableObject {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         ws.send(WireProtocol.singleVideoCommand(url: trimmed, title: title))
+    }
+
+    /// Cast an arbitrary media URL with optional request headers (IPTV channels and
+    /// saved collection items, which may require a Referer/User-Agent).
+    func castMedia(url: String, title: String? = nil, headers: [String: String] = [:], contentType: String? = nil) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        ws.send(WireProtocol.singleVideoCommand(
+            url: trimmed,
+            title: title,
+            contentType: contentType,
+            subtitles: [],
+            headers: headers,
+            detectedBy: "iptv"
+        ))
     }
 
     /// Cast a browser-detected stream: chosen quality URL (or the master), `mediaHeaders`,
@@ -152,10 +252,14 @@ final class ConnectionViewModel: ObservableObject {
 
     // MARK: - Persistence
 
+    /// Find a previously-paired record for `device` so we can reuse its token + SPKI pin.
+    /// Returns nil when there's no match — never falls back to the active device, or we'd
+    /// try to validate a new TV against another TV's pin ("fingerprint changed").
     private func matchingSaved(for device: DiscoveredDevice) -> PairedDevice? {
-        guard let saved = pairedDevice else { return nil }
-        if !device.uuid.isEmpty, !saved.uuid.isEmpty { return device.uuid == saved.uuid ? saved : nil }
-        return saved.ip == device.ip ? saved : nil
+        savedDevices.first { saved in
+            if !device.uuid.isEmpty, !saved.uuid.isEmpty { return device.uuid == saved.uuid }
+            return saved.ip == device.ip
+        }
     }
 
     private func persistCredentials(_ creds: WebSocketClient.IssuedCredentials) {
@@ -170,6 +274,7 @@ final class ConnectionViewModel: ObservableObject {
         var stored = device
         stored.setToken(creds.token)
         store.savePairedDevice(stored)
+        upsertSaved(stored)
         DispatchQueue.main.async { self.pairedDevice = stored }
     }
 
@@ -178,6 +283,7 @@ final class ConnectionViewModel: ObservableObject {
         device.players = caps.players
         device.browsers = caps.browsers
         store.savePairedDevice(device)
+        upsertSaved(device)
         DispatchQueue.main.async { self.pairedDevice = device }
     }
 }

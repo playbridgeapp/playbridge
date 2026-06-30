@@ -15,15 +15,23 @@ final class BrowserStore: ObservableObject {
 
     static let homeURL = "https://www.google.com"
 
+    /// History + bookmarks, shared with the browser UI via the environment.
+    let data = BrowserDataStore()
+
+    private var isRestoring = false
+    private let tabsFileURL: URL = {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("browser_tabs.json")
+    }()
+
     init() {
-        newTab()
+        restoreTabs()
         Task { @MainActor in
-            // Compile whatever is already cached so blocking is active immediately
-            // (curated fallback on first launch).
+            // Compile cached rules so blocking is active immediately (curated fallback).
             ruleLists = await ContentBlocker.compileAll()
             applyRulesToAllTabs()
-            // Then fetch/refresh the full filter lists in the background and
-            // recompile, upgrading from the curated fallback to EasyList et al.
+            // Then fetch/refresh the full filter lists and recompile.
             await ContentBlocker.ensureListsDownloaded()
             ruleLists = await ContentBlocker.compileAll()
             applyRulesToAllTabs()
@@ -34,15 +42,87 @@ final class BrowserStore: ObservableObject {
 
     @discardableResult
     func newTab(loading url: String? = nil) -> BrowserTab {
+        makeTab(url: url)
+    }
+
+    @discardableResult
+    private func makeTab(url: String?) -> BrowserTab {
         let handler = TabScriptHandler()
         let tab = BrowserTab(configuration: makeConfiguration(), handler: handler)
         handler.tab = tab
         tab.onPageCast = { [weak self] payload in self?.onPageCast?(payload) }
+        tab.onMainFrameCommit = { [weak self, weak tab] _ in
+            guard let self, let tab else { return }
+            self.applyRules(to: tab)
+        }
+        tab.onPageFinished = { [weak self] finishedURL, title in
+            guard let self else { return }
+            if let finishedURL { self.data.recordVisit(url: finishedURL.absoluteString, title: title) }
+            self.saveTabs()
+        }
         tabs.append(tab)
         activeID = tab.id
         applyRules(to: tab)
-        tab.load(url ?? BrowserStore.homeURL)
+        if let url, !url.isEmpty {
+            tab.load(url)
+        } else {
+            tab.isHome = true   // show the new-tab/home page until the user navigates
+        }
+        saveTabs()
         return tab
+    }
+
+    // MARK: - Tab persistence
+
+    private struct SavedTabs: Codable { var urls: [String]; var activeIndex: Int }
+
+    private func restoreTabs() {
+        isRestoring = true
+        let saved = loadSavedTabs()
+        if saved.urls.isEmpty {
+            makeTab(url: nil)
+        } else {
+            for u in saved.urls { makeTab(url: u) }
+            if tabs.indices.contains(saved.activeIndex) {
+                activeID = tabs[saved.activeIndex].id
+            }
+        }
+        isRestoring = false
+        saveTabs()
+    }
+
+    private func saveTabs() {
+        guard !isRestoring else { return }
+        var urls: [String] = []
+        var activeIndex = 0
+        for tab in tabs {
+            let u = tab.urlString
+            guard u.hasPrefix("http") else { continue }
+            if tab.id == activeID { activeIndex = urls.count }
+            urls.append(u)
+        }
+        let payload = SavedTabs(urls: urls, activeIndex: activeIndex)
+        if let d = try? JSONEncoder().encode(payload) { try? d.write(to: tabsFileURL, options: .atomic) }
+    }
+
+    private func loadSavedTabs() -> SavedTabs {
+        guard let d = try? Data(contentsOf: tabsFileURL),
+              let s = try? JSONDecoder().decode(SavedTabs.self, from: d) else {
+            return SavedTabs(urls: [], activeIndex: 0)
+        }
+        return s
+    }
+
+    /// Sites whose own anti-adblock breaks playback when their requests are blocked.
+    /// Content blockers can't remove these ads anyway (that needs scriptlet injection
+    /// which WKContentRuleList doesn't support), so we exempt them to keep video working.
+    private static let adblockExemptSuffixes = [
+        "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com",
+    ]
+
+    private func isExempt(_ url: URL?) -> Bool {
+        guard let host = url?.host?.lowercased() else { return false }
+        return BrowserStore.adblockExemptSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
     }
 
     // MARK: - Ad blocking
@@ -68,24 +148,25 @@ final class BrowserStore: ObservableObject {
     private func applyRules(to tab: BrowserTab) {
         let cc = tab.webView.configuration.userContentController
         cc.removeAllContentRuleLists()
-        if adBlockEnabled {
-            for list in ruleLists {
-                cc.add(list)
-            }
+        // Skip blocking on anti-adblock sites (e.g. YouTube) so playback isn't broken.
+        guard adBlockEnabled, !isExempt(tab.webView.url) else { return }
+        for list in ruleLists {
+            cc.add(list)
         }
     }
 
-    func select(_ id: UUID) { activeID = id }
+    func select(_ id: UUID) { activeID = id; saveTabs() }
 
     func closeTab(_ id: UUID) {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs[idx].webView.stopLoading()
         tabs.remove(at: idx)
         if tabs.isEmpty {
-            newTab()
+            makeTab(url: nil)
         } else if activeID == id {
             activeID = tabs[min(idx, tabs.count - 1)].id
         }
+        saveTabs()
     }
 
     private func makeConfiguration() -> WKWebViewConfiguration {

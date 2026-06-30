@@ -13,6 +13,12 @@ enum DetectionScript {
       if (window.__playbridge_detector) return;
       window.__playbridge_detector = true;
 
+      // Players that break when their visibility state is faked (YouTube) run in
+      // "safe mode": detection (fetch/XHR/DOM) still runs, but the visibility shim is
+      // skipped so the player doesn't error out.
+      var __pb_host = (location.hostname || '').toLowerCase();
+      var __pb_safe = /(^|\.)(youtube\.com|youtube-nocookie\.com|googlevideo\.com|youtu\.be)$/.test(__pb_host);
+
       var SEGMENT = /\.(ts|m4s|fmp4|cmfv|cmfa)(\?|$)/i;
       var MEDIA = /\.(m3u8|mpd|mp4|m4v|mov|mkv|webm|avi|flv|wmv|3gp|vtt|srt)(\?|$)/i;
       var MEDIA_CT = /(video\/|mpegurl|application\/dash|application\/octet-stream|text\/vtt|application\/x-subrip)/i;
@@ -113,12 +119,14 @@ enum DetectionScript {
         });
       } catch (e) {}
 
-      // ── Background-playback shim (port of content.js) ─────────────────────────
-      try {
-        Object.defineProperty(document, 'visibilityState', { get: function () { return 'visible'; }, configurable: true });
-        Object.defineProperty(document, 'hidden', { get: function () { return false; }, configurable: true });
-        window.addEventListener('visibilitychange', function (e) { e.stopImmediatePropagation(); }, true);
-      } catch (e) {}
+      // ── Background-playback shim (skipped in safe mode) ───────────────────────
+      if (!__pb_safe) {
+        try {
+          Object.defineProperty(document, 'visibilityState', { get: function () { return 'visible'; }, configurable: true });
+          Object.defineProperty(document, 'hidden', { get: function () { return false; }, configurable: true });
+          window.addEventListener('visibilitychange', function (e) { e.stopImmediatePropagation(); }, true);
+        } catch (e) {}
+      }
 
       // ── window.playbridge.cast() bridge ───────────────────────────────────────
       window.playbridge = {

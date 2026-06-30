@@ -5,9 +5,17 @@ struct MenuSheet: View {
     @ObservedObject var store: BrowserStore
     @Binding var isPresented: Bool
 
+    @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var data: BrowserDataStore
+
     @State private var showAdblockSettings = false
     @State private var showComingSoonAlert = false
     @State private var comingSoonFeatureName = ""
+
+    private func go(_ screen: AppScreen) {
+        isPresented = false
+        nav.navigate(to: screen)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,28 +33,34 @@ struct MenuSheet: View {
                     menuGridItem(
                         icon: "bookmark",
                         label: "Bookmarks",
-                        comingSoon: true
+                        action: { go(.bookmarks) }
                     )
                     menuGridItem(
                         icon: "clock.arrow.circlepath",
                         label: "History",
-                        comingSoon: true
+                        action: { go(.history) }
                     )
                     menuGridItem(
-                        icon: "arrow.down.circle",
-                        label: "Downloads",
-                        comingSoon: true
-                    )
-                    menuGridItem(
-                        icon: "star",
-                        label: "Add Bookmark",
-                        comingSoon: true
+                        icon: data.isBookmarked(tab.urlString) ? "star.fill" : "star",
+                        label: data.isBookmarked(tab.urlString) ? "Bookmarked" : "Add Bookmark",
+                        selected: data.isBookmarked(tab.urlString),
+                        action: {
+                            data.toggleBookmark(url: tab.urlString, title: tab.title)
+                            isPresented = false
+                        }
                     )
                     menuGridItem(
                         icon: "magnifyingglass",
                         label: "Find in Page",
-                        comingSoon: true
+                        action: {
+                            isPresented = false
+                            tab.findInPage()
+                        }
                     )
+
+                    // Spacer cell to keep 5-column alignment with row 2
+                    Spacer()
+                        .frame(maxWidth: .infinity)
                 }
 
                 // Row 2
@@ -59,7 +73,7 @@ struct MenuSheet: View {
                     menuGridItem(
                         icon: "gearshape",
                         label: "Settings",
-                        comingSoon: true
+                        action: { go(.browserSettings) }
                     )
                     menuGridItem(
                         icon: "desktopcomputer",
@@ -87,7 +101,10 @@ struct MenuSheet: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 30)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.surfaceContainerLow.ignoresSafeArea())
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.hidden)
         .sheet(isPresented: $showAdblockSettings) {
             AdblockSettingsSheet(store: store)
         }

@@ -25,6 +25,38 @@ struct AdblockSettingsSheet: View {
                 }
 
                 Section {
+                    if let extra = ContentBlocker.remoteExtraListURL {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("PlayBridge Extra Rules")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundColor(Theme.onSurface)
+                                Spacer()
+                                Text("Built-in")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundColor(Theme.primary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Theme.primary.opacity(0.15))
+                                    .clipShape(Capsule())
+                            }
+                            Text(extra.absoluteString)
+                                .font(.system(size: 11))
+                                .foregroundColor(Theme.onSurfaceVariant)
+                                .lineLimit(1)
+                            Text(ContentBlocker.isListDownloaded(url: extra) ? "Active" : "Downloads on launch")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundColor(ContentBlocker.isListDownloaded(url: extra) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
+                                .padding(.top, 2)
+                        }
+                    }
+                } header: {
+                    Text("Built-in list")
+                } footer: {
+                    Text("Always on and updated automatically. Maintained by PlayBridge — can't be removed.")
+                }
+
+                Section {
                     ForEach(filterLists, id: \.self) { url in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(getListName(for: url))
@@ -161,7 +193,12 @@ struct AdblockSettingsSheet: View {
                     failCount += 1
                 }
             }
-            
+
+            // Refresh the always-on built-in list too.
+            if let extra = ContentBlocker.remoteExtraListURL {
+                try? await ContentBlocker.download(url: extra)
+            }
+
             do {
                 let lists = try await ContentBlocker.forceCompileAll()
                 await store.updateAdBlockRules()
