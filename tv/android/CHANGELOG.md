@@ -3,6 +3,16 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## GeckoView Plugin [0.3.2] — 2026-07-01 (versionCode 210)
+
+### Fixed
+- **Google Play TV Compatibility**: Set `android.software.leanback` to required in the manifest to ensure correct store filtering on Android TV.
+
+## Player [0.7.2] — 2026-07-01 (versionCode 218)
+
+### Fixed
+- **Google Play TV Compatibility**: Set `android.software.leanback` to required in the manifest to ensure correct store filtering on Android TV.
+
 ## GeckoView Plugin [0.3.1] — 2026-07-01 (versionCode 209)
 
 ### Fixed

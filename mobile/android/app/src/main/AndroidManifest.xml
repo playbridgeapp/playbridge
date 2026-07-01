@@ -25,6 +25,11 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- Ensure Google Play filters out this app on TV devices that don't have touchscreens -->
+    <uses-feature
+        android:name="android.hardware.touchscreen"
+        android:required="true" />
+
     <application
         android:name=".PlayBridgeApplication"
         android:allowBackup="true"

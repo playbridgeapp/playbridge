@@ -3,6 +3,11 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] — 2026-07-01 (versionCode 215)
+
+### Fixed
+- **Google Play Compatibility**: Declared `android.hardware.touchscreen` as required in the manifest to ensure the phone app is filtered out on non-touch TV devices.
+
 ## [0.7.0] — 2026-06-30 (versionCode 214)
 
 ### Added

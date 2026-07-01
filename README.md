@@ -15,19 +15,71 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 > [!WARNING]
 > **PlayBridge is in alpha.** It's under active early development — expect bugs, incomplete features, and breaking changes between releases. Feedback and issue reports are very welcome.
 
+## Table of Contents
+
+- [Screenshots](#screenshots)
+- [Features](#features)
+- [Installation](#installation)
+  - [Closed Testing (Google Play)](#closed-testing-google-play)
+- [How to connect & cast](#how-to-connect--cast)
+- [Components](#components)
+- [Documentation](#documentation)
+- [Build Instructions](#build-instructions)
+- [Contributing](#contributing)
+- [AI Policy](#ai-policy)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
+- [Contact](#contact)
+
 ## Screenshots
 
 **Browse & cast from your phone**
 
-| Console hub | Library & discovery | Built-in browser |
-|:---:|:---:|:---:|
-| <img src="docs/screenshots/phone-hub.jpg" alt="Console hub — connected to the TV" width="230"> | <img src="docs/screenshots/phone-library.jpg" alt="Library and discovery" width="230"> | <img src="docs/screenshots/phone-browser.jpg" alt="Built-in browser with cast" width="230"> |
+| Console hub | Library & discovery | Library detail screen | Built-in browser |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/screenshots/phone-hub.jpg" alt="Console hub — connected to the TV" width="170"> | <img src="docs/screenshots/phone-library.jpg" alt="Library and discovery" width="170"> | <img src="docs/screenshots/phone-library-details.jpg" alt="Library detail screen" width="170"> | <img src="docs/screenshots/phone-browser.jpg" alt="Built-in browser with cast" width="170"> |
 
 **Your phone is the remote**
 
-| Now playing | Touchpad · D-Pad · Keyboard |
+| Context-aware remote | Touchpad remote | D-Pad remote | Keyboard remote |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/screenshots/phone-remote-context.jpg" alt="Context-aware remote" width="170"> | <img src="docs/screenshots/phone-remote-touchpad.jpg" alt="Touchpad mode" width="170"> | <img src="docs/screenshots/phone-remote-dpad.jpg" alt="D-Pad mode" width="170"> | <img src="docs/screenshots/phone-remote-keyboard.jpg" alt="Keyboard input mode" width="170"> |
+
+**Android TV receiver**
+
+| Pairing screen | Player & details | Settings |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/tv-pairing.png" alt="Android TV pairing screen" width="230"> | <img src="docs/screenshots/tv-preplay.jpg" alt="Android TV player and details" width="230"> | <img src="docs/screenshots/tv-settings.png" alt="Android TV settings screen" width="230"> |
+
+| Favorites | History |
 |:---:|:---:|
-| <img src="docs/screenshots/phone-now-playing.jpg" alt="Now playing — scrub and transport controls" width="230"> | <img src="docs/screenshots/phone-remote.jpg" alt="Touchpad, D-Pad and keyboard remote" width="230"> |
+| <img src="docs/screenshots/tv-favourite.png" alt="Android TV favorites" width="230"> | <img src="docs/screenshots/tv-history.png" alt="Android TV history" width="230"> |
+
+**Apple TV receiver**
+
+| Pairing screen | Player & details | Settings |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/apple-tv-pairing.jpg" alt="Apple TV pairing screen" width="230"> | <img src="docs/screenshots/apple-tv-preplay.jpg" alt="Apple TV player and details" width="230"> | <img src="docs/screenshots/apple-tv-settings.jpg" alt="Apple TV settings screen" width="230"> |
+
+| Favorites | History |
+|:---:|:---:|
+| <img src="docs/screenshots/apple-tv-favourite.jpg" alt="Apple TV favorites" width="230"> | <img src="docs/screenshots/apple-tv-history.jpg" alt="Apple TV history" width="230"> |
+
+**Desktop receiver**
+
+| Pairing screen | Player & details | Settings |
+|:---:|:---:|:---:|
+| <img src="docs/screenshots/desktop-pairing.jpg" alt="Desktop pairing screen" width="230"> | <img src="docs/screenshots/desktop-preplay.jpg" alt="Desktop player and details" width="230"> | <img src="docs/screenshots/desktop-settings.jpg" alt="Desktop settings screen" width="230"> |
+
+| Favorites | History |
+|:---:|:---:|
+| <img src="docs/screenshots/desktop-favourite.jpg" alt="Desktop favorites" width="230"> | <img src="docs/screenshots/desktop-history.jpg" alt="Desktop history" width="230"> |
+
+**Browser extension**
+
+| Connected | Streams detected | Subtitles detected | Open URL options |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/screenshots/ext-connected.jpg" alt="Extension connected" width="170"> | <img src="docs/screenshots/ext-video-streams.jpg" alt="Video streams detected" width="170"> | <img src="docs/screenshots/ext-subtitles.jpg" alt="Subtitles detected" width="170"> | <img src="docs/screenshots/ext-open-url.jpg" alt="Open URL options" width="170"> |
 
 ## Features
 
@@ -51,6 +103,19 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 - **Desktop (receiver)**: download the build for your OS from [Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
 - **Android Phone (sender)**: download the latest `phone` APK from [Releases](https://github.com/playbridgeapp/playbridge/releases) and install it.
+
+### Closed Testing (Google Play)
+
+To participate in the Google Play closed testing track, you need to first join the Google Group and then opt-in as a tester using the links below:
+
+* **Android Phone (Sender)**
+  * **Group invite**: [pbphoneclosedtesters Google Group](https://groups.google.com/g/pbphoneclosedtesters)
+  * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.sender)
+  * **Download app**: [Google Play Store](https://play.google.com/store/apps/details?id=com.playbridge.sender)
+* **Android TV (Player)**
+  * **Group invite**: [pbtvclosedtesters Google Group](https://groups.google.com/g/pbtvclosedtesters)
+  * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.player)
+  * **Download app**: [Google Play Store](https://play.google.com/store/apps/details?id=com.playbridge.player)
 
 ## How to connect & cast
 
