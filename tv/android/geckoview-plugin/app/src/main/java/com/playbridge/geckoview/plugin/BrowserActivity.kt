@@ -45,6 +45,8 @@ class BrowserActivity : ComponentActivity() {
         const val EXTRA_MOUSE_DY = "mouse_dy"
         const val EXTRA_REMOTE_KEY = "remote_key"
         const val EXTRA_BROWSER_ACTION = "browser_action"
+        const val ACTION_USER_AGENT_CHANGED = "com.playbridge.player.ACTION_USER_AGENT_CHANGED"
+        const val EXTRA_USER_AGENT_VALUE = "extra_user_agent_value"
     }
 
     private var engine: GeckoViewEngine? = null
@@ -90,6 +92,10 @@ class BrowserActivity : ComponentActivity() {
                 ACTION_BROWSER_CONTROL -> {
                     val action = intent.getStringExtra(EXTRA_BROWSER_ACTION)
                     handleBrowserControlCommand(action)
+                }
+                ACTION_USER_AGENT_CHANGED -> {
+                    val value = intent.getStringExtra(EXTRA_USER_AGENT_VALUE)
+                    engine?.setUserAgentOverride(value)
                 }
             }
         }
@@ -184,6 +190,7 @@ class BrowserActivity : ComponentActivity() {
             addAction(ACTION_MOUSE)
             addAction(ACTION_REMOTE)
             addAction(ACTION_BROWSER_CONTROL)
+            addAction(ACTION_USER_AGENT_CHANGED)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(commandReceiver, filter, Context.RECEIVER_EXPORTED)
@@ -201,11 +208,13 @@ class BrowserActivity : ComponentActivity() {
         }
 
         val desktopMode = intent.getBooleanExtra(EXTRA_DESKTOP_MODE, false)
+        val userAgentOverride = intent.getStringExtra(EXTRA_USER_AGENT_VALUE)?.takeIf { it.isNotBlank() }
 
-        Log.d(TAG, "Initializing GeckoView Engine (desktop=$desktopMode)")
+        Log.d(TAG, "Initializing GeckoView Engine (desktop=$desktopMode, uaOverride=${userAgentOverride != null})")
         engine = GeckoViewEngine(
             this,
             desktopMode = desktopMode,
+            userAgentOverride = userAgentOverride,
             onFullscreen = { isFullscreen ->
                 if (isFullscreen) {
                     enterGeckoFullscreen()

@@ -12,6 +12,7 @@ import org.mozilla.geckoview.ScreenLength
 class GeckoViewEngine(
     private val context: Context,
     private val desktopMode: Boolean = false,
+    private var userAgentOverride: String? = null,
     private val onFullscreen: ((Boolean) -> Unit)? = null
 ) {
 
@@ -37,6 +38,13 @@ class GeckoViewEngine(
     }
 
     fun reload() {
+        session.reload()
+    }
+
+    /** Live update from the phone's User Agent manager — applies and reloads immediately. */
+    fun setUserAgentOverride(value: String?) {
+        userAgentOverride = value?.takeIf { it.isNotBlank() }
+        session.settings.userAgentOverride = userAgentOverride
         session.reload()
     }
 
@@ -106,6 +114,9 @@ class GeckoViewEngine(
             } else {
                 org.mozilla.geckoview.GeckoSessionSettings.USER_AGENT_MODE_MOBILE
             }
+            // A literal override (picked from the phone's User Agent manager) wins outright,
+            // same precedence as the phone app's own in-app browser.
+            userAgentOverride = this@GeckoViewEngine.userAgentOverride
         }
 
         // PB Bridge + uBlock extensions are ensured (and the bridge delegate registered) once at

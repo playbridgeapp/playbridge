@@ -3,6 +3,11 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.2-alpha] — 2026-07-01 (build 5)
+
+### Removed
+- **Referer Fallback**: Removed automatic fallback that populated `Referer` headers with the page's origin URL when requesting video streams.
+
 ## [0.3.1-alpha] — 2026-06-30 (build 4)
 
 ### Added

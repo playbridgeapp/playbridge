@@ -705,11 +705,18 @@ class BrowserActivity : ComponentActivity() {
             var menuExpanded by remember { mutableStateOf(false) }
             var showMenuSheet by remember { mutableStateOf(false) }
             val sheetState = rememberModalBottomSheetState()
+            var showUserAgentSheet by remember { mutableStateOf(false) }
+            val userAgentSheetState = rememberModalBottomSheetState()
 
             val composeScope = rememberCoroutineScope()
             // User preferences via SettingsRepository
             val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
             val maxAliveTabs by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
+            val userAgentPreset by settingsRepository.userAgentPreset.collectAsState(initial = UserAgentPresets.DEFAULT_ID)
+            val customUserAgents by settingsRepository.customUserAgents.collectAsState(initial = emptyList())
+            val userAgentOverride by remember(userAgentPreset, customUserAgents) {
+                derivedStateOf { UserAgentPresets.resolve(userAgentPreset, customUserAgents) }
+            }
 
             LaunchedEffect(maxAliveTabs) {
                 tabManager.maxAliveSessions = maxAliveTabs
@@ -907,9 +914,6 @@ class BrowserActivity : ComponentActivity() {
                             return@launch
                         }
                         val headers = VideoDetector.mediaHeaders(video)
-                        if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                            headers["Referer"] = video.originUrl
-                        }
                         connectionViewModel.playOnDlna(
                             com.playbridge.sender.cast.MediaItem(
                                 url = video.url,
@@ -1002,9 +1006,6 @@ class BrowserActivity : ComponentActivity() {
                             }
                         } else {
                             val headers = VideoDetector.mediaHeaders(video)
-                            if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                headers["Referer"] = video.originUrl
-                            }
                             val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
                             val cmd = createSingleVideoCommandJson(
                                 PlayPayload(
@@ -1204,6 +1205,7 @@ class BrowserActivity : ComponentActivity() {
                 previousUrl = previousUrlState,
                 pendingDownload = pendingDownloadState,
                 isDesktopMode = isDesktopMode,
+                userAgentOverride = userAgentOverride,
                 isSecureConnection = isSecureConnectionState,
                 siteSecurityInfo = siteSecurityInfoState,
                 pendingPopup = pendingPopupState,
@@ -1675,6 +1677,48 @@ class BrowserActivity : ComponentActivity() {
                     },
                     onToggleDesktopMode = { isDesktopMode = !isDesktopMode },
                     onToggleVideoDetect = { composeScope.launch { settingsRepository.setDetectVideos(!detectVideosEnabled) } },
+                    userAgentActive = userAgentPreset != UserAgentPresets.DEFAULT_ID,
+                    onUserAgentClick = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showMenuSheet = false
+                            showUserAgentSheet = true
+                        }
+                    },
+
+                    // User Agent Sheet States
+                    showUserAgentSheet = showUserAgentSheet,
+                    onUserAgentDismiss = { showUserAgentSheet = false },
+                    userAgentSheetState = userAgentSheetState,
+                    userAgentPreset = userAgentPreset,
+                    customUserAgents = customUserAgents,
+                    onSelectUserAgentPreset = { id ->
+                        composeScope.launch { settingsRepository.setUserAgentPreset(id) }
+                        scope.launch { userAgentSheetState.hide() }.invokeOnCompletion {
+                            showUserAgentSheet = false
+                        }
+                    },
+                    onAddCustomUserAgent = { name, value ->
+                        val agent = com.playbridge.sender.browser.CustomUserAgent(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = name,
+                            value = value,
+                        )
+                        composeScope.launch {
+                            settingsRepository.addCustomUserAgent(agent)
+                            settingsRepository.setUserAgentPreset(UserAgentPresets.customSelectionId(agent.id))
+                        }
+                        scope.launch { userAgentSheetState.hide() }.invokeOnCompletion {
+                            showUserAgentSheet = false
+                        }
+                    },
+                    onDeleteCustomUserAgent = { id ->
+                        composeScope.launch {
+                            settingsRepository.removeCustomUserAgent(id)
+                            if (userAgentPreset == UserAgentPresets.customSelectionId(id)) {
+                                settingsRepository.setUserAgentPreset(UserAgentPresets.DEFAULT_ID)
+                            }
+                        }
+                    },
 
                     // Site Info Sheet States
                     showSiteInfoSheet = showSiteInfoSheet,
@@ -1701,9 +1745,6 @@ class BrowserActivity : ComponentActivity() {
                          val dlnaTarget = connectionViewModel.activeDlnaTarget.value
                          if (dlnaTarget != null) {
                              val dlnaHeaders = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                             if (!video.originUrl.isNullOrEmpty() && dlnaHeaders.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                 dlnaHeaders["Referer"] = video.originUrl
-                             }
                              connectionViewModel.playOnDlna(
                                  com.playbridge.sender.cast.MediaItem(
                                      url = video.url,
@@ -1736,9 +1777,6 @@ class BrowserActivity : ComponentActivity() {
                              )
                          } else {
                              val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                             if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                 headers["Referer"] = video.originUrl
-                             }
                              val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
                              createSingleVideoCommandJson(
                                  PlayPayload(
@@ -1780,9 +1818,6 @@ class BrowserActivity : ComponentActivity() {
                             is WebSocketClient.ConnectionState.Connected -> {
                                 val items: List<PlayPayload> = video.playlistPayload ?: run {
                                     val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                                    if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                        headers["Referer"] = video.originUrl
-                                    }
                                     listOf(
                                         PlayPayload(
                                             url = video.url,
@@ -1811,7 +1846,7 @@ class BrowserActivity : ComponentActivity() {
                         forcePlaylistSheet = null
                     },
                     onDownloadVideo = { video ->
-                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer") ?: video.originUrl, selectedTab?.content?.title)
+                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer"), selectedTab?.content?.title)
                     },
                     onClearVideos = { com.playbridge.sender.cast.VideoDetector.clearTab(selectedTabId ?: "") },
                     playerMode = sheetPlayerMode,

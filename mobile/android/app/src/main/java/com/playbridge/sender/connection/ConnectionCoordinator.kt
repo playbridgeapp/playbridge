@@ -11,6 +11,16 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 /**
+ * TV browser User-Agent state, as last reported by the TV: [active] is the name of the
+ * selected entry (blank = default/no override), [entries] are the name→value pairs saved
+ * on the TV (for reselection — see `createUserAgentJson`/`IncomingMessage.UserAgent`).
+ */
+data class TvUserAgentState(
+    val active: String = "",
+    val entries: List<Pair<String, String>> = emptyList(),
+)
+
+/**
  * Coordinates WebSocket connection state parsing, TV playback updates, and command execution.
  * Extracts message processing out of BrowserActivity for better separation of concerns.
  */
@@ -30,6 +40,10 @@ class ConnectionCoordinator(
     
     // Names of user scripts currently installed on the TV (for the management UI).
     val installedUserScripts = MutableStateFlow<List<String>>(emptyList())
+
+    // TV browser User-Agent: which one is active (name, blank = default) + which custom
+    // ones are saved on the TV (for the management UI).
+    val tvUserAgentState = MutableStateFlow(TvUserAgentState())
 
     // TMDb Sync & Now Playing Metadata states
     val nowPlayingTvId = MutableStateFlow<Int?>(null)
@@ -116,6 +130,20 @@ class ConnectionCoordinator(
                                 if (arr != null) for (i in 0 until arr.length()) add(arr.optString(i))
                             }
                             Log.d(TAG, "TV user scripts: ${installedUserScripts.value}")
+                        }
+                        "user_agents" -> {
+                            val active = json.optString("active", "")
+                            val entriesJson = json.optJSONArray("entries")
+                            val entries = buildList {
+                                if (entriesJson != null) {
+                                    for (i in 0 until entriesJson.length()) {
+                                        val o = entriesJson.optJSONObject(i) ?: continue
+                                        add(o.optString("name") to o.optString("value"))
+                                    }
+                                }
+                            }
+                            tvUserAgentState.value = TvUserAgentState(active, entries)
+                            Log.d(TAG, "TV user agents updated: active=$active, ${entries.size} saved")
                         }
                         "player_settings" -> {
                             tvPlayerSettings.value = TvPlayerSettings(

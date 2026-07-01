@@ -26,6 +26,7 @@ class SystemWebViewEngine(
     private val context: Context,
     private val adBlocker: AdBlocker,
     private val desktopMode: Boolean = false,
+    private var userAgentOverride: String? = null,
     private val onFullscreen: (View, WebChromeClient.CustomViewCallback) -> Unit,
     private val onExitFullscreen: () -> Unit,
     private val onEngineRecreateRequired: (url: String?) -> Unit = {},
@@ -67,6 +68,28 @@ class SystemWebViewEngine(
     }
 
     fun reload() {
+        webView.reload()
+    }
+
+    /** Resolve the literal UA string to apply: [userAgentOverride] wins, else desktop/mobile default. */
+    private fun resolveUserAgent(): String {
+        userAgentOverride?.let { return it }
+        return if (desktopMode) {
+            // Desktop spoofing still mismatches the mobile client hints, so it stays
+            // captcha-prone; at least track the device's real Chrome major version.
+            val real = WebSettings.getDefaultUserAgent(context)
+            val chromeVersion = Regex("Chrome/([\\d.]+)").find(real)?.groupValues?.get(1)
+                ?: "120.0.0.0"
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Safari/537.36"
+        } else {
+            WebSettings.getDefaultUserAgent(context)
+        }
+    }
+
+    /** Live update from the phone's User Agent manager — applies and reloads immediately. */
+    fun setUserAgentOverride(value: String?) {
+        userAgentOverride = value?.takeIf { it.isNotBlank() }
+        webView.settings.userAgentString = resolveUserAgent()
         webView.reload()
     }
 
@@ -617,21 +640,14 @@ class SystemWebViewEngine(
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
-                // User agent. In mobile mode use the WebView's OWN default UA rather than a
-                // hardcoded Chrome version: the device sends User-Agent Client Hints (Sec-CH-UA)
-                // derived from the real WebView/Chrome version, and Google flags the UA string when
-                // its Chrome version disagrees with those hints ("I'm not a robot"). A stale
-                // "Chrome/120" string against a newer WebView is exactly that mismatch.
-                userAgentString = if (desktopMode) {
-                    // Desktop spoofing still mismatches the mobile client hints, so it stays
-                    // captcha-prone; at least track the device's real Chrome major version.
-                    val real = WebSettings.getDefaultUserAgent(context)
-                    val chromeVersion = Regex("Chrome/([\\d.]+)").find(real)?.groupValues?.get(1)
-                        ?: "120.0.0.0"
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$chromeVersion Safari/537.36"
-                } else {
-                    WebSettings.getDefaultUserAgent(context)
-                }
+                // User agent. A literal [userAgentOverride] (picked from the phone's User Agent
+                // manager) wins outright. Otherwise, in mobile mode use the WebView's OWN
+                // default UA rather than a hardcoded Chrome version: the device sends
+                // User-Agent Client Hints (Sec-CH-UA) derived from the real WebView/Chrome
+                // version, and Google flags the UA string when its Chrome version disagrees
+                // with those hints ("I'm not a robot"). A stale "Chrome/120" string against a
+                // newer WebView is exactly that mismatch.
+                userAgentString = resolveUserAgent()
 
                 // Optimize for media streaming
                 cacheMode = WebSettings.LOAD_DEFAULT
