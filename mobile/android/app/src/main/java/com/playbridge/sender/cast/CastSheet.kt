@@ -189,16 +189,7 @@ fun CastSheet(
         //   - strips browser-context headers (Sec-Fetch-*, Sec-CH-UA-*, etc.) that CDNs
         //     reject when they arrive from a different origin (the proxy server)
         //   - ensures a sane User-Agent is always present
-        val proxyHeaders = VideoDetector.mediaHeaders(video).also { headers ->
-            // Apply the same originUrl → Referer fallback that BrowserActivity uses.
-            // Without this, CDNs that require a Referer would reject the proxy request
-            // because this fallback normally runs after applyProxy() returns.
-            if (!video.originUrl.isNullOrEmpty() &&
-                headers.keys.none { it.equals("Referer", ignoreCase = true) }
-            ) {
-                headers["Referer"] = video.originUrl
-            }
-        }
+        val proxyHeaders = VideoDetector.mediaHeaders(video)
 
         val result = MediaflowProxy.rewrite(
             mode = proxyMode,

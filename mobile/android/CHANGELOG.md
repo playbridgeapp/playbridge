@@ -9,6 +9,10 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **User Agent Presets**: Added custom User Agent presets sheet supporting Android/Desktop/TV browser spoofing and settings repository persistence.
 - **User Agent Selection UI**: Built the `UserAgentSheet` component and menu integration to allow hot-swapping web browser layouts.
 
+### Removed
+- **Referer Fallback**: Removed automatic fallback that populated `Referer` headers with the page's origin URL when requesting video streams.
+
+
 ## [0.6.1] — 2026-06-29 (versionCode 213)
 
 ### Fixed

@@ -62,11 +62,6 @@ final class VideoDetector: ObservableObject {
         }
         if !result.keys.contains(where: { $0.caseInsensitiveCompare("User-Agent") == .orderedSame }) {
             result["User-Agent"] = fallbackUA
-        }
-        if let origin = video.originUrl, !origin.isEmpty,
-           !result.keys.contains(where: { $0.caseInsensitiveCompare("Referer") == .orderedSame }) {
-            result["Referer"] = origin
-        }
         return result
     }
 }

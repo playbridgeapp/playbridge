@@ -914,9 +914,6 @@ class BrowserActivity : ComponentActivity() {
                             return@launch
                         }
                         val headers = VideoDetector.mediaHeaders(video)
-                        if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                            headers["Referer"] = video.originUrl
-                        }
                         connectionViewModel.playOnDlna(
                             com.playbridge.sender.cast.MediaItem(
                                 url = video.url,
@@ -1009,9 +1006,6 @@ class BrowserActivity : ComponentActivity() {
                             }
                         } else {
                             val headers = VideoDetector.mediaHeaders(video)
-                            if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                headers["Referer"] = video.originUrl
-                            }
                             val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
                             val cmd = createSingleVideoCommandJson(
                                 PlayPayload(
@@ -1751,9 +1745,6 @@ class BrowserActivity : ComponentActivity() {
                          val dlnaTarget = connectionViewModel.activeDlnaTarget.value
                          if (dlnaTarget != null) {
                              val dlnaHeaders = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                             if (!video.originUrl.isNullOrEmpty() && dlnaHeaders.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                 dlnaHeaders["Referer"] = video.originUrl
-                             }
                              connectionViewModel.playOnDlna(
                                  com.playbridge.sender.cast.MediaItem(
                                      url = video.url,
@@ -1786,9 +1777,6 @@ class BrowserActivity : ComponentActivity() {
                              )
                          } else {
                              val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                             if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                 headers["Referer"] = video.originUrl
-                             }
                              val effectiveQuality = defaultVideoQuality.takeIf { it != "Auto" }
                              createSingleVideoCommandJson(
                                  PlayPayload(
@@ -1830,9 +1818,6 @@ class BrowserActivity : ComponentActivity() {
                             is WebSocketClient.ConnectionState.Connected -> {
                                 val items: List<PlayPayload> = video.playlistPayload ?: run {
                                     val headers = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                                    if (!video.originUrl.isNullOrEmpty() && headers.keys.none { it.equals("Referer", ignoreCase = true) }) {
-                                        headers["Referer"] = video.originUrl
-                                    }
                                     listOf(
                                         PlayPayload(
                                             url = video.url,
@@ -1861,7 +1846,7 @@ class BrowserActivity : ComponentActivity() {
                         forcePlaylistSheet = null
                     },
                     onDownloadVideo = { video ->
-                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer") ?: video.originUrl, selectedTab?.content?.title)
+                        enqueueEngineDownload(video.url, null, video.contentType, video.headers?.get("User-Agent"), video.headers?.get("Cookie"), video.headers?.get("Referer"), selectedTab?.content?.title)
                     },
                     onClearVideos = { com.playbridge.sender.cast.VideoDetector.clearTab(selectedTabId ?: "") },
                     playerMode = sheetPlayerMode,
