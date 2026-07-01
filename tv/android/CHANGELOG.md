@@ -3,6 +3,16 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## GeckoView Plugin [0.3.1] — 2026-07-01 (versionCode 209)
+
+### Fixed
+- **Google Play TV Compatibility**: Declared `android.hardware.bluetooth` as optional in the plugin manifest to ensure wide device compatibility. (#70)
+
+## Player [0.7.1] — 2026-07-01 (versionCode 217)
+
+### Fixed
+- **Google Play TV Compatibility**: Declared `android.hardware.bluetooth` as optional to prevent Google Play from listing the player as incompatible on uncertified/generic TV boxes that do not support Bluetooth. (#70)
+
 ## GeckoView Plugin [0.3.0] — 2026-06-30 (versionCode 208)
 
 ### Added

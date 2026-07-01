@@ -49,6 +49,13 @@
     <uses-feature
         android:name="android.hardware.wifi"
         android:required="false" />
+    <!-- FOREGROUND_SERVICE_CONNECTED_DEVICE implicitly marks
+         android.hardware.bluetooth as REQUIRED, which makes Google Play list the app as
+         "not compatible" on generic/uncertified TV boxes that don't declare bluetooth features.
+         Declare it optional. See issue #70. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
 
     <!-- Android 11+ Package Visibility Rules:
          Allow this app to query the system for other apps that can handle video playback intents.
