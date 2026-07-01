@@ -19,8 +19,8 @@ android {
         applicationId = "com.playbridge.geckoview.plugin"
         minSdk = 26
         targetSdk = 36
-        versionCode = 208
-        versionName = "0.3.0"
+        versionCode = 209
+        versionName = "0.3.1"
 
         ndk {
             abiFilters.add("armeabi-v7a")
