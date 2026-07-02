@@ -856,44 +856,38 @@ class ExoPlayerActivity : PlayerActivity() {
                 // fine without tunneling. Falling straight to MPV forced software
                 // decode, which can't sustain 4K on TV silicon. The block persists
                 // until the user toggles Tunneled Playback in Settings.
+                // MPV is ALWAYS the immediate fallback: one switch, instant recovery,
+                // no ExoPlayer restart cascade. But LEARN a persisted compatibility
+                // flag from the failure first, so the NEXT ExoPlayer session avoids
+                // the broken path (see ExoPlayerEngine): tunneling off, Dolby Vision
+                // decoders replaced by their HEVC/AVC base-layer fallbacks, or async
+                // MediaCodec forced synchronous — each a failure mode observed on
+                // MediaTek TV panels ("vendor decode not init", 0xfffffff4). The
+                // Settings "Reset Decoder Compatibility" row clears the flags.
                 val prefs = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
                 val wasTunneled = prefs.getBoolean("tunneled_playback", false) &&
                     !prefs.getBoolean("tunneling_auto_blocked", false)
-                // A Dolby Vision hardware decoder that fatally fails gets blocked so the
-                // retry decodes the HEVC/AVC base layer instead (media3 lists those as
-                // compatibility fallbacks for DV profiles 8/9). MTK panels advertise DV
-                // decoders that accept dvhe.08 and then die with 0xfffffff4, while their
-                // plain HEVC decoder plays the very same track.
                 val failingDolbyVision =
                     (error as? androidx.media3.exoplayer.ExoPlaybackException)
                         ?.rendererFormat?.sampleMimeType ==
                         androidx.media3.common.MimeTypes.VIDEO_DOLBY_VISION
                 when {
                     wasTunneled -> {
-                        FileLogger.w(TAG, "Fatal decoder error in TUNNELED mode — blocking tunneling and retrying ExoPlayer")
+                        FileLogger.w(TAG, "Fatal decoder error in TUNNELED mode — blocking tunneling for future ExoPlayer sessions")
                         prefs.edit().putBoolean("tunneling_auto_blocked", true).apply()
-                        switchPlayer("exo")
                     }
                     failingDolbyVision && !prefs.getBoolean("dv_decoders_blocked", false) -> {
-                        FileLogger.w(TAG, "Fatal decoder error on a Dolby Vision decoder — blocking DV decoders and retrying with the HEVC/AVC base layer")
+                        FileLogger.w(TAG, "Fatal decoder error on a Dolby Vision decoder — future ExoPlayer sessions use the HEVC/AVC base layer")
                         prefs.edit().putBoolean("dv_decoders_blocked", true).apply()
-                        switchPlayer("exo")
                     }
                     !prefs.getBoolean("codec_async_blocked", false) -> {
-                        // Next rung: some vendor decoders (MTK TV panels) crash under
-                        // ASYNC MediaCodec (the API 31+ default) but decode fine in
-                        // synchronous mode — MPV drives the very same hardware decoder
-                        // synchronously and succeeds. Try sync hardware decode before
-                        // surrendering to software MPV.
-                        FileLogger.w(TAG, "Fatal decoder error in async codec mode — blocking async and retrying ExoPlayer synchronously")
+                        FileLogger.w(TAG, "Fatal decoder error in async codec mode — future ExoPlayer sessions use synchronous MediaCodec")
                         prefs.edit().putBoolean("codec_async_blocked", true).apply()
-                        switchPlayer("exo")
                     }
-                    else -> {
-                        FileLogger.w(TAG, "Fatal Decoder Error detected — immediate failover to MPV")
-                        switchPlayer("mpv")
-                    }
+                    else -> FileLogger.w(TAG, "Fatal decoder error with all compatibility flags already set")
                 }
+                FileLogger.w(TAG, "Fatal Decoder Error — failing over to MPV")
+                switchPlayer("mpv")
                 return
             }
             // Live stream fell behind the available DVR window — seek back to the live edge and resume.
