@@ -49,6 +49,41 @@ data class ExportedResume(
     val updatedAt: Long,
 )
 
+/**
+ * A user-added IPTV playlist source. Channels are NOT exported — they're a refreshable
+ * cache re-parsed from [source]. Note: FILE-sourced playlists carry a content:// URI
+ * whose permission grant does not transfer to another device; those import but need
+ * the file re-picked.
+ */
+@Serializable
+data class ExportedIptvPlaylist(
+    val name: String,
+    val source: String,
+    val sourceType: String,
+    val addedAt: Long,
+)
+
+@Serializable
+data class ExportedCollectionItem(
+    val title: String,
+    val url: String,
+    val kind: String,
+    val mimeType: String? = null,
+    val headersJson: String? = null,
+    val logo: String? = null,
+    val sourceTag: String? = null,
+    val orderIndex: Int = 0,
+    val addedAt: Long,
+)
+
+/** A curated collection with its ordered items (LOCAL items: see FILE caveat above). */
+@Serializable
+data class ExportedCollection(
+    val name: String,
+    val addedAt: Long,
+    val items: List<ExportedCollectionItem> = emptyList(),
+)
+
 /** App-level preferences stored in DataStore (toggles, defaults, popup lists). */
 @Serializable
 data class ExportedAppSettings(
@@ -85,6 +120,8 @@ data class ExportedSettings(
     val bookmarks: List<ExportedBookmark>? = null,
     val watchlist: List<ExportedWatchlist>? = null,
     val resume: List<ExportedResume>? = null,
+    val iptvPlaylists: List<ExportedIptvPlaylist>? = null,
+    val collections: List<ExportedCollection>? = null,
     val appSettings: ExportedAppSettings? = null,
     val mediaflowProxyUrl: String? = null,
     val mediaflowProxyPassword: String? = null,

@@ -4,10 +4,16 @@ import android.content.Context
 import com.playbridge.sender.browser.Components
 import com.playbridge.sender.settings.ExportedAppSettings
 import com.playbridge.sender.settings.ExportedBookmark
+import com.playbridge.sender.settings.ExportedCollection
+import com.playbridge.sender.settings.ExportedCollectionItem
+import com.playbridge.sender.settings.ExportedIptvPlaylist
 import com.playbridge.sender.settings.ExportedResume
 import com.playbridge.sender.settings.ExportedSettings
 import com.playbridge.sender.settings.ExportedTab
 import com.playbridge.sender.settings.ExportedWatchlist
+import com.playbridge.sender.data.collection.CollectionEntity
+import com.playbridge.sender.data.collection.CollectionItemEntity
+import com.playbridge.sender.data.iptv.IptvPlaylistEntity
 import com.playbridge.sender.data.debrid.DebridRepository
 import com.playbridge.sender.data.history.BookmarkEntity
 import com.playbridge.sender.data.history.DatabaseProvider
@@ -69,6 +75,36 @@ object BackupUtils {
                 updatedAt = it.updatedAt,
             )
         }
+        // IPTV playlist sources (channels are a cache; re-parsed after import/refresh).
+        val currentIptvPlaylists = database.iptvPlaylistDao().observeAll().first().map {
+            ExportedIptvPlaylist(
+                name = it.name,
+                source = it.source,
+                sourceType = it.sourceType,
+                addedAt = it.addedAt,
+            )
+        }
+        // Collections with their ordered items (items are self-contained and playable).
+        val collectionItemDao = database.collectionItemDao()
+        val currentCollections = database.collectionDao().observeAll().first().map { c ->
+            ExportedCollection(
+                name = c.name,
+                addedAt = c.addedAt,
+                items = collectionItemDao.getForCollection(c.id).map { item ->
+                    ExportedCollectionItem(
+                        title = item.title,
+                        url = item.url,
+                        kind = item.kind,
+                        mimeType = item.mimeType,
+                        headersJson = item.headersJson,
+                        logo = item.logo,
+                        sourceTag = item.sourceTag,
+                        orderIndex = item.orderIndex,
+                        addedAt = item.addedAt,
+                    )
+                }
+            )
+        }
         val appSettings = ExportedAppSettings(
             autoSwitchToRemote = settingsRepository.autoSwitchToRemote.first(),
             maxAliveTabs = settingsRepository.maxAliveTabs.first(),
@@ -104,6 +140,8 @@ object BackupUtils {
             bookmarks = currentBookmarks,
             watchlist = currentWatchlist,
             resume = currentResume,
+            iptvPlaylists = currentIptvPlaylists,
+            collections = currentCollections,
             appSettings = appSettings,
             mediaflowProxyUrl = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, ""),
             mediaflowProxyPassword = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, ""),
@@ -216,6 +254,54 @@ object BackupUtils {
                         durationMs = item.durationMs,
                         updatedAt = item.updatedAt,
                     ))
+                }
+            }
+
+            // IPTV playlist sources — deduped by source so re-imports don't double up.
+            // Channels re-populate on the playlist's first open/refresh.
+            if (imported.iptvPlaylists != null) {
+                val iptvDao = database.iptvPlaylistDao()
+                val existingSources = iptvDao.observeAll().first().map { it.source }.toSet()
+                imported.iptvPlaylists.forEach { p ->
+                    if (p.source !in existingSources) {
+                        iptvDao.insert(IptvPlaylistEntity(
+                            name = p.name,
+                            source = p.source,
+                            sourceType = p.sourceType,
+                            addedAt = p.addedAt,
+                        ))
+                    }
+                }
+            }
+
+            // Collections + items — deduped by collection name; ids are re-generated
+            // locally, items keep their order.
+            if (imported.collections != null) {
+                val collectionDao = database.collectionDao()
+                val itemDao = database.collectionItemDao()
+                val existingNames = collectionDao.observeAll().first().map { it.name }.toSet()
+                imported.collections.forEach { c ->
+                    if (c.name !in existingNames) {
+                        val newId = collectionDao.insert(CollectionEntity(
+                            name = c.name,
+                            addedAt = c.addedAt,
+                            itemCount = c.items.size,
+                        ))
+                        c.items.forEach { item ->
+                            itemDao.insert(CollectionItemEntity(
+                                collectionId = newId,
+                                title = item.title,
+                                url = item.url,
+                                kind = item.kind,
+                                mimeType = item.mimeType,
+                                headersJson = item.headersJson,
+                                logo = item.logo,
+                                sourceTag = item.sourceTag,
+                                orderIndex = item.orderIndex,
+                                addedAt = item.addedAt,
+                            ))
+                        }
+                    }
                 }
             }
 
