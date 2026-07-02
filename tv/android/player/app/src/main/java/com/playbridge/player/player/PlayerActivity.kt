@@ -397,6 +397,9 @@ abstract class PlayerActivity : ComponentActivity() {
     protected fun showSwitchPlayerDialog(currentPlayerId: String) {
         val wasPlaying = isPlaying()
         if (wasPlaying) pause()
+        // Whether closing the dialog should resume playback. Opening an external
+        // player must NOT resume — our audio would play underneath the other app.
+        var resumeOnDismiss = wasPlaying
 
         val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
         val composeView = androidx.compose.ui.platform.ComposeView(this)
@@ -410,7 +413,12 @@ abstract class PlayerActivity : ComponentActivity() {
                     currentPlayer = currentPlayerId,
                     onPlayerSelected = { selectedPlayerId ->
                         dialog.dismiss()
-                        switchPlayer(selectedPlayerId)
+                        if (selectedPlayerId == SwitchPlayerIds.EXTERNAL) {
+                            resumeOnDismiss = false
+                            openInExternalPlayer()
+                        } else {
+                            switchPlayer(selectedPlayerId)
+                        }
                     },
                     onDismiss = {
                         dialog.dismiss()
@@ -421,9 +429,97 @@ abstract class PlayerActivity : ComponentActivity() {
 
         dialog.setContentView(composeView)
         dialog.setOnDismissListener {
-            if (wasPlaying) play()
+            if (resumeOnDismiss) play()
         }
         dialog.show()
+    }
+
+    /**
+     * Hand the current stream to an external player app via an ACTION_VIEW chooser.
+     * Carries title, resume position, and request headers using the extras
+     * conventions most Android players understand (VLC, MX Player, Just Player,
+     * Kodi ignore what they don't know). Our player stays paused underneath, so
+     * backing out of the external app lands back here at the same spot.
+     */
+    protected fun openInExternalPlayer() {
+        val pm = getPlayerProgressManager()
+        val url = pm?.url ?: intent.getStringExtra(ServerService.EXTRA_URL)
+        if (url == null) {
+            FileLogger.e("PlayerActivity", "Cannot open external player without a valid URL")
+            return
+        }
+        val title = pm?.title ?: intent.getStringExtra(ServerService.EXTRA_TITLE)
+        val mime = pm?.contentType?.takeIf { it.isNotBlank() } ?: "video/*"
+        val positionMs = getCurrentPosition()
+
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            addCategory(Intent.CATEGORY_DEFAULT)
+            setDataAndTypeAndNormalize(android.net.Uri.parse(url), mime)
+            if (title != null) {
+                putExtra("title", title)              // VLC / MX Player convention
+                putExtra(Intent.EXTRA_TITLE, title)
+            }
+            if (positionMs > 0L) {
+                putExtra("position", positionMs.toInt()) // VLC / MX Player: resume point (ms)
+            }
+            val headers = pm?.headers ?: intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
+            if (!headers.isNullOrEmpty()) {
+                // Alternating key/value array — MX Player / Just Player convention.
+                putExtra("headers", headers.flatMap { listOf(it.key, it.value) }.toTypedArray())
+            }
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        // Android TV builds don't ship the system chooser/sharesheet —
+        // Intent.createChooser silently shows nothing and returns. Resolve the
+        // candidates ourselves and present a D-pad-friendly picker instead.
+        val candidates = packageManager
+            .queryIntentActivities(viewIntent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            .filter { it.activityInfo.packageName != packageName }
+        FileLogger.i("PlayerActivity", "External player candidates: ${candidates.map { it.activityInfo.packageName }}")
+
+        when {
+            candidates.isEmpty() -> {
+                android.widget.Toast.makeText(
+                    this,
+                    "No external player app installed",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
+            }
+            candidates.size == 1 -> launchExternalPlayer(viewIntent, candidates[0])
+            else -> {
+                val dialog = android.app.Dialog(this, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen)
+                val composeView = androidx.compose.ui.platform.ComposeView(this)
+                composeView.setViewTreeLifecycleOwner(this)
+                composeView.setViewTreeSavedStateRegistryOwner(this)
+                composeView.setContent {
+                    androidx.tv.material3.MaterialTheme {
+                        ExternalPlayerPickerDialog(
+                            options = candidates.map { it.loadLabel(packageManager).toString() },
+                            onSelected = { index ->
+                                dialog.dismiss()
+                                launchExternalPlayer(viewIntent, candidates[index])
+                            },
+                            onDismiss = { dialog.dismiss() }
+                        )
+                    }
+                }
+                dialog.setContentView(composeView)
+                dialog.show()
+            }
+        }
+    }
+
+    private fun launchExternalPlayer(baseIntent: Intent, target: android.content.pm.ResolveInfo) {
+        try {
+            val explicit = Intent(baseIntent)
+                .setClassName(target.activityInfo.packageName, target.activityInfo.name)
+            startActivity(explicit)
+            FileLogger.i("PlayerActivity", "Opened stream in ${target.activityInfo.packageName}")
+        } catch (e: Exception) {
+            FileLogger.e("PlayerActivity", "Failed to launch external player", e)
+            android.widget.Toast.makeText(this, "Couldn't open external player", android.widget.Toast.LENGTH_SHORT).show()
+        }
     }
 
     protected fun handlePrePlayMetadata(intent: Intent?, controlsViewModel: PlayerControlsViewModel) {

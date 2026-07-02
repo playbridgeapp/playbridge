@@ -20,6 +20,73 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.tv.material3.*
 
+/** Sentinel ids used by [SwitchPlayerDialog] beyond the internal engines. */
+object SwitchPlayerIds {
+    const val EXTERNAL = "external"
+}
+
+/**
+ * D-pad-friendly picker for external player apps (TV builds have no system
+ * chooser, so [android.content.Intent.createChooser] shows nothing).
+ */
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+fun ExternalPlayerPickerDialog(
+    options: List<String>,
+    onSelected: (Int) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) {
+        try { focusRequester.requestFocus() } catch (e: Exception) { /* not attached yet */ }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .width(360.dp)
+                .background(Color(0xF21A1A2E), RoundedCornerShape(14.dp))
+                .padding(24.dp)
+        ) {
+            Text(
+                text = "Open With",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+
+            LazyColumn {
+                items(options.size) { index ->
+                    var isFocused by remember { mutableStateOf(false) }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (isFocused) Color.White.copy(alpha = 0.2f) else Color.Transparent)
+                            .onFocusChanged { isFocused = it.isFocused }
+                            .then(if (index == 0) Modifier.focusRequester(focusRequester) else Modifier)
+                            .clickable { onSelected(index) }
+                            .focusable(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = options[index],
+                            color = Color.White,
+                            fontSize = 16.sp,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun SwitchPlayerDialog(
@@ -29,7 +96,10 @@ fun SwitchPlayerDialog(
 ) {
     val players = listOf(
         Pair("exo", "ExoPlayer"),
-        Pair("mpv", "MPV")
+        Pair("mpv", "MPV"),
+        // Handled specially by the host (PlayerActivity): fires an ACTION_VIEW
+        // chooser with the current stream instead of switching internal engines.
+        Pair(SwitchPlayerIds.EXTERNAL, "External Player…")
     )
 
     val focusRequester = remember { FocusRequester() }
