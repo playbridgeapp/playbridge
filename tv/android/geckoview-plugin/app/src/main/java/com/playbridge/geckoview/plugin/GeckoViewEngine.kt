@@ -119,7 +119,7 @@ class GeckoViewEngine(
             userAgentOverride = this@GeckoViewEngine.userAgentOverride
         }
 
-        // PB Bridge + uBlock extensions are ensured (and the bridge delegate registered) once at
+        // PB Bridge (built-in) + uBlock Origin (AMO install/update) are handled once at
         // startup in PlayBridgeBrowserApplication; the runtime is shared, so nothing to do here.
 
         session.contentDelegate = object : GeckoSession.ContentDelegate {

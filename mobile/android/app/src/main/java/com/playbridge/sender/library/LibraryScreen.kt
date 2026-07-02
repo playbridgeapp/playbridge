@@ -71,7 +71,6 @@ import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
 import com.playbridge.sender.settings.SettingsScreen
-import com.playbridge.sender.cast.DeviceChip
 import com.playbridge.sender.connection.WebSocketClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -415,14 +414,13 @@ private fun LibraryScreenContent(
                                         .focusRequester(searchFocusRequester)
                                 )
                             } else {
-                                // Shared device picker: tap opens a bottom-sheet connection screen.
-                                // watch_on_tv is also reconciled by the LaunchedEffect above; these
-                                // hooks just set it optimistically on selection.
-                                DeviceChip(
-                                    showThisDevice = true,
-                                onPickedThisDevice = { browserPrefs.edit { putBoolean("watch_on_tv", false) } },
-                                onPickedDevice = { browserPrefs.edit { putBoolean("watch_on_tv", true) } },
-                                    onOpenAllDevices = onOpenConnectionScreen
+                                // Destination status lives in the app-wide NowPlayingBar
+                                // (which opens the device picker), so the top bar just
+                                // titles the screen instead of duplicating "Watching on".
+                                Text(
+                                    text = "Library",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold
                                 )
                             }
                         },
@@ -439,10 +437,8 @@ private fun LibraryScreenContent(
                                 if (isSearching) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")
                                 } else {
-                                    Image(
-                                        painter = painterResource(id = R.drawable.ic_playbridge_logo),
-                                        contentDescription = "PlayBridge",
-                                        modifier = Modifier.size(24.dp)
+                                    com.playbridge.sender.ui.DashboardBlocksIcon(
+                                        modifier = Modifier.size(22.dp)
                                     )
                                 }
                             }

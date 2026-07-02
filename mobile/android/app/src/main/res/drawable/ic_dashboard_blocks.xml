@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Dashboard "blocks" glyph: a 2×2 grid of rounded tiles echoing the Dashboard's
+  card grid. Used as the top-bar navigation icon on every main screen to return
+  to the Dashboard (replaces the app logo, which read as branding, not a button).
+  Drawn in currentColor-style solid black so Compose Icon tint applies.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Top-left tile -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M5,3 h3.5 a2,2 0 0 1 2,2 v3.5 a2,2 0 0 1 -2,2 h-3.5 a2,2 0 0 1 -2,-2 v-3.5 a2,2 0 0 1 2,-2 z" />
+    <!-- Top-right tile -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M15.5,3 h3.5 a2,2 0 0 1 2,2 v3.5 a2,2 0 0 1 -2,2 h-3.5 a2,2 0 0 1 -2,-2 v-3.5 a2,2 0 0 1 2,-2 z" />
+    <!-- Bottom-left tile -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M5,13.5 h3.5 a2,2 0 0 1 2,2 v3.5 a2,2 0 0 1 -2,2 h-3.5 a2,2 0 0 1 -2,-2 v-3.5 a2,2 0 0 1 2,-2 z" />
+    <!-- Bottom-right tile -->
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M15.5,13.5 h3.5 a2,2 0 0 1 2,2 v3.5 a2,2 0 0 1 -2,2 h-3.5 a2,2 0 0 1 -2,-2 v-3.5 a2,2 0 0 1 2,-2 z" />
+</vector>

@@ -407,24 +407,94 @@ object Components {
                 GeckoResult.fromValue(null)
             }
 
-            // Also install uBlock Origin
-            runtime.webExtensionController.ensureBuiltIn(
-                "resource://android/assets/extensions/ublock_origin/",
-                "uBlock0@raymondhill.net"
-            ).then { extension ->
-                if (extension != null) {
-                    Log.i(TAG, "uBlock Origin loaded successfully: ${extension.id}")
-                } else {
-                    Log.e(TAG, "uBlock Origin ensureBuiltIn returned null extension")
-                }
-                GeckoResult.fromValue(extension)
-            }.exceptionally { throwable ->
-                Log.e(TAG, "uBlock Origin ensureBuiltIn FAILED", throwable)
-                GeckoResult.fromValue(null)
-            }
+            // uBlock Origin: real AMO install (signed store build) instead of the old
+            // bundled ensureBuiltIn copy. A store install starts with fresh filter
+            // lists, keeps regional/locale list selection intact, exposes the full
+            // dashboard, and can actually update — we trigger the update check
+            // ourselves since GeckoView has no background extension updater.
+            installOrUpdateUblock()
         }
     }
     
+    // ── uBlock Origin (AMO install) ──────────────────────────────────────────
+
+    private const val UBLOCK_ID = "uBlock0@raymondhill.net"
+    // AMO's stable "latest signed XPI" redirect for uBlock Origin.
+    private const val UBLOCK_AMO_XPI =
+        "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
+    private const val UBLOCK_UPDATE_CHECK_PREF = "ublock_last_update_check"
+    private const val UBLOCK_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L
+
+    /**
+     * Ensure uBlock Origin is installed as a real AMO install and kept current.
+     * Runs on the main looper (posted by [installBundledExtension]) like every
+     * other webExtensionController call in this file. Three cases:
+     *
+     *  - not installed → install from AMO (an offline first launch simply retries
+     *    on the next startup, since this runs every launch);
+     *  - legacy bundled built-in copy present → uninstall it once, then AMO-install
+     *    (the built-in froze filter lists at build time and stripped locale data,
+     *    which is why it blocked worse than a store install);
+     *  - AMO copy present → trigger a signed update check via its AMO update_url,
+     *    throttled to once a day (GeckoView never updates extensions on its own).
+     */
+    private fun installOrUpdateUblock() {
+        val controller = runtime.webExtensionController
+        controller.list().then({ extensions ->
+            val existing = extensions?.firstOrNull { it.id == UBLOCK_ID }
+            when {
+                existing == null -> installUblockFromAmo(reason = "fresh install")
+                existing.isBuiltIn -> {
+                    Log.i(TAG, "Migrating uBlock Origin: bundled built-in → AMO install")
+                    controller.uninstall(existing).then({
+                        installUblockFromAmo(reason = "migration from built-in")
+                        GeckoResult.fromValue(null)
+                    }, { throwable ->
+                        // Keep the bundled copy working rather than ending up with none.
+                        Log.e(TAG, "Failed to remove built-in uBlock; keeping bundled copy", throwable)
+                        GeckoResult.fromValue(null)
+                    })
+                }
+                else -> maybeCheckUblockUpdate(existing)
+            }
+            GeckoResult.fromValue(null)
+        }, { throwable ->
+            Log.e(TAG, "webExtensionController.list() failed; skipping uBlock setup", throwable)
+            GeckoResult.fromValue(null)
+        })
+    }
+
+    private fun installUblockFromAmo(reason: String) {
+        Log.i(TAG, "Installing uBlock Origin from AMO ($reason)…")
+        runtime.webExtensionController
+            .install(UBLOCK_AMO_XPI, WebExtensionController.INSTALLATION_METHOD_MANAGER)
+            .then({ extension ->
+                Log.i(TAG, "uBlock Origin ${extension?.metaData?.version} installed from AMO ($reason)")
+                GeckoResult.fromValue(null)
+            }, { throwable ->
+                Log.e(TAG, "uBlock Origin AMO install failed ($reason) — will retry next launch", throwable)
+                GeckoResult.fromValue(null)
+            })
+    }
+
+    private fun maybeCheckUblockUpdate(extension: GeckoWebExtension) {
+        val prefs = appContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        if (now - prefs.getLong(UBLOCK_UPDATE_CHECK_PREF, 0L) < UBLOCK_UPDATE_INTERVAL_MS) return
+        prefs.edit().putLong(UBLOCK_UPDATE_CHECK_PREF, now).apply()
+        runtime.webExtensionController.update(extension).then({ updated ->
+            if (updated != null) {
+                Log.i(TAG, "uBlock Origin updated to ${updated.metaData?.version}")
+            } else {
+                Log.d(TAG, "uBlock Origin is up to date")
+            }
+            GeckoResult.fromValue(null)
+        }, { throwable ->
+            Log.w(TAG, "uBlock Origin update check failed", throwable)
+            GeckoResult.fromValue(null)
+        })
+    }
+
     // Store extension reference for later use
     private var videoDetectorExtension: GeckoWebExtension? = null
 

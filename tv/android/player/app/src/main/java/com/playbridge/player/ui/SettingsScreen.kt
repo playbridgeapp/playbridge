@@ -219,7 +219,33 @@ fun SettingsScreen(
                                 checked = tunneledPlayback,
                                 onCheckedChange = {
                                     tunneledPlayback = it
-                                    prefs.edit().putBoolean("tunneled_playback", it).apply()
+                                    // An explicit user choice clears any automatic block set
+                                    // after a tunneled decoder crash (see ExoPlayerActivity).
+                                    prefs.edit()
+                                        .putBoolean("tunneled_playback", it)
+                                        .remove("tunneling_auto_blocked")
+                                        .apply()
+                                }
+                            )
+                        }
+                        item {
+                            // Escape hatch for the persistent decoder-compatibility flags the
+                            // failover ladder sets after fatal decoder errors (see
+                            // ExoPlayerActivity): tunneling / async MediaCodec / Dolby Vision.
+                            SettingClickableItem(
+                                label = "Reset Decoder Compatibility",
+                                description = "Clear automatic decoder blocks set after playback errors (tunneling, async codec, Dolby Vision)",
+                                onClick = {
+                                    prefs.edit()
+                                        .remove("tunneling_auto_blocked")
+                                        .remove("codec_async_blocked")
+                                        .remove("dv_decoders_blocked")
+                                        .apply()
+                                    android.widget.Toast.makeText(
+                                        context,
+                                        "Decoder compatibility flags reset",
+                                        android.widget.Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             )
                         }

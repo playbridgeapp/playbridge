@@ -155,14 +155,12 @@ fun ConnectionScreen(
                     IconButton(
                         onClick = onMenuClick,
                         modifier = Modifier.semantics {
-                            contentDescription = "Menu"
+                            contentDescription = "Dashboard"
                             role = androidx.compose.ui.semantics.Role.Button
                         }
                     ) {
-                        Image(
-                            painter = painterResource(id = R.drawable.ic_playbridge_logo),
-                            contentDescription = "PlayBridge",
-                            modifier = Modifier.size(24.dp)
+                        DashboardBlocksIcon(
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 },

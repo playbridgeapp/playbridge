@@ -62,7 +62,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import kotlin.math.roundToInt
-import com.playbridge.sender.model.TvDevice
 
 // ==================== Shared Components ====================
 
@@ -321,24 +320,16 @@ internal fun SplitPlayButton(
     tvName: String? = null,
     isTvConnected: Boolean = false,
     watchOnTv: Boolean,
-    onWatchOnTvChange: (Boolean) -> Unit,
     watchLabel: String = "Watch",
-    selectedTvDevice: TvDevice? = null,
-    onOpenConnectionScreen: () -> Unit = {},
     onWatchOnTv: () -> Unit,
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
     onWatchOnPhoneLongClick: (() -> Unit)? = null,
-    playerMode: String = "tv",
-    onPlayerModeChange: (String) -> Unit = {},
     proxyAvailable: Boolean = false,
     proxyMode: MediaflowProxy.Mode = MediaflowProxy.Mode.OFF,
     onProxyModeChange: (MediaflowProxy.Mode) -> Unit = {},
     themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
-    // Options reflect what the selected TV reported it supports (see TvCapabilityOptions).
-    val playerOptions = TvCapabilityOptions.playerOptions(selectedTvDevice)
-    val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
     var showProvidersSheet by remember { mutableStateOf(false) }
 
     val topProvider = watchProviders.firstOrNull()
@@ -353,44 +344,26 @@ internal fun SplitPlayButton(
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // ── Mode toggle chip ──────────────────────────────────────────────────
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Shared device picker (tap opens the bottom-sheet connection screen). watch_on_tv
-            // follows the picker's selection via these hooks.
-            DeviceChip(
-                showThisDevice = true,
-                themeColor = themeColor,
-                onPickedThisDevice = { onWatchOnTvChange(false) },
-                onPickedDevice = { onWatchOnTvChange(true) },
-                onOpenAllDevices = onOpenConnectionScreen
-            )
-
-            // Player-mode + proxy chips (only meaningful when casting to TV).
-            // Mirrors the CastSheet chips so users can tweak engine / proxy
-            // without having to open the bottom sheet.
-            if (watchOnTv) {
+        // ── Proxy chip ────────────────────────────────────────────────────────
+        // The "Watching on" device chip and the player-engine chip used to live
+        // here too; both were duplicates. Destination now lives solely in the
+        // app-wide NowPlayingBar, and the engine picker sits under the connected
+        // TV in the device connection sheet.
+        if (watchOnTv && proxyAvailable) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 ChipDropdown(
-                    selectedLabel = selectedPlayerLabel,
-                    options = playerOptions,
-                    selectedValue = playerMode,
-                    onSelect = onPlayerModeChange,
+                    selectedLabel = proxyMode.label,
+                    options = MediaflowProxy.Mode.entries.map { it.name to it.label },
+                    selectedValue = proxyMode.name,
+                    onSelect = { value -> onProxyModeChange(MediaflowProxy.Mode.valueOf(value)) },
                     themeColor = themeColor
                 )
-                if (proxyAvailable) {
-                    ChipDropdown(
-                        selectedLabel = proxyMode.label,
-                        options = MediaflowProxy.Mode.entries.map { it.name to it.label },
-                        selectedValue = proxyMode.name,
-                        onSelect = { value -> onProxyModeChange(MediaflowProxy.Mode.valueOf(value)) },
-                        themeColor = themeColor
-                    )
-                }
             }
         }
 

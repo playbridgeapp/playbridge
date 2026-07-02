@@ -1519,6 +1519,18 @@ fun AppNavHost(
                 val nativePlaying = tvActiveContext == "player" && wsConnected
                 val playing = dlnaHasMedia || nativePlaying
 
+                // Pause + progress for the bar: freeze the equalizer while paused and
+                // drive the bottom progress line off the live status snapshots.
+                val paused =
+                    if (dlnaActive) dlnaState == PlaybackState.PAUSED
+                    else tvPlayback?.state == "paused"
+                val playbackProgress = when {
+                    dlnaActive -> dlnaStatus?.takeIf { it.durationMs > 0 }
+                        ?.let { it.positionMs.toFloat() / it.durationMs }
+                    else -> tvPlayback?.takeIf { it.durationMs > 0 }
+                        ?.let { it.positionMs.toFloat() / it.durationMs }
+                }
+
                 val deviceName = activeDlnaTarget?.name ?: tvDevice?.name
                 val leadingIcon = when {
                     dlnaActive -> Icons.Default.Cast
@@ -1561,6 +1573,8 @@ fun AppNavHost(
                         }
                     },
                     isPlaying = playing,
+                    isPaused = paused,
+                    progress = if (playing) playbackProgress else null,
                     showTvIcon = playing,
                     onTvIconClick = {
                         showDevicePicker = true

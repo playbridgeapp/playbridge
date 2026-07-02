@@ -846,10 +846,47 @@ class ExoPlayerActivity : PlayerActivity() {
             val player = engine?.getExoPlayer() ?: return
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
             
-            // Immediate failover for common fatal startup errors
+            // Immediate failover for common fatal startup errors.
             if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED) {
-                FileLogger.w(TAG, "Fatal Decoder Error detected — immediate failover to MPV")
+                // If the failing session ran TUNNELED, disable tunneling and retry the
+                // hardware decoder first: some vendor decoders (MediaTek TV panels —
+                // "vendor decode not init", CodecException 0xfffffff4 right after the
+                // tunneled configure) crash on tunneled 4K but decode the same stream
+                // fine without tunneling. Falling straight to MPV forced software
+                // decode, which can't sustain 4K on TV silicon. The block persists
+                // until the user toggles Tunneled Playback in Settings.
+                // MPV is ALWAYS the immediate fallback: one switch, instant recovery,
+                // no ExoPlayer restart cascade. But LEARN a persisted compatibility
+                // flag from the failure first, so the NEXT ExoPlayer session avoids
+                // the broken path (see ExoPlayerEngine): tunneling off, Dolby Vision
+                // decoders replaced by their HEVC/AVC base-layer fallbacks, or async
+                // MediaCodec forced synchronous — each a failure mode observed on
+                // MediaTek TV panels ("vendor decode not init", 0xfffffff4). The
+                // Settings "Reset Decoder Compatibility" row clears the flags.
+                val prefs = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                val wasTunneled = prefs.getBoolean("tunneled_playback", false) &&
+                    !prefs.getBoolean("tunneling_auto_blocked", false)
+                val failingDolbyVision =
+                    (error as? androidx.media3.exoplayer.ExoPlaybackException)
+                        ?.rendererFormat?.sampleMimeType ==
+                        androidx.media3.common.MimeTypes.VIDEO_DOLBY_VISION
+                when {
+                    wasTunneled -> {
+                        FileLogger.w(TAG, "Fatal decoder error in TUNNELED mode — blocking tunneling for future ExoPlayer sessions")
+                        prefs.edit().putBoolean("tunneling_auto_blocked", true).apply()
+                    }
+                    failingDolbyVision && !prefs.getBoolean("dv_decoders_blocked", false) -> {
+                        FileLogger.w(TAG, "Fatal decoder error on a Dolby Vision decoder — future ExoPlayer sessions use the HEVC/AVC base layer")
+                        prefs.edit().putBoolean("dv_decoders_blocked", true).apply()
+                    }
+                    !prefs.getBoolean("codec_async_blocked", false) -> {
+                        FileLogger.w(TAG, "Fatal decoder error in async codec mode — future ExoPlayer sessions use synchronous MediaCodec")
+                        prefs.edit().putBoolean("codec_async_blocked", true).apply()
+                    }
+                    else -> FileLogger.w(TAG, "Fatal decoder error with all compatibility flags already set")
+                }
+                FileLogger.w(TAG, "Fatal Decoder Error — failing over to MPV")
                 switchPlayer("mpv")
                 return
             }
@@ -1623,6 +1660,9 @@ class ExoPlayerActivity : PlayerActivity() {
         return listOf(UnifiedTrack("off", "Off", offSelected, "sub")) + embedded + external
     }
 
+    // Format.NO_VALUE is UnstableApi; this usage predates this annotation but fell
+    // out of the lint baseline when the file's line numbers shifted.
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun buildTrackName(format: androidx.media3.common.Format): String {
         val items = mutableListOf<String>()
         if (format.height != androidx.media3.common.Format.NO_VALUE) items.add("${format.height}p")

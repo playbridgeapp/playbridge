@@ -250,12 +250,10 @@ fun PhoneFilesScreen(
                             Icon(Icons.Default.Close, contentDescription = "Close search")
                         }
                     } else {
-                        // PlayBridge logo → Dashboard, matching the other top-level screens.
+                        // Dashboard (blocks) icon → Dashboard, matching the other top-level screens.
                         IconButton(onClick = onBack) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_playbridge_logo),
-                                contentDescription = "PlayBridge",
-                                modifier = Modifier.size(24.dp),
+                            com.playbridge.sender.ui.DashboardBlocksIcon(
+                                modifier = Modifier.size(22.dp),
                             )
                         }
                     }

@@ -177,9 +177,7 @@ fun LibraryDetailScreen(
     val watchOnTv = routeTargetsTv
 
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
-    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
     val tmdbRepository: com.playbridge.sender.data.library.TmdbRepository = org.koin.compose.koinInject()
-    val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
 
     // Mediaflow proxy config (read once — user reopens the screen to pick up changes)
     val mediaflowProxyUrl by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
@@ -793,9 +791,6 @@ fun LibraryDetailScreen(
                                 tvName = tvName,
                                 isTvConnected = isTvConnected,
                                 watchOnTv = watchOnTv,
-                                onWatchOnTvChange = { onSetWatchRoute(it) },
-                                selectedTvDevice = selectedTvDevice,
-                                onOpenConnectionScreen = onOpenConnectionScreen,
                                 onWatchOnTv = {
                                     if (isSeries && firstEpisodeForTv != null) {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${firstEpisodeForTv.episode ?: 1}" else firstEpisodeForTv.id
@@ -843,12 +838,6 @@ fun LibraryDetailScreen(
                                         triggerWatch(streamId, addonType, displayTitle, true, true, null)
                                     }
                                 },
-                                playerMode = playerMode,
-                                onPlayerModeChange = { mode ->
-                                    scope.launch {
-                                        settingsRepository.setTvPlayerMode(mode)
-                                    }
-                                },
                                 proxyAvailable = proxyAvailable,
                                 proxyMode = proxyMode,
                                 onProxyModeChange = { proxyMode = it },
@@ -887,12 +876,9 @@ fun LibraryDetailScreen(
                                     tvName = tvName,
                                     isTvConnected = isTvConnected,
                                     watchOnTv = watchOnTv,
-                                    onWatchOnTvChange = { onSetWatchRoute(it) },
                                     watchLabel = epResume
                                         ?.let { "Resume $epLabel · ${formatResumeTime(it.positionMs)}" }
                                         ?: "Watch $epLabel",
-                                    selectedTvDevice = selectedTvDevice,
-                                    onOpenConnectionScreen = onOpenConnectionScreen,
                                     onWatchOnTv = {
                                         val streamId = if (resolvedImdbId != null) "$resolvedImdbId:${selectedSeason}:${nextUnwatchedEpisode.episode ?: 1}" else nextUnwatchedEpisode.id
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
@@ -918,12 +904,6 @@ fun LibraryDetailScreen(
                                         val streamType = if (resolvedImdbId != null) "series" else addonType
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
                                         triggerWatch(streamId, streamType, title, true, true, nextUnwatchedEpisode)
-                                    },
-                                    playerMode = playerMode,
-                                    onPlayerModeChange = { mode ->
-                                        scope.launch {
-                                            settingsRepository.setTvPlayerMode(mode)
-                                        }
                                     },
                                     proxyAvailable = proxyAvailable,
                                     proxyMode = proxyMode,

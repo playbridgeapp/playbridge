@@ -19,9 +19,6 @@ import 'sas_crypto.dart';
 /// receiver's `CertManager` computes the same over its public key. We locate the
 /// SPKI inside the TBSCertificate as the unique SEQUENCE whose children are an
 /// AlgorithmIdentifier SEQUENCE followed by a BIT STRING.
-///
-/// NOTE: the ASN.1 walk is the one bit that needs a real device check — pair
-/// once and confirm the computed pin equals the TV-delivered `certFingerprint`.
 String? spkiPinFromCertDer(Uint8List der) {
   try {
     final cert = ASN1Parser(der).nextObject() as ASN1Sequence;
@@ -32,8 +29,14 @@ String? spkiPinFromCertDer(Uint8List der) {
           el.elements!.length == 2 &&
           el.elements![0] is ASN1Sequence &&
           el.elements![1] is ASN1BitString) {
-        final spkiDer = el.encodedBytes;
-        if (spkiDer == null) return null;
+        final bytes = el.encodedBytes;
+        if (bytes == null) return null;
+        // pointycastle slices a nested element's encodedBytes to the END of
+        // the parent's buffer, not the element's declared end — so the raw
+        // bytes include trailing siblings (e.g. the extensions block) and the
+        // hash never matches the TV's pin. Trim to tag + length + value.
+        final spkiLen = el.valueStartPosition + el.valueByteLength!;
+        final spkiDer = Uint8List.sublistView(bytes, 0, spkiLen);
         final digest = crypto.sha256.convert(spkiDer).bytes;
         return 'sha256/${base64.encode(digest)}';
       }
