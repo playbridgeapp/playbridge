@@ -2,6 +2,7 @@ package com.playbridge.sender.connection
 
 import android.util.Log
 import com.playbridge.shared.protocol.createAuthJson
+import com.playbridge.shared.protocol.createContextQueryJson
 import com.playbridge.shared.protocol.createPairingCommitJson
 import com.playbridge.shared.protocol.createPairingChallengeJson
 import com.playbridge.shared.protocol.createPairingRevealJson
@@ -74,6 +75,13 @@ class WebSocketClient {
 
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
+
+    /**
+     * True when the last disconnect was an explicit user action (Disconnect button /
+     * route change), false after an unexpected drop. Lets callers (foreground-return
+     * hook, auto-connect re-arm) avoid re-establishing a link the user chose to close.
+     */
+    val wasUserDisconnect: Boolean get() = isUserDisconnect
 
     @Volatile private var senderKeyPair: SasCrypto.KeyPair? = null
     @Volatile private var nonceS: ByteArray? = null
@@ -321,6 +329,10 @@ class WebSocketClient {
                             }
                             emitCapabilities(json)
                             _connectionState.value = ConnectionState.Connected(serverName, isSecure)
+                            // Resync: the TV only broadcasts context on its own activity
+                            // transitions, so a client (re)connecting mid-playback would
+                            // otherwise show "idle" until the next transition.
+                            webSocket.send(createContextQueryJson())
                             return
                         }
                     } catch (e: Exception) {
@@ -354,6 +366,9 @@ class WebSocketClient {
                                     Log.i(TAG, "Authentication successful")
                                     emitCapabilities(json)
                                     _connectionState.value = ConnectionState.Connected(serverName, isSecure)
+                                    // Resync context after every (re)connect — see the
+                                    // pairing_approved path for rationale.
+                                    webSocket.send(createContextQueryJson())
                                     val token = json["token"]?.toString()?.replace("\"", "")
                                     val certFp = json["certFingerprint"]?.toString()?.replace("\"", "")
                                         ?.takeIf { it.isNotEmpty() && it != "null" }
@@ -554,12 +569,19 @@ class WebSocketClient {
     
     /**
      * Re-establish the last connection using the retained [targetConnection]. Used by the
-     * cast-session reconnect supervisor when a live native link drops unexpectedly. No-op if
-     * the user explicitly disconnected, if there's no prior target, or if a connection is
-     * already in progress / established. Reuses the saved token (no re-pairing).
+     * cast-session reconnect supervisor when a live native link drops unexpectedly, and by
+     * the foreground-return hook. No-op if the user explicitly disconnected, if there's no
+     * prior target, or if a connection is already in progress / established. Reuses the
+     * saved token (no re-pairing).
+     *
+     * [freshDevice] is the saved TV record (kept up to date by the UUID-matched discovery
+     * healer in ConnectionViewModel). When it refers to the same receiver as
+     * [targetConnection], its endpoint + credentials replace the cached ones — so a
+     * reconnect after a DHCP lease change (router restart) targets the TV's *new* IP
+     * instead of retrying the dead one.
      */
-    fun reconnect() {
-        val conn = targetConnection
+    fun reconnect(freshDevice: com.playbridge.sender.model.TvDevice? = null) {
+        var conn = targetConnection
         if (conn == null) {
             Log.d(TAG, "reconnect(): no prior target — ignoring")
             return
@@ -570,6 +592,29 @@ class WebSocketClient {
         }
         val state = _connectionState.value
         if (state is ConnectionState.Connected || state is ConnectionState.Connecting) return
+
+        // Refresh the endpoint from the saved record if it's the same receiver. Matching is
+        // by receiver name (the saved record carries the TV uuid, but targetConnection only
+        // knows the name the TV announced at connect time). The token/pin are refreshed too:
+        // receivers may rotate the token on every auth, and the store is authoritative.
+        if (freshDevice != null && !freshDevice.isDlna &&
+            freshDevice.token.isNotEmpty() && freshDevice.name == conn.serverName &&
+            (freshDevice.ip != conn.ip || freshDevice.port != conn.port ||
+                freshDevice.wssPort != conn.wssPort || freshDevice.token != conn.token ||
+                (freshDevice.certFingerprint ?: conn.pin) != conn.pin)
+        ) {
+            Log.i(TAG, "reconnect(): endpoint refreshed from saved record " +
+                "(${conn.ip}:${conn.port} → ${freshDevice.ip}:${freshDevice.port})")
+            conn = conn.copy(
+                ip = freshDevice.ip,
+                port = freshDevice.port,
+                wssPort = freshDevice.wssPort ?: conn.wssPort,
+                token = freshDevice.token,
+                pin = freshDevice.certFingerprint ?: conn.pin,
+            )
+            targetConnection = conn
+        }
+
         Log.i(TAG, "reconnect(): re-attempting ${conn.serverName} at ${conn.ip}:${conn.port}")
         attemptConnection(conn.ip, conn.port, conn.serverName)
     }

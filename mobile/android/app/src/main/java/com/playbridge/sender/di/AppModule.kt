@@ -114,7 +114,9 @@ val appModule = module {
             context = androidContext(),
             webSocketClient = get(),
             connectionCoordinator = get(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            connectionStore = get(),
+            nsdHelper = get(),
         )
     }
 

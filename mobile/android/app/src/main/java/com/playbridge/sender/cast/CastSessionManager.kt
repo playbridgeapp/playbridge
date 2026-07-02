@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -45,6 +46,8 @@ class CastSessionManager(
     private val webSocketClient: WebSocketClient,
     private val connectionCoordinator: ConnectionCoordinator,
     private val scope: CoroutineScope,
+    private val connectionStore: com.playbridge.sender.connection.ConnectionStore,
+    private val nsdHelper: com.playbridge.sender.connection.NsdHelper,
 ) {
     private val TAG = "CastSessionManager"
 
@@ -213,6 +216,55 @@ class CastSessionManager(
     }.stateIn(scope, SharingStarted.Eagerly, SessionInfo("TV", null))
 
     init {
+        // Reattach a dropped link whenever the app returns to the foreground (change 1).
+        registerForegroundObserver()
+        // Reattach as soon as Wi-Fi/Ethernet comes (back) up (change 5).
+        registerNetworkCallback()
+
+        // Background discovery while the reconnect supervisor is retrying (change 3): the
+        // saved TV may have moved (router restart → new DHCP lease), in which case the
+        // backoff attempts would hammer a dead IP forever. Scan while retrying; when the
+        // saved UUID re-announces, heal the stored record and reconnect immediately instead
+        // of waiting out the backoff. NsdHelper is owner-refcounted, so this never fights
+        // the UI's foreground scan window.
+        scope.launch {
+            _reconnecting.collectLatest { active ->
+                if (!active) return@collectLatest
+                val saved = runCatching { connectionStore.tvDevice.first() }.getOrNull()
+                    ?: return@collectLatest
+                if (saved.uuid.isEmpty()) return@collectLatest
+                nsdHelper.startDiscovery(com.playbridge.sender.connection.NsdHelper.OWNER_RECONNECT)
+                try {
+                    var current: TvDevice = saved
+                    nsdHelper.discoveredDevices.collect { devices ->
+                        val found = devices.find { it.uuid == current.uuid } ?: return@collect
+                        val healed = current.copy(
+                            ip = found.ip,
+                            port = found.port,
+                            name = found.name,
+                            wssPort = found.wssPort,
+                        )
+                        if (healed != current) {
+                            Log.i(TAG, "Reconnect scan: saved TV re-announced at " +
+                                "${found.ip}:${found.port} (was ${current.ip}:${current.port})")
+                            runCatching { connectionStore.saveTvDevice(healed) }
+                            current = healed
+                        }
+                        val s = webSocketClient.connectionState.value
+                        if (s !is WebSocketClient.ConnectionState.Connected &&
+                            s !is WebSocketClient.ConnectionState.Connecting
+                        ) {
+                            // Skip the rest of the backoff wait — the TV is provably here.
+                            reconnectJob?.cancel()
+                            webSocketClient.reconnect(healed)
+                        }
+                    }
+                } finally {
+                    nsdHelper.stopDiscovery(com.playbridge.sender.connection.NsdHelper.OWNER_RECONNECT)
+                }
+            }
+        }
+
         // Mirror the WS session into a NativeCastTarget.
         scope.launch {
             webSocketClient.connectionState.collect { state ->
@@ -251,6 +303,7 @@ class CastSessionManager(
                     // begin from a user action in the foreground, so this is belt-and-braces.
                     runCatching { CastSessionService.start(context) }
                         .onFailure { Log.w(TAG, "Could not start cast session service: ${it.message}") }
+                    maybeRequestBatteryExemption()
                 } else {
                     delay(STOP_GRACE_MS)
                     CastSessionService.stop(context)
@@ -343,8 +396,78 @@ class CastSessionManager(
                 s is WebSocketClient.ConnectionState.Connecting
             ) return@launch
             Log.d(TAG, "Reconnect attempt $attempt after ${backoff + jitter}ms")
-            webSocketClient.reconnect()
+            // Pass the saved record: if discovery has UUID-matched the TV at a new address
+            // (router restart / DHCP change), the attempt targets the fresh IP, not the
+            // dead one cached from the previous socket.
+            webSocketClient.reconnect(runCatching { connectionStore.tvDevice.first() }.getOrNull())
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Foreground-return reconnect
+    //
+    // Without a foreground service (e.g. connected-but-idle on the ThisDevice route) the
+    // socket routinely dies while the app is cached/backgrounded, and nothing used to
+    // re-establish it: startup auto-connect is once-per-ViewModel and the supervisor only
+    // runs for the NativeTv route. This hook reattaches on every return to the foreground.
+    // ------------------------------------------------------------------
+
+    private fun registerForegroundObserver() {
+        // ProcessLifecycleOwner must be touched on the main thread; Koin may build this
+        // singleton off it.
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
+                object : androidx.lifecycle.DefaultLifecycleObserver {
+                    override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+                        onAppForegrounded()
+                    }
+                }
+            )
+        }
+    }
+
+    private fun onAppForegrounded() = attemptRecovery("app foregrounded")
+
+    /**
+     * Try to re-establish a dropped link right now, from the saved device record.
+     * Triggered by foreground return and by Wi-Fi/Ethernet becoming available — both
+     * moments where an immediate attempt is far more likely to succeed than the next
+     * scheduled backoff tick (if any is even pending).
+     */
+    private fun attemptRecovery(reason: String) {
+        // Fresh retry budget: conditions changed, so a TV that took longer than the
+        // backoff window to come back (e.g. router reboot) gets retried.
+        reconnectAttempt = 0
+        if (!routePrefs.getBoolean("auto_connect_tv", true)) return
+        val state = webSocketClient.connectionState.value
+        val eligible = state is WebSocketClient.ConnectionState.Disconnected ||
+            state is WebSocketClient.ConnectionState.Error
+        if (!eligible) return
+        Log.d(TAG, "attemptRecovery($reason)")
+        scope.launch {
+            // reconnect() internally no-ops when there was no prior link this process
+            // (cold start — ConnectionViewModel's auto-connect owns that) or when the
+            // user disconnected deliberately.
+            webSocketClient.reconnect(runCatching { connectionStore.tvDevice.first() }.getOrNull())
+        }
+    }
+
+    private fun registerNetworkCallback() {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as? android.net.ConnectivityManager ?: return
+        val request = android.net.NetworkRequest.Builder()
+            .addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+            .addTransportType(android.net.NetworkCapabilities.TRANSPORT_ETHERNET)
+            .build()
+        // Note: onAvailable also fires once at registration when a matching network is
+        // already up; attemptRecovery() is a cheap no-op in that case (no prior target).
+        runCatching {
+            cm.registerNetworkCallback(request, object : android.net.ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: android.net.Network) {
+                    attemptRecovery("network available")
+                }
+            })
+        }.onFailure { Log.w(TAG, "Could not register network callback: ${it.message}") }
     }
 
     // ------------------------------------------------------------------
@@ -450,6 +573,30 @@ class CastSessionManager(
      */
     fun notifyNativePlaybackStarted() {
         connectionCoordinator.startLocalPlaybackSession(null, null, null)
+    }
+
+    /**
+     * Ask (once, on the first cast session) to be exempted from battery optimization.
+     * Casting phone files means this app IS the media server: Doze and OEM "app sleep"
+     * managers freeze a backgrounded app's network — and eventually the process — even
+     * with the cast FGS running, killing the local proxy mid-stream. Prompted here
+     * rather than at app launch so a fresh install isn't greeted by a stack of system
+     * dialogs; a session always starts from a foreground user action, so launching
+     * the settings dialog is permitted.
+     */
+    private fun maybeRequestBatteryExemption() {
+        val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+        if (pm.isIgnoringBatteryOptimizations(context.packageName)) return
+        val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+        if (prefs.getBoolean("battery_exemption_prompted", false)) return
+        prefs.edit().putBoolean("battery_exemption_prompted", true).apply()
+        runCatching {
+            context.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(android.net.Uri.parse("package:${context.packageName}"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        }.onFailure { Log.w(TAG, "Battery-optimization exemption request failed", it) }
     }
 
     /** Stop playback on the active target and end the session (notification Stop action). */

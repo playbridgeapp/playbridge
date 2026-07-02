@@ -30,7 +30,15 @@ class NsdHelper(context: Context) {
         val wssPort: Int? = null
     )
 
-    fun startDiscovery() {
+    // Discovery is refcounted by owner so independent clients (the UI scan window and the
+    // reconnect supervisor's background scan) can start/stop without stomping each other:
+    // the mDNS engine runs while at least one owner is active. Repeated start/stop from the
+    // same owner is idempotent.
+    private val activeOwners = mutableSetOf<String>()
+
+    @Synchronized
+    fun startDiscovery(owner: String = OWNER_UI) {
+        activeOwners.add(owner)
         if (discoveryListener != null) return
 
         // Clear previous results
@@ -84,12 +92,12 @@ class NsdHelper(context: Context) {
 
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                 Log.e(TAG, "Discovery failed: Error code:$errorCode")
-                stopDiscovery()
+                forceStop()
             }
 
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
                 Log.e(TAG, "Discovery failed: Error code:$errorCode")
-                stopDiscovery()
+                forceStop()
             }
         }
 
@@ -100,7 +108,21 @@ class NsdHelper(context: Context) {
         )
     }
 
-    fun stopDiscovery() {
+    @Synchronized
+    fun stopDiscovery(owner: String = OWNER_UI) {
+        activeOwners.remove(owner)
+        if (activeOwners.isNotEmpty()) return
+        stopEngine()
+    }
+
+    /** Unconditional teardown — used on listener failure, where owner state is moot. */
+    @Synchronized
+    private fun forceStop() {
+        activeOwners.clear()
+        stopEngine()
+    }
+
+    private fun stopEngine() {
         if (discoveryListener != null) {
             try {
                 nsdManager.stopServiceDiscovery(discoveryListener)
@@ -113,6 +135,11 @@ class NsdHelper(context: Context) {
 
     companion object {
         private const val TAG = "NsdHelper"
+
+        /** Default owner: the foreground scan window driven by ConnectionViewModel. */
+        const val OWNER_UI = "ui"
+        /** The reconnect supervisor's background scan (CastSessionManager). */
+        const val OWNER_RECONNECT = "reconnect"
 
         /** Pure parse of a resolved service into a [DiscoveredDevice] (testable). */
         fun parseDevice(

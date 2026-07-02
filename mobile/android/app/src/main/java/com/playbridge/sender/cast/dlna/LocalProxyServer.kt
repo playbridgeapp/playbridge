@@ -326,6 +326,19 @@ class LocalProxyServer(
         runCatching {
             NetworkInterface.getNetworkInterfaces().toList()
                 .filter { runCatching { it.isUp && !it.isLoopback }.getOrDefault(false) }
+                // Never advertise a VPN tunnel address: WireGuard/tun interfaces carry
+                // 10.x addresses that pass isSiteLocalAddress, but the TV can't route
+                // to them — the stream would stall or never start. Interface enumeration
+                // order is arbitrary, so without this filter a running VPN app can win
+                // even when this app is split-tunnel excluded (exclusion changes routing,
+                // not interface visibility).
+                .filterNot { nif ->
+                    val n = nif.name.orEmpty()
+                    n.startsWith("tun") || n.startsWith("wg") ||
+                        n.startsWith("ppp") || n.startsWith("ipsec")
+                }
+                // Prefer Wi-Fi over cellular/other interfaces.
+                .sortedByDescending { it.name.orEmpty().startsWith("wlan") }
                 .flatMap { it.inetAddresses.toList() }
                 .firstOrNull { it is Inet4Address && !it.isLoopbackAddress && it.isSiteLocalAddress }
                 ?.hostAddress

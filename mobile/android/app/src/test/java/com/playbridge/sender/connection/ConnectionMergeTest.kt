@@ -47,4 +47,56 @@ class ConnectionMergeTest {
         val device = dev("1.1.1.1", 8765, uuid = "u1")
         assertNull(ConnectionMerge.withDiscoveredWssPort(device, emptyList()).wssPort)
     }
+
+    // ── resolveAuthFailure ──────────────────────────────────────────────────
+    // The regression this guards: pairing with TV B being denied must NOT wipe
+    // the token of a different, already-paired TV A (the stored device) — that
+    // made tapping the saved TV ask for the pairing code again.
+
+    @Test
+    fun failedPairingWithDifferentTvLeavesSavedDeviceAlone() {
+        val savedA = dev("1.1.1.1", 8765, uuid = "uA", token = "tokenA")
+        val newB = dev("2.2.2.2", 8765, uuid = "uB", token = "")
+        val (target, action) = ConnectionMerge.resolveAuthFailure(failed = newB, saved = savedA)!!
+        assertEquals("uB", target.uuid)
+        assertEquals(ConnectionMerge.AuthFailureAction.WIPE_FAILED_HISTORY_ONLY, action)
+    }
+
+    @Test
+    fun staleTokenOnSavedDeviceWipesJustItsToken() {
+        val savedA = dev("1.1.1.1", 8765, uuid = "uA", token = "tokenA")
+        // Startup auto-connect: no in-flight device, the stored one failed.
+        val (target, action) = ConnectionMerge.resolveAuthFailure(failed = null, saved = savedA)!!
+        assertEquals("uA", target.uuid)
+        assertEquals(ConnectionMerge.AuthFailureAction.WIPE_SAVED_TOKEN, action)
+    }
+
+    @Test
+    fun deliberateReconnectToSavedDeviceStillWipesItsToken() {
+        val savedA = dev("1.1.1.1", 8765, uuid = "uA", token = "tokenA")
+        // Same TV rediscovered at a new IP — uuid identifies it as the saved one.
+        val failedA = dev("1.1.1.50", 8765, uuid = "uA", token = "tokenA")
+        val (_, action) = ConnectionMerge.resolveAuthFailure(failed = failedA, saved = savedA)!!
+        assertEquals(ConnectionMerge.AuthFailureAction.WIPE_SAVED_TOKEN, action)
+    }
+
+    @Test
+    fun firstEverPairingFailureClearsTheHalfSavedDevice() {
+        val saved = dev("1.1.1.1", 8765, uuid = "uA", token = "")
+        val (_, action) = ConnectionMerge.resolveAuthFailure(failed = saved, saved = saved)!!
+        assertEquals(ConnectionMerge.AuthFailureAction.CLEAR_SAVED_DEVICE, action)
+    }
+
+    @Test
+    fun nothingKnownReturnsNull() {
+        assertNull(ConnectionMerge.resolveAuthFailure(failed = null, saved = null))
+    }
+
+    @Test
+    fun ipPortMatchUsedWhenUuidMissing() {
+        val savedA = dev("1.1.1.1", 8765, uuid = "", token = "tokenA")
+        val failedSameIp = dev("1.1.1.1", 8765, uuid = "", token = "tokenA")
+        val (_, action) = ConnectionMerge.resolveAuthFailure(failed = failedSameIp, saved = savedA)!!
+        assertEquals(ConnectionMerge.AuthFailureAction.WIPE_SAVED_TOKEN, action)
+    }
 }

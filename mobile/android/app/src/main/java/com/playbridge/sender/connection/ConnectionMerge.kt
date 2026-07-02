@@ -22,4 +22,37 @@ object ConnectionMerge {
      */
     fun mergeDiscovered(native: List<TvDevice>, dlna: List<TvDevice>): List<TvDevice> =
         native + dlna.filter { it.ip.isNotEmpty() }
+
+    /** Same physical device: uuid match when both known, else ip/port. */
+    fun isSameDevice(a: TvDevice, b: TvDevice): Boolean =
+        (a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port)
+
+    /** What to do with stored credentials after an auth failure / pairing denial. */
+    enum class AuthFailureAction {
+        /** First-time pairing with the stored device failed — forget it entirely. */
+        CLEAR_SAVED_DEVICE,
+        /** The stored, already-paired device's token was rejected — wipe just its token. */
+        WIPE_SAVED_TOKEN,
+        /** A different device failed — leave the stored device alone entirely. */
+        WIPE_FAILED_HISTORY_ONLY,
+    }
+
+    /**
+     * Decide which device's credentials an auth failure belongs to. [failed] is the
+     * device of the in-flight connect attempt (null for the startup auto-connect,
+     * where the failing device IS the stored [saved] one). Crucially, a failure while
+     * pairing a NEW TV must never wipe the token of a different, already-paired TV —
+     * that regression made saved TVs ask for the pairing code again.
+     *
+     * Returns the failing device plus the action to take, or null if nothing is known.
+     */
+    fun resolveAuthFailure(failed: TvDevice?, saved: TvDevice?): Pair<TvDevice, AuthFailureAction>? {
+        val target = failed ?: saved ?: return null
+        return if (saved != null && isSameDevice(target, saved)) {
+            if (saved.token.isEmpty()) target to AuthFailureAction.CLEAR_SAVED_DEVICE
+            else target to AuthFailureAction.WIPE_SAVED_TOKEN
+        } else {
+            target to AuthFailureAction.WIPE_FAILED_HISTORY_ONLY
+        }
+    }
 }

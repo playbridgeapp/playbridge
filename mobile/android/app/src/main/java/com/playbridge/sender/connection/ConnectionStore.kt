@@ -90,6 +90,34 @@ class ConnectionStore(private val context: Context) {
     }
 
     /**
+     * Wipe the stored pairing token of the matching history entry (by uuid, falling
+     * back to ip/port) without touching any other saved TV. Used when a TV rejects
+     * a token or denies pairing, so only THAT device re-pairs on the next tap.
+     */
+    suspend fun wipeHistoryToken(device: TvDevice) {
+        context.dataStore.edit { prefs ->
+            val historyJson = prefs[DEVICE_HISTORY] ?: return@edit
+            val currentHistory = try {
+                protocolJson.decodeFromString<List<TvDevice>>(historyJson)
+            } catch (e: Exception) {
+                return@edit
+            }
+
+            val newHistory = currentHistory.map { entry ->
+                val matches =
+                    (device.uuid.isNotEmpty() && entry.uuid == device.uuid) ||
+                        (entry.ip == device.ip && entry.port == device.port)
+                if (matches) entry.copy(token = "") else entry
+            }
+
+            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
+                newHistory
+            )
+        }
+    }
+
+    /**
      * Remove from history
      */
     suspend fun removeFromHistory(device: TvDevice) {

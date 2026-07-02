@@ -173,10 +173,16 @@ class ConnectionViewModel(
             }.collect { (device, state) ->
                 // Only auto-connect on startup or initial discovery, not infinitely after disconnection.
                 // Never auto-connect after AuthFailed — the token is wrong and we must not retry it.
+                // Error is accepted alongside Disconnected so the UUID-healer below can re-arm a
+                // failed startup attempt once discovery finds the TV at a fresh address (a failed
+                // connect lands in Error, not Disconnected). wasUserDisconnect keeps a deliberate
+                // disconnect from being overridden when this ViewModel is recreated.
                 if (!hasAttemptedInitialConnect &&
                     _autoConnectEnabled.value &&
                     device != null &&
-                    state is WebSocketClient.ConnectionState.Disconnected) {
+                    !webSocketClient.wasUserDisconnect &&
+                    (state is WebSocketClient.ConnectionState.Disconnected ||
+                        state is WebSocketClient.ConnectionState.Error)) {
                     hasAttemptedInitialConnect = true
                     Log.d(TAG, "Auto-connecting to saved TV: ${device.name} at ${device.ip}:${device.port}")
                     webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint)
@@ -184,11 +190,13 @@ class ConnectionViewModel(
             }
         }
 
-        // Manage discovery (mDNS + DLNA SSDP). Stop discovery when we are active or connecting.
+        // Manage discovery (mDNS + DLNA SSDP). Stop discovery once we're connected — but
+        // NOT while merely Connecting: a failing (re)connect flaps through Connecting
+        // repeatedly, and killing the scan there would suppress the very UUID heal that
+        // fixes a stale IP after the TV moved (router restart).
         viewModelScope.launch {
             connectionState.collect { state ->
-                if (state is WebSocketClient.ConnectionState.Connected ||
-                    state is WebSocketClient.ConnectionState.Connecting) {
+                if (state is WebSocketClient.ConnectionState.Connected) {
                     stopDiscovery()
                 }
             }
@@ -208,10 +216,24 @@ class ConnectionViewModel(
                             name = matchedDevice.name,
                             wssPort = matchedDevice.wssPort
                         )
-                        // Only keep the saved address fresh for the next (manual/on-demand)
-                        // connect — never spontaneously connect from discovery, or opening
-                        // the Cast sheet would auto-connect. (The old mid-retry reconnect is
-                        // gone along with automatic retries.)
+                        // Keep the saved address fresh for the next connect. Additionally
+                        // (change 4): if the startup auto-connect already fired and lost the
+                        // race against discovery — it tried the stale IP and failed while the
+                        // TV had moved (router restart / DHCP change) — re-arm it, so the
+                        // save below re-triggers the auto-connect collector with the healed
+                        // address. Gated on a dead link and on the disconnect not being
+                        // user-initiated, so this never spontaneously connects when the user
+                        // is happily disconnected and merely opens the Cast sheet.
+                        val st = connectionState.value
+                        if (hasAttemptedInitialConnect &&
+                            _autoConnectEnabled.value &&
+                            !webSocketClient.wasUserDisconnect &&
+                            (st is WebSocketClient.ConnectionState.Disconnected ||
+                                st is WebSocketClient.ConnectionState.Error)
+                        ) {
+                            Log.i(TAG, "Saved TV moved (${savedDevice.ip} → ${matchedDevice.ip}); re-arming auto-connect")
+                            hasAttemptedInitialConnect = false
+                        }
                         connectionStore.saveTvDevice(updatedDevice)
                         connectionStore.addToHistory(updatedDevice)
                     }
@@ -239,24 +261,50 @@ class ConnectionViewModel(
             }
         }
 
-        // On auth failure or pairing denial, wipe the token or clear the device from storage.
+        // On auth failure or pairing denial, wipe credentials for the device that
+        // actually FAILED — not blindly whatever is in connectionStore.tvDevice.
+        // Previously a denied pairing with TV B wiped the token of already-paired
+        // TV A (the stored device), so tapping the saved TV A asked for a pairing
+        // code again. activeConnectingDevice tells us which TV was being connected;
+        // it is null only for the startup auto-connect, where the failing device IS
+        // the stored one.
         viewModelScope.launch {
             connectionState.collect { state ->
-                if (state is WebSocketClient.ConnectionState.AuthFailed ||
-                    state is WebSocketClient.ConnectionState.PairingDenied) {
-                    activeConnectingDevice = null
-                    val currentDevice = connectionStore.tvDevice.first()
-                    if (currentDevice != null) {
-                        if (currentDevice.token.isEmpty()) {
-                            // If the token was empty (first time pairing failed), clear it from connectionStore
-                            connectionStore.clearTvDevice()
-                        } else {
-                            // If it was already paired, wipe the token but keep the device so they can tap to re-pair.
-                            updateSavedDevice { device ->
-                                device.copy(token = "")
-                            }
+                when (state) {
+                    is WebSocketClient.ConnectionState.AuthFailed,
+                    is WebSocketClient.ConnectionState.PairingDenied -> {
+                        val failed = activeConnectingDevice
+                        activeConnectingDevice = null
+                        val saved = connectionStore.tvDevice.first()
+                        val (target, action) =
+                            ConnectionMerge.resolveAuthFailure(failed, saved) ?: return@collect
+                        when (action) {
+                            ConnectionMerge.AuthFailureAction.CLEAR_SAVED_DEVICE ->
+                                // First-time pairing with the stored device failed — forget it.
+                                connectionStore.clearTvDevice()
+                            ConnectionMerge.AuthFailureAction.WIPE_SAVED_TOKEN ->
+                                // Was paired; wipe the token but keep the device so a tap re-pairs.
+                                deviceUpdateMutex.withLock {
+                                    val wiped = saved!!.copy(token = "")
+                                    connectionStore.saveTvDevice(wiped)
+                                    connectionStore.addToHistory(wiped)
+                                }
+                            ConnectionMerge.AuthFailureAction.WIPE_FAILED_HISTORY_ONLY ->
+                                Unit // stored device untouched; history wipe below covers it
                         }
+                        // Always invalidate the failing device's own history token so the
+                        // next tap goes through pairing instead of retrying a rejected
+                        // token. No-op if it was never saved; never touches other TVs.
+                        connectionStore.wipeHistoryToken(target)
                     }
+                    is WebSocketClient.ConnectionState.Error,
+                    is WebSocketClient.ConnectionState.Disconnected -> {
+                        // A dead link ends any in-flight connect attempt; drop the
+                        // reference so a later failure can't be attributed to a stale
+                        // device (and wipe the wrong token).
+                        activeConnectingDevice = null
+                    }
+                    else -> Unit
                 }
             }
         }
