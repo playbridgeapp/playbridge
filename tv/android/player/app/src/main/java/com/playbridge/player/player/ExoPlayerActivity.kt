@@ -846,11 +846,54 @@ class ExoPlayerActivity : PlayerActivity() {
             val player = engine?.getExoPlayer() ?: return
             FileLogger.e(TAG, "ExoPlayer Error: ${error.message}", error)
             
-            // Immediate failover for common fatal startup errors
+            // Immediate failover for common fatal startup errors.
             if (error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
                 error.errorCode == androidx.media3.common.PlaybackException.ERROR_CODE_DECODING_FAILED) {
-                FileLogger.w(TAG, "Fatal Decoder Error detected — immediate failover to MPV")
-                switchPlayer("mpv")
+                // If the failing session ran TUNNELED, disable tunneling and retry the
+                // hardware decoder first: some vendor decoders (MediaTek TV panels —
+                // "vendor decode not init", CodecException 0xfffffff4 right after the
+                // tunneled configure) crash on tunneled 4K but decode the same stream
+                // fine without tunneling. Falling straight to MPV forced software
+                // decode, which can't sustain 4K on TV silicon. The block persists
+                // until the user toggles Tunneled Playback in Settings.
+                val prefs = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                val wasTunneled = prefs.getBoolean("tunneled_playback", false) &&
+                    !prefs.getBoolean("tunneling_auto_blocked", false)
+                // A Dolby Vision hardware decoder that fatally fails gets blocked so the
+                // retry decodes the HEVC/AVC base layer instead (media3 lists those as
+                // compatibility fallbacks for DV profiles 8/9). MTK panels advertise DV
+                // decoders that accept dvhe.08 and then die with 0xfffffff4, while their
+                // plain HEVC decoder plays the very same track.
+                val failingDolbyVision =
+                    (error as? androidx.media3.exoplayer.ExoPlaybackException)
+                        ?.rendererFormat?.sampleMimeType ==
+                        androidx.media3.common.MimeTypes.VIDEO_DOLBY_VISION
+                when {
+                    wasTunneled -> {
+                        FileLogger.w(TAG, "Fatal decoder error in TUNNELED mode — blocking tunneling and retrying ExoPlayer")
+                        prefs.edit().putBoolean("tunneling_auto_blocked", true).apply()
+                        switchPlayer("exo")
+                    }
+                    failingDolbyVision && !prefs.getBoolean("dv_decoders_blocked", false) -> {
+                        FileLogger.w(TAG, "Fatal decoder error on a Dolby Vision decoder — blocking DV decoders and retrying with the HEVC/AVC base layer")
+                        prefs.edit().putBoolean("dv_decoders_blocked", true).apply()
+                        switchPlayer("exo")
+                    }
+                    !prefs.getBoolean("codec_async_blocked", false) -> {
+                        // Next rung: some vendor decoders (MTK TV panels) crash under
+                        // ASYNC MediaCodec (the API 31+ default) but decode fine in
+                        // synchronous mode — MPV drives the very same hardware decoder
+                        // synchronously and succeeds. Try sync hardware decode before
+                        // surrendering to software MPV.
+                        FileLogger.w(TAG, "Fatal decoder error in async codec mode — blocking async and retrying ExoPlayer synchronously")
+                        prefs.edit().putBoolean("codec_async_blocked", true).apply()
+                        switchPlayer("exo")
+                    }
+                    else -> {
+                        FileLogger.w(TAG, "Fatal Decoder Error detected — immediate failover to MPV")
+                        switchPlayer("mpv")
+                    }
+                }
                 return
             }
             // Live stream fell behind the available DVR window — seek back to the live edge and resume.
