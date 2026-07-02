@@ -84,8 +84,11 @@ fun IptvScreen(
             TopAppBar(
                 title = { Text("IPTV") },
                 navigationIcon = {
+                    // Top-level screen: blocks icon → Dashboard, matching the other main screens.
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        com.playbridge.sender.ui.DashboardBlocksIcon(
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                 },
                 actions = {

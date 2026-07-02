@@ -236,10 +236,8 @@ fun DebridLibraryScreen(
                             Icon(Icons.Default.ArrowBack, contentDescription = "Close search")
                         }
                         else -> IconButton(onClick = onMenuClick) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_playbridge_logo),
-                                contentDescription = "PlayBridge",
-                                modifier = Modifier.size(24.dp)
+                            com.playbridge.sender.ui.DashboardBlocksIcon(
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                     }

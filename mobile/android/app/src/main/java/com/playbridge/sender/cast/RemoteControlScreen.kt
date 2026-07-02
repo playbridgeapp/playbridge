@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -678,6 +679,9 @@ private fun SeekVolumeBar(
 
     val volumeStepPx = with(LocalDensity.current) { 28.dp.toPx() }
     val seekStepPx = with(LocalDensity.current) { 16.dp.toPx() }
+    // The wave canvas is inset by the arrow gutters (52dp each side); absolute
+    // finger-follow scrubbing maps the pointer x within that span.
+    val contentInsetPx = with(LocalDensity.current) { 52.dp.toPx() }
 
     val view = LocalView.current
     val tick: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
@@ -702,7 +706,8 @@ private fun SeekVolumeBar(
     val fraction = if (hasDuration && durationMs > 0L) (displayMs / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
 
     val primary = MaterialTheme.colorScheme.primary
-    val activeColor by animateColorAsState(targetValue = if (isAggressive) Color(0xFFFF5252) else primary, animationSpec = tween(200), label = "activeColor")
+    // Red "fast" tint only for hold-then-drag volume; seeking is absolute and has no fast mode.
+    val activeColor by animateColorAsState(targetValue = if (isAggressive && activeAxis == DragAxis.VERTICAL) Color(0xFFFF5252) else primary, animationSpec = tween(200), label = "activeColor")
     val thumbScale by animateFloatAsState(targetValue = if (dragging) 1.5f else 1.0f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "thumbScale")
 
     val popupOffset = with(LocalDensity.current) { IntOffset(0, -180.dp.roundToPx()) }
@@ -730,6 +735,9 @@ private fun SeekVolumeBar(
                 var seekAccum = 0f
                 detectDragGestures(
                     onDragStart = {
+                        // Hold-then-drag: horizontal becomes absolute finger-follow
+                        // scrubbing, vertical becomes fast volume. A quick swipe keeps
+                        // the gentle relative seek.
                         val dragStartTime = System.currentTimeMillis()
                         isAggressive = (dragStartTime - touchDownTime) >= 400L
                         if (isAggressive) thud()
@@ -746,9 +754,19 @@ private fun SeekVolumeBar(
                         }
                         when (axis) {
                             DragAxis.HORIZONTAL -> if (hasDuration && widthPx > 0f) {
-                                val rangeMs = if (isAggressive) durationMs.toFloat() else (durationMs / 10L).coerceIn(120_000L, 600_000L).toFloat()
-                                val deltaMs = (drag.x / widthPx) * rangeMs
-                                dragMs = (dragMs + deltaMs).coerceIn(0f, durationMs.toFloat())
+                                if (isAggressive) {
+                                    // Scrub: map the finger's x directly onto the bar span
+                                    // so the playhead tracks the finger 1:1.
+                                    val span = (widthPx - 2 * contentInsetPx).coerceAtLeast(1f)
+                                    val target = ((change.position.x - contentInsetPx) / span).coerceIn(0f, 1f)
+                                    dragMs = target * durationMs.toFloat()
+                                } else {
+                                    // Relative swipe-to-seek: full width ≈ a tenth of the
+                                    // runtime (clamped 2–10 min) for fine adjustments.
+                                    val rangeMs = (durationMs / 10L).coerceIn(120_000L, 600_000L).toFloat()
+                                    val deltaMs = (drag.x / widthPx) * rangeMs
+                                    dragMs = (dragMs + deltaMs).coerceIn(0f, durationMs.toFloat())
+                                }
                                 seekAccum += abs(drag.x)
                                 while (seekAccum >= seekStepPx) { tick(); seekAccum -= seekStepPx }
                             }
@@ -805,7 +823,7 @@ private fun SeekVolumeBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 val seekLabel = if (activeAxis == DragAxis.HORIZONTAL) {
-                    if (isAggressive) "FAST SEEK ◄►" else "SEEKING ◄►"
+                    if (isAggressive) "SCRUBBING ◄►" else "SEEKING ◄►"
                 } else {
                     if (isPlaying) "◄► SEEK · TAP ❙❙" else "◄► SEEK · TAP ▶"
                 }
@@ -827,11 +845,23 @@ private fun SeekVolumeBar(
                 val strokeActiveWidth = with(LocalDensity.current) { 4.dp.toPx() }
                 val strokeInactiveWidth = with(LocalDensity.current) { 2.dp.toPx() }
 
+                // Slow "breathing" of the wave height so the motion feels organic rather
+                // than a fixed-height ripple; layered with the phase scroll below.
+                val breath by rememberInfiniteTransition(label = "waveBreath").animateFloat(
+                    initialValue = 0.8f,
+                    targetValue = 1.2f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 2600, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "breath"
+                )
+
                 Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {
                     val width = size.width
                     val height = size.height
                     val centerY = height / 2f
-                    val amp = ampPx
+                    val amp = ampPx * breath
                     val activeWidth = width * fraction
 
                     val tickCount = 30
@@ -841,38 +871,61 @@ private fun SeekVolumeBar(
                         drawLine(color = Color.White.copy(alpha = 0.1f), start = Offset(x, centerY - tickHeight), end = Offset(x, centerY + tickHeight), strokeWidth = 1f)
                     }
 
-                    fun getWaveY(x: Float, p: Float): Float {
+                    fun waveY(x: Float, p: Float, a: Float, wl: Float): Float {
                         val safeX = x.coerceIn(0f, width)
                         val envelope = if (width > 0f) sin(Math.PI * (safeX / width)).toFloat() else 0f
-                        val angle = (2 * Math.PI * x / wavelength).toFloat() + p
-                        return centerY + amp * envelope * sin(angle)
+                        val angle = (2 * Math.PI * x / wl).toFloat() + p
+                        return centerY + a * envelope * sin(angle)
                     }
 
+                    fun buildWave(fromX: Float, toX: Float, p: Float, a: Float, wl: Float) = Path().apply {
+                        moveTo(fromX, waveY(fromX, p, a, wl))
+                        var x = fromX + 1f
+                        while (x <= toX) { lineTo(x, waveY(x, p, a, wl)); x += 2f }
+                    }
+
+                    // Unplayed side: nearly flat — the energy lives behind the playhead.
                     if (activeWidth < width) {
-                        val inactivePath = Path().apply {
-                            moveTo(activeWidth, getWaveY(activeWidth, phase))
-                            var x = activeWidth + 1f
-                            while (x <= width) { lineTo(x, getWaveY(x, phase)); x += 2f }
-                        }
-                        drawPath(path = inactivePath, color = Color.White.copy(alpha = 0.15f), style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round))
+                        drawPath(
+                            path = buildWave(activeWidth, width, phase, amp * 0.15f, wavelength),
+                            color = Color.White.copy(alpha = 0.15f),
+                            style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round)
+                        )
                     }
 
                     if (activeWidth > 0f) {
-                        val activePath = Path().apply {
-                            moveTo(0f, getWaveY(0f, phase))
-                            var x = 1f
-                            while (x <= activeWidth) { lineTo(x, getWaveY(x, phase)); x += 2f }
-                        }
-                        drawPath(
-                            path = activePath,
-                            brush = Brush.horizontalGradient(colors = listOf(activeColor.copy(alpha = 0.8f), Color.White), startX = 0f, endX = activeWidth),
-                            style = Stroke(width = strokeActiveWidth, cap = StrokeCap.Round)
+                        val activeBrush = Brush.horizontalGradient(
+                            colors = listOf(activeColor.copy(alpha = 0.8f), Color.White),
+                            startX = 0f, endX = activeWidth
                         )
+                        val mainWave = buildWave(0f, activeWidth, phase, amp, wavelength)
+
+                        // Soft glow under the main wave.
+                        drawPath(
+                            path = mainWave,
+                            color = activeColor.copy(alpha = 0.25f),
+                            style = Stroke(width = strokeActiveWidth * 2.8f, cap = StrokeCap.Round)
+                        )
+                        // Faint counter-scrolling harmonic behind the main wave — the two
+                        // layers interfere visually and read as liquid. Phase multiplier
+                        // must be an integer so the infinite loop's 2π restart is seamless.
+                        drawPath(
+                            path = buildWave(0f, activeWidth, -phase * 2f, amp * 0.45f, wavelength * 0.55f),
+                            color = activeColor.copy(alpha = 0.35f),
+                            style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round)
+                        )
+                        drawPath(path = mainWave, brush = activeBrush, style = Stroke(width = strokeActiveWidth, cap = StrokeCap.Round))
 
                         if (fraction > 0f && fraction < 1f) {
                             val thumbX = activeWidth
                             val barWidth = 3.dp.toPx() * thumbScale
                             val barHeight = 18.dp.toPx() * thumbScale
+                            // Halo behind the playhead (grows with the drag thumb scale).
+                            drawCircle(
+                                color = activeColor.copy(alpha = 0.30f),
+                                radius = 9.dp.toPx() * thumbScale,
+                                center = Offset(thumbX, centerY)
+                            )
                             drawLine(
                                 color = Color.White,
                                 start = Offset(thumbX, centerY - barHeight / 2),
@@ -899,7 +952,7 @@ private fun SeekVolumeBar(
         Popup(alignment = Alignment.Center, offset = popupOffset, properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
             Surface(color = Color.Black.copy(alpha = 0.85f), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, activeColor.copy(alpha = 0.5f))) {
                 Column(modifier = Modifier.padding(horizontal = 28.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(if (isAggressive) "Fast Seek" else "Seek", color = activeColor, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
+                    Text(if (isAggressive) "Scrub" else "Seek", color = activeColor, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
                     Spacer(modifier = Modifier.height(6.dp))
                     Text("${formatTime(dragMs.toLong())} / ${formatTime(durationMs)}", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                     val sign = if (deltaMs >= 0) "+" else "-"

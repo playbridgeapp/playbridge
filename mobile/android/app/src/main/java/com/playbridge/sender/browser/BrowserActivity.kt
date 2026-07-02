@@ -394,16 +394,23 @@ class BrowserActivity : ComponentActivity() {
         setContent {
             var currentScreen by remember {
                 val sp = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+                // First launch (no main screen ever persisted) lands on the Dashboard,
+                // which doubles as the home for the one-time onboarding overlay.
                 mutableStateOf<Screen>(
-                    when (sp.getString("last_main_screen", "browser")) {
+                    if (!sp.contains("last_main_screen")) Screen.Dashboard
+                    else when (sp.getString("last_main_screen", "browser")) {
                         "library" -> Screen.Library
                         "debrid" -> Screen.DebridLibrary
                         else -> Screen.Browser
                     }
                 )
             }
-            // Tracks the last "main" tab so Settings/overlays know where to return
-            var lastMainScreen by remember { mutableStateOf(currentScreen) }
+            // Tracks the last "main" tab so Settings/overlays know where to return.
+            // When we start on the Dashboard (first launch), fall back to Browser so
+            // closing the Dashboard has somewhere sensible to go.
+            var lastMainScreen by remember {
+                mutableStateOf(if (currentScreen == Screen.Dashboard) Screen.Browser else currentScreen)
+            }
             // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
             // Connection) rather than always falling back to the last main tab.
             var remoteOrigin by remember { mutableStateOf<Screen?>(null) }

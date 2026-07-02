@@ -69,8 +69,11 @@ fun CollectionsScreen(
             TopAppBar(
                 title = { Text("Collections") },
                 navigationIcon = {
+                    // Top-level screen: blocks icon → Dashboard, matching the other main screens.
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        com.playbridge.sender.ui.DashboardBlocksIcon(
+                            modifier = Modifier.size(22.dp)
+                        )
                     }
                 },
                 actions = {

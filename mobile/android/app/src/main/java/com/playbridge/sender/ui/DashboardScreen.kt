@@ -58,6 +58,15 @@ fun DashboardScreen(
     var showExitConfirm by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
 
+    // One-time onboarding tour (first launch lands here; see BrowserActivity).
+    val onboardingContext = androidx.compose.ui.platform.LocalContext.current
+    val onboardingPrefs = remember {
+        onboardingContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
+    }
+    var showOnboarding by remember {
+        mutableStateOf(!onboardingPrefs.getBoolean("dashboard_onboarding_seen", false))
+    }
+
     val logoScale by animateFloatAsState(
         targetValue = if (visible) 1f else 0.3f,
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 300f),
@@ -457,6 +466,16 @@ fun DashboardScreen(
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                 )
             }
+        }
+
+        // First-launch coach marks, drawn above everything on the Dashboard.
+        if (showOnboarding) {
+            DashboardOnboardingOverlay(
+                onDone = {
+                    onboardingPrefs.edit().putBoolean("dashboard_onboarding_seen", true).apply()
+                    showOnboarding = false
+                }
+            )
         }
 
         // Confirm before fully quitting — this is a hard exit, not a background close.
