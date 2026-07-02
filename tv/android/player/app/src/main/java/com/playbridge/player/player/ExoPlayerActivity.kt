@@ -1666,6 +1666,9 @@ class ExoPlayerActivity : PlayerActivity() {
         return listOf(UnifiedTrack("off", "Off", offSelected, "sub")) + embedded + external
     }
 
+    // Format.NO_VALUE is UnstableApi; this usage predates this annotation but fell
+    // out of the lint baseline when the file's line numbers shifted.
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
     private fun buildTrackName(format: androidx.media3.common.Format): String {
         val items = mutableListOf<String>()
         if (format.height != androidx.media3.common.Format.NO_VALUE) items.add("${format.height}p")
