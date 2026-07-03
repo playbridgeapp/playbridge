@@ -199,6 +199,36 @@ object DatabaseProvider {
         }
     }
 
+    private val MIGRATION_20_21 = object : Migration(20, 21) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Nuvio scraper-plugin support (NUVIO_PLAN Phase 1). The repo itself is an
+            // installed_addons row (resource "nuvio"); per-scraper metadata lives here.
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS `nuvio_scrapers` (" +
+                    "`repoUrl` TEXT NOT NULL, " +
+                    "`scraperId` TEXT NOT NULL, " +
+                    "`name` TEXT NOT NULL, " +
+                    "`description` TEXT NOT NULL, " +
+                    "`version` TEXT NOT NULL, " +
+                    "`filename` TEXT NOT NULL, " +
+                    "`supportedTypes` TEXT NOT NULL, " +
+                    "`contentLanguage` TEXT NOT NULL, " +
+                    "`logo` TEXT NOT NULL, " +
+                    "`isEnabled` INTEGER NOT NULL, " +
+                    "`installedAt` INTEGER NOT NULL, " +
+                    "PRIMARY KEY(`repoUrl`, `scraperId`))"
+            )
+        }
+    }
+
+    private val MIGRATION_21_22 = object : Migration(21, 22) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Per-scraper settings (NUVIO_PLAN Phase 4).
+            db.execSQL("ALTER TABLE nuvio_scrapers ADD COLUMN hasSettings INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE nuvio_scrapers ADD COLUMN settingsJson TEXT NOT NULL DEFAULT '{}'")
+        }
+    }
+
     @Volatile
     private var INSTANCE: HistoryDatabase? = null
 
@@ -209,7 +239,7 @@ object DatabaseProvider {
                 HistoryDatabase::class.java,
                 "history_database"
             )
-            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+            .addMigrations(MIGRATION_4_5, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22)
             .fallbackToDestructiveMigration()
             .build()
             INSTANCE = instance

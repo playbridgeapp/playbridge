@@ -6,9 +6,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,6 +58,8 @@ import kotlin.math.roundToInt
 @Composable
 fun AddonSettingsScreen(
     addonRepository: AddonRepository,
+    nuvioRepository: com.playbridge.sender.data.nuvio.NuvioRepository = org.koin.compose.koinInject(),
+    settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject(),
     installedAddons: List<InstalledAddonEntity>,
     onBack: () -> Unit,
     /** Called when the user taps "Open URL" so the parent can navigate to the browser. */
@@ -147,7 +151,7 @@ fun AddonSettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Paste the addon URL from Stremio. For Torrentio with Real-Debrid, configure it at torrentio.strem.fun and copy the install URL.",
+                            text = "Paste a Stremio addon URL, or a Nuvio plugin manifest URL to add local scrapers. For Torrentio with Real-Debrid, configure it at torrentio.strem.fun and copy the install URL.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -168,6 +172,21 @@ fun AddonSettingsScreen(
                                 if (addonUrl.isBlank()) return@Button
                                 isInstalling = true
                                 scope.launch {
+                                    // Nuvio plugin repos aren't HTTP addons — detect and route them
+                                    // to the local-scraper installer. null = not a Nuvio manifest,
+                                    // so fall through to the standard Stremio addon install.
+                                    val nuvioInstalled = nuvioRepository.tryInstall(addonUrl)
+                                    if (nuvioInstalled != null) {
+                                        isInstalling = false
+                                        if (nuvioInstalled) {
+                                            addonUrl = ""
+                                            onCatalogsChanged()
+                                            Toast.makeText(context, "Installed Nuvio plugins", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "Failed to install Nuvio plugins", Toast.LENGTH_SHORT).show()
+                                        }
+                                        return@launch
+                                    }
                                     val result = addonRepository.installAddon(addonUrl)
                                     isInstalling = false
                                     if (result != null) {
@@ -206,6 +225,17 @@ fun AddonSettingsScreen(
                         }
                     }
                 }
+            }
+
+            // ── Nuvio scraper plugins (per-scraper toggles) ──────────────
+            val nuvioRepos = installedAddons.filter {
+                it.resources.contains(com.playbridge.sender.data.nuvio.NuvioRepository.NUVIO_RESOURCE)
+            }
+            if (nuvioRepos.isNotEmpty()) {
+                item { NuvioMasterToggleCard(settingsRepository = settingsRepository) }
+            }
+            items(nuvioRepos, key = { "nuvio:${it.manifestUrl}" }) { repo ->
+                NuvioScrapersCard(repo = repo, nuvioRepository = nuvioRepository)
             }
 
             // ── Catalog cache settings ───────────────────────────────────
@@ -417,6 +447,12 @@ fun AddonSettingsScreen(
                     },
                     onRefresh = {
                         scope.launch {
+                            if (addon.resources.contains(com.playbridge.sender.data.nuvio.NuvioRepository.NUVIO_RESOURCE)) {
+                                // Nuvio repo: re-download manifest + scraper code, preserving toggles.
+                                val ok = nuvioRepository.installRepo(addon.manifestUrl)
+                                Toast.makeText(context, if (ok) "Refreshed Nuvio plugins" else "Refresh failed", Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
                             val updated = addonRepository.refreshAddon(addon)
                             val msg = if (updated != null) "Refreshed: ${updated.name}" else "Refresh failed"
                             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -425,6 +461,9 @@ fun AddonSettingsScreen(
                     },
                     onDelete = {
                         scope.launch {
+                            if (addon.resources.contains(com.playbridge.sender.data.nuvio.NuvioRepository.NUVIO_RESOURCE)) {
+                                nuvioRepository.removeRepo(addon.manifestUrl)
+                            }
                             addonRepository.removeAddon(addon)
                             onCatalogsChanged()
                             Toast.makeText(context, "Removed: ${addon.name}", Toast.LENGTH_SHORT).show()
@@ -944,3 +983,256 @@ private fun Modifier.onSizeChangedOnce(onSize: (IntSize) -> Unit): Modifier =
             onSize(IntSize(coords.size.width, coords.size.height))
         }
     )
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Nuvio scraper plugins
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Card for a single installed Nuvio plugin repository, listing its scrapers with
+ * per-scraper enable switches. The repo's own master enable/refresh/remove lives on
+ * the standard AddonCard above (it is an installed_addons row); this card drives the
+ * finer-grained `nuvio_scrapers` toggles that [com.playbridge.sender.data.nuvio.NuvioRepository]
+ * consults during stream resolution.
+ */
+@Composable
+private fun NuvioScrapersCard(
+    repo: InstalledAddonEntity,
+    nuvioRepository: com.playbridge.sender.data.nuvio.NuvioRepository,
+) {
+    val scope = rememberCoroutineScope()
+    val scrapers by nuvioRepository.observeScrapers(repo.manifestUrl)
+        .collectAsState(initial = emptyList())
+    var expanded by remember { mutableStateOf(false) }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded }
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = repo.name.ifBlank { "Nuvio Plugins" },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    val enabledCount = scrapers.count { it.isEnabled }
+                    Text(
+                        text = "$enabledCount of ${scrapers.size} scrapers enabled",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(
+                    imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = if (expanded) "Collapse" else "Expand"
+                )
+            }
+
+            if (expanded) {
+                Spacer(modifier = Modifier.height(8.dp))
+                var settingsFor by remember {
+                    mutableStateOf<com.playbridge.sender.data.nuvio.NuvioScraperEntity?>(null)
+                }
+                scrapers.forEach { scraper ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(scraper.name, style = MaterialTheme.typography.bodyLarge)
+                            val meta = buildString {
+                                append(scraper.supportedTypes)
+                                if (scraper.contentLanguage.isNotBlank()) {
+                                    append(" · ").append(scraper.contentLanguage)
+                                }
+                            }
+                            Text(
+                                meta,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (scraper.hasSettings) {
+                            IconButton(onClick = { settingsFor = scraper }) {
+                                Icon(Icons.Default.Settings, contentDescription = "Scraper settings")
+                            }
+                        }
+                        Switch(
+                            checked = scraper.isEnabled,
+                            onCheckedChange = { checked ->
+                                scope.launch { nuvioRepository.setScraperEnabled(scraper, checked) }
+                            }
+                        )
+                    }
+                }
+                settingsFor?.let { target ->
+                    NuvioScraperSettingsDialog(
+                        scraper = target,
+                        nuvioRepository = nuvioRepository,
+                        onDismiss = { settingsFor = null }
+                    )
+                }
+                if (scrapers.isEmpty()) {
+                    Text(
+                        "No scrapers — try refreshing this plugin.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Master opt-in switch for Nuvio local scrapers. Default off — scrapers execute
+ * third-party JavaScript, so [com.playbridge.sender.data.nuvio.NuvioRepository] skips
+ * them entirely until the user turns this on.
+ */
+@Composable
+private fun NuvioMasterToggleCard(
+    settingsRepository: com.playbridge.sender.data.settings.SettingsRepository,
+) {
+    val scope = rememberCoroutineScope()
+    val enabled by settingsRepository.enableLocalScrapers.collectAsState(initial = false)
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        )
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "Enable local scrapers",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Runs third-party plugin code on your device to find streams. Off by default — turn on at your own risk.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Switch(
+                checked = enabled,
+                onCheckedChange = { checked ->
+                    scope.launch { settingsRepository.setEnableLocalScrapers(checked) }
+                }
+            )
+        }
+    }
+}
+
+/**
+ * Settings dialog for a Nuvio scraper. Loads the schema from the scraper's exported
+ * `onSettings()` (via QuickJS), renders each field (header / choice / free text), and
+ * persists the chosen values back as the scraper's `settingsJson`.
+ */
+@Composable
+private fun NuvioScraperSettingsDialog(
+    scraper: com.playbridge.sender.data.nuvio.NuvioScraperEntity,
+    nuvioRepository: com.playbridge.sender.data.nuvio.NuvioRepository,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+
+    var schema by remember { mutableStateOf<List<com.playbridge.sender.data.nuvio.NuvioSettingField>?>(null) }
+    val values = remember { mutableStateMapOf<String, String>() }
+
+    LaunchedEffect(scraper.repoUrl, scraper.scraperId) {
+        // Seed from saved values (falling back to each field's default once schema arrives).
+        runCatching {
+            val obj = org.json.JSONObject(scraper.settingsJson)
+            obj.keys().forEach { k -> values[k] = obj.optString(k) }
+        }
+
+        val loaded = nuvioRepository.getSettingsSchema(scraper)
+        loaded.forEach { field ->
+            if (field.key.isNotBlank() && !values.containsKey(field.key)) {
+                field.defaultValue?.let { values[field.key] = it }
+            }
+        }
+        schema = loaded
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(scraper.name) },
+        text = {
+            val current = schema
+            if (current == null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Loading settings…")
+                }
+            } else if (current.isEmpty()) {
+                Text("This scraper exposes no configurable settings.")
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    current.forEach { field ->
+                        when {
+                            field.isHeader -> Text(
+                                field.label,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                            field.isChoice -> {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    Text(field.label, style = MaterialTheme.typography.bodyMedium)
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        field.options.forEach { opt ->
+                                            FilterChip(
+                                                selected = values[field.key] == opt.value,
+                                                onClick = { values[field.key] = opt.value },
+                                                label = { Text(opt.label.ifBlank { opt.value }) }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            else -> OutlinedTextField(
+                                value = values[field.key] ?: "",
+                                onValueChange = { values[field.key] = it },
+                                label = { Text(field.label.ifBlank { field.key }) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val payload = org.json.JSONObject().apply {
+                    values.forEach { (k, v) -> put(k, v) }
+                }.toString()
+                scope.launch { nuvioRepository.setScraperSettings(scraper, payload) }
+                onDismiss()
+            }) { Text("Save") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}

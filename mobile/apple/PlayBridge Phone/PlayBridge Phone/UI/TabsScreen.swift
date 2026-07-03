@@ -54,6 +54,11 @@ private struct TabCard: View {
                 }
                 .frame(height: 110)
                 .clipped()
+                // .clipped() only clips drawing, not hit-testing: a fill-mode
+                // snapshot extends invisibly over neighboring cards and steals
+                // their taps. The card handles selection itself, so the image
+                // shouldn't receive touches at all.
+                .allowsHitTesting(false)
 
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle.fill")
@@ -73,6 +78,7 @@ private struct TabCard: View {
                 .stroke(isActive ? Theme.primary : Color.clear, lineWidth: 2)
         )
         .cornerRadius(12)
+        .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture(perform: onSelect)
         .onAppear {
             tab.webView.takeSnapshot(with: nil) { image, _ in snapshot = image }

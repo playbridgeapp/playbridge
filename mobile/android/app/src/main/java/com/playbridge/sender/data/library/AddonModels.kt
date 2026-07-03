@@ -231,7 +231,15 @@ data class StremioStream(
     @SerialName("externalUrl") val externalUrl: String? = null,
     val behaviorHints: StemioBehaviorHints? = null,
     /** Subtitle language (ISO code like "en"/"eng"), present on subtitle resources. */
-    val lang: String? = null
+    val lang: String? = null,
+    /**
+     * Request headers required to play this stream (Referer/User-Agent/Cookie).
+     * Populated by Nuvio local scrapers; empty for standard Stremio addon streams
+     * (which are already debrid-resolved). Plumbed into MediaItem.headers /
+     * PlayPayload.headers at the send sites. Defaulted so the on-disk stream cache
+     * stays backward-compatible.
+     */
+    val headers: Map<String, String> = emptyMap()
 ) {
     /** Whether this is a directly playable HTTP stream (from debrid) */
     val isDirectUrl: Boolean get() = !url.isNullOrBlank() && (url.startsWith("http://") || url.startsWith("https://"))

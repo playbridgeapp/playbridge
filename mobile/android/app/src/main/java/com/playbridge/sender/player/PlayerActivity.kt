@@ -120,6 +120,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.lifecycle.lifecycleScope
@@ -242,6 +243,7 @@ class PlayerActivity : ComponentActivity() {
             exo.setMediaItem(buildMediaItem(url!!, contentType, titles.getOrNull(startIndex), subtitles), startPositionMs)
             val ctrl = LazyEpisodeController(
                 player = exo,
+                context = applicationContext,
                 scope = lifecycleScope,
                 repo = addonRepository,
                 streamType = intent.getStringExtra(EXTRA_LAZY_STREAM_TYPE) ?: "series",
@@ -403,6 +405,26 @@ class PlayerActivity : ComponentActivity() {
                 .build()
         }
 
+        /**
+         * Builds a [MediaSource] that carries per-request [headers] on its own HTTP data
+         * source — used for lazily-resolved episodes whose scraper streams need headers
+         * different from the first episode the player was built with.
+         */
+        internal fun buildHeaderMediaSource(
+            context: Context,
+            mediaItem: MediaItem,
+            headers: Map<String, String>
+        ): MediaSource {
+            val httpFactory = DefaultHttpDataSource.Factory()
+                .setAllowCrossProtocolRedirects(true)
+                .setConnectTimeoutMs(30_000)
+                .setReadTimeoutMs(30_000)
+                .setUserAgent(headers["User-Agent"] ?: DEFAULT_UA)
+            httpFactory.setDefaultRequestProperties(headers)
+            val dataSourceFactory: DataSource.Factory = DefaultDataSource.Factory(context, httpFactory)
+            return DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)
+        }
+
         internal fun buildMediaItem(
             url: String,
             contentType: String?,
@@ -537,6 +559,9 @@ object PlayerLauncher {
         startIndex: Int,
         forcedSource: String? = null,
         bingeGroup: String? = null,
+        // Request headers for the already-resolved [firstUrl] (e.g. Nuvio scraper streams
+        // needing Referer/User-Agent). Lazily-resolved later episodes carry their own.
+        firstHeaders: Map<String, String>? = null,
         // Watch-progress identity (series). seasons/episodes are parallel to streamIds.
         tmdbId: Int = 0,
         seasons: List<Int> = emptyList(),
@@ -548,6 +573,7 @@ object PlayerLauncher {
         if (streamIds.size <= 1) {
             start(
                 context, firstUrl, titles.getOrNull(startIndex),
+                headers = firstHeaders,
                 tmdbId = tmdbId, mediaType = if (tmdbId > 0) "tv" else null,
                 season = seasons.getOrNull(startIndex), episode = episodes.getOrNull(startIndex),
                 startPositionMs = startPositionMs,
@@ -556,6 +582,7 @@ object PlayerLauncher {
         }
         val intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra(PlayerActivity.EXTRA_URL, firstUrl)
+            if (!firstHeaders.isNullOrEmpty()) putExtra(PlayerActivity.EXTRA_HEADERS, HashMap(firstHeaders))
             putExtra(PlayerActivity.EXTRA_TITLE, titles.getOrNull(startIndex))
             putStringArrayListExtra(PlayerActivity.EXTRA_LAZY_STREAM_IDS, ArrayList(streamIds))
             putStringArrayListExtra(PlayerActivity.EXTRA_PLAYLIST_TITLES, ArrayList(titles))
@@ -614,6 +641,7 @@ data class AutoPickPrefs(
  */
 class LazyEpisodeController(
     private val player: ExoPlayer,
+    private val context: Context,
     private val scope: CoroutineScope,
     private val repo: AddonRepository,
     private val streamType: String,
@@ -640,15 +668,23 @@ class LazyEpisodeController(
         errorMessage.value = null
         isLoading.value = true
         loadJob = scope.launch {
-            val streamUrl = resolveBest(index)
+            val resolved = resolveBest(index)
+            val streamUrl = resolved?.stream?.url
             isLoading.value = false
             if (streamUrl == null) {
                 errorMessage.value = "No stream found for ${titles.getOrNull(index) ?: "this episode"}."
                 return@launch
             }
-            player.setMediaItem(
-                PlayerActivity.buildMediaItem(streamUrl, null, titles.getOrNull(index), emptyList())
-            )
+            val mediaItem = PlayerActivity.buildMediaItem(streamUrl, null, titles.getOrNull(index), emptyList())
+            val headers = resolved.stream.headers
+            // Scraper streams may need per-episode Referer/User-Agent. The player's shared
+            // data source only carries the first episode's headers, so rebuild the media
+            // source with this episode's headers when it has any.
+            if (headers.isEmpty()) {
+                player.setMediaItem(mediaItem)
+            } else {
+                player.setMediaSource(PlayerActivity.buildHeaderMediaSource(context, mediaItem, headers))
+            }
             player.prepare()
             player.playWhenReady = true
             prefetch(index + 1)
@@ -661,11 +697,11 @@ class LazyEpisodeController(
         scope.launch { runCatching { resolveBest(index) } }
     }
 
-    private suspend fun resolveBest(index: Int): String? {
+    private suspend fun resolveBest(index: Int): com.playbridge.sender.data.library.ResolvedStream? {
         val streams = repo.resolveStreamsOnce(streamType, streamIds[index], forcedSource)
         // Prefer the same release the user started with (Stremio bingeGroup) so audio/video,
         // source and quality stay consistent across episodes; fall back to the usual auto-pick.
-        val best = StreamSelector.matchBingeGroup(streams, bingeGroup)
+        return StreamSelector.matchBingeGroup(streams, bingeGroup)
             ?: StreamSelector.selectBest(
                 streams = streams,
                 preferredQuality = QualityFilter.fromKey(prefs.qualityKey) ?: QualityFilter.ALL,
@@ -675,7 +711,6 @@ class LazyEpisodeController(
                 preferredSourceTypes = prefs.sourceTypes
             )
             ?: streams.firstOrNull()
-        return best?.stream?.url
     }
 }
 

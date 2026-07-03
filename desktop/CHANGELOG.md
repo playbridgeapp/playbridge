@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.3+21] — 2026-07-03
+
+### Added
+- **HLS Master Resolver**: Dynamic HLS master playlist parser for choosing optimal audio/video sub-streams in the MPV player engine.
+
+### Fixed
+- **MPV Seek Clamping**: Clamped forward and backward seek operations to prevent seeking out of bounds or to negative position offsets.
+
+
 ## [0.6.2+20] — 2026-06-30
 
 ### Fixed

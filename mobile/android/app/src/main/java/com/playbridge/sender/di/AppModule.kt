@@ -52,12 +52,25 @@ val appModule = module {
     single { get<HistoryDatabase>().collectionDao() }
     single { get<HistoryDatabase>().collectionItemDao() }
     single { get<HistoryDatabase>().downloadDao() }
+    single { get<HistoryDatabase>().nuvioScraperDao() }
 
     // 3. Core Repositories & Services
     single {
         AddonRepository(
             addonDao = get(),
             cacheDir = androidContext().cacheDir,
+            client = get()
+        )
+    }
+    // Nuvio scraper-plugin support: sandboxed JS runner + repository.
+    single { com.playbridge.sender.data.nuvio.NuvioScraperRunner(context = androidContext(), client = get()) }
+    single {
+        com.playbridge.sender.data.nuvio.NuvioRepository(
+            addonDao = get(),
+            scraperDao = get(),
+            runner = get(),
+            settingsRepository = get(),
+            filesDir = androidContext().filesDir,
             client = get()
         )
     }

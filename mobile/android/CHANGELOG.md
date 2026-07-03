@@ -3,6 +3,12 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] — 2026-07-03 (versionCode 216)
+
+### Added
+- **Nuvio Scrapers**: Integrated a sandboxed JavaScript runtime powered by QuickJS, with Cheerio and CryptoJS support for scraper scripts.
+- **Library Add-ons UI**: Created addon models, database provider migrations, addon settings UI, and scraper runner logs.
+
 ## [0.7.1] — 2026-07-01 (versionCode 215)
 
 ### Fixed

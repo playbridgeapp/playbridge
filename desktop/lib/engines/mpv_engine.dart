@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
+import 'hls_master_resolver.dart';
 
 /// Headers that must NOT be forwarded to the player. They're browser-request
 /// artifacts captured by the extension; passing them to mpv breaks playback —
@@ -41,7 +42,6 @@ Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
 
 class MpvEngine extends PlayerEngine {
   MpvEngine() {
-    _configureMpv();
     _subs.addAll([
       player.stream.playing.listen((_) => notifyListeners()),
       player.stream.position.listen((_) => _emitThrottled()),
@@ -64,6 +64,11 @@ class MpvEngine extends PlayerEngine {
   final Player player = Player();
   final List<StreamSubscription> _subs = [];
   VoidCallback? onCompleted;
+
+  /// mpv tuning is applied asynchronously; opens must await it so the very first
+  /// stream gets the same demuxer/network config as every later one (otherwise a
+  /// cast fired immediately after engine creation races the property setup).
+  late final Future<void> _configured = _configureMpv();
 
   DateTime _lastPositionEmit = DateTime.fromMillisecondsSinceEpoch(0);
   static const _positionEmitInterval = Duration(milliseconds: 200);
@@ -239,13 +244,17 @@ class MpvEngine extends PlayerEngine {
 
   @override
   Future<void> openPlaylist(List<QueueItem> items, int startIndex) async {
-    final playlist = Playlist(
-      items
-          .map((i) =>
-              Media(i.url, httpHeaders: sanitizePlayerHeaders(i.headers)))
-          .toList(),
-      index: startIndex,
-    );
+    // Ensure demuxer/network tuning is live before the first open (race fix).
+    await _configured;
+
+    // Resolve any HLS *master* playlist to a single H.264 variant first — see
+    // hls_master_resolver.dart for why mpv chokes on multi-rendition masters.
+    final medias = await Future.wait(items.map((i) async {
+      final headers = sanitizePlayerHeaders(i.headers);
+      final resolvedUrl = await resolveHlsMaster(i.url, headers: headers);
+      return Media(resolvedUrl, httpHeaders: headers);
+    }));
+    final playlist = Playlist(medias, index: startIndex);
     await player.open(playlist, play: true);
 
     // External subtitles for the current item

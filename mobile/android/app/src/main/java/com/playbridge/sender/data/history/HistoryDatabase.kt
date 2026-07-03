@@ -18,10 +18,12 @@ import com.playbridge.sender.data.library.PlaybackResumeDao
 import com.playbridge.sender.data.library.PlaybackResumeEntity
 import com.playbridge.sender.data.library.WatchlistDao
 import com.playbridge.sender.data.library.WatchlistEntity
+import com.playbridge.sender.data.nuvio.NuvioScraperDao
+import com.playbridge.sender.data.nuvio.NuvioScraperEntity
 
 @Database(
-    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class, DownloadEntity::class],
-    version = 20
+    entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class, DownloadEntity::class, NuvioScraperEntity::class],
+    version = 22
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao
@@ -37,4 +39,5 @@ abstract class HistoryDatabase : RoomDatabase() {
     abstract fun collectionDao(): CollectionDao
     abstract fun collectionItemDao(): CollectionItemDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun nuvioScraperDao(): NuvioScraperDao
 }

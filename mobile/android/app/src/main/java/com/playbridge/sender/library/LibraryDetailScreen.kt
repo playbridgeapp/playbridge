@@ -83,6 +83,7 @@ fun LibraryDetailScreen(
     id: String,
     type: String,
     addonRepository: AddonRepository,
+    nuvioRepository: com.playbridge.sender.data.nuvio.NuvioRepository = org.koin.compose.koinInject(),
     onPlayStream: (url: String, title: String) -> Unit = { _, _ -> },
     onPlayPayloadToTv: (playbridge.PlayPayload) -> Unit = {},
     onStartTvEpisodeQueue: (current: playbridge.PlayPayload, plan: com.playbridge.sender.connection.TvEpisodeQueuePlan) -> Unit = { _, _ -> },
@@ -397,7 +398,13 @@ fun LibraryDetailScreen(
      * auto-advance episode-to-episode even without a Hub/play-endpoint addon — mirroring
      * [buildHubPlaylist]'s episode selection. Movies / single episodes play directly.
      */
-    fun launchPhonePlayback(streamUrl: String, resTitle: String, episode: StremioVideo?, bingeGroup: String? = null) {
+    fun launchPhonePlayback(
+        streamUrl: String,
+        resTitle: String,
+        episode: StremioVideo?,
+        bingeGroup: String? = null,
+        headers: Map<String, String> = emptyMap(),
+    ) {
         val videos = addonMeta?.videos
             ?.filter { it.season != null && it.episode != null && it.season > 0 }
             ?.distinctBy { Pair(it.season, it.episode) }
@@ -423,6 +430,7 @@ fun LibraryDetailScreen(
                 startIndex = startIdx,
                 forcedSource = forcedSource,
                 bingeGroup = bingeGroup,
+                firstHeaders = headers.ifEmpty { null },
                 tmdbId = resolvedTmdbId ?: 0,
                 seasons = videos.map { it.season ?: 0 },
                 episodes = videos.map { it.episode ?: 0 },
@@ -431,6 +439,7 @@ fun LibraryDetailScreen(
         } else {
             com.playbridge.sender.player.PlayerLauncher.start(
                 context, streamUrl, resTitle,
+                headers = headers.ifEmpty { null },
                 tmdbId = resolvedTmdbId ?: 0,
                 mediaType = if (isSeries) "tv" else "movie",
                 season = if (isSeries) episode?.season else null,
@@ -491,6 +500,27 @@ fun LibraryDetailScreen(
         }
     }
 
+    // Resolve Nuvio local-scraper streams (TMDB-keyed) and append them to whatever
+    // the Stremio addon flow has already produced. Runs in the same resolution job so
+    // scraped streams land in the same picker / auto-pick list. No-op when no TMDB id
+    // is known or no scrapers are installed.
+    suspend fun appendNuvioStreams(streamType: String, episode: StremioVideo?) {
+        val tmdbId = resolvedTmdbId ?: return
+        val nuvio = runCatching {
+            nuvioRepository.resolveStreams(
+                stremioType = streamType,
+                tmdbId = tmdbId.toString(),
+                season = episode?.season,
+                episode = episode?.episode
+            )
+        }.getOrDefault(emptyList())
+        if (nuvio.isNotEmpty()) {
+            resolvedStreams = (resolvedStreams + nuvio)
+                .distinctBy { it.stream.url }
+                .sortedByDescending { it.stream.isDirectUrl }
+        }
+    }
+
     val startResolution: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = start@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
         if (!canResolveStreams) return@start
 
@@ -515,6 +545,7 @@ fun LibraryDetailScreen(
             addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
                 resolvedStreams = latest
             }
+            appendNuvioStreams(streamType, episode)
             resolutionState = resolutionState.copy(isResolving = false)
 
             // Auto-pick logic
@@ -533,12 +564,14 @@ fun LibraryDetailScreen(
                     val streamUrl = finalSelection.stream.url
                     if (streamUrl != null) {
                         if (forPhone) {
-                            launchPhonePlayback(streamUrl, resTitle, episode, finalSelection.stream.behaviorHints?.bingeGroup)
+                            launchPhonePlayback(streamUrl, resTitle, episode, finalSelection.stream.behaviorHints?.bingeGroup, finalSelection.stream.headers)
                         } else {
-                            // Send to TV with metadata
+                            // Send to TV with metadata. Nuvio-scraped streams carry request
+                            // headers (Referer/User-Agent) the TV needs to play them.
                             val payload = playbridge.PlayPayload(
                                 url = streamUrl,
                                 title = resTitle,
+                                headers = finalSelection.stream.headers,
                                 content_type = if (isSeries) "series" else "movie",
                                 detected_by = "library",
                                 visual_metadata = buildVisualMetadata(episode),
@@ -579,6 +612,7 @@ fun LibraryDetailScreen(
             addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
                 resolvedStreams = latest
             }
+            appendNuvioStreams(streamType, episode)
             resolutionState = resolutionState.copy(isResolving = false)
 
             val runtimeForBitrate = if (isSeries) 45 else 120
@@ -697,11 +731,12 @@ fun LibraryDetailScreen(
                 val streamUrl = resolved.stream.url ?: return@StreamPickerSheet
 
                 if (forPhone) {
-                    launchPhonePlayback(streamUrl, streamPickerTitle, currentEpisodeSelection, resolved.stream.behaviorHints?.bingeGroup)
+                    launchPhonePlayback(streamUrl, streamPickerTitle, currentEpisodeSelection, resolved.stream.behaviorHints?.bingeGroup, resolved.stream.headers)
                 } else {
                     val payload = playbridge.PlayPayload(
                         url = streamUrl,
                         title = streamPickerTitle,
+                        headers = resolved.stream.headers,
                         content_type = if (isSeries) "series" else "movie",
                         detected_by = "library",
                         visual_metadata = buildVisualMetadata(currentEpisodeSelection),
