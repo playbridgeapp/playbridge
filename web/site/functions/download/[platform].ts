@@ -31,9 +31,9 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
     const finalArch = arch || 'universal';
     assetPattern = `^playbridge-tv-player-.*-${finalArch}-release\\.apk$`;
   } else if (cleanPlatform === 'tv-browser') {
-    tagPrefix = 'tv-browser-v';
+    tagPrefix = 'tv-geckoview-plugin-v';
     const finalArch = arch || 'universal';
-    assetPattern = `^playbridge-tv-browser-.*-${finalArch}-release\\.apk$`;
+    assetPattern = `^playbridge-tv-geckoview-plugin-.*-${finalArch}-release\\.apk$`;
   } else if (cleanPlatform === 'macos') {
     tagPrefix = 'desktop-v';
     assetPattern = '^playbridge-desktop-macos-.*\\.zip$';
@@ -63,13 +63,15 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
   }
 
   try {
-    const githubUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases`;
-    const apiResponse = await fetch(githubUrl, {
-      headers: {
-        'User-Agent': 'PlayBridge-Downloader',
-        'Accept': 'application/vnd.github+json'
-      }
-    });
+    const githubUrl = `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100`;
+    const headers: Record<string, string> = {
+      'User-Agent': 'PlayBridge-Downloader',
+      'Accept': 'application/vnd.github+json'
+    };
+    if (context.env && (context.env as any).GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${(context.env as any).GITHUB_TOKEN}`;
+    }
+    const apiResponse = await fetch(githubUrl, { headers });
 
     if (!apiResponse.ok) {
       throw new Error(`GitHub API returned status ${apiResponse.status}`);
