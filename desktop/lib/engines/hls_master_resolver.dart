@@ -51,8 +51,9 @@ Future<String> resolveHlsMaster(
     if (!body.contains('#EXTM3U')) return url; // not an HLS playlist at all
 
     final variants = _parseMaster(body, uri);
-    if (variants.isEmpty)
+    if (variants.isEmpty) {
       return url; // media playlist, or no variants → leave it
+    }
 
     final chosen = _pick(variants);
     debugPrint(
