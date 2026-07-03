@@ -39,7 +39,9 @@ enum ContentBlocker {
     /// Compile (or fetch the cached) rule lists. Returns compiled lists.
     /// Identifiers are derived from each list's content hash, so a list whose
     /// contents changed recompiles automatically instead of serving a stale
-    /// cached compilation.
+    /// cached compilation. Each source compiles into two rule lists — network
+    /// (`<id>`) and cosmetic (`<id>-css`) — so a selector WebKit rejects can only
+    /// lose that source's cosmetics, never its network blocking.
     @MainActor
     static func compileAll() async -> [WKContentRuleList] {
         guard let store = WKContentRuleListStore.default() else { return [] }
@@ -50,15 +52,11 @@ enum ContentBlocker {
         for url in filterListURLs {
             // Read + hash off the main thread (lists can be multiple MB).
             guard let loaded = await loadList(getLocalListPath(for: url)) else { continue }
-            desired.insert(loaded.id)
-            if let cached = await lookup(store: store, identifier: loaded.id) {
-                lists.append(cached); compiledAnyCustom = true; continue
-            }
-            // Parse off the main thread; only the WebKit compile (async) runs here.
-            let json = await parseOffMain(loaded.text)
-            if let list = try? await compile(store: store, identifier: loaded.id, json: json, sourceName: url.lastPathComponent) {
-                lists.append(list); compiledAnyCustom = true
-            }
+            let result = await compileSource(store: store, baseId: loaded.id, text: loaded.text,
+                                             sourceName: url.lastPathComponent)
+            desired.formUnion(result.ids)
+            if !result.lists.isEmpty { compiledAnyCustom = true }
+            lists.append(contentsOf: result.lists)
         }
 
         if !compiledAnyCustom {
@@ -76,19 +74,13 @@ enum ContentBlocker {
 
         // Always-on extra rules from the bundled/hosted list (small; safe to read here).
         if let extra = extraListText(), !extra.isEmpty {
-            let supId = cacheIdentifier(for: extra)
-            desired.insert(supId)
-            if let cached = await lookup(store: store, identifier: supId) {
-                lists.append(cached)
-            } else {
-                let json = await parseOffMain(extra)
-                if let list = try? await compile(store: store, identifier: supId, json: json, sourceName: "playbridge-extra") {
-                    lists.append(list)
-                }
-            }
+            let result = await compileSource(store: store, baseId: cacheIdentifier(for: extra), text: extra,
+                                             sourceName: "playbridge-extra")
+            desired.formUnion(result.ids)
+            lists.append(contentsOf: result.lists)
         }
 
-        // User cosmetic rules (element-picker "Block").
+        // User cosmetic rules (element-picker "Block") — cosmetic-only by construction.
         let userText = userRulesText()
         if !userText.isEmpty {
             let uid = cacheIdentifier(for: userText)
@@ -96,8 +88,9 @@ enum ContentBlocker {
             if let cached = await lookup(store: store, identifier: uid) {
                 lists.append(cached)
             } else {
-                let json = await parseOffMain(userText)
-                if let list = try? await compile(store: store, identifier: uid, json: json, sourceName: "user-cosmetic") {
+                let parsed = await parseOffMain(userText)
+                if !parsed.cosmeticJSON.isEmpty,
+                   let list = try? await compile(store: store, identifier: uid, json: parsed.cosmeticJSON, sourceName: "user-cosmetic") {
                     lists.append(list)
                 }
             }
@@ -131,6 +124,83 @@ enum ContentBlocker {
         return lists
     }
 
+    /// Compiles (or fetches the cached) network + cosmetic rule lists for one
+    /// filter-list source. Returns whatever compiled successfully plus the
+    /// identifiers this source wants kept alive in the store.
+    @MainActor
+    private static func compileSource(store: WKContentRuleListStore, baseId: String, text: String,
+                                      sourceName: String) async -> (lists: [WKContentRuleList], ids: Set<String>) {
+        let cssId = baseId + "-css"
+        var ids: Set<String> = [baseId]
+        var lists: [WKContentRuleList] = []
+
+        let cachedNet = await lookup(store: store, identifier: baseId)
+        if let cachedNet {
+            lists.append(cachedNet)
+            if cssAbsentIDs().contains(baseId) { return (lists, ids) }
+            if let cachedCss = await lookup(store: store, identifier: cssId) {
+                ids.insert(cssId)
+                lists.append(cachedCss)
+                return (lists, ids)
+            }
+        }
+
+        // Parse off the main thread; only the WebKit compile (async) runs here.
+        let parsed = await parseOffMain(text)
+        if cachedNet == nil,
+           let list = try? await compile(store: store, identifier: baseId, json: parsed.networkJSON,
+                                         sourceName: "\(sourceName) (network)") {
+            lists.append(list)
+        }
+        if parsed.cosmeticJSON.isEmpty {
+            markCssAbsent(baseId)
+        } else {
+            ids.insert(cssId)
+            if let list = try? await compile(store: store, identifier: cssId, json: parsed.cosmeticJSON,
+                                             sourceName: "\(sourceName) (cosmetic)") {
+                lists.append(list)
+            }
+        }
+        return (lists, ids)
+    }
+
+    /// Sources (by content-hash id) known to produce no cosmetic rules, so the
+    /// cached-compilation fast path doesn't reparse them on every launch just to
+    /// discover the `-css` list legitimately doesn't exist.
+    private static let cssAbsentKey = "pb_adblock_css_absent"
+
+    private static func cssAbsentIDs() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: cssAbsentKey) ?? [])
+    }
+
+    private static func markCssAbsent(_ id: String) {
+        var ids = cssAbsentIDs()
+        if ids.insert(id).inserted {
+            UserDefaults.standard.set(Array(ids), forKey: cssAbsentKey)
+        }
+    }
+
+    /// Force-compiles one source's network + cosmetic lists, ignoring the cache.
+    /// Throws on the first failure so the UI can surface it.
+    @MainActor
+    private static func forceCompileSource(store: WKContentRuleListStore, baseId: String, text: String,
+                                           sourceName: String) async throws -> (lists: [WKContentRuleList], ids: Set<String>) {
+        let parsed = await parseOffMain(text)
+        var ids: Set<String> = [baseId]
+        var lists: [WKContentRuleList] = []
+        lists.append(try await compile(store: store, identifier: baseId, json: parsed.networkJSON,
+                                       sourceName: "\(sourceName) (network)"))
+        if parsed.cosmeticJSON.isEmpty {
+            markCssAbsent(baseId)
+        } else {
+            let cssId = baseId + "-css"
+            ids.insert(cssId)
+            lists.append(try await compile(store: store, identifier: cssId, json: parsed.cosmeticJSON,
+                                           sourceName: "\(sourceName) (cosmetic)"))
+        }
+        return (lists, ids)
+    }
+
     /// Forces compilation of all downloaded rules, ignoring any cached compilation.
     /// Throws on the first compilation failure so the UI can surface it.
     @MainActor
@@ -148,11 +218,11 @@ enum ContentBlocker {
 
         for url in filterListURLs {
             guard let loaded = await loadList(getLocalListPath(for: url)) else { continue }
-            desired.insert(loaded.id)
             // Force a fresh compile rather than trusting any cached list.
-            let json = await parseOffMain(loaded.text)
-            let list = try await compile(store: store, identifier: loaded.id, json: json, sourceName: url.lastPathComponent)
-            lists.append(list)
+            let result = try await forceCompileSource(store: store, baseId: loaded.id, text: loaded.text,
+                                                      sourceName: url.lastPathComponent)
+            desired.formUnion(result.ids)
+            lists.append(contentsOf: result.lists)
             compiledAnyCustom = true
         }
 
@@ -166,20 +236,21 @@ enum ContentBlocker {
 
         // Always-on extra rules from the bundled/hosted list.
         if let extra = extraListText(), !extra.isEmpty {
-            let supId = cacheIdentifier(for: extra)
-            desired.insert(supId)
-            let json = await parseOffMain(extra)
-            let supList = try await compile(store: store, identifier: supId, json: json, sourceName: "playbridge-extra")
-            lists.append(supList)
+            let result = try await forceCompileSource(store: store, baseId: cacheIdentifier(for: extra), text: extra,
+                                                      sourceName: "playbridge-extra")
+            desired.formUnion(result.ids)
+            lists.append(contentsOf: result.lists)
         }
 
         let userText = userRulesText()
         if !userText.isEmpty {
-            let uid = cacheIdentifier(for: userText)
-            desired.insert(uid)
-            let json = await parseOffMain(userText)
-            let userList = try await compile(store: store, identifier: uid, json: json, sourceName: "user-cosmetic")
-            lists.append(userList)
+            let parsed = await parseOffMain(userText)
+            if !parsed.cosmeticJSON.isEmpty {
+                let uid = cacheIdentifier(for: userText)
+                desired.insert(uid)
+                let userList = try await compile(store: store, identifier: uid, json: parsed.cosmeticJSON, sourceName: "user-cosmetic")
+                lists.append(userList)
+            }
         }
 
         let domJSON = userDomainsJSON()
@@ -241,8 +312,8 @@ enum ContentBlocker {
     }
 
     /// Parses EasyList text into WebKit JSON off the main thread (CPU-heavy).
-    private static func parseOffMain(_ text: String) async -> String {
-        await Task.detached(priority: .utility) { parseListTextToJSON(text) }.value
+    private static func parseOffMain(_ text: String) async -> ParsedList {
+        await Task.detached(priority: .utility) { parseListText(text) }.value
     }
 
     /// Removes any of our previously-compiled rule lists that are no longer in use
@@ -256,16 +327,20 @@ enum ContentBlocker {
         for id in identifiers where id.hasPrefix("playbridge-adblock") && !keeping.contains(id) {
             store.removeContentRuleList(forIdentifier: id) { _ in }
         }
+        // Drop css-absent markers for sources that no longer exist.
+        let absent = cssAbsentIDs().intersection(keeping)
+        UserDefaults.standard.set(Array(absent), forKey: cssAbsentKey)
     }
 
     /// Bump when the rule-generation logic changes so that existing cached
     /// compilations are invalidated and recompiled with the new parser.
-    private static let rulesetVersion = "7"
+    private static let rulesetVersion = "8"
 
-    /// Every WKContentRuleList resource type except `document`, so a block rule can
-    /// never cancel a page the user navigated to — only its sub-resources (scripts,
-    /// images, trackers, media, pop-ups). Prevents "blocked by content blocker" (104)
-    /// failures on normal navigation.
+    /// Default resource types for a block rule: every WKContentRuleList type except
+    /// `document`, so a block rule can never cancel a page the user navigated to.
+    /// Frame documents (ad iframes) are covered separately by a companion rule with
+    /// `resource-type: ["document"]` + `load-context: ["child-frame"]`, which can
+    /// never cause "blocked by content blocker" (104) failures on top-level navigation.
     private static let blockResourceTypes = ["image", "style-sheet", "script", "font", "raw", "svg-document", "media", "popup"]
 
     /// Stable identifier derived from a list's content (plus the parser version),
@@ -339,10 +414,22 @@ enum ContentBlocker {
         return FileManager.default.fileExists(atPath: path)
     }
 
-    /// Parse EasyList text format into WebKit Content Blocker rules (with 60k rule limit and cosmetic chunking)
-    private static func parseListTextToJSON(_ text: String) -> String {
+    /// Result of parsing one EasyList source. Network and cosmetic rules compile as
+    /// SEPARATE WKContentRuleLists so a selector WebKit rejects can only lose that
+    /// source's cosmetics — never its network blocking.
+    struct ParsedList {
+        var networkJSON: String
+        var cosmeticJSON: String   // "" when the list has no usable cosmetic rules
+    }
+
+    /// WebKit allows 150k rules per compiled list (iOS 15+); stay safely under it.
+    private static let maxRulesPerList = 140_000
+
+    /// Parse EasyList text format into WebKit Content Blocker rules.
+    private static func parseListText(_ text: String) -> ParsedList {
         var rules: [[String: Any]] = []
         var exceptionRules: [[String: Any]] = []
+        var cosmeticRules: [[String: Any]] = []
         var cosmeticSelectors: [String] = []
         var ruleCount = 0
 
@@ -406,8 +493,8 @@ enum ContentBlocker {
                                 } else if !negativeDomains.isEmpty {
                                     trigger["unless-domain"] = negativeDomains
                                 }
-                                
-                                rules.append([
+
+                                cosmeticRules.append([
                                     "trigger": trigger,
                                     "action": ["type": "css-display-none", "selector": selector]
                                 ])
@@ -444,18 +531,13 @@ enum ContentBlocker {
                     let safe = !inner.isEmpty && inner.allSatisfy {
                         $0.isLetter || $0.isNumber || "._-/".contains($0)
                     }
-                    if !o.skip && safe, (try? NSRegularExpression(pattern: inner)) != nil {
-                        var t: [String: Any] = ["url-filter": inner]
-                        if !isException { t["resource-type"] = blockResourceTypes }
-                        if let lt = o.loadType { t["load-type"] = lt }
-                        if !o.ifDomain.isEmpty { t["if-domain"] = o.ifDomain }
-                        else if !o.unlessDomain.isEmpty { t["unless-domain"] = o.unlessDomain }
-                        let r: [String: Any] = ["trigger": t,
-                                                "action": ["type": isException ? "ignore-previous-rules" : "block"]]
-                        if isException { exceptionRules.append(r) }
-                        else {
-                            rules.append(r); ruleCount += 1
-                            if ruleCount > 60000 { break }
+                    if !o.skip && safe {
+                        let rs = webkitRules(urlFilter: inner, options: o, block: !isException)
+                        if isException {
+                            exceptionRules.append(contentsOf: rs)
+                        } else if ruleCount < maxRulesPerList {
+                            rules.append(contentsOf: rs)
+                            ruleCount += rs.count
                         }
                     }
                     continue
@@ -476,10 +558,12 @@ enum ContentBlocker {
             if !netRules.isEmpty {
                 if isException {
                     exceptionRules.append(contentsOf: netRules)
-                } else {
+                } else if ruleCount < maxRulesPerList {
+                    // Over the cap, further block rules are dropped — but keep
+                    // scanning: exceptions and cosmetic rules later in the file
+                    // (EasyList puts element hiding at the end) must not be lost.
                     rules.append(contentsOf: netRules)
                     ruleCount += netRules.count
-                    if ruleCount > 60000 { break }
                 }
             }
             continue
@@ -488,26 +572,29 @@ enum ContentBlocker {
         // Exceptions go after all block rules so `ignore-previous-rules` can
         // override the blocks they whitelist.
         rules.append(contentsOf: exceptionRules)
-        
-        // Chunk cosmetic rules to prevent WebKit length limits
+
+        // Chunk generic cosmetic selectors to prevent WebKit length limits.
         let chunkSize = 1000
         for i in stride(from: 0, to: cosmeticSelectors.count, by: chunkSize) {
             let end = min(i + chunkSize, cosmeticSelectors.count)
             let chunk = Array(cosmeticSelectors[i..<end])
             let joinedSelector = chunk.joined(separator: ", ")
-            rules.append([
+            cosmeticRules.append([
                 "trigger": ["url-filter": ".*"],
                 "action": ["type": "css-display-none", "selector": joinedSelector]
             ])
         }
-        
+        if cosmeticRules.count > maxRulesPerList {
+            cosmeticRules = Array(cosmeticRules.prefix(maxRulesPerList))
+        }
+
         if rules.isEmpty {
             rules.append([
                 "trigger": ["url-filter": "playbridge-dummy-rule-to-prevent-empty-list-error"],
                 "action": ["type": "block"]
             ])
         }
-        
+
         let dummyRuleJSON = """
         [
           {
@@ -516,10 +603,15 @@ enum ContentBlocker {
           }
         ]
         """
-        
-        guard let data = try? JSONSerialization.data(withJSONObject: rules),
-              let json = String(data: data, encoding: .utf8) else { return dummyRuleJSON }
-        return json
+
+        let networkJSON = jsonString(rules) ?? dummyRuleJSON
+        let cosmeticJSON = cosmeticRules.isEmpty ? "" : (jsonString(cosmeticRules) ?? "")
+        return ParsedList(networkJSON: networkJSON, cosmeticJSON: cosmeticJSON)
+    }
+
+    private static func jsonString(_ rules: [[String: Any]]) -> String? {
+        guard let data = try? JSONSerialization.data(withJSONObject: rules) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     /// Parsed subset of EasyList rule options that WebKit can represent.
@@ -527,8 +619,28 @@ enum ContentBlocker {
         var loadType: [String]? = nil      // nil = both first- and third-party
         var ifDomain: [String] = []
         var unlessDomain: [String] = []
+        var types: Set<String> = []        // explicit WebKit resource types from $type options
+        var subdocument = false            // $subdocument: block as child-frame document
+        var noSubdocument = false          // $~subdocument: suppress the child-frame rule
         var skip = false                   // rule uses an option we can't represent
     }
+
+    /// EasyList resource-type options → WebKit content-blocker resource types.
+    /// (`subdocument` is handled separately; negated types like `~script` are
+    /// ignored, i.e. the rule keeps its broad default coverage, as before.)
+    private static let resourceTypeOptions: [String: String] = [
+        "script": "script",
+        "image": "image", "background": "image",
+        "stylesheet": "style-sheet",
+        "font": "font",
+        "media": "media",
+        "popup": "popup",
+        "xmlhttprequest": "raw", "xhr": "raw",
+        "websocket": "raw",
+        "ping": "raw", "beacon": "raw",
+        "other": "raw",
+        "object": "raw", "object-subrequest": "raw",
+    ]
 
     private static func parseOptions(_ optStr: Substring) -> NetOptions {
         var o = NetOptions()
@@ -540,6 +652,12 @@ enum ContentBlocker {
                 o.loadType = ["third-party"]
             } else if opt == "~third-party" || opt == "first-party" || opt == "1p" || opt == "~3p" {
                 o.loadType = ["first-party"]
+            } else if opt == "subdocument" || opt == "frame" {
+                o.subdocument = true
+            } else if opt == "~subdocument" || opt == "~frame" {
+                o.noSubdocument = true
+            } else if let mapped = resourceTypeOptions[opt] {
+                o.types.insert(mapped)
             } else if opt.hasPrefix("domain=") {
                 let val = opt.dropFirst("domain=".count)
                 for d in val.split(separator: "|") {
@@ -567,21 +685,43 @@ enum ContentBlocker {
         return o
     }
 
+    /// Builds the WebKit rule(s) for one url-filter + parsed options: a sub-resource
+    /// rule and/or a child-frame document rule. Untyped EasyList rules apply to ALL
+    /// request types — including ad iframes — so they get a companion rule with
+    /// `resource-type: ["document"]` + `load-context: ["child-frame"]`, which blocks
+    /// the frame document itself but can never cancel top-level navigation.
+    private static func webkitRules(urlFilter: String, options: NetOptions, block: Bool) -> [[String: Any]] {
+        guard (try? NSRegularExpression(pattern: urlFilter)) != nil else { return [] }
+        var base: [String: Any] = ["url-filter": urlFilter]
+        if let lt = options.loadType { base["load-type"] = lt }
+        if !options.ifDomain.isEmpty { base["if-domain"] = options.ifDomain }
+        else if !options.unlessDomain.isEmpty { base["unless-domain"] = options.unlessDomain }
+
+        guard block else {
+            // Exceptions carry no resource-type: ignore-previous-rules must lift
+            // blocks on every resource type, including frame documents.
+            return [["trigger": base, "action": ["type": "ignore-previous-rules"]]]
+        }
+
+        var out: [[String: Any]] = []
+        let subdocumentOnly = options.subdocument && options.types.isEmpty
+        if !subdocumentOnly {
+            var t = base
+            t["resource-type"] = options.types.isEmpty ? blockResourceTypes : Array(options.types).sorted()
+            out.append(["trigger": t, "action": ["type": "block"]])
+        }
+        if options.subdocument || (options.types.isEmpty && !options.noSubdocument) {
+            var t = base
+            t["resource-type"] = ["document"]
+            t["load-context"] = ["child-frame"]
+            out.append(["trigger": t, "action": ["type": "block"]])
+        }
+        return out
+    }
+
     /// Translates a single EasyList network pattern (the part before `$`) into one
     /// or more WebKit content-blocker rules. Returns [] if it can't be represented.
     private static func makeNetworkRules(pattern rawPattern: Substring, options: NetOptions, block: Bool) -> [[String: Any]] {
-        let actionType = block ? "block" : "ignore-previous-rules"
-
-        func trigger(_ urlFilter: String) -> [String: Any]? {
-            guard (try? NSRegularExpression(pattern: urlFilter)) != nil else { return nil }
-            var t: [String: Any] = ["url-filter": urlFilter]
-            if block { t["resource-type"] = blockResourceTypes }
-            if let lt = options.loadType { t["load-type"] = lt }
-            if !options.ifDomain.isEmpty { t["if-domain"] = options.ifDomain }
-            else if !options.unlessDomain.isEmpty { t["unless-domain"] = options.unlessDomain }
-            return ["trigger": t, "action": ["type": actionType]]
-        }
-
         var p = rawPattern
         if p.isEmpty { return [] }
 
@@ -601,10 +741,8 @@ enum ContentBlocker {
             let ds = String(p).trimmingCharacters(in: .whitespaces)
             guard !ds.isEmpty, isValidRuleDomain(ds) else { return [] }
             let escaped = ds.replacingOccurrences(of: ".", with: "\\.")
-            var out: [[String: Any]] = []
-            if let r = trigger("^https?://([^/]+\\.)?\(escaped)[:/?]") { out.append(r) }
-            if let r = trigger("^https?://([^/]+\\.)?\(escaped)$") { out.append(r) }
-            return out
+            return webkitRules(urlFilter: "^https?://([^/]+\\.)?\(escaped)[:/?]", options: options, block: block)
+                 + webkitRules(urlFilter: "^https?://([^/]+\\.)?\(escaped)$", options: options, block: block)
         }
 
         // General pattern -> WebKit url-filter regex.
@@ -626,8 +764,7 @@ enum ContentBlocker {
         else if anchorStart { urlFilter = "^" + body }
         if anchorEnd { urlFilter += "$" }
 
-        if let r = trigger(urlFilter) { return [r] }
-        return []
+        return webkitRules(urlFilter: urlFilter, options: options, block: block)
     }
 
     /// Single source of truth for the custom rules: one hosted file on the site
@@ -932,8 +1069,15 @@ enum ContentBlocker {
     static func shouldBlock(urlString: String) -> Bool {
         guard isEnabled else { return false }
 
-        let lowerUrl = urlString.lowercased()
-        for domain in blockedDomains where lowerUrl.contains(domain) { return true }
+        // Suffix-match the parsed host — substring-matching the whole URL
+        // false-positives on paths/params that merely contain a blocked domain
+        // (e.g. "segment.com" inside a query string), which can silently drop
+        // legitimate detected streams.
+        if let host = URL(string: urlString)?.host?.lowercased() {
+            for domain in blockedDomains where host == domain || host.hasSuffix("." + domain) {
+                return true
+            }
+        }
 
         lock.lock()
         let ready = isPatternsCompiled

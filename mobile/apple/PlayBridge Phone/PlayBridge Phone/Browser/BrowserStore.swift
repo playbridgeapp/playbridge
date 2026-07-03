@@ -13,6 +13,12 @@ final class BrowserStore: ObservableObject {
     @Published var adBlockEnabled: Bool = ContentBlocker.isEnabled
     private var ruleLists: [WKContentRuleList] = []
 
+    /// False until the first rule compilation has been applied to the webviews.
+    /// Loads requested before then (restored tabs) are deferred so the first
+    /// pages of a session never load unfiltered.
+    private var rulesReady = false
+    private var pendingInitialLoads: [UUID: String] = [:]
+
     static let homeURL = "https://www.google.com"
 
     /// History + bookmarks, shared with the browser UI via the environment.
@@ -31,11 +37,32 @@ final class BrowserStore: ObservableObject {
             // Compile cached rules so blocking is active immediately (curated fallback).
             ruleLists = await ContentBlocker.compileAll()
             applyRulesToAllTabs()
+            // Rules are on the webviews — start the deferred restored-tab loads.
+            rulesReady = true
+            flushPendingLoads()
             // Then fetch/refresh the full filter lists and recompile.
             await ContentBlocker.ensureListsDownloaded()
             ruleLists = await ContentBlocker.compileAll()
             applyRulesToAllTabs()
         }
+        // Safety valve: a full recompile (e.g. after a parser-version bump
+        // invalidates the cache) can take a long time. Never hold restored tabs
+        // blank for it — after a short grace period fall back to loading
+        // immediately; the rules attach to the webviews when compilation finishes.
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            rulesReady = true
+            flushPendingLoads()
+        }
+    }
+
+    /// Loads any tab URLs that were deferred while rules were still compiling.
+    private func flushPendingLoads() {
+        guard !pendingInitialLoads.isEmpty else { return }
+        for tab in tabs {
+            if let url = pendingInitialLoads[tab.id] { tab.load(url) }
+        }
+        pendingInitialLoads.removeAll()
     }
 
     var activeTab: BrowserTab? { tabs.first { $0.id == activeID } }
@@ -85,7 +112,14 @@ final class BrowserStore: ObservableObject {
         activeID = tab.id
         applyRules(to: tab)
         if let url, !url.isEmpty {
-            tab.load(url)
+            if rulesReady {
+                tab.load(url)
+            } else {
+                // Defer until the first compile applies. Setting urlString keeps the
+                // address bar and saveTabs() correct while the load is pending.
+                tab.urlString = url
+                pendingInitialLoads[tab.id] = url
+            }
         } else {
             tab.isHome = true   // show the new-tab/home page until the user navigates
         }
@@ -192,10 +226,19 @@ final class BrowserStore: ObservableObject {
         saveTabs()
     }
 
-    func select(_ id: UUID) { activeID = id; saveTabs() }
+    func select(_ id: UUID) {
+        activeID = id
+        // A deliberate user selection outranks the rules-ready deferral — load now.
+        if let url = pendingInitialLoads.removeValue(forKey: id),
+           let tab = tabs.first(where: { $0.id == id }) {
+            tab.load(url)
+        }
+        saveTabs()
+    }
 
     func closeTab(_ id: UUID) {
         guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
+        pendingInitialLoads.removeValue(forKey: id)
         tabs[idx].webView.stopLoading()
         tabs.remove(at: idx)
         if tabs.isEmpty {

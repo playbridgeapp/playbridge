@@ -41,6 +41,8 @@ class SettingsRepository(
         val USER_AGENT_PRESET = stringPreferencesKey("user_agent_preset")
         /** JSON array of saved {id, name, value} custom user agents the person has added. */
         val CUSTOM_USER_AGENTS = stringPreferencesKey("custom_user_agents")
+        /** Master switch for Nuvio local JS scrapers. Default OFF — they run third-party code. */
+        val ENABLE_LOCAL_SCRAPERS = booleanPreferencesKey("enable_local_scrapers")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -71,6 +73,8 @@ class SettingsRepository(
     val userAgentPreset: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.USER_AGENT_PRESET] ?: "default" }
     val customUserAgents: Flow<List<CustomUserAgent>> = dataStore.data.catch { handleException(it) }
         .map { decodeCustomUserAgents(it[Keys.CUSTOM_USER_AGENTS] ?: "[]") }
+    /** Whether Nuvio local JS scrapers may run. Default false (opt-in; runs third-party code). */
+    val enableLocalScrapers: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.ENABLE_LOCAL_SCRAPERS] ?: false }
 
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
@@ -91,6 +95,7 @@ class SettingsRepository(
     suspend fun setSendSubtitlesToTv(value: Boolean) = write { it[Keys.SEND_SUBTITLES_TO_TV] = value }
     suspend fun setLogsExcludeFilters(value: Set<String>) = write { it[Keys.LOGS_EXCLUDE_FILTERS] = value }
     suspend fun setUserAgentPreset(value: String) = write { it[Keys.USER_AGENT_PRESET] = value }
+    suspend fun setEnableLocalScrapers(value: Boolean) = write { it[Keys.ENABLE_LOCAL_SCRAPERS] = value }
 
     /** Append a new saved custom user agent. */
     suspend fun addCustomUserAgent(agent: CustomUserAgent) = write { prefs ->

@@ -427,7 +427,7 @@ struct CastSheet: View {
         
         Task {
             // Show a parsed thumbnail (like Android) rather than an inline video player.
-            let thumb = await Thumbnailer.thumbnail(url: video.url, headers: headers)
+            let thumb = await Thumbnailer.thumbnail(url: video.url, headers: headers, isHLS: video.kind == .hls)
             await MainActor.run {
                 self.thumbnail = thumb
                 self.isThumbnailLoading = false
@@ -688,7 +688,7 @@ struct VideoCard: View {
             if !isSelected {
                 localLoading = true
                 let headers = VideoDetector.mediaHeaders(for: video)
-                localThumbnail = await Thumbnailer.thumbnail(url: video.url, headers: headers)
+                localThumbnail = await Thumbnailer.thumbnail(url: video.url, headers: headers, isHLS: video.kind == .hls)
                 localLoading = false
             }
         }

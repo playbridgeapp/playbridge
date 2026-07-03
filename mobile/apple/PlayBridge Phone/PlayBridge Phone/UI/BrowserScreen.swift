@@ -28,7 +28,8 @@ struct BrowserScreen: View {
                 guard let url = payload["url"] as? String, !url.isEmpty else { return }
                 let v = DetectedVideo(url: url, contentType: payload["contentType"] as? String,
                                       detectedBy: "page_bridge",
-                                      originUrl: store.activeTab?.urlString, headers: [:],
+                                      originUrl: store.activeTab?.urlString,
+                                      headers: VideoDetector.requestHeaders(originUrl: store.activeTab?.urlString),
                                       kind: DetectedVideo.classify(url: url, contentType: payload["contentType"] as? String))
                 vm.castStream(v)
                 nav.navigate(to: .remote)

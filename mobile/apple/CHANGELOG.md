@@ -3,6 +3,11 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.3-alpha] — 2026-07-03 (build 6)
+
+### Changed
+- **Adblocker & Cosmetic Filtering**: Refined WKWebView element picker logic, custom CSS selectors, and thumbnail resolution patterns.
+
 ## [0.3.2-alpha] — 2026-07-01 (build 5)
 
 ### Removed

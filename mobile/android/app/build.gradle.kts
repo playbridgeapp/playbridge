@@ -25,8 +25,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 215
-        versionName = "0.7.1"
+        versionCode = 216
+        versionName = "0.8.0"
 
         ndk {
             abiFilters.add("armeabi-v7a")
@@ -164,6 +164,9 @@ dependencies {
     // Koin Dependency Injection
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
+
+    // QuickJS — sandboxed JS runtime for Nuvio scraper plugins
+    implementation(libs.quickjs.kt)
 
     implementation(project(":shared"))
 }

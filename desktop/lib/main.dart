@@ -483,15 +483,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
             ),
             SeekForwardIntent: CallbackAction<SeekForwardIntent>(
               onInvoke: (_) {
-                _player
-                    .seek(Duration(milliseconds: _player.positionMs + 10000));
+                final dur = _player.durationMs;
+                var target = _player.positionMs + 10000;
+                if (dur > 0 && target > dur) target = dur;
+                _player.seek(Duration(milliseconds: target));
                 return null;
               },
             ),
             SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
               onInvoke: (_) {
-                _player
-                    .seek(Duration(milliseconds: _player.positionMs - 10000));
+                // Clamp to 0 — a negative absolute seek makes mpv jump to EOF.
+                final target = _player.positionMs - 10000;
+                _player.seek(Duration(milliseconds: target < 0 ? 0 : target));
                 return null;
               },
             ),

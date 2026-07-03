@@ -41,7 +41,8 @@ enum DetectionScript {
           url: url,
           contentType: contentType || '',
           detectedBy: detectedBy || 'unknown',
-          originUrl: location.href
+          originUrl: location.href,
+          ua: navigator.userAgent
         });
       }
 
