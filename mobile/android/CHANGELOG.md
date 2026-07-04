@@ -3,6 +3,14 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] — 2026-07-04 (versionCode 217)
+
+### Added
+- **In-App Updates**: Implemented dynamic updates check on cold start, local APK downloader (`ApkInstaller`), and a manual "Check for updates" option in Settings.
+
+### Fixed
+- **Touchpad Area Gestures**: Locked the touchpad two-finger gestures to a single mode (zoom or scroll) for its lifetime using accumulator logic, and fixed a panY calculation typo.
+
 ## [0.8.0] — 2026-07-03 (versionCode 216)
 
 ### Added

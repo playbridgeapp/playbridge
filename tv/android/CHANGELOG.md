@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.8.0] — 2026-07-04 (versionCode 219)
+
+### Added
+- **In-App Updates**: Implemented updates check on cold start, updates downloader, Settings integration, and update prompt dialog logic.
+
 ## GeckoView Plugin [0.3.2] — 2026-07-01 (versionCode 210)
 
 ### Fixed
