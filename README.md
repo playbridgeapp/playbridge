@@ -83,13 +83,15 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 
 ## Features
 
-- **Browse & detect**: a full phone browser (GeckoView) that detects videos on the page — direct files, HLS, DASH, and MSE/blob players — and casts them with one tap.
-- **Library & discovery**: a Stremio-style library with catalogs, add-ons, and a watchlist; pick an episode and send it straight to the TV.
+- **Browse & detect**: a full phone browser (GeckoView, with built-in ad-blocking) that detects videos on the page — direct files, HLS, DASH, and MSE/blob players — and casts them with one tap.
+- **Library & discovery**: a Stremio-style library with catalogs, add-ons (including sandboxed JavaScript scrapers), a watchlist, and Collections; pick an episode and send it straight to the TV.
 - **Cast anywhere**: native receivers for Android TV / Fire TV, Apple TV, and desktop — or cast to any DLNA/UPnP renderer without installing anything on it.
 - **Binge-ready**: episode queue with lazy auto-advance, watch-progress tracking, and resume ("Resume · 23:14") that actually seeks the TV to where you left off.
 - **Phone as remote**: touchpad, D-pad, keyboard, and transport controls, context-aware for the browser and player.
-- **Local files**: cast videos from your phone's storage to any receiver.
+- **Local files & IPTV**: cast videos from your phone's storage to any receiver, and load M3U/IPTV playlists.
+- **Downloads**: save streams to your phone with a WorkManager-backed queue, on-the-fly HLS→MP4 transmuxing, and publishing to your gallery.
 - **Dual player engines**: ExoPlayer and MPV on the TV, with automatic fallback when a stream misbehaves.
+- **Secure pairing**: connections are verified with a short 6-digit code and encrypted over `wss://` with certificate pinning.
 - **Private by design**: everything stays on your local network — no account, no cloud, GPLv3.
 
 ## Installation
@@ -103,6 +105,7 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 - **Desktop (receiver)**: download the build for your OS from [Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
 - **Android Phone (sender)**: download the latest `phone` APK from [Releases](https://github.com/playbridgeapp/playbridge/releases) and install it.
+- **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
 
 ### Closed Testing (Google Play)
 
@@ -122,7 +125,7 @@ To participate in the Google Play closed testing track, you need to first join t
 1. Connect your phone and receiver to the **same Wi-Fi network**, and open the PlayBridge app on both.
 2. On the phone, tap the **device chip** (top of the Library and browser cast screens) — it lists discovered receivers. Tap yours to connect.
    - *Not discovered?* Tap **"All devices & manual connect"** and enter the receiver's IP address (shown on its screen).
-3. On first connect, the receiver asks **"Allow device to connect?"** — select **Allow** with your TV remote.
+3. On first connect, the receiver displays a **6-digit pairing code**. Enter it on the phone to verify and secure the connection — devices you've already paired reconnect automatically.
 4. Browse any video site in the phone browser, play a video, and tap cast when PlayBridge detects the stream — or send a movie/episode directly from the Library.
 
 ## Components

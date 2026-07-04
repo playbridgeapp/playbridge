@@ -980,6 +980,8 @@ private fun SeekVolumeBar(
     }
 }
 
+private enum class TwoFingerMode { UNDECIDED, SCROLL, ZOOM }
+
 @Composable
 private fun TouchpadArea(
     onMouseMove: (dx: Float, dy: Float) -> Unit,
@@ -998,6 +1000,14 @@ private fun TouchpadArea(
             .glassSurface(RoundedCornerShape(24.dp), alpha = 0.05f)
             .pointerInput(Unit) {
                 awaitPointerEventScope {
+                    // Two-finger gesture is locked to one mode for its whole lifetime so a
+                    // scroll never flips into a zoom (or vice-versa) mid-drag. We accumulate
+                    // evidence until one axis clears the slop, then commit.
+                    var twoFingerMode = TwoFingerMode.UNDECIDED
+                    var accumZoom = 0f
+                    var accumPan = 0f
+                    val gestureSlop = 24f
+
                     while (true) {
                         val event = awaitPointerEvent()
                         val pointerCount = event.changes.count { it.pressed }
@@ -1011,12 +1021,27 @@ private fun TouchpadArea(
                                 val curDist = (a.position - b.position).getDistance()
                                 val prevDist = (a.previousPosition - b.previousPosition).getDistance()
                                 val panX = ((a.position.x + b.position.x) - (a.previousPosition.x + b.previousPosition.x)) / 2f
-                                val panY = ((a.position.y + b.previousPosition.y) - (a.previousPosition.y + b.previousPosition.y)) / 2f
+                                val panY = ((a.position.y + b.position.y) - (a.previousPosition.y + b.previousPosition.y)) / 2f
                                 val distDelta = curDist - prevDist
-                                if (prevDist > 0f && abs(distDelta) > abs(panY) && abs(distDelta) > abs(panX)) {
-                                    onPinchZoom(curDist / prevDist)
-                                } else {
-                                    onMouseScroll(panX, panY * 2f)
+
+                                if (twoFingerMode == TwoFingerMode.UNDECIDED) {
+                                    accumZoom += abs(distDelta)
+                                    accumPan += abs(panX) + abs(panY)
+                                    if (accumZoom > gestureSlop || accumPan > gestureSlop) {
+                                        twoFingerMode = if (accumZoom > accumPan) {
+                                            TwoFingerMode.ZOOM
+                                        } else {
+                                            TwoFingerMode.SCROLL
+                                        }
+                                    }
+                                }
+
+                                when (twoFingerMode) {
+                                    TwoFingerMode.ZOOM ->
+                                        if (prevDist > 0f) onPinchZoom(curDist / prevDist)
+                                    TwoFingerMode.SCROLL ->
+                                        onMouseScroll(panX, panY * 2f)
+                                    TwoFingerMode.UNDECIDED -> { /* still gathering slop */ }
                                 }
                                 a.consume(); b.consume()
                             }
@@ -1029,6 +1054,9 @@ private fun TouchpadArea(
                             }
                         } else if (pointerCount == 0) {
                             isScrolling = false
+                            twoFingerMode = TwoFingerMode.UNDECIDED
+                            accumZoom = 0f
+                            accumPan = 0f
                         }
                     }
                 }
