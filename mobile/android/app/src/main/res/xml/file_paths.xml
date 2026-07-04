@@ -4,4 +4,6 @@
     <external-path name="downloads" path="Download/" />
     <!-- Exported log files shared from the in-app Logs viewer (cacheDir/logs/) -->
     <cache-path name="logs" path="logs/" />
+    <!-- Downloaded self-update APK handed to the system installer (cacheDir/updates/) -->
+    <cache-path name="updates" path="updates/" />
 </paths>

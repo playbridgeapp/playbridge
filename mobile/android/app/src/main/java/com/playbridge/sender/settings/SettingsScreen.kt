@@ -266,15 +266,24 @@ private fun SettingsHubContent(
                 }
             }
             if (versionName != null) {
+                val updateChecker: com.playbridge.sender.update.UpdateChecker =
+                    org.koin.compose.koinInject()
+                val updateState by updateChecker.state.collectAsState()
+                val checking = updateState is
+                    com.playbridge.sender.update.UpdateState.Checking
+                // The dialog/progress UI itself is rendered once at the activity root
+                // (BrowserActivity); here we only expose the manual trigger.
+
                 Spacer(modifier = Modifier.height(12.dp))
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .clickable(enabled = !checking) { updateChecker.check(manual = true) }
                         .padding(16.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "Version $versionName",
+                        if (checking) "Checking for updates…" else "Version $versionName · Check for updates",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

@@ -2,4 +2,6 @@
 <paths>
     <!-- Matches getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) where downloads are saved -->
     <external-files-path name="downloads" path="Download/" />
+    <!-- Downloaded self-update APK handed to the system installer (cacheDir/updates/) -->
+    <cache-path name="updates" path="updates/" />
 </paths>

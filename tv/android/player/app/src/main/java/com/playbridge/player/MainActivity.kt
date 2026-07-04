@@ -84,6 +84,9 @@ class MainActivity : ComponentActivity() {
             _openPairingRequest.value = true
         }
 
+        // Fire-and-forget update check on cold start; only surfaces UI if a newer build exists.
+        com.playbridge.player.update.UpdateChecker.getInstance(this).check(manual = false)
+
         setContent {
             val appTheme = remember { mutableStateOf(AppTheme.fromPrefs(this)) }
             var showPhoneWarning by remember { mutableStateOf(DeviceGuard.shouldWarn(this)) }
@@ -105,6 +108,14 @@ class MainActivity : ComponentActivity() {
                         showOverlayRationale = false
                     },
                     onDismiss = { showOverlayRationale = false }
+                )
+            }
+            // Update-available notify / download / install flow. Gated behind the
+            // cold-start guard dialogs so we never stack two dialogs (bad with D-pad focus);
+            // once those are dismissed the update dialog surfaces on its own.
+            if (!showPhoneWarning && !showOverlayRationale) {
+                com.playbridge.player.update.UpdateGate(
+                    com.playbridge.player.update.UpdateChecker.getInstance(this)
                 )
             }
             PlayBridgeTVTheme(theme = appTheme.value) {

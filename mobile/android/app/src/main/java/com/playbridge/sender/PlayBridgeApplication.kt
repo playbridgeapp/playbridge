@@ -32,5 +32,8 @@ class PlayBridgeApplication : Application() {
 
         // Start backup trigger
         BackupTrigger(this, applicationScope).start()
+
+        // Remove any leftover self-update APK from a previous session (cacheDir/updates).
+        com.playbridge.sender.update.ApkInstaller.cleanupStaleApks(this)
     }
 }
