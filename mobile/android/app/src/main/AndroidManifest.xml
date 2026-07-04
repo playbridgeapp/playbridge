@@ -19,6 +19,8 @@
     <!-- One-time user-approved exemption so Doze/OEM app-sleep can't freeze the
          local proxy while casting phone files with the app backgrounded. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Self-update: install a downloaded APK when the app was sideloaded (not from Play). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Explicitly remove QUERY_ALL_PACKAGES permission potentially merged from dependencies -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" tools:ignore="QueryAllPackagesPermission" />
 

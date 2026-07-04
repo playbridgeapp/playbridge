@@ -36,6 +36,9 @@ class PlayBridgeApplication : Application() {
 
         // Preload AdBlocker in background so filters are ready
         com.playbridge.player.browser.AdBlocker.preload(this)
+
+        // Remove any leftover self-update APK from a previous session (cacheDir/updates).
+        com.playbridge.player.update.ApkInstaller.cleanupStaleApks(this)
     }
 
 

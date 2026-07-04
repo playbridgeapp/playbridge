@@ -440,6 +440,22 @@ fun SettingsScreen(
                             )
                         }
                         item {
+                            val updateChecker = remember {
+                                com.playbridge.player.update.UpdateChecker.getInstance(context)
+                            }
+                            val updateState by updateChecker.state.collectAsState()
+                            val checking = updateState is
+                                com.playbridge.player.update.UpdateState.Checking
+                            // The dialog/progress UI itself is rendered once at the activity
+                            // root (MainActivity); here we only expose the manual trigger.
+                            SettingClickableItem(
+                                label = "Check for updates",
+                                description = if (checking) "Checking…" else "Tap to check for a newer version",
+                                enabled = !checking,
+                                onClick = { updateChecker.check(manual = true) }
+                            )
+                        }
+                        item {
                             SettingClickableItem(
                                 label = "GeckoView Engine (Optional Plugin)",
                                 description = if (isGeckoInstalled) "Installed" else "Not Installed (click to learn more/sideload)",

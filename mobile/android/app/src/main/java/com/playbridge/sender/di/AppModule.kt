@@ -246,4 +246,13 @@ val appModule = module {
         )
     }
     single { SettingsRepository(get()) }
+
+    // 8. In-app update flow (sideload self-update vs Play Store redirect)
+    single { com.playbridge.sender.update.ApkInstaller(androidContext()) }
+    single {
+        com.playbridge.sender.update.UpdateChecker(
+            appContext = androidContext(),
+            installer = get(),
+        )
+    }
 }

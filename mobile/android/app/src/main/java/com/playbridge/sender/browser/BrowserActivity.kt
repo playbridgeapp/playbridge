@@ -212,6 +212,7 @@ class BrowserActivity : ComponentActivity() {
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
+    private val updateChecker: com.playbridge.sender.update.UpdateChecker by inject()
 
     /**
      * Phase-2 cutover: route browser/cast-sheet downloads through the new WorkManager
@@ -335,6 +336,9 @@ class BrowserActivity : ComponentActivity() {
         }
         VideoDetector.init(applicationContext)
 
+        // Fire-and-forget update check on cold start; only surfaces UI if a newer build exists.
+        updateChecker.check(manual = false)
+
         // Capture a web link that launched us (tapped in another app); consumed in Compose.
         pendingLinkUrl.value = parseLinkIntent(intent)
 
@@ -435,6 +439,11 @@ class BrowserActivity : ComponentActivity() {
                     TvDeviceGuard.dismiss(context)
                     showTvWarning = false
                 })
+            }
+            // Update-available notify / download / install flow. Gated behind the
+            // wrong-device dialog so we never stack two dialogs; it surfaces once that's gone.
+            if (!showTvWarning) {
+                com.playbridge.sender.update.UpdateGate(updateChecker)
             }
             val connectionState by connectionViewModel.connectionState.collectAsState()
             val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
