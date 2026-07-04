@@ -76,6 +76,10 @@ jobs:
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
       run: ./gradlew assembleRelease
 
+    - name: Strip restricted permissions for Play Store build
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: sed -i '/REQUEST_INSTALL_PACKAGES/d' app/src/main/AndroidManifest.xml
+
     - name: Build Release AAB
       if: steps.check_tag.outputs.skipped == 'false'
       env:
@@ -175,6 +179,10 @@ jobs:
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
       run: ./gradlew :player:app:assembleRelease
+
+    - name: Strip restricted permissions for Play Store build
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: sed -i '/REQUEST_INSTALL_PACKAGES/d' app/src/main/AndroidManifest.xml
 
     - name: Build Release AAB
       if: steps.check_tag.outputs.skipped == 'false'
