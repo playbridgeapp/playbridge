@@ -12,13 +12,17 @@ plugins {
 android {
     namespace = "com.playbridge.sender"
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     lint {
         // Existing issues are recorded in lint-baseline.xml; CI fails only on NEW ones.
         baseline = file("lint-baseline.xml")
         disable += "UnsafeOptInUsageError"
+        // New check introduced by the Compose/lint upgrade; flags pre-existing
+        // Locale.getDefault() date formatting in composables. Not a crash/security
+        // issue (locale rarely changes at runtime), so suppress rather than churn.
+        disable += "NonObservableLocale"
     }
 
     defaultConfig {
@@ -82,18 +86,28 @@ android {
 }
 
 dependencies {
-    implementation(libs.androidx.compose.ui.text.google.fonts)
     implementation(libs.androidx.palette.ktx)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.activity.compose)
+    // Compose BOM still aligns non-overridden androidx/compose artifacts. The
+    // core UI artifacts below are pinned to the alpha `compose` version so they
+    // pair with the alpha material3 that carries Material 3 Expressive. Explicit
+    // versions win over the BOM's constraints.
     implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.graphics)
-    implementation(libs.androidx.compose.ui.tooling.preview)
+    val composeVersion = libs.versions.compose.get()
+    implementation("androidx.compose.ui:ui:$composeVersion")
+    implementation("androidx.compose.ui:ui-graphics:$composeVersion")
+    implementation("androidx.compose.ui:ui-tooling-preview:$composeVersion")
+    implementation("androidx.compose.ui:ui-text-google-fonts:$composeVersion")
+    implementation("androidx.compose.foundation:foundation:$composeVersion")
+    implementation("androidx.compose.animation:animation:$composeVersion")
+    // material3 alpha (Expressive theme + MotionScheme) via the catalog alias.
     implementation(libs.androidx.compose.material3)
+    // Seeds a full ColorScheme from poster/backdrop art (dynamic theming).
+    implementation(libs.material.kolor)
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
     implementation(libs.coil.compose)
 
@@ -146,12 +160,12 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:${libs.versions.compose.get()}")
     // Phase-0 transmux spike only. The production HLS merge uses the platform MediaMuxer
     // (PlatformMuxer), not Transformer, so this stays test-scoped and out of the APK.
     androidTestImplementation(libs.androidx.media3.transformer)
-    debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    debugImplementation("androidx.compose.ui:ui-tooling:${libs.versions.compose.get()}")
+    debugImplementation("androidx.compose.ui:ui-test-manifest:${libs.versions.compose.get()}")
     // Media3 (ExoPlayer)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
@@ -174,5 +188,8 @@ dependencies {
 kotlin {
     compilerOptions {
         freeCompilerArgs.add("-opt-in=androidx.media3.common.util.UnstableApi")
+        // Material 3 Expressive theme + motion APIs are experimental (alpha channel).
+        freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
+        freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3ExpressiveApi")
     }
 }

@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "com.playbridge.geckoview.plugin"
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     lint {

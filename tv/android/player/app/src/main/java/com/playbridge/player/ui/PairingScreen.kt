@@ -13,8 +13,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -25,6 +27,8 @@ import androidx.tv.material3.MaterialTheme
 import androidx.tv.material3.OutlinedButton
 import androidx.tv.material3.Text
 import com.playbridge.player.model.PairedDevice
+import com.playbridge.player.ui.theme.AppTheme
+import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.player.server.WebSocketServer
 import java.text.DateFormat
 import java.util.Date
@@ -218,7 +222,12 @@ private fun DevicesDialog(
     onForgetAll: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    // A Dialog is composed in a separate window whose subcomposition doesn't
+    // reliably inherit the tv-material3 theme, so re-apply it here — otherwise the
+    // popup falls back to default colours/typography and looks off-theme.
+    val context = LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
+      PlayBridgeTVTheme(theme = AppTheme.fromPrefs(context)) {
         Box(
             modifier = Modifier
                 .widthIn(min = 400.dp, max = 640.dp)
@@ -231,13 +240,18 @@ private fun DevicesDialog(
             Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
                         text = "Paired Devices",
                         style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        // Take the leftover space so the buttons keep their natural
+                        // width instead of being squeezed until their text wraps.
+                        modifier = Modifier.weight(1f)
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         if (pairedDevices.isNotEmpty()) {
@@ -246,9 +260,11 @@ private fun DevicesDialog(
                                 colors = ButtonDefaults.colors(
                                     containerColor = MaterialTheme.colorScheme.error
                                 )
-                            ) { Text("Remove All") }
+                            ) { Text("Remove All", maxLines = 1, softWrap = false) }
                         }
-                        OutlinedButton(onClick = onDismiss) { Text("Close") }
+                        OutlinedButton(onClick = onDismiss) {
+                            Text("Close", maxLines = 1, softWrap = false)
+                        }
                     }
                 }
 
@@ -273,6 +289,7 @@ private fun DevicesDialog(
                 }
             }
         }
+      }
     }
 }
 

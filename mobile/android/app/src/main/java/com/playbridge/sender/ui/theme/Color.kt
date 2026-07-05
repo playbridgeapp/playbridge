@@ -32,6 +32,22 @@ val OnSurfaceVariant = Color(0xFF9AA0A6)
 val Outline          = Color(0xFF5F6368)
 val OutlineVariant   = Color(0xFF3C4043)
 
+// Extended roles — fill every gap so nothing falls back to the baseline Material
+// palette (which tints elevated surfaces purple and shows baseline error/tertiary).
+// Tertiary mirrors the blue accent so no new colour is introduced.
+val Tertiary            = Color(0xFF8AB4F8)
+val OnTertiary          = Color(0xFF001F4D)
+val TertiaryContainer   = Color(0xFF232D3F)
+val OnTertiaryContainer = Color(0xFFD2E3FC)
+val ErrorColor          = Color(0xFFF2B8B5)
+val OnErrorColor        = Color(0xFF601410)
+val ErrorContainer      = Color(0xFF8C1D18)
+val OnErrorContainer    = Color(0xFFF9DEDC)
+val InversePrimary      = Color(0xFF3B6FB5)
+val InverseSurface      = Color(0xFFE8EAED)
+val InverseOnSurface    = Color(0xFF2E3133)
+val ScrimColor          = Color(0xFF000000)
+
 // ── AMOLED palette ────────────────────────────────────────────────────────────
 
 // Surface Hierarchy (pure-black OLED surfaces; brand colours unchanged)
@@ -74,4 +90,17 @@ val LightOnSurface        = Color(0xFF202124)
 val LightOnSurfaceVariant = Color(0xFF5F6368)
 val LightOutline          = Color(0xFFDADCE0)
 val LightOutlineVariant   = Color(0xFFDADCE0)
+
+// Extended roles (light)
+val LightTertiary            = Color(0xFF1A73E8)
+val LightOnTertiary          = Color(0xFFFFFFFF)
+val LightTertiaryContainer   = Color(0xFFD2E3FC)
+val LightOnTertiaryContainer = Color(0xFF1A73E8)
+val LightError               = Color(0xFFB3261E)
+val LightOnError             = Color(0xFFFFFFFF)
+val LightErrorContainer      = Color(0xFFF9DEDC)
+val LightOnErrorContainer    = Color(0xFF410E0B)
+val LightInversePrimary      = Color(0xFF8AB4F8)
+val LightInverseSurface      = Color(0xFF2E3133)
+val LightInverseOnSurface    = Color(0xFFF1F3F4)
 

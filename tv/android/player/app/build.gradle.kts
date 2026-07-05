@@ -10,7 +10,7 @@ plugins {
 android {
     namespace = "com.playbridge.player"
     compileSdk {
-        version = release(36)
+        version = release(37)
     }
 
     lint {

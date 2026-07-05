@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.SwitchPlayerDialog
+import com.playbridge.player.ui.theme.TvExpressiveMotion
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -60,8 +61,8 @@ fun PlayerControlsOverlay(
         // Main Controls Overlay
         AnimatedVisibility(
             visible = state.isVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn(TvExpressiveMotion.effects()),
+            exit = fadeOut(TvExpressiveMotion.effects()),
             modifier = Modifier.fillMaxSize()
         ) {
             Box(
@@ -72,8 +73,8 @@ fun PlayerControlsOverlay(
                 // Settings Panel (Slides from right)
                 AnimatedVisibility(
                     visible = state.activeOverlay == ActiveOverlay.SETTINGS,
-                    enter = slideInHorizontally { it } + fadeIn(),
-                    exit = slideOutHorizontally { it } + fadeOut(),
+                    enter = slideInHorizontally(TvExpressiveMotion.spatial()) { it } + fadeIn(TvExpressiveMotion.effects()),
+                    exit = slideOutHorizontally(TvExpressiveMotion.spatial()) { it } + fadeOut(TvExpressiveMotion.effects()),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     MediaSettingsPanel(
@@ -90,8 +91,8 @@ fun PlayerControlsOverlay(
                 // Subtitle Overlay (Language → Options → Sync)
                 AnimatedVisibility(
                     visible = state.activeOverlay == ActiveOverlay.SUBTITLES,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                    enter = fadeIn(TvExpressiveMotion.effects()),
+                    exit = fadeOut(TvExpressiveMotion.effects()),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     SubtitleSelectionOverlay(
@@ -110,8 +111,8 @@ fun PlayerControlsOverlay(
                 // Playlist Picker Overlay
                 AnimatedVisibility(
                     visible = state.activeOverlay == ActiveOverlay.PLAYLIST_PICKER,
-                    enter = slideInHorizontally { it } + fadeIn(),
-                    exit = slideOutHorizontally { it } + fadeOut(),
+                    enter = slideInHorizontally(TvExpressiveMotion.spatial()) { it } + fadeIn(TvExpressiveMotion.effects()),
+                    exit = slideOutHorizontally(TvExpressiveMotion.spatial()) { it } + fadeOut(TvExpressiveMotion.effects()),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     PlaylistPickerDialog(
@@ -125,8 +126,8 @@ fun PlayerControlsOverlay(
                 // Switch Player Overlay
                 AnimatedVisibility(
                     visible = state.activeOverlay == ActiveOverlay.SWITCH_PLAYER,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                    enter = fadeIn(TvExpressiveMotion.effects()),
+                    exit = fadeOut(TvExpressiveMotion.effects()),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     SwitchPlayerDialog(

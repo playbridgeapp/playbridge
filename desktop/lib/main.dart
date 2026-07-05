@@ -458,6 +458,14 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         scaffoldBackgroundColor: Colors.transparent,
         canvasColor: Colors.transparent,
+        // Brand font shared with the Android apps. Applies app-wide through the
+        // text theme; explicit monospace styles (logs) are unaffected.
+        textTheme: ThemeData.dark(useMaterial3: true).textTheme.apply(
+              fontFamily: 'Poppins',
+            ),
+        primaryTextTheme: ThemeData.dark(useMaterial3: true)
+            .primaryTextTheme
+            .apply(fontFamily: 'Poppins'),
       ),
       home: Shortcuts(
         shortcuts: {

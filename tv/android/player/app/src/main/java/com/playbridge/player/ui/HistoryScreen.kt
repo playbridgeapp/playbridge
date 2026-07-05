@@ -91,7 +91,7 @@ fun HistoryScreen(
     }
 
     if (showClearConfirmDialog) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showClearConfirmDialog = false }) {
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showClearConfirmDialog = false }) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
