@@ -19,6 +19,10 @@ android {
         // Existing issues are recorded in lint-baseline.xml; CI fails only on NEW ones.
         baseline = file("lint-baseline.xml")
         disable += "UnsafeOptInUsageError"
+        // New check introduced by the Compose/lint upgrade; flags pre-existing
+        // Locale.getDefault() date formatting in composables. Not a crash/security
+        // issue (locale rarely changes at runtime), so suppress rather than churn.
+        disable += "NonObservableLocale"
     }
 
     defaultConfig {

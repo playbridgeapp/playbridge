@@ -31,7 +31,6 @@ import com.playbridge.player.ui.FavoritesScreen
 import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.SettingsScreen
 import com.playbridge.player.ui.components.AppSidebar
-import com.playbridge.player.ui.components.StaticAuroraBackground
 import com.playbridge.player.ui.theme.AppTheme
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import kotlinx.coroutines.flow.first
@@ -272,9 +271,9 @@ fun MainContent(
         }
     }
 
+    // Background comes straight from the themed Surface (colorScheme.surface), so
+    // Dark / AMOLED / Light are respected with no extra gradient layer.
     Box(modifier = Modifier.fillMaxSize()) {
-        StaticAuroraBackground()
-
         Row(modifier = Modifier.fillMaxSize()) {
             AppSidebar(
                 currentScreen = currentScreen,
