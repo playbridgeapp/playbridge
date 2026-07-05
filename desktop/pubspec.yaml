@@ -67,3 +67,9 @@ flutter:
     # the app can register it with browsers. Compile it via scripts/build_host.sh
     # before building. Empty in a fresh checkout (the app falls back to build/).
     - assets/host/
+  # Brand font shared with the Android apps (Poppins). Single static weight;
+  # Flutter synthesizes heavier weights from it.
+  fonts:
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/Poppins-Regular.ttf
