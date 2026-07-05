@@ -477,7 +477,7 @@ fun SettingsScreen(
     // IP Entry Dialog (Remains mostly same but styled)
     if (showIpDialog) {
         var tempIp by remember { mutableStateOf(if (customIp == "auto") "" else customIp) }
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showIpDialog = false }) {
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showIpDialog = false }) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.width(400.dp)
@@ -528,7 +528,7 @@ fun SettingsScreen(
     }
 
     if (showGeckoDialog) {
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showGeckoDialog = false }) {
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showGeckoDialog = false }) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.width(450.dp)
@@ -577,7 +577,7 @@ fun SettingsScreen(
 
     if (showApiKeyDialog) {
         var tempKey by remember { mutableStateOf(introDbApiKey) }
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showApiKeyDialog = false }) {
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showApiKeyDialog = false }) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.width(400.dp)
@@ -626,7 +626,7 @@ fun SettingsScreen(
 
     if (showApiUrlDialog) {
         var tempUrl by remember { mutableStateOf(introDbApiUrl) }
-        androidx.compose.ui.window.Dialog(onDismissRequest = { showApiUrlDialog = false }) {
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showApiUrlDialog = false }) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.width(400.dp)

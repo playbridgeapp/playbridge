@@ -60,7 +60,21 @@ private val DarkColorScheme = darkColorScheme(
     onSurface = OnSurface,
     onSurfaceVariant = OnSurfaceVariant,
     outline = Outline,
-    outlineVariant = OutlineVariant
+    outlineVariant = OutlineVariant,
+    onBackground = OnSurface,
+    surfaceTint = Primary,
+    tertiary = Tertiary,
+    onTertiary = OnTertiary,
+    tertiaryContainer = TertiaryContainer,
+    onTertiaryContainer = OnTertiaryContainer,
+    error = ErrorColor,
+    onError = OnErrorColor,
+    errorContainer = ErrorContainer,
+    onErrorContainer = OnErrorContainer,
+    inversePrimary = InversePrimary,
+    inverseSurface = InverseSurface,
+    inverseOnSurface = InverseOnSurface,
+    scrim = ScrimColor
 )
 
 private val AmoledColorScheme = darkColorScheme(
@@ -82,7 +96,21 @@ private val AmoledColorScheme = darkColorScheme(
     onSurface = OnSurface,
     onSurfaceVariant = OnSurfaceVariant,
     outline = Outline,
-    outlineVariant = OutlineVariant
+    outlineVariant = OutlineVariant,
+    onBackground = OnSurface,
+    surfaceTint = Primary,
+    tertiary = Tertiary,
+    onTertiary = OnTertiary,
+    tertiaryContainer = TertiaryContainer,
+    onTertiaryContainer = OnTertiaryContainer,
+    error = ErrorColor,
+    onError = OnErrorColor,
+    errorContainer = ErrorContainer,
+    onErrorContainer = OnErrorContainer,
+    inversePrimary = InversePrimary,
+    inverseSurface = InverseSurface,
+    inverseOnSurface = InverseOnSurface,
+    scrim = ScrimColor
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -104,7 +132,21 @@ private val LightColorScheme = lightColorScheme(
     onSurface = LightOnSurface,
     onSurfaceVariant = LightOnSurfaceVariant,
     outline = LightOutline,
-    outlineVariant = LightOutlineVariant
+    outlineVariant = LightOutlineVariant,
+    onBackground = LightOnSurface,
+    surfaceTint = LightPrimary,
+    tertiary = LightTertiary,
+    onTertiary = LightOnTertiary,
+    tertiaryContainer = LightTertiaryContainer,
+    onTertiaryContainer = LightOnTertiaryContainer,
+    error = LightError,
+    onError = LightOnError,
+    errorContainer = LightErrorContainer,
+    onErrorContainer = LightOnErrorContainer,
+    inversePrimary = LightInversePrimary,
+    inverseSurface = LightInverseSurface,
+    inverseOnSurface = LightInverseOnSurface,
+    scrim = ScrimColor
 )
 
 // Expressive rounded shape scale (mirrors ArchiveTune). Drives the corner radii
