@@ -461,9 +461,11 @@ class SystemWebViewEngine(
         val downEvent = android.view.MotionEvent.obtain(
             downTime, eventTime, android.view.MotionEvent.ACTION_DOWN, x, y, 0
         )
+        downEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
         val upEvent = android.view.MotionEvent.obtain(
             downTime, eventTime + 100, android.view.MotionEvent.ACTION_UP, x, y, 0
         )
+        upEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
         webView.dispatchTouchEvent(downEvent)
         webView.dispatchTouchEvent(upEvent)

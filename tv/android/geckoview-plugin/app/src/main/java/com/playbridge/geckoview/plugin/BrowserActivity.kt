@@ -250,6 +250,7 @@ class BrowserActivity : ComponentActivity() {
      */
     private fun dispatchTouchToActiveView(action: Int, x: Float, y: Float, downTime: Long, eventTime: Long) {
         val event = android.view.MotionEvent.obtain(downTime, eventTime, action, x, y, 0)
+        event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
         val targetView = engine?.getView()
         targetView?.dispatchTouchEvent(event)
         event.recycle()

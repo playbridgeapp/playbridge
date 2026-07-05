@@ -1008,6 +1008,12 @@ private fun TouchpadArea(
                     var accumPan = 0f
                     val gestureSlop = 24f
 
+                    var downTime = 0L
+                    var downPos = androidx.compose.ui.geometry.Offset.Zero
+                    var maxMoveDist = 0f
+                    val clickSlop = 15f // pixels
+                    val clickTimeout = 300L // ms
+
                     while (true) {
                         val event = awaitPointerEvent()
                         val pointerCount = event.changes.count { it.pressed }
@@ -1047,21 +1053,36 @@ private fun TouchpadArea(
                             }
                         } else if (pointerCount == 1 && !isScrolling) {
                             val change = event.changes.first()
+                            if (change.pressed && !change.previousPressed) {
+                                downTime = System.currentTimeMillis()
+                                downPos = change.position
+                                maxMoveDist = 0f
+                            }
                             if (change.pressed && change.previousPressed) {
                                 val delta = change.position - change.previousPosition
+                                val totalDist = (change.position - downPos).getDistance()
+                                if (totalDist > maxMoveDist) {
+                                    maxMoveDist = totalDist
+                                }
                                 onMouseMove(delta.x * 1.5f, delta.y * 1.5f)
                                 change.consume()
                             }
                         } else if (pointerCount == 0) {
+                            val upTime = System.currentTimeMillis()
+                            val duration = upTime - downTime
+                            if (!isScrolling && duration < clickTimeout && maxMoveDist < clickSlop && downTime > 0L) {
+                                onMouseClick()
+                            }
+
                             isScrolling = false
                             twoFingerMode = TwoFingerMode.UNDECIDED
                             accumZoom = 0f
                             accumPan = 0f
+                            downTime = 0L
                         }
                     }
                 }
             }
-            .pointerInput(Unit) { detectTapGestures(onTap = { onMouseClick() }) }
             .pointerInput(Unit) {
                 detectDragGesturesAfterLongPress(
                     onDragStart = { isDragging = true; onMouseDown() },
