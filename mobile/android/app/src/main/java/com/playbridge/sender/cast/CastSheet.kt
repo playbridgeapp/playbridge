@@ -440,14 +440,16 @@ fun CastSheet(
                 }
             }
 
-            // Compact player + TV selectors side by side
-            // Options reflect what the selected TV reported it supports (see TvCapabilityOptions).
-            val playerOptions = if (castAction == "browse") {
+            // Engine + proxy selectors side by side.
+            // The player-engine picker was removed from the cast sheet — play/queue always use
+            // the TV's own default player. In Browse mode we still offer the browser-engine
+            // picker (a separate capability), derived from what the selected TV reported.
+            val browserOptions = if (castAction == "browse") {
                 TvCapabilityOptions.browserOptions(selectedTvDevice)
             } else {
-                TvCapabilityOptions.playerOptions(selectedTvDevice)
+                emptyList()
             }
-            val selectedPlayerLabel = playerOptions.find { it.first == playerMode }?.second ?: "TV Default"
+            val selectedBrowserLabel = browserOptions.find { it.first == playerMode }?.second ?: "TV Default"
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -455,12 +457,14 @@ fun CastSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                ChipDropdown(
-                    selectedLabel = selectedPlayerLabel,
-                    options = playerOptions,
-                    selectedValue = playerMode,
-                    onSelect = onPlayerModeChange
-                )
+                if (castAction == "browse") {
+                    ChipDropdown(
+                        selectedLabel = selectedBrowserLabel,
+                        options = browserOptions,
+                        selectedValue = playerMode,
+                        onSelect = onPlayerModeChange
+                    )
+                }
                 if (castAction != "browse" && proxyAvailable) {
                     ChipDropdown(
                         selectedLabel = proxyMode.label,

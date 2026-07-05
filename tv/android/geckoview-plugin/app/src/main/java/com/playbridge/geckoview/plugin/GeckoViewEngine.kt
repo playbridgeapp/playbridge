@@ -86,9 +86,11 @@ class GeckoViewEngine(
         val downEvent = MotionEvent.obtain(
             downTime, eventTime, MotionEvent.ACTION_DOWN, x, y, 0
         )
+        downEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
         val upEvent = MotionEvent.obtain(
             downTime, eventTime + 100, MotionEvent.ACTION_UP, x, y, 0
         )
+        upEvent.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
         geckoView.dispatchTouchEvent(downEvent)
         geckoView.dispatchTouchEvent(upEvent)
