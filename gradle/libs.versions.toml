@@ -1,13 +1,29 @@
 [versions]
-agp = "9.0.1"
-kotlin = "2.2.10"
+# NOTE: Kotlin/AGP/KSP/Compose bumped together to unlock Material 3 Expressive
+# (MaterialExpressiveTheme + MotionScheme), which only ships in the material3
+# ALPHA channel. Versions mirror ArchiveTune's known-good set. This touches the
+# shared KMP + TV modules too — validate with a full multi-module build.
+# AGP 9.2.1 (matches ArchiveTune). The alpha Compose + material3 + lifecycle 2.11
+# artifacts require AGP >= 9.1.0 and compileSdk 37, so all Android modules that
+# share this catalog are on compileSdk 37. Requires an Android Studio new enough
+# to support AGP 9.2.x.
+agp = "9.2.1"
+kotlin = "2.4.0"
 coreKtx = "1.17.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
-lifecycleRuntimeKtx = "2.10.0"
-activityCompose = "1.12.3"
-composeBom = "2024.09.00"
+lifecycleRuntimeKtx = "2.11.0"
+activityCompose = "1.13.0"
+# Baseline Compose for BOTH apps. Bumped off 2024.09.00 to a modern stable BOM so
+# the Compose runtime is compatible with the Kotlin 2.4 compose compiler. TV
+# rides this; the phone overrides specific artifacts to the alpha `compose` below.
+composeBom = "2026.06.00"
+# Phone-only overrides: the alpha Compose + material3 pair that carries the
+# Material 3 Expressive theme + motion APIs (mirrors ArchiveTune). Referenced via
+# libs.versions.compose.get() in the phone build script.
+compose = "1.12.0-beta02"
+material3 = "1.5.0-alpha23"
 okhttp = "4.12.0"
 datastore = "1.1.1"
 kotlinxSerialization = "1.7.3"
@@ -20,7 +36,7 @@ media3 = "1.9.2"
 room = "2.8.4"
 work = "2.10.1"
 palette = "1.0.0"
-ksp = "2.3.2"
+ksp = "2.3.9"
 ktor = "3.0.3"
 okio = "3.9.1"
 settings-mp = "1.2.0"
@@ -28,14 +44,14 @@ turbine = "1.1.0"
 appcompat = "1.6.1"
 tvFoundation = "1.0.0-alpha12"
 tvMaterial = "1.0.1"
-composeUiTextGoogleFonts = "1.6.4"
 wire = "5.1.0"
 koin = "3.5.6"
 quickjs = "1.0.5"
+materialKolor = "5.0.0-alpha07"
 
 [libraries]
 androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
-androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts", version.ref = "composeUiTextGoogleFonts" }
+androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
@@ -44,6 +60,11 @@ androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecyc
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeKtx" }
 androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycleRuntimeKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+# Compose artifacts stay BOM-managed so BOTH the phone and TV Gradle builds
+# (which share this catalog) resolve a consistent Compose version. The phone
+# overrides the specific artifacts it needs to the alpha `compose` version via
+# explicit coordinates in mobile/android/app/build.gradle.kts (Expressive needs
+# alpha material3, which only pairs with alpha Compose). TV stays on the BOM.
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
 androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
@@ -51,7 +72,10 @@ androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
-androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+# Phone-only: material3 alpha carries the Expressive theme + motion APIs. TV
+# depends on material3 via a plain string coordinate, so it is unaffected by this
+# alias and keeps the stable, BOM-managed material3.
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 androidx-tv-foundation = { group = "androidx.tv", name = "tv-foundation", version.ref = "tvFoundation" }
 androidx-tv-material = { group = "androidx.tv", name = "tv-material", version.ref = "tvMaterial" }
@@ -145,6 +169,10 @@ koin-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = 
 
 # QuickJS — sandboxed JS engine for Nuvio scraper plugins
 quickjs-kt = { module = "io.github.dokar3:quickjs-kt", version.ref = "quickjs" }
+
+# MaterialKolor — seeds a full Material 3 ColorScheme from a single key colour
+# (used to re-tint the theme from poster/backdrop art). Phone-only.
+material-kolor = { module = "com.materialkolor:material-kolor", version.ref = "materialKolor" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

@@ -25,6 +25,7 @@ import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
+import com.playbridge.player.ui.theme.TvExpressiveMotion
 import playbridge.VisualMetadata
 
 @OptIn(ExperimentalTvMaterial3Api::class)
@@ -241,8 +242,10 @@ private fun StatusText(countdown: Int) {
         AnimatedContent(
             targetState = countdown,
             transitionSpec = {
-                (slideInVertically { height -> height } + fadeIn()).togetherWith(
-                    slideOutVertically { height -> -height } + fadeOut()
+                (slideInVertically(TvExpressiveMotion.spatial()) { height -> height } +
+                    fadeIn(TvExpressiveMotion.effects())).togetherWith(
+                    slideOutVertically(TvExpressiveMotion.spatial()) { height -> -height } +
+                        fadeOut(TvExpressiveMotion.effects())
                 )
             },
             label = "CountdownAnimation"

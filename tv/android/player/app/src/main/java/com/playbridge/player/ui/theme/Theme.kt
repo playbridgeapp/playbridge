@@ -2,11 +2,14 @@ package com.playbridge.player.ui.theme
 
 import android.content.Context
 import androidx.tv.material3.MaterialTheme
+import androidx.tv.material3.Shapes
 import androidx.tv.material3.darkColorScheme
 import androidx.tv.material3.lightColorScheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 
 enum class AppTheme(val label: String) {
     DARK("Dark"),
@@ -59,6 +62,16 @@ private val LightColorScheme = lightColorScheme(
     onSurfaceVariant = LightOnSurfaceVariant
 )
 
+// Expressive rounded shape scale (mirrors the phone app). tv-material3 components
+// that read the theme's shapes (Cards, Surfaces via ShapeDefaults) pick this up.
+private val ExpressiveShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(12.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(24.dp),
+    extraLarge = RoundedCornerShape(32.dp),
+)
+
 @Composable
 fun PlayBridgeTVTheme(
     theme: AppTheme = AppTheme.DARK,
@@ -71,6 +84,7 @@ fun PlayBridgeTVTheme(
     }
     MaterialTheme(
         colorScheme = colorScheme,
+        shapes = ExpressiveShapes,
         typography = AppTypography,
         content = content
     )

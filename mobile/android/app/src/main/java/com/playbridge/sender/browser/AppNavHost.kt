@@ -68,6 +68,7 @@ import playbridge.PlaylistPayload
 import playbridge.PlayPayload
 import com.playbridge.sender.cast.*
 import com.playbridge.sender.library.*
+import com.playbridge.sender.ui.theme.DynamicColorTheme
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 import com.playbridge.sender.data.library.AddonDao
@@ -983,6 +984,9 @@ fun AppNavHost(
                     val screen = targetScreen as Screen.LibraryDetail
                     BackHandler { onScreenChange(Screen.Library) }
                     val screenNumericId = screen.id.toIntOrNull()
+                    // Re-tint the whole detail screen from the poster's dominant
+                    // colour (reported below via onDominantColorChange).
+                    DynamicColorTheme(seedColor = libraryDetailAccent) {
                     LibraryDetailScreen(
                         id = screen.id,
                         type = screen.type,
@@ -1353,6 +1357,7 @@ fun AppNavHost(
                             context.startActivity(Intent.createChooser(intent, "Share $title"))
                         }
                     )
+                    }
                 }
                 Screen.AddonSettings -> {
                     BackHandler {

@@ -1,68 +1,131 @@
 package com.playbridge.sender.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.playbridge.sender.R
 
 // Bundled (not downloadable) so it can't fall back to FontFamily.Default — that
-// fallback is what Samsung's FlipFont silently swaps for the user's system font
-// ("my chocochoco"). Reading the font from the APK pins a specific typeface that
-// FlipFont can't touch. space_grotesk.ttf is a variable font; each weight reuses
-// the same file (Compose derives the wght axis from the FontWeight on API 26+).
-val AppFontFamily = FontFamily(
-    Font(R.font.space_grotesk, weight = FontWeight.Normal),
-    Font(R.font.space_grotesk, weight = FontWeight.Medium),
-    Font(R.font.space_grotesk, weight = FontWeight.SemiBold),
-    Font(R.font.space_grotesk, weight = FontWeight.Bold)
-)
+// fallback is what Samsung's FlipFont silently swaps for the user's system font.
+// Reading the font from the APK pins a specific typeface FlipFont can't touch.
+//
+// poppins.ttf is a single static weight (Regular). Heavier FontWeights requested
+// by the type scale below are synthesized by Compose (faux-bold). Drop matching
+// Poppins weight files (medium/semibold/bold) into res/font and register them
+// here if crisper weights are wanted later.
+val AppFontFamily = FontFamily(Font(R.font.poppins))
 
-// Apply the single app font to every Material 3 text style. Any style left
-// unspecified falls back to FontFamily.Default. The five tuned styles keep their
-// custom size / weight / tracking.
-private val default = Typography()
-
+// Every Material 3 text style is defined explicitly against Poppins so the app
+// reads consistently and nothing silently falls back to FontFamily.Default.
+// Scale mirrors the M3 defaults (as used by ArchiveTune); the display/headline
+// styles keep PlayBridge's tighter, bolder treatment.
 val AppTypography = Typography(
-    displayLarge = default.displayLarge.copy(
+    displayLarge = TextStyle(
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.Bold,
-        fontSize = 48.sp,
-        letterSpacing = (-0.02).em
+        fontSize = 57.sp,
+        lineHeight = 64.sp,
+        letterSpacing = (-0.25).sp,
     ),
-    displayMedium = default.displayMedium.copy(fontFamily = AppFontFamily),
-    displaySmall = default.displaySmall.copy(fontFamily = AppFontFamily),
-    headlineLarge = default.headlineLarge.copy(
+    displayMedium = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 45.sp,
+        lineHeight = 52.sp,
+        letterSpacing = 0.sp,
+    ),
+    displaySmall = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 36.sp,
+        lineHeight = 44.sp,
+        letterSpacing = 0.sp,
+    ),
+    headlineLarge = TextStyle(
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.Bold,
         fontSize = 32.sp,
-        letterSpacing = (-0.02).em
+        lineHeight = 40.sp,
+        letterSpacing = 0.sp,
     ),
-    headlineMedium = default.headlineMedium.copy(fontFamily = AppFontFamily),
-    headlineSmall = default.headlineSmall.copy(fontFamily = AppFontFamily),
-    titleLarge = default.titleLarge.copy(
+    headlineMedium = TextStyle(
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.SemiBold,
-        fontSize = 22.sp
+        fontSize = 28.sp,
+        lineHeight = 36.sp,
+        letterSpacing = 0.sp,
     ),
-    titleMedium = default.titleMedium.copy(fontFamily = AppFontFamily),
-    titleSmall = default.titleSmall.copy(fontFamily = AppFontFamily),
-    bodyLarge = default.bodyLarge.copy(fontFamily = AppFontFamily),
-    bodyMedium = default.bodyMedium.copy(
+    headlineSmall = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp,
+        lineHeight = 32.sp,
+        letterSpacing = 0.sp,
+    ),
+    titleLarge = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 22.sp,
+        lineHeight = 28.sp,
+        letterSpacing = 0.sp,
+    ),
+    titleMedium = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.15.sp,
+    ),
+    titleSmall = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        letterSpacing = 0.1.sp,
+    ),
+    bodyLarge = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp,
+        lineHeight = 24.sp,
+        letterSpacing = 0.5.sp,
+    ),
+    bodyMedium = TextStyle(
         fontFamily = AppFontFamily,
         fontWeight = FontWeight.Normal,
         fontSize = 14.sp,
-        lineHeight = 20.sp
+        lineHeight = 20.sp,
+        letterSpacing = 0.25.sp,
     ),
-    bodySmall = default.bodySmall.copy(fontFamily = AppFontFamily),
-    labelLarge = default.labelLarge.copy(fontFamily = AppFontFamily),
-    labelMedium = default.labelMedium.copy(fontFamily = AppFontFamily),
-    labelSmall = default.labelSmall.copy(
+    bodySmall = TextStyle(
         fontFamily = AppFontFamily,
-        fontWeight = FontWeight.Bold,
+        fontWeight = FontWeight.Normal,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.4.sp,
+    ),
+    labelLarge = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        letterSpacing = 0.1.sp,
+    ),
+    labelMedium = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp,
+        lineHeight = 16.sp,
+        letterSpacing = 0.5.sp,
+    ),
+    labelSmall = TextStyle(
+        fontFamily = AppFontFamily,
+        fontWeight = FontWeight.Medium,
         fontSize = 11.sp,
-        letterSpacing = 0.06.em
-    )
+        lineHeight = 16.sp,
+        letterSpacing = 0.5.sp,
+    ),
 )
