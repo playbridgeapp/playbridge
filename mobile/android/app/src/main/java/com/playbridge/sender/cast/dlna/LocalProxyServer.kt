@@ -92,6 +92,7 @@ class LocalProxyServer(
     fun publish(url: String, headers: Map<String, String>, mime: String?): String {
         isLiveStream = false // re-learned when an HLS media playlist is served
         vodDurationMs = 0L
+        cachedLanIp = lanIp() // refresh once per cast; register() reuses it
         return register(Entry.Remote(url, filterHeaders(headers), mime), guessExt(url, mime))
     }
 
@@ -99,6 +100,7 @@ class LocalProxyServer(
     fun publishLocal(uri: Uri, mime: String?): String {
         isLiveStream = false
         vodDurationMs = 0L
+        cachedLanIp = lanIp()
         return register(Entry.Local(uri, mime), extForMime(mime))
     }
 
@@ -110,10 +112,18 @@ class LocalProxyServer(
                 lk != "host" && lk != "accept-encoding" && lk != "connection" && lk != "range"
         }
 
+    /**
+     * LAN IP cached per publish(): register() runs once per URL in a playlist rewrite —
+     * enumerating every NetworkInterface per segment line (thousands for a long VOD,
+     * re-done on every live-playlist refresh) is measurable syscall churn.
+     */
+    @Volatile private var cachedLanIp: String? = null
+
     private fun register(entry: Entry, ext: String): String {
         val token = UUID.randomUUID().toString().replace("-", "").take(16)
         entries[token] = entry
-        return "http://${lanIp()}:$port/$token$ext"
+        val ip = cachedLanIp ?: lanIp().also { cachedLanIp = it }
+        return "http://$ip:$port/$token$ext"
     }
 
     private fun acceptLoop(s: ServerSocket) {
@@ -131,6 +141,9 @@ class LocalProxyServer(
     }
 
     private fun handle(socket: Socket) = socket.use { sock ->
+        // A renderer that opens a connection and never finishes its headers would
+        // otherwise pin this daemon thread forever on readLine().
+        sock.soTimeout = 15_000
         val reader = BufferedReader(InputStreamReader(sock.getInputStream()))
         val requestLine = reader.readLine() ?: return // "GET /<token>.mp4 HTTP/1.1"
         val parts = requestLine.split(" ")

@@ -45,7 +45,7 @@ abstract class PlayerActivity : ComponentActivity() {
             if (!isFinishing) {
                 FileLogger.w("PlayerActivity", "Watchdog: Playback failed to start within 30s. Swapping engine.")
                 val alternative = if (currentEngineId == "mpv") "exo" else "mpv"
-                switchPlayer(alternative)
+                switchPlayer(alternative, automatic = true)
             }
         }
     }
@@ -576,7 +576,31 @@ abstract class PlayerActivity : ComponentActivity() {
     protected open fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
         emptyList<playbridge.PlayPayload>() to 0
 
-    protected fun switchPlayer(newMode: String) {
+    /**
+     * Relaunch playback in [newMode]'s engine activity.
+     *
+     * [automatic] marks failover switches (watchdog timeout, fatal decoder/load errors) as
+     * opposed to an explicit user/phone request. Automatic switches carry a counter across
+     * the relaunch intent and stop after [MAX_AUTO_ENGINE_SWITCHES]: without the cap, a
+     * stream that fails on BOTH engines ping-pongs exo↔mpv forever (each bounce relaunches
+     * an Activity, re-sniffs and re-buffers, flashing the screen indefinitely). A manual
+     * switch resets the budget.
+     */
+    protected fun switchPlayer(newMode: String, automatic: Boolean = false) {
+        val autoSwitchCount = intent.getIntExtra(EXTRA_AUTO_SWITCH_COUNT, 0)
+        if (automatic && autoSwitchCount >= MAX_AUTO_ENGINE_SWITCHES) {
+            FileLogger.e(
+                "PlayerActivity",
+                "Auto engine switch budget exhausted ($autoSwitchCount) — giving up instead of ping-ponging"
+            )
+            android.widget.Toast.makeText(
+                this,
+                "Playback failed in both players",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
+            finish()
+            return
+        }
         val currentPosition = getCurrentPosition()
         val pm = getPlayerProgressManager()
         val url = pm?.url ?: intent.getStringExtra(ServerService.EXTRA_URL)
@@ -648,6 +672,9 @@ abstract class PlayerActivity : ComponentActivity() {
         }
 
         newIntent.putExtra("extra_start_position", currentPosition)
+        // Failover bookkeeping: count automatic switches across relaunches; a manual
+        // switch is a fresh user intent and resets the budget.
+        newIntent.putExtra(EXTRA_AUTO_SWITCH_COUNT, if (automatic) autoSwitchCount + 1 else 0)
         newIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
 
         // Clear the explicit package/component if it was set by the original intent
@@ -662,5 +689,11 @@ abstract class PlayerActivity : ComponentActivity() {
     companion object {
         @Volatile
         private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
+
+        /** Intent extra carrying how many automatic engine failovers this session has done. */
+        private const val EXTRA_AUTO_SWITCH_COUNT = "extra_auto_engine_switch_count"
+
+        /** exo→mpv→exo (2 automatic switches) is the most a failing stream gets. */
+        private const val MAX_AUTO_ENGINE_SWITCHES = 2
     }
 }

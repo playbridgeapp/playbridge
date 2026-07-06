@@ -185,7 +185,7 @@ class ConnectionViewModel(
                         state is WebSocketClient.ConnectionState.Error)) {
                     hasAttemptedInitialConnect = true
                     Log.d(TAG, "Auto-connecting to saved TV: ${device.name} at ${device.ip}:${device.port}")
-                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint)
+                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint, device.uuid)
                 }
             }
         }
@@ -318,7 +318,7 @@ class ConnectionViewModel(
             viewModelScope.launch {
                 val device = tvDevice.first()
                 if (device != null) {
-                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint)
+                    webSocketClient.connect(device.ip, device.port, device.token, device.name, phoneDeviceName, phoneDeviceUUID, device.wssPort, device.certFingerprint, device.uuid)
                 }
             }
         }
@@ -344,7 +344,7 @@ class ConnectionViewModel(
             Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
             activeConnectingDevice = merged
-            webSocketClient.connect(merged.ip, merged.port, merged.token, merged.name, phoneDeviceName, phoneDeviceUUID, merged.wssPort, merged.certFingerprint)
+            webSocketClient.connect(merged.ip, merged.port, merged.token, merged.name, phoneDeviceName, phoneDeviceUUID, merged.wssPort, merged.certFingerprint, merged.uuid)
         }
     }
 
@@ -427,6 +427,23 @@ class ConnectionViewModel(
         webSocketClient.disconnect()
         // Also disable auto-connect so it doesn't immediately reconnect
         setAutoConnectEnabled(false)
+    }
+
+    /** Live retry-cycle info for the "Reconnecting to <TV>" popup (null = no cycle). */
+    val reconnectStatus = castSessionManager.reconnectStatus
+
+    /**
+     * Cancel on the connecting/reconnecting popup: stop dialling the TV and route
+     * playback to this phone, per the popup's promise.
+     */
+    fun cancelConnectingToThisDevice() {
+        disconnect()
+        castSessionManager.cancelReconnect() // clears retry state + selects This Device
+    }
+
+    /** "Keep trying" on the reconnect popup: refresh the retry budget and continue. */
+    fun keepTryingReconnect() {
+        castSessionManager.keepTryingReconnect()
     }
 
     fun removeDeviceFromHistory(device: TvDevice) {

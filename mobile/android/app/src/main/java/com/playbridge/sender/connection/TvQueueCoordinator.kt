@@ -144,10 +144,18 @@ class TvQueueCoordinator(
     private fun matchEpisodeByTitle(p: TvEpisodeQueuePlan, title: String): Int {
         val exact = p.items.indexOfFirst { it.template.title == title }
         if (exact >= 0) return exact
-        return p.items.indexOfFirst {
-            val t = it.template.title
-            !t.isNullOrBlank() && (title.contains(t) || t.contains(title))
+        // Boundary-aware prefix match: the TV reports the template title plus a suffix
+        // (" (n/m)"), so prefix+boundary covers the real case. A plain contains() matched
+        // "Show S1E1" inside "Show S1E10 …" when episode titles are blank, deriving the
+        // wrong current episode.
+        fun boundaryMatch(candidate: String?): Boolean {
+            if (candidate.isNullOrBlank()) return false
+            val longer = if (title.length >= candidate.length) title else candidate
+            val shorter = if (title.length >= candidate.length) candidate else title
+            if (!longer.startsWith(shorter)) return false
+            return longer.length == shorter.length || !longer[shorter.length].isLetterOrDigit()
         }
+        return p.items.indexOfFirst { boundaryMatch(it.template.title) }
     }
 
     private fun clearLocked() {
@@ -158,28 +166,62 @@ class TvQueueCoordinator(
         currentEpisodeIndex = 0
     }
 
-    /** Resolve & enqueue forward until at least [window] episodes are queued ahead of the current one. */
-    private suspend fun topUp() = mutex.withLock {
-        val p = plan ?: return
-        fun queuedAhead() = queuedEpisodeIndices.count { it > currentEpisodeIndex }
-        while (queuedAhead() < window && nextToResolve <= p.items.lastIndex) {
-            val idx = nextToResolve
-            val url = resolveBest(p, idx)
-            if (url != null) {
-                val tmpl = p.items[idx].template
-                val subs = fetchSubtitlesFor(tmpl, url)
-                val payload = tmpl.copy(url = url, subtitles = (tmpl.subtitles + subs).distinct())
-                if (!webSocketClient.send(createQueueAddCommandJson(payload))) {
-                    // Send failed (socket dropped) — leave nextToResolve so we retry on the next tick.
-                    Log.w(TAG, "queue_add failed for episode index $idx; will retry")
-                    return
-                }
-                queuedEpisodeIndices.add(idx)
-                Log.d(TAG, "Queued episode index $idx (current=$currentEpisodeIndex, ${queuedAhead()} ahead)")
-            } else {
-                Log.w(TAG, "No stream resolved for episode index $idx; skipping")
+    /** One unit of top-up work, snapshotted under the lock. */
+    private data class TopUpWork(
+        val plan: TvEpisodeQueuePlan,
+        val index: Int,
+        val epoch: Int,
+        val picks: AutoPickPrefs,
+    )
+
+    /**
+     * Resolve & enqueue forward until at least [window] episodes are queued ahead of the
+     * current one.
+     *
+     * Stream resolution + subtitle fetching are network I/O and deliberately run OUTSIDE
+     * the mutex: holding it across the fetch would block stop()/start()/every signal tick
+     * for the duration of the slowest addon (a user switching series would visibly stall).
+     * The epoch/plan re-check on commit discards results that a supersession made stale —
+     * the same pattern DlnaQueueCoordinator.advance() uses.
+     */
+    private suspend fun topUp() {
+        while (true) {
+            val work = mutex.withLock {
+                val p = plan ?: return
+                val ahead = queuedEpisodeIndices.count { it > currentEpisodeIndex }
+                if (ahead >= window || nextToResolve > p.items.lastIndex) return
+                TopUpWork(p, nextToResolve, epoch, autoPick)
             }
-            nextToResolve++
+
+            // Slow part — no lock held.
+            val url = resolveBest(work.plan, work.index, work.picks)
+            val payload = if (url != null) {
+                val tmpl = work.plan.items[work.index].template
+                val subs = fetchSubtitlesFor(tmpl, url)
+                tmpl.copy(url = url, subtitles = (tmpl.subtitles + subs).distinct())
+            } else {
+                null
+            }
+
+            mutex.withLock {
+                // Superseded (stop/start/re-attach) while resolving — drop the result.
+                if (epoch != work.epoch || plan !== work.plan) return
+                // Another concurrent topUp() already advanced past this index — retry loop.
+                if (nextToResolve != work.index) return@withLock
+                if (payload != null) {
+                    if (!webSocketClient.send(createQueueAddCommandJson(payload))) {
+                        // Send failed (socket dropped) — leave nextToResolve so we retry on the next tick.
+                        Log.w(TAG, "queue_add failed for episode index ${work.index}; will retry")
+                        return
+                    }
+                    queuedEpisodeIndices.add(work.index)
+                    val ahead = queuedEpisodeIndices.count { it > currentEpisodeIndex }
+                    Log.d(TAG, "Queued episode index ${work.index} (current=$currentEpisodeIndex, $ahead ahead)")
+                } else {
+                    Log.w(TAG, "No stream resolved for episode index ${work.index}; skipping")
+                }
+                nextToResolve++
+            }
         }
     }
 
@@ -195,8 +237,8 @@ class TvQueueCoordinator(
         )
     }
 
-    private suspend fun resolveBest(p: TvEpisodeQueuePlan, index: Int): String? =
-        EpisodeStreamResolver.resolveBest(addonRepository, p, index, autoPick)
+    private suspend fun resolveBest(p: TvEpisodeQueuePlan, index: Int, picks: AutoPickPrefs): String? =
+        EpisodeStreamResolver.resolveBest(addonRepository, p, index, picks)
 
     /**
      * When idle, if the TV is already playing a series whose `playlist_status` carries the echoed

@@ -146,14 +146,17 @@ private fun SettingsHubContent(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
         ) {
-            val items = remember(isFromLibrary, context) {
+            // Read the reactive theme in composable scope (not inside buildList, which is
+            // not @Composable); keying `items` on it refreshes the subtitle on change.
+            val themeLabel = com.playbridge.sender.ui.theme.ThemeController.current().label
+            val items = remember(isFromLibrary, context, themeLabel) {
                 buildList {
                     // 1. Appearance (Shared)
                     add(
                         SettingsItemData(
                             icon = Icons.Default.Palette,
                             title = "Appearance",
-                            subtitle = "Theme: ${AppTheme.fromPrefs(context).label}",
+                            subtitle = "Theme: $themeLabel",
                             onClick = onAppearance
                         )
                     )

@@ -63,6 +63,7 @@ fun SettingsScreen(
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
     var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
     var isRestarting by remember { mutableStateOf(false) }
+    var showExitDialog by remember { mutableStateOf(false) }
     var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
 
     // GeckoView Plugin states
@@ -107,6 +108,18 @@ fun SettingsScreen(
         }
     }
 
+    fun exitApp() {
+        scope.launch {
+            // Stop the FGS first so the WS server closes cleanly and NSD unregisters.
+            ServerService.stop(context)
+            delay(300)
+            (context as? Activity)?.finishAffinity()
+            // Kill the process so nothing (started-sticky service, retained singletons)
+            // lingers. BootReceiver will bring the server back on next boot/app launch.
+            kotlin.system.exitProcess(0)
+        }
+    }
+
     Row(modifier = Modifier.fillMaxSize()) {
         // --- Sidebar ---
         Column(
@@ -144,7 +157,7 @@ fun SettingsScreen(
                         scale = ListItemDefaults.scale(focusedScale = 1.05f)
                     )
                 }
-                
+
             }
         }
 
@@ -467,6 +480,49 @@ fun SettingsScreen(
                                     }
                                 }
                             )
+                        }
+                        item {
+                            SettingClickableItem(
+                                label = "Exit PlayBridge",
+                                description = "Quit the app and stop the server.",
+                                onClick = { showExitDialog = true }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showExitDialog) {
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showExitDialog = false }) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.width(400.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("Exit PlayBridge?", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "This stops the server — the phone won't be able to cast until you open the app again.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(onClick = { showExitDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            showExitDialog = false
+                            exitApp()
+                        }) {
+                            Text("Exit")
                         }
                     }
                 }

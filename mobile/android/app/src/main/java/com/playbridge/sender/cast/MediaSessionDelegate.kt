@@ -31,7 +31,8 @@ class MediaSessionObserver(
         Log.d(TAG, "onMediaActivated (tabId=$tabId)")
         isActive = true
         tabManager.markTabAsPlaying(tabId)
-        MediaPlaybackService.start(context)
+        // Owner-refcounted: the service stays up until the LAST active tab deactivates.
+        MediaPlaybackService.activate(context, tabId)
 
         controlJob?.cancel()
         controlJob = scope.launch {
@@ -57,7 +58,7 @@ class MediaSessionObserver(
         tabManager.playingTabIds.remove(tabId)
         controlJob?.cancel()
         controlJob = null
-        MediaPlaybackService.stop(context)
+        MediaPlaybackService.deactivate(tabId)
     }
 
     override fun onMediaMetadataChanged(metadata: MediaSession.Metadata) {

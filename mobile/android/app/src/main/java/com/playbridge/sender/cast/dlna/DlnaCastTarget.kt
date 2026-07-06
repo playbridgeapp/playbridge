@@ -61,11 +61,21 @@ class DlnaCastTarget(
         avTransport.play()
 
         // Resume point: seek once the renderer has begun playback (an immediate Seek is
-        // ignored by most renderers while still TRANSITIONING).
+        // ignored by most renderers while still TRANSITIONING). Poll the transport state
+        // instead of a blind delay — a fixed 2.5s missed slow renderers entirely and
+        // over-waited on fast ones.
         if (media.startPositionMs > 0 && !proxy.isLiveStream) {
             scope.launch {
-                delay(2_500)
-                runCatching { avTransport.seek(formatTime(media.startPositionMs)) }
+                val deadline = System.currentTimeMillis() + RESUME_SEEK_TIMEOUT_MS
+                while (System.currentTimeMillis() < deadline) {
+                    val state = runCatching { avTransport.getTransportState() }.getOrNull()
+                    if (state?.uppercase() == "PLAYING") break
+                    delay(500)
+                }
+                // Re-check liveness: the playlist may only now have been served/parsed.
+                if (!proxy.isLiveStream) {
+                    runCatching { avTransport.seek(formatTime(media.startPositionMs)) }
+                }
             }
         }
 
@@ -167,6 +177,9 @@ class DlnaCastTarget(
 
     companion object {
         private const val POLL_INTERVAL_MS = 1000L
+
+        /** How long to wait for the renderer to reach PLAYING before the resume seek. */
+        private const val RESUME_SEEK_TIMEOUT_MS = 10_000L
 
         /** ms → "HH:MM:SS" for AVTransport REL_TIME (zero-padded — some renderers reject "0:..."). */
         fun formatTime(ms: Long): String {

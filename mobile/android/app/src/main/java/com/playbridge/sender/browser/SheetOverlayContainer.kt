@@ -148,6 +148,15 @@ fun SheetOverlayContainer(
 
         // 3. Cast Sheet
         if (showVideoSheet) {
+            // Opening the cast sheet implies intent to play elsewhere: stop the page's
+            // own playback immediately, and leave it stopped across the sheet's lifetime
+            // and dismissal (no auto-resume — the user presses play on the page if they
+            // want local playback back). Runs once per sheet opening.
+            LaunchedEffect(Unit) {
+                val selectedId = Components.store.state.selectedTabId
+                val session = selectedId?.let { Components.tabManager.sessions[it] }
+                if (session != null) Components.tabManager.pauseMedia(session)
+            }
             val collectionsViewModel: com.playbridge.sender.collection.CollectionsViewModel = koinViewModel()
             val castSheetContext = LocalContext.current
             // Set when "Save to Collection" is tapped on a card → shows the collection picker.

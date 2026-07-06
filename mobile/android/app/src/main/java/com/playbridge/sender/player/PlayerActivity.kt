@@ -50,7 +50,7 @@ import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.ScreenRotation
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.RepeatOne
@@ -162,13 +162,94 @@ data class SubtitleTrack(
 class PlayerActivity : ComponentActivity() {
 
     private var player: ExoPlayer? = null
-    private var isBackgroundModeEnabled = false
+
+    /**
+     * Background-mode toggle, hoisted here (single source of truth shared with the
+     * composable) so returning from the notification can reset the button state.
+     */
+    private val backgroundModeState = mutableStateOf(false)
     private val isInPipModeState = mutableStateOf(false)
     private val addonRepository: AddonRepository by inject()
     private val progressTracker: com.playbridge.sender.connection.PlaybackProgressTracker by inject()
 
     /** True when this playback carries TMDB identity, so onDestroy flushes a final resume. */
     private var tracksProgress = false
+
+    /** Follow the video's aspect for orientation until the user rotates manually. */
+    private var autoOrientationEnabled = true
+
+    /** Called by the manual rotate control: the user's choice wins from now on. */
+    fun disableAutoOrientation() {
+        autoOrientationEnabled = false
+    }
+
+    // ── Background-mode media session ────────────────────────────────────────
+    // While background playback is enabled and the activity leaves the foreground,
+    // playback is exposed through MediaPlaybackService: a media notification with
+    // play/pause/stop, audio focus, and a wake lock — the same owner-refcounted
+    // service the browser uses. Without it, background playback ran with no
+    // controls, no notification, and nothing keeping the process alive.
+    private var backgroundSessionActive = false
+    private var mediaControlJob: kotlinx.coroutines.Job? = null
+
+    private val backgroundStateListener = object : Player.Listener {
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (backgroundSessionActive) {
+                com.playbridge.sender.cast.MediaPlaybackService.sendStateUpdate(this@PlayerActivity, isPlaying)
+            }
+        }
+    }
+
+    private fun startBackgroundMediaSession() {
+        val exo = player ?: return
+        if (backgroundSessionActive) return
+        backgroundSessionActive = true
+        val service = com.playbridge.sender.cast.MediaPlaybackService
+        // Notification taps should land back HERE (singleTask brings this instance
+        // forward), not in the browser.
+        service.setContentIntent(
+            Intent(this, PlayerActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+        )
+        service.activate(this, service.OWNER_INAPP_PLAYER)
+        service.sendMetadataUpdate(
+            this,
+            title = intent.getStringExtra(EXTRA_TITLE) ?: "Video",
+            artist = "PlayBridge Player",
+        )
+        service.sendStateUpdate(this, exo.isPlaying)
+        exo.addListener(backgroundStateListener)
+        // Obey notification controls. lifecycleScope keeps collecting while STOPPED
+        // (it only dies with the activity), which is exactly the window we need.
+        mediaControlJob?.cancel()
+        mediaControlJob = lifecycleScope.launch {
+            com.playbridge.sender.cast.MediaControlChannel.actions.collect { action ->
+                if (!backgroundSessionActive) return@collect
+                val p = player ?: return@collect
+                when (action) {
+                    com.playbridge.sender.cast.MediaControlChannel.Action.PLAY -> p.play()
+                    com.playbridge.sender.cast.MediaControlChannel.Action.PAUSE -> p.pause()
+                    com.playbridge.sender.cast.MediaControlChannel.Action.STOP -> {
+                        p.pause()
+                        finish()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopBackgroundMediaSession() {
+        if (!backgroundSessionActive) return
+        backgroundSessionActive = false
+        mediaControlJob?.cancel()
+        mediaControlJob = null
+        player?.removeListener(backgroundStateListener)
+        com.playbridge.sender.cast.MediaPlaybackService.setContentIntent(null)
+        com.playbridge.sender.cast.MediaPlaybackService.deactivate(
+            com.playbridge.sender.cast.MediaPlaybackService.OWNER_INAPP_PLAYER
+        )
+    }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: android.content.res.Configuration) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
@@ -230,6 +311,27 @@ class PlayerActivity : ComponentActivity() {
 
         val exo = buildPlayer(this, headers)
         this.player = exo
+
+        // Match the player orientation to the video: portrait content (e.g. phone
+        // recordings, shorts) rotates the activity to portrait as soon as its size is
+        // known; landscape content keeps the sensor-landscape default. The manual
+        // rotate button disables this so it can't fight a user choice.
+        exo.addListener(object : Player.Listener {
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (!autoOrientationEnabled) return
+                val w = videoSize.width
+                val h = videoSize.height
+                if (w <= 0 || h <= 0) return
+                // Some containers deliver a rotated frame + rotation metadata.
+                val swapped = videoSize.unappliedRotationDegrees % 180 != 0
+                val isPortraitVideo = if (swapped) w > h else h > w
+                requestedOrientation = if (isPortraitVideo) {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
+            }
+        })
 
         val initialTitle: String?
         var episodeController: LazyEpisodeController? = null
@@ -317,22 +419,41 @@ class PlayerActivity : ComponentActivity() {
                     onClose = { finish() },
                     onEnded = { finish() },
                     isInPip = isInPip,
-                    onBackgroundModeChanged = { enabled -> this.isBackgroundModeEnabled = enabled }
+                    backgroundMode = backgroundModeState,
+                    onEnterBackgroundMode = {
+                        // The composable already flipped backgroundModeState (shared,
+                        // synchronous) — onStop reads it to decide pause-vs-notify.
+                        moveTaskToBack(true)
+                    }
                 )
             }
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Back in the foreground (e.g. via the notification): the on-screen controls
+        // take over again, and the background toggle resets so the next departure is
+        // a deliberate choice rather than a sticky leftover.
+        stopBackgroundMediaSession()
+        backgroundModeState.value = false
+    }
+
     override fun onStop() {
         super.onStop()
-        // Pause when leaving the foreground, UNLESS background mode is enabled.
-        if (!isBackgroundModeEnabled) {
+        // Pause when leaving the foreground, UNLESS background mode is enabled — in which
+        // case expose playback through the media notification service. Skip on config
+        // changes (rotation would flash a notification) and in PiP (still visible).
+        if (!backgroundModeState.value) {
             player?.playWhenReady = false
+        } else if (!isFinishing && !isChangingConfigurations && !isInPipModeState.value) {
+            startBackgroundMediaSession()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        stopBackgroundMediaSession()
         // Flush a final resume point and clear the in-app leg (the polling loop is already
         // cancelled with lifecycleScope). Only fires on real close, not on rotation — the
         // activity handles orientation config changes itself.
@@ -733,7 +854,10 @@ private fun PlayerScreen(
     onClose: () -> Unit,
     onEnded: () -> Unit,
     isInPip: Boolean,
-    onBackgroundModeChanged: (Boolean) -> Unit
+    /** Shared with the activity: onStop reads it, notification-return resets it. */
+    backgroundMode: MutableState<Boolean>,
+    /** Send the task home (background mode was just enabled synchronously). */
+    onEnterBackgroundMode: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val window = (context as? Activity)?.window
@@ -781,7 +905,7 @@ private fun PlayerScreen(
     }
 
     // New states
-    var isBackgroundModeEnabled by remember { mutableStateOf(false) }
+    var isBackgroundModeEnabled by backgroundMode
     var repeatMode by remember { mutableIntStateOf(player.repeatMode) }
     var abStartMs by remember { mutableStateOf<Long?>(null) }
     var abEndMs by remember { mutableStateOf<Long?>(null) }
@@ -789,10 +913,7 @@ private fun PlayerScreen(
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
 
-    // Sync background playback toggle to activity
-    LaunchedEffect(isBackgroundModeEnabled) {
-        onBackgroundModeChanged(isBackgroundModeEnabled)
-    }
+    // (Background toggle state is hoisted — the activity shares backgroundMode directly.)
 
     // Precision AB Loop segment repeat
     LaunchedEffect(abStartMs, abEndMs) {
@@ -1401,11 +1522,12 @@ private fun PlayerScreen(
                             .windowInsetsPadding(WindowInsets.navigationBars)
                             .padding(horizontal = 16.dp, vertical = 12.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
+                        // The 11 fixed-size buttons total ~550dp with spacing — far wider
+                        // than any portrait screen, which overflowed/clipped the single
+                        // row (the broken portrait layout). The two clusters are extracted
+                        // so portrait can stack them as two rows; landscape keeps one row
+                        // with the flexible gap in the middle.
+                        val transportControls: @Composable () -> Unit = {
                             // 1. Lock Controls
                             GlassControl(
                                 onClick = { locked = true; showUnlock = true },
@@ -1414,18 +1536,29 @@ private fun PlayerScreen(
                                 Icon(Icons.Filled.Lock, "Lock controls", tint = Color.White, modifier = Modifier.size(20.dp))
                             }
 
-                            // 2. Background Playback Toggle
+                            // 2. Background Playback Toggle. Enabling it acts immediately:
+                            // the whole point is listening with the screen off / elsewhere,
+                            // so go straight home and let the media notification take over.
+                            // Tapping again (after returning) turns it off.
                             GlassControl(
                                 onClick = {
-                                    isBackgroundModeEnabled = !isBackgroundModeEnabled
-                                    aspectLabel = if (isBackgroundModeEnabled) "Background Playback Enabled" else "Background Playback Disabled"
-                                    markInteraction()
+                                    if (isBackgroundModeEnabled) {
+                                        isBackgroundModeEnabled = false
+                                        aspectLabel = "Background Playback Disabled"
+                                        markInteraction()
+                                    } else {
+                                        isBackgroundModeEnabled = true
+                                        // Sync the activity flag synchronously and background
+                                        // the task — waiting for the LaunchedEffect would race
+                                        // onStop, which reads the flag to decide pause-vs-notify.
+                                        onEnterBackgroundMode()
+                                    }
                                 },
                                 diameter = 40.dp,
                                 background = if (isBackgroundModeEnabled) Color.Green.copy(alpha = 0.25f) else Color.White.copy(alpha = 0.14f)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Filled.Hearing,
+                                    imageVector = Icons.Filled.Headphones,
                                     contentDescription = "Background mode",
                                     tint = if (isBackgroundModeEnabled) Color.Green else Color.White,
                                     modifier = Modifier.size(20.dp)
@@ -1437,8 +1570,12 @@ private fun PlayerScreen(
                                 onClick = {
                                     val activity = context as? Activity
                                     if (activity != null) {
-                                        activity.requestedOrientation = if (activity.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE) {
-                                            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                        // Manual choice — stop auto-following the video aspect.
+                                        (activity as? PlayerActivity)?.disableAutoOrientation()
+                                        val isLandscapeNow =
+                                            activity.requestedOrientation == ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                                        activity.requestedOrientation = if (isLandscapeNow) {
+                                            ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
                                         } else {
                                             ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                                         }
@@ -1550,9 +1687,9 @@ private fun PlayerScreen(
                                 }
                             }
 
-                            // 7. Flexible Spacing Separator
-                            Spacer(Modifier.weight(1f))
+                        }
 
+                        val utilityControls: @Composable () -> Unit = {
                             // 8. Capture Frame (Photo)
                             GlassControl(
                                 onClick = {
@@ -1627,6 +1764,32 @@ private fun PlayerScreen(
                                 diameter = 40.dp
                             ) {
                                 Icon(Icons.Filled.AspectRatio, "Resize", tint = Color.White, modifier = Modifier.size(20.dp))
+                            }
+                        }
+
+                        val isPortraitLayout =
+                            LocalConfiguration.current.screenWidthDp < LocalConfiguration.current.screenHeightDp
+                        if (isPortraitLayout) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) { transportControls() }
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) { utilityControls() }
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                transportControls()
+                                Spacer(Modifier.weight(1f))
+                                utilityControls()
                             }
                         }
 

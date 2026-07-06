@@ -396,7 +396,13 @@ class BrowserActivity : ComponentActivity() {
         }
 
         setContent {
-            var currentScreen by remember {
+            // rememberSaveable + Screen.Saver: survives Activity recreation (memory-pressure
+            // destroy while the in-app player / another Activity is in front), so Back
+            // returns to the exact screen — e.g. a library detail page — instead of
+            // resetting to the persisted main tab.
+            var currentScreen by androidx.compose.runtime.saveable.rememberSaveable(
+                stateSaver = Screen.Saver
+            ) {
                 val sp = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
                 // First launch (no main screen ever persisted) lands on the Dashboard,
                 // which doubles as the home for the one-time onboarding overlay.
@@ -2085,11 +2091,16 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
 
-                // Pairing/Connection Dialog Popup
+                // Pairing/Connection Dialog Popup. Also shown across the reconnect retry
+                // cycle (linear, 3 attempts) so the user sees progress and can bail out —
+                // Cancel routes playback to This Device instead of silently retrying.
                 val state = connectionState
+                val reconnect by connectionViewModel.reconnectStatus.collectAsState()
+                val isPairingState = state is WebSocketClient.ConnectionState.WaitingForCodeInput ||
+                    state is WebSocketClient.ConnectionState.VerifyingCode
                 if (state is WebSocketClient.ConnectionState.Connecting ||
-                    state is WebSocketClient.ConnectionState.WaitingForCodeInput ||
-                    state is WebSocketClient.ConnectionState.VerifyingCode) {
+                    isPairingState ||
+                    reconnect != null) {
 
                     var codeText by remember { mutableStateOf("") }
                     val focusRequester = remember { FocusRequester() }
@@ -2105,12 +2116,21 @@ class BrowserActivity : ComponentActivity() {
                     }
 
                     AlertDialog(
-                        onDismissRequest = { connectionViewModel.disconnect() },
+                        onDismissRequest = {
+                            if (isPairingState) connectionViewModel.disconnect()
+                            else connectionViewModel.cancelConnectingToThisDevice()
+                        },
                         title = {
                             Text(
-                                text = when (state) {
-                                    is WebSocketClient.ConnectionState.WaitingForCodeInput -> "Pairing with ${state.serverName}"
-                                    is WebSocketClient.ConnectionState.VerifyingCode -> "Verifying Code"
+                                text = when {
+                                    state is WebSocketClient.ConnectionState.WaitingForCodeInput ->
+                                        "Pairing with ${state.serverName}"
+                                    state is WebSocketClient.ConnectionState.VerifyingCode ->
+                                        "Verifying Code"
+                                    reconnect != null ->
+                                        "Reconnecting to ${reconnect?.deviceName ?: "TV"}"
+                                    state is WebSocketClient.ConnectionState.Connecting ->
+                                        "Connecting to ${state.serverName}"
                                     else -> "Connecting to TV"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
@@ -2171,31 +2191,62 @@ class BrowserActivity : ComponentActivity() {
                                     ) {
                                         CircularProgressIndicator(modifier = Modifier.size(36.dp), strokeWidth = 3.dp)
                                     }
+                                    val rc = reconnect
                                     Text(
-                                        text = if (state is WebSocketClient.ConnectionState.VerifyingCode)
-                                            "Verifying code with ${state.serverName}…"
-                                        else
-                                            "Connecting to TV…",
+                                        text = when {
+                                            state is WebSocketClient.ConnectionState.VerifyingCode ->
+                                                "Verifying code with ${state.serverName}…"
+                                            rc != null ->
+                                                "Reconnecting… (attempt ${rc.attempt})"
+                                            state is WebSocketClient.ConnectionState.Connecting ->
+                                                "Connecting to ${state.serverName}…"
+                                            else -> "Connecting to TV…"
+                                        },
                                         style = MaterialTheme.typography.bodyMedium,
                                         textAlign = TextAlign.Center,
                                         modifier = Modifier.fillMaxWidth()
                                     )
+                                    if (rc != null || state is WebSocketClient.ConnectionState.Connecting) {
+                                        Text(
+                                            text = "Play on this device instead, or keep waiting for the TV.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = TextAlign.Center,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
                                 }
                             }
                         },
                         confirmButton = {
-                            if (state is WebSocketClient.ConnectionState.WaitingForCodeInput) {
-                                Button(
-                                    onClick = { connectionViewModel.submitPairingCode(codeText) },
-                                    enabled = codeText.length == 6
-                                ) {
-                                    Text("Verify")
+                            when {
+                                state is WebSocketClient.ConnectionState.WaitingForCodeInput -> {
+                                    Button(
+                                        onClick = { connectionViewModel.submitPairingCode(codeText) },
+                                        enabled = codeText.length == 6
+                                    ) {
+                                        Text("Verify")
+                                    }
+                                }
+                                // Reconnect cycle: let the user extend the retry window.
+                                reconnect != null -> {
+                                    Button(onClick = { connectionViewModel.keepTryingReconnect() }) {
+                                        Text("Keep trying")
+                                    }
                                 }
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = { connectionViewModel.disconnect() }) {
-                                Text("Cancel")
+                            TextButton(onClick = {
+                                if (isPairingState) {
+                                    connectionViewModel.disconnect()
+                                } else {
+                                    // Connecting/reconnecting: bail out to phone-local playback.
+                                    connectionViewModel.cancelConnectingToThisDevice()
+                                }
+                            }) {
+                                // The dismiss action means "play here" everywhere except pairing.
+                                Text(if (isPairingState) "Cancel" else "Play on this device")
                             }
                         }
                     )

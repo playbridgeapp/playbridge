@@ -88,10 +88,27 @@ class PlaybackProgressTracker(
     private var lastObservedPositionMs = 0L
     private var lastObservedDurationMs = 0L
 
-    /** Resume-write throttle state. */
-    private var lastSavedKey: String? = null
-    private var lastSavedPosMs = 0L
-    private var lastState: String? = null
+    /**
+     * Resume-write throttle state, one per transport leg. Keeping this per-leg matters:
+     * the native, DLNA and in-app collectors run in the same scope, and a shared throttle
+     * would let one leg's tick suppress (or misattribute) another leg's pause-triggered
+     * resume write.
+     */
+    private class ResumeThrottle {
+        var lastSavedKey: String? = null
+        var lastSavedPosMs = 0L
+        var lastState: String? = null
+
+        fun reset() {
+            lastSavedKey = null
+            lastSavedPosMs = 0L
+            lastState = null
+        }
+    }
+
+    private val nativeThrottle = ResumeThrottle()
+    private val dlnaThrottle = ResumeThrottle()
+    private val inAppThrottle = ResumeThrottle()
     private val writeMutex = Mutex()
 
     /**
@@ -186,7 +203,7 @@ class PlaybackProgressTracker(
                 ) {
                     markEpisodeWatched(tmdbId, s, e)
                 } else if (lastObservedPositionMs >= MIN_RESUME_POSITION_MS && lastObservedDurationMs > 0) {
-                    saveResume(item, lastObservedPositionMs, lastObservedDurationMs)
+                    saveResume(item, lastObservedPositionMs, lastObservedDurationMs, nativeThrottle)
                 }
             }
             lastObservedPositionMs = 0L
@@ -219,7 +236,7 @@ class PlaybackProgressTracker(
             else markMovieWatched(tmdbId)
         } else {
             thresholdArmed = true // seen genuinely-unwatched playback; threshold may fire now
-            maybeSaveResume(item, pb.positionMs, pb.durationMs, pb.state)
+            maybeSaveResume(item, pb.positionMs, pb.durationMs, pb.state, nativeThrottle)
         }
     }
 
@@ -255,7 +272,7 @@ class PlaybackProgressTracker(
             ) {
                 markEpisodeWatched(prevItem.tmdbId, prevItem.season!!, prevItem.episode!!)
             } else if (dlnaLastObservedPosMs >= MIN_RESUME_POSITION_MS && dlnaLastObservedDurMs > 0) {
-                saveResume(prevItem, dlnaLastObservedPosMs, dlnaLastObservedDurMs)
+                saveResume(prevItem, dlnaLastObservedPosMs, dlnaLastObservedDurMs, dlnaThrottle)
             }
             dlnaLastObservedPosMs = 0L
             dlnaLastObservedDurMs = 0L
@@ -281,7 +298,7 @@ class PlaybackProgressTracker(
                 com.playbridge.sender.cast.PlaybackState.PLAYING -> "playing"
                 else -> st.state.name.lowercase()
             }
-            maybeSaveResume(item, st.positionMs, st.durationMs, stateKey)
+            maybeSaveResume(item, st.positionMs, st.durationMs, stateKey, dlnaThrottle)
         }
     }
 
@@ -310,7 +327,7 @@ class PlaybackProgressTracker(
                 inAppLastObservedPosMs >= MIN_RESUME_POSITION_MS && inAppLastObservedDurMs > 0 &&
                 !ProgressRules.isWatched(inAppLastObservedPosMs, inAppLastObservedDurMs)
             ) {
-                saveResume(item, inAppLastObservedPosMs, inAppLastObservedDurMs)
+                saveResume(item, inAppLastObservedPosMs, inAppLastObservedDurMs, inAppThrottle)
             }
             inAppItem = null
             inAppLastObservedPosMs = 0L
@@ -340,7 +357,7 @@ class PlaybackProgressTracker(
             ) {
                 markEpisodeWatched(prevItem.tmdbId, prevItem.season!!, prevItem.episode!!)
             } else if (inAppLastObservedPosMs >= MIN_RESUME_POSITION_MS && inAppLastObservedDurMs > 0) {
-                saveResume(prevItem, inAppLastObservedPosMs, inAppLastObservedDurMs)
+                saveResume(prevItem, inAppLastObservedPosMs, inAppLastObservedDurMs, inAppThrottle)
             }
             inAppLastObservedPosMs = 0L
             inAppLastObservedDurMs = 0L
@@ -359,26 +376,37 @@ class PlaybackProgressTracker(
             else markMovieWatched(item.tmdbId)
         } else {
             inAppThresholdArmed = true
-            maybeSaveResume(item, positionMs, durationMs, if (isPlaying) "playing" else "paused")
+            maybeSaveResume(item, positionMs, durationMs, if (isPlaying) "playing" else "paused", inAppThrottle)
         }
     }
 
     // ── Resume positions ────────────────────────────────────────────────────
 
     /** Throttled persist: on item change, every ≥10s of movement, or on pause. */
-    private suspend fun maybeSaveResume(item: PlayingItem, positionMs: Long, durationMs: Long, state: String?) {
-        val pausedNow = state == "paused" && lastState != "paused"
-        lastState = state
+    private suspend fun maybeSaveResume(
+        item: PlayingItem,
+        positionMs: Long,
+        durationMs: Long,
+        state: String?,
+        throttle: ResumeThrottle,
+    ) {
+        val pausedNow = state == "paused" && throttle.lastState != "paused"
+        throttle.lastState = state
         if (positionMs < MIN_RESUME_POSITION_MS || durationMs <= 0) return
-        val keyChanged = item.key != lastSavedKey
-        val moved = kotlin.math.abs(positionMs - lastSavedPosMs) >= RESUME_SAVE_INTERVAL_MS
+        val keyChanged = item.key != throttle.lastSavedKey
+        val moved = kotlin.math.abs(positionMs - throttle.lastSavedPosMs) >= RESUME_SAVE_INTERVAL_MS
         if (!keyChanged && !moved && !pausedNow) return
-        saveResume(item, positionMs, durationMs)
+        saveResume(item, positionMs, durationMs, throttle)
     }
 
-    private suspend fun saveResume(item: PlayingItem, positionMs: Long, durationMs: Long) {
-        lastSavedKey = item.key
-        lastSavedPosMs = positionMs
+    private suspend fun saveResume(
+        item: PlayingItem,
+        positionMs: Long,
+        durationMs: Long,
+        throttle: ResumeThrottle,
+    ) {
+        throttle.lastSavedKey = item.key
+        throttle.lastSavedPosMs = positionMs
         runCatching {
             resumeDao.upsert(
                 PlaybackResumeEntity(
@@ -426,9 +454,8 @@ class PlaybackProgressTracker(
         sessionTmdbId = null
         lastObservedPositionMs = 0L
         lastObservedDurationMs = 0L
-        lastSavedKey = null
-        lastSavedPosMs = 0L
-        lastState = null
+        nativeThrottle.reset()
+        dlnaThrottle.reset()
         thresholdArmed = false
         dlnaThresholdArmed = false
     }
