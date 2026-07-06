@@ -175,15 +175,28 @@ function renderSavedConnections() {
         const item = document.createElement('div');
         item.className = 'saved-connection-item';
         
-        item.innerHTML = `
-            <div class="saved-connection-info">
-                <span class="saved-connection-ip">${conn.ip}</span>
-                <span class="saved-connection-pin">PIN: ${conn.pin ? '*'.repeat(conn.pin.length) : 'None'}</span>
-            </div>
-            <button class="delete-connection-btn" title="Remove connection" aria-label="Remove connection">
-                <svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 24 24" width="18" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-            </button>
-        `;
+        const infoDiv = document.createElement('div');
+        infoDiv.className = 'saved-connection-info';
+
+        const ipSpan = document.createElement('span');
+        ipSpan.className = 'saved-connection-ip';
+        ipSpan.textContent = conn.ip;
+
+        const pinSpan = document.createElement('span');
+        pinSpan.className = 'saved-connection-pin';
+        pinSpan.textContent = `PIN: ${conn.pin ? '*'.repeat(conn.pin.length) : 'None'}`;
+
+        infoDiv.appendChild(ipSpan);
+        infoDiv.appendChild(pinSpan);
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'delete-connection-btn';
+        deleteBtn.title = 'Remove connection';
+        deleteBtn.setAttribute('aria-label', 'Remove connection');
+        deleteBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="18" viewBox="0 0 24 24" width="18" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>';
+
+        item.appendChild(infoDiv);
+        item.appendChild(deleteBtn);
         
         // Auto-fill and connect on click
         item.addEventListener('click', () => {
