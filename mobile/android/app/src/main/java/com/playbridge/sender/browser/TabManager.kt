@@ -197,6 +197,12 @@ class TabManager {
                     val engineSession = tab.engineState.engineSession
                     if (engineSession != null) {
                         if (sessions[tab.id] !== engineSession) {
+                            // Session replaced (crash restore / recreation): the OLD
+                            // session's media observer dies without onMediaDeactivated —
+                            // drop its hold on the media notification (no-op otherwise).
+                            if (sessions[tab.id] != null) {
+                                com.playbridge.sender.cast.MediaPlaybackService.deactivate(tab.id)
+                            }
                             sessions[tab.id] = engineSession
                             engineSession.register(
                                 MediaSessionObserver(
@@ -464,6 +470,10 @@ class TabManager {
         crashGivenUp.remove(tabId)
         sessions.remove(tabId)
         VideoDetector.clearTab(tabId)
+        // A tab closed while its media session was active never fires
+        // onMediaDeactivated — release its hold on the media notification service
+        // here or the notification sticks around forever. No-op for other tabs.
+        com.playbridge.sender.cast.MediaPlaybackService.deactivate(tabId)
         // NOTE: the engine session itself is closed by EngineMiddleware
         // (TabsRemovedMiddleware) when the tab is removed from the store.
     }
