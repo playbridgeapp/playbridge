@@ -119,6 +119,10 @@ class WebSocketClient {
         val deviceUUID: String,
         val wssPort: Int? = null,
         val pin: String? = null,
+        /** The receiver's uuid (from discovery/saved record) — used to match the saved
+         *  device on reconnect. Names collide (two TVs of the same model announce the
+         *  same Build.MODEL); uuids don't. Empty when unknown. */
+        val tvUuid: String = "",
     )
 
     /** Token + SPKI pin issued by the receiver, persisted together by the ViewModel. */
@@ -129,7 +133,8 @@ class WebSocketClient {
 
         sealed class ConnectionState {
             data object Disconnected : ConnectionState()
-            data object Connecting : ConnectionState()
+            /** [serverName] = the receiver being dialled, so UI can say WHICH TV. */
+            data class Connecting(val serverName: String = "TV") : ConnectionState()
             data class Connected(val serverName: String, val secure: Boolean = false) : ConnectionState()
             // New SAS Handshake states.
             // [attemptsLeft] counts down as the user mistypes the 6-digit code; [lastCodeWrong]
@@ -166,15 +171,18 @@ class WebSocketClient {
         deviceUUID: String,
         wssPort: Int? = null,
         certFingerprint: String? = null,
+        tvUuid: String = "",
     ) {
         isUserDisconnect = false
-        targetConnection = TvConnectionInfo(ip, port, token, serverName, deviceName, deviceUUID, wssPort, certFingerprint)
+        targetConnection = TvConnectionInfo(
+            ip, port, token, serverName, deviceName, deviceUUID, wssPort, certFingerprint, tvUuid
+        )
         attemptConnection(ip, port, serverName)
     }
 
     private fun attemptConnection(ip: String, port: Int, serverName: String) {
         // Update state first to prevent race where UI thinks we are connected but socket is null
-        _connectionState.value = ConnectionState.Connecting
+        _connectionState.value = ConnectionState.Connecting(serverName)
         
         if (webSocket != null) {
             try { webSocket?.close(1000, "Reconnecting") } catch(e: Exception) {}
@@ -328,6 +336,7 @@ class WebSocketClient {
                                 scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
                             }
                             emitCapabilities(json)
+                            clearPairingSecrets() // handshake done — drop key material
                             _connectionState.value = ConnectionState.Connected(serverName, isSecure)
                             // Resync: the TV only broadcasts context on its own activity
                             // transitions, so a client (re)connecting mid-playback would
@@ -498,6 +507,21 @@ class WebSocketClient {
         return true
     }
 
+    /**
+     * Drop the ephemeral SAS-handshake material (keys, nonces, shared secret, code).
+     * Called once a session is established and on teardown — there's no reason to keep
+     * key material in memory for the life of the process.
+     */
+    private fun clearPairingSecrets() {
+        senderKeyPair = null
+        nonceS = null
+        commitStr = null
+        tvEphPub = null
+        nonceT = null
+        sharedSecret = null
+        calculatedSas = null
+    }
+
     /** Parse players/browsers from an auth/pairing response and publish them (if any). */
     private fun emitCapabilities(json: JsonObject) {
         val players = parseStringArray(json, "players")
@@ -593,12 +617,19 @@ class WebSocketClient {
         val state = _connectionState.value
         if (state is ConnectionState.Connected || state is ConnectionState.Connecting) return
 
-        // Refresh the endpoint from the saved record if it's the same receiver. Matching is
-        // by receiver name (the saved record carries the TV uuid, but targetConnection only
-        // knows the name the TV announced at connect time). The token/pin are refreshed too:
-        // receivers may rotate the token on every auth, and the store is authoritative.
+        // Refresh the endpoint from the saved record if it's the same receiver. Match by
+        // uuid when both sides know it (names collide: two TVs of the same model announce
+        // the same Build.MODEL); fall back to the announced name only when the uuid is
+        // unavailable. The token/pin are refreshed too: receivers may rotate the token on
+        // every auth, and the store is authoritative.
+        val sameReceiver = freshDevice != null &&
+            (if (conn.tvUuid.isNotEmpty() && freshDevice.uuid.isNotEmpty()) {
+                freshDevice.uuid == conn.tvUuid
+            } else {
+                freshDevice.name == conn.serverName
+            })
         if (freshDevice != null && !freshDevice.isDlna &&
-            freshDevice.token.isNotEmpty() && freshDevice.name == conn.serverName &&
+            freshDevice.token.isNotEmpty() && sameReceiver &&
             (freshDevice.ip != conn.ip || freshDevice.port != conn.port ||
                 freshDevice.wssPort != conn.wssPort || freshDevice.token != conn.token ||
                 (freshDevice.certFingerprint ?: conn.pin) != conn.pin)
@@ -625,6 +656,7 @@ class WebSocketClient {
         pendingDx = 0f
         pendingDy = 0f
         isUserDisconnect = true
+        clearPairingSecrets()
         webSocket?.close(1000, "User disconnect")
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected

@@ -185,6 +185,15 @@ class ConnectionCoordinator(
         tvPlaylistState.value = null
     }
 
+    /**
+     * Mark the receiver idle locally (e.g. session ended from the phone while no native
+     * target is connected to confirm it). Keeps external classes from poking
+     * [tvActiveContext] directly.
+     */
+    fun markIdle() {
+        tvActiveContext.value = "idle"
+    }
+
     private fun clearPlayerStates() {
         tvPlaylistState.value = null
         tvPlayback.value = null

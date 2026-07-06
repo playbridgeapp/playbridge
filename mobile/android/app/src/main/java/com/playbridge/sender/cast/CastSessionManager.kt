@@ -106,10 +106,22 @@ class CastSessionManager(
         _route.value = Route.ThisDevice
         persistBaseRoute("this")
         // Leaving the TV route: stop trying to keep the native link alive.
-        hasConnectedThisSession = false
-        reconnectAttempt = 0
-        reconnectJob?.cancel()
-        _reconnecting.value = false
+        stopReconnectSupervisor()
+    }
+
+    /**
+     * Stand the reconnect supervisor down. Runs inside the manager's single-threaded
+     * scope: callers are on arbitrary threads (UI picks, DLNA selection), while the
+     * supervisor's counters/job are otherwise only touched by scope coroutines.
+     */
+    private fun stopReconnectSupervisor() {
+        scope.launch {
+            hasConnectedThisSession = false
+            reconnectAttempt = 0
+            reconnectJob?.cancel()
+            _reconnecting.value = false
+            _reconnectStatus.value = null
+        }
     }
 
     /** User picked the native TV receiver. Connecting is a separate concern (caller/Stage B). */
@@ -343,6 +355,8 @@ class CastSessionManager(
                         reconnectAttempt = 0
                         reconnectJob?.cancel()
                         _reconnecting.value = false
+                        _reconnectStatus.value = null
+                        cancelReconnectGaveUpNotification()
                     }
                     is WebSocketClient.ConnectionState.Error,
                     is WebSocketClient.ConnectionState.Disconnected -> {
@@ -356,6 +370,7 @@ class CastSessionManager(
                         hasConnectedThisSession = false
                         reconnectJob?.cancel()
                         _reconnecting.value = false
+                        _reconnectStatus.value = null
                     }
                     else -> Unit
                 }
@@ -368,34 +383,82 @@ class CastSessionManager(
     private var reconnectAttempt = 0
     private var reconnectJob: Job? = null
 
+    /** What the "Reconnecting…" popup shows; null when no retry cycle is running. */
+    data class ReconnectStatus(val attempt: Int, val maxAttempts: Int, val deviceName: String)
+
+    private val _reconnectStatus = MutableStateFlow<ReconnectStatus?>(null)
+    val reconnectStatus: StateFlow<ReconnectStatus?> = _reconnectStatus.asStateFlow()
+
+    /**
+     * User pressed Cancel on the reconnect/connecting popup: stop chasing the TV and
+     * route playback to this phone.
+     */
+    fun cancelReconnect() {
+        _reconnectStatus.value = null
+        selectThisDevice() // also stands the supervisor down
+    }
+
+    /**
+     * User pressed "Keep trying" on the reconnect popup: refresh the retry budget and,
+     * if the supervisor had stood down, kick off a new cycle.
+     */
+    fun keepTryingReconnect() {
+        scope.launch {
+            reconnectAttempt = 0
+            if (reconnectJob?.isActive != true &&
+                _route.value is Route.NativeTv &&
+                hasConnectedThisSession
+            ) {
+                scheduleReconnect()
+            }
+        }
+    }
+
     private fun scheduleReconnect() {
         if (reconnectJob?.isActive == true) return
-        // Bound the effort: after RECONNECT_GIVE_UP attempts, stand down (release the FGS so
-        // we don't pin the process / show a misleading notification while the TV is gone).
-        // The user can reconnect manually, which resets the counter.
+        // Budget exhausted: how we stand down depends on whether the user is watching.
+        //  - Foreground (interactive): the user was actively using the TV; a route left
+        //    pointing at a dead receiver makes every play action fail, so fall back to
+        //    this phone and tell them (they can re-pick the TV, or hit "Keep trying").
+        //  - Background: never silently change the route — a screen-off session (episode
+        //    queue topping up) must resume on the TV when it returns. Just stand down and
+        //    notify; the foreground-return / Wi-Fi hooks re-arm and reconnect later.
         if (reconnectAttempt >= RECONNECT_GIVE_UP) {
-            Log.i(TAG, "Reconnect: giving up after $reconnectAttempt attempts")
             _reconnecting.value = false
+            _reconnectStatus.value = null
+            if (isForeground) {
+                Log.i(TAG, "Reconnect: gave up after $reconnectAttempt attempts (foreground) — routing to This Device")
+                selectThisDevice()
+                notifyReconnectGaveUp(backgrounded = false)
+            } else {
+                Log.i(TAG, "Reconnect: gave up after $reconnectAttempt attempts (background) — standing down, route unchanged")
+                notifyReconnectGaveUp(backgrounded = true)
+            }
             return
         }
         _reconnecting.value = true
         reconnectJob = scope.launch {
             val attempt = reconnectAttempt
             reconnectAttempt += 1
-            val step = attempt.coerceAtMost(RECONNECT_MAX_STEP)
-            val backoff = (RECONNECT_BASE_MS shl step).coerceAtMost(RECONNECT_MAX_MS)
-            val jitter = (0L..RECONNECT_JITTER_MS).random()
-            delay(backoff + jitter)
+            // Surface the retry cycle so the connecting popup can show progress (1-based).
+            val deviceName = runCatching { connectionStore.tvDevice.first() }.getOrNull()
+                ?.name ?: "TV"
+            _reconnectStatus.value = ReconnectStatus(attempt + 1, RECONNECT_GIVE_UP, deviceName)
+            // Linear pacing over a realistic window: real drops (router reboot, TV Wi-Fi
+            // waking from standby, AP roaming) take tens of seconds, so retry steadily for
+            // ~90s rather than giving up in a few. On a LAN a 3s retry is cheap.
+            delay(RECONNECT_DELAY_MS)
             // Re-check: the user may have switched route or a connection may have come up.
             if (_route.value !is Route.NativeTv) {
                 _reconnecting.value = false
+                _reconnectStatus.value = null
                 return@launch
             }
             val s = webSocketClient.connectionState.value
             if (s is WebSocketClient.ConnectionState.Connected ||
                 s is WebSocketClient.ConnectionState.Connecting
             ) return@launch
-            Log.d(TAG, "Reconnect attempt $attempt after ${backoff + jitter}ms")
+            Log.d(TAG, "Reconnect attempt ${attempt + 1}/$RECONNECT_GIVE_UP")
             // Pass the saved record: if discovery has UUID-matched the TV at a new address
             // (router restart / DHCP change), the attempt targets the fresh IP, not the
             // dead one cached from the previous socket.
@@ -412,6 +475,15 @@ class CastSessionManager(
     // runs for the NativeTv route. This hook reattaches on every return to the foreground.
     // ------------------------------------------------------------------
 
+    /**
+     * Whether the app is currently in the foreground. Drives the retry policy's key
+     * decision: an *interactive* reconnect (user watching) may auto-fall back to the
+     * phone when the TV can't be reached, but a *background* one must never silently
+     * change the route — it just stands down and notifies, so a backgrounded session
+     * (screen off, episode queue topping up) resumes on the TV when it returns.
+     */
+    @Volatile private var isForeground = false
+
     private fun registerForegroundObserver() {
         // ProcessLifecycleOwner must be touched on the main thread; Koin may build this
         // singleton off it.
@@ -419,7 +491,12 @@ class CastSessionManager(
             androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(
                 object : androidx.lifecycle.DefaultLifecycleObserver {
                     override fun onStart(owner: androidx.lifecycle.LifecycleOwner) {
+                        isForeground = true
                         onAppForegrounded()
+                    }
+
+                    override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
+                        isForeground = false
                     }
                 }
             )
@@ -435,16 +512,19 @@ class CastSessionManager(
      * scheduled backoff tick (if any is even pending).
      */
     private fun attemptRecovery(reason: String) {
-        // Fresh retry budget: conditions changed, so a TV that took longer than the
-        // backoff window to come back (e.g. router reboot) gets retried.
-        reconnectAttempt = 0
-        if (!routePrefs.getBoolean("auto_connect_tv", true)) return
-        val state = webSocketClient.connectionState.value
-        val eligible = state is WebSocketClient.ConnectionState.Disconnected ||
-            state is WebSocketClient.ConnectionState.Error
-        if (!eligible) return
-        Log.d(TAG, "attemptRecovery($reason)")
+        // Callers arrive on arbitrary threads (main-thread lifecycle observer,
+        // ConnectivityManager binder thread) — hop into the manager's single-threaded
+        // scope before touching supervisor state so nothing races the reconnect loop.
         scope.launch {
+            if (!routePrefs.getBoolean("auto_connect_tv", true)) return@launch
+            val state = webSocketClient.connectionState.value
+            val eligible = state is WebSocketClient.ConnectionState.Disconnected ||
+                state is WebSocketClient.ConnectionState.Error
+            if (!eligible) return@launch
+            // Fresh retry budget: conditions changed, so a TV that took longer than the
+            // backoff window to come back (e.g. router reboot) gets retried.
+            reconnectAttempt = 0
+            Log.d(TAG, "attemptRecovery($reason)")
             // reconnect() internally no-ops when there was no prior link this process
             // (cold start — ConnectionViewModel's auto-connect owns that) or when the
             // user disconnected deliberately.
@@ -493,10 +573,7 @@ class CastSessionManager(
         _route.value = Route.Dlna(device.uuid, device.name)
         // DLNA is a cast target → mirror "watch on TV" for legacy readers.
         routePrefs.edit().putBoolean("watch_on_tv", true).apply()
-        hasConnectedThisSession = false
-        reconnectAttempt = 0
-        reconnectJob?.cancel()
-        _reconnecting.value = false
+        stopReconnectSupervisor()
         dlnaStatusJob = scope.launch { target.status().collect { _dlnaStatus.value = it } }
         Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
     }
@@ -599,6 +676,60 @@ class CastSessionManager(
         }.onFailure { Log.w(TAG, "Battery-optimization exemption request failed", it) }
     }
 
+    /**
+     * One-shot "Lost connection to your TV" notification when the reconnect supervisor
+     * exhausts its retry budget. Best-effort: wrapped so a missing POST_NOTIFICATIONS
+     * grant (API 33+) or OEM quirk can never break the supervisor.
+     *
+     * [backgrounded] tailors the message: a background stand-down left the route on the
+     * TV (it'll resume when reachable), while a foreground give-up switched to the phone.
+     */
+    private fun notifyReconnectGaveUp(backgrounded: Boolean) {
+        runCatching {
+            val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE)
+                as android.app.NotificationManager
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                mgr.getNotificationChannel(RECONNECT_CHANNEL_ID) == null
+            ) {
+                mgr.createNotificationChannel(
+                    android.app.NotificationChannel(
+                        RECONNECT_CHANNEL_ID,
+                        "TV connection",
+                        android.app.NotificationManager.IMPORTANCE_DEFAULT,
+                    )
+                )
+            }
+            val contentPi = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                ?.let { launch ->
+                    android.app.PendingIntent.getActivity(
+                        context, 0, launch,
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                            android.app.PendingIntent.FLAG_IMMUTABLE,
+                    )
+                }
+            val message = if (backgrounded) {
+                "Couldn't reach your TV. It'll reconnect when you reopen the app."
+            } else {
+                "Playback switched to this phone. Pick the TV again to reconnect."
+            }
+            val notif = androidx.core.app.NotificationCompat.Builder(context, RECONNECT_CHANNEL_ID)
+                .setSmallIcon(com.playbridge.sender.R.drawable.ic_launcher_foreground)
+                .setContentTitle("Lost connection to your TV")
+                .setContentText(message)
+                .setAutoCancel(true)
+                .apply { contentPi?.let { setContentIntent(it) } }
+                .build()
+            mgr.notify(RECONNECT_NOTIF_ID, notif)
+        }.onFailure { Log.w(TAG, "Could not post reconnect notification: ${it.message}") }
+    }
+
+    private fun cancelReconnectGaveUpNotification() {
+        runCatching {
+            (context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
+                .cancel(RECONNECT_NOTIF_ID)
+        }
+    }
+
     /** Stop playback on the active target and end the session (notification Stop action). */
     fun endSession() {
         val dlna = _dlnaCast.value
@@ -611,7 +742,7 @@ class CastSessionManager(
         if (native != null) {
             scope.launch { runCatching { native.stop() } } // also flips tvActiveContext → "idle"
         } else {
-            connectionCoordinator.tvActiveContext.value = "idle"
+            connectionCoordinator.markIdle()
         }
     }
 
@@ -619,12 +750,14 @@ class CastSessionManager(
         /** How long a session may be "inactive" before the FGS is torn down. */
         private const val STOP_GRACE_MS = 3_000L
 
-        // Reconnect backoff: 1s, 2s, 4s, 8s, then capped at 10s, each with up to 0.5s jitter.
-        private const val RECONNECT_BASE_MS = 1_000L
-        private const val RECONNECT_MAX_MS = 10_000L
-        private const val RECONNECT_JITTER_MS = 500L
-        private const val RECONNECT_MAX_STEP = 4
-        // Stop retrying after this many consecutive failed attempts (~1 minute of backoff).
-        private const val RECONNECT_GIVE_UP = 8
+        // Linear retry pacing: a fixed pause before each attempt (no exponential backoff).
+        private const val RECONNECT_DELAY_MS = 3_000L
+        // ~90s window (30 × 3s): covers router reboots / TV Wi-Fi wake / AP roaming, which
+        // a few-second budget missed entirely. Exhaustion then stands down (see scheduleReconnect).
+        private const val RECONNECT_GIVE_UP = 30
+
+        // "Reconnect gave up" user notification.
+        private const val RECONNECT_CHANNEL_ID = "tv_connection_channel"
+        private const val RECONNECT_NOTIF_ID = 4713
     }
 }
