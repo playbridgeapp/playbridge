@@ -28,7 +28,10 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
     val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = koinInject()
     val maxAliveTabsRepository by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
     val coroutineScope = rememberCoroutineScope()
-    var selectedTheme by remember { mutableStateOf(AppTheme.fromPrefs(context)) }
+    // Reactive theme: reading it here subscribes, so the selected row updates instantly
+    // when the theme changes — no Activity.recreate(), which used to reset in-Settings
+    // navigation and break the Back button.
+    val selectedTheme = com.playbridge.sender.ui.theme.ThemeController.current()
 
     Scaffold(
         topBar = {
@@ -61,9 +64,8 @@ fun AppearanceSettingsScreen(onBack: () -> Unit) {
                     isSelected = theme == selectedTheme,
                     onSelect = {
                         if (theme != selectedTheme) {
-                            selectedTheme = theme
-                            prefs.edit { putString("app_theme", theme.name) }
-                            (context as? Activity)?.recreate()
+                            // Persist + apply reactively — the whole app re-themes in place.
+                            com.playbridge.sender.ui.theme.ThemeController.set(context, theme)
                         }
                     }
                 )

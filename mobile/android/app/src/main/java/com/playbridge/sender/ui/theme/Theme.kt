@@ -41,6 +41,38 @@ enum class AppTheme(val label: String) {
     }
 }
 
+/**
+ * Process-wide, reactive holder for the active [AppTheme].
+ *
+ * The theme is a Compose [androidx.compose.runtime.MutableState], so changing it
+ * recomposes every subtree reading it — the app re-themes instantly with no
+ * `Activity.recreate()`. Recreating the Activity to apply a theme was the source of a
+ * bug: it reset in-screen navigation (e.g. Settings → Appearance jumped back to the
+ * Settings hub) and corrupted the shell's "return to" target so Back got stuck.
+ */
+object ThemeController {
+    private val state = androidx.compose.runtime.mutableStateOf<AppTheme?>(null)
+
+    /** Read the current theme in composition (subscribes); seeds from prefs on first use. */
+    @Composable
+    fun current(): AppTheme {
+        val context = LocalContext.current
+        val value = state.value
+        if (value != null) return value
+        return AppTheme.fromPrefs(context).also { state.value = it }
+    }
+
+    /** Persist and apply [theme] immediately (recomposes everything reading [current]). */
+    fun set(context: Context, theme: AppTheme) {
+        context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            .edit().putString("app_theme", theme.name).apply()
+        state.value = theme
+    }
+
+    /** Non-composable read for callers that just need the persisted value. */
+    fun peek(context: Context): AppTheme = state.value ?: AppTheme.fromPrefs(context)
+}
+
 private val DarkColorScheme = darkColorScheme(
     background = Surface,
     surface = Surface,
@@ -169,8 +201,8 @@ private fun staticSchemeFor(theme: AppTheme): ColorScheme = when (theme) {
 fun PlayBridgeTheme(
     content: @Composable () -> Unit
 ) {
-    val context = LocalContext.current
-    val theme = remember { AppTheme.fromPrefs(context) }
+    // Reactive: changing the theme recomposes this and re-themes the whole tree.
+    val theme = ThemeController.current()
 
     // Flip status-bar and nav-bar icons to dark on light theme so they're
     // visible against the light background. SideEffect runs after every
@@ -201,8 +233,7 @@ fun DynamicColorTheme(
     seedColor: Color?,
     content: @Composable () -> Unit
 ) {
-    val context = LocalContext.current
-    val theme = remember { AppTheme.fromPrefs(context) }
+    val theme = ThemeController.current()
     val isDark = theme != AppTheme.LIGHT
     // IMPORTANT: content() must stay at ONE composition position regardless of
     // seedColor. Branching (e.g. early-returning content() when the seed is null)
