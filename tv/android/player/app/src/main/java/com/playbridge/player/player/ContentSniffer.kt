@@ -19,6 +19,18 @@ private const val TAG = "ContentSniffer"
  */
 class ContentSniffer {
 
+    companion object {
+        /** Shared base client — pool/dispatcher reused by every derived per-request client. */
+        private val baseClient: okhttp3.OkHttpClient by lazy {
+            okhttp3.OkHttpClient.Builder()
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .followRedirects(true)
+                .followSslRedirects(true)
+                .build()
+        }
+    }
+
     /**
      * Returns true if the URL is on a local/private network address where
      * self-signed certificates are common and acceptable.
@@ -28,12 +40,16 @@ class ContentSniffer {
      * thread. Non-numeric hostnames are matched only by name (.local, localhost).
      */
     fun isLocalUrl(url: String): Boolean {
-        val host = Uri.parse(url).host ?: return false
+        val rawHost = Uri.parse(url).host ?: return false
+        val host = rawHost.removePrefix("[").removeSuffix("]")
 
         if (host == "localhost" || host.endsWith(".local")) return true
 
-        // Avoid DNS: only attempt InetAddress parsing for numeric IPs.
-        val looksLikeIp = host.all { it.isDigit() || it == '.' || it == ':' || it in 'a'..'f' || it in 'A'..'F' }
+        // Avoid DNS — and never grant the trust-all path to a resolvable NAME: only a
+        // literal IPv4 dotted-quad or an IPv6 literal (contains ':') qualifies. The old
+        // hex-char heuristic accepted hostnames like "beef.dead", silently resolving
+        // them via DNS and letting a DNS-controlled name earn the local trust bypass.
+        val looksLikeIp = host.contains(':') || host.matches(Regex("""\d{1,3}(\.\d{1,3}){3}"""))
         if (!looksLikeIp) return false
 
         return try {
@@ -62,11 +78,10 @@ class ContentSniffer {
      */
     fun getOkHttpClient(headers: Map<String, String>? = null, trustAllCerts: Boolean = false): okhttp3.OkHttpClient {
         try {
-            val builder = okhttp3.OkHttpClient.Builder()
-                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-                .followRedirects(true)
-                .followSslRedirects(true)
+            // Derive from a shared base client: newBuilder() shares the connection pool
+            // and dispatcher threads, so per-sniff clients no longer each spin up their
+            // own pool/executor.
+            val builder = baseClient.newBuilder()
 
             if (trustAllCerts) {
                 val trustManagers = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {

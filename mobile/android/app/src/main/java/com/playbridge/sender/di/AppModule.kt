@@ -122,12 +122,15 @@ val appModule = module {
 
     // 5a. CastSessionManager — process-wide owner of the active cast target (native/DLNA)
     //     and the CastSessionService foreground lifecycle.
+    //     Single-threaded scope: the reconnect-supervisor state (attempt counter, job,
+    //     hasConnectedThisSession) is mutated from several collectors plus external
+    //     callbacks; serializing the scope removes the data races without locks.
     single {
         com.playbridge.sender.cast.CastSessionManager(
             context = androidContext(),
             webSocketClient = get(),
             connectionCoordinator = get(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
             connectionStore = get(),
             nsdHelper = get(),
         )
@@ -158,6 +161,9 @@ val appModule = module {
 
     // 5d. PlaybackProgressTracker — auto-updates watchlist progress from TV playback.
     //     createdAtStart: it has no injectors; it must exist to observe.
+    //     Single-threaded scope: the three transport legs (native/DLNA/in-app) share
+    //     non-thread-safe session state (markedKeys/ensuredKeys, threshold arming);
+    //     serializing the scope makes their interleaving safe.
     single(createdAtStart = true) {
         com.playbridge.sender.connection.PlaybackProgressTracker(
             watchlistDao = get(),
@@ -166,7 +172,7 @@ val appModule = module {
             settingsRepository = get(),
             connectionCoordinator = get(),
             castSessionManager = get(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1))
         )
     }
 

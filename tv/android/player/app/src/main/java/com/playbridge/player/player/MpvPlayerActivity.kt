@@ -680,7 +680,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         // If it ended very quickly without playing anything, it might be a load error
                         if (positionMs == 0L && durationMs == 0L) {
                             FileLogger.w(TAG, "MPV ended file immediately — likely a load error. Failing over to ExoPlayer.")
-                            switchPlayer("exo")
+                            switchPlayer("exo", automatic = true)
                         } else {
                             finish()
                         }

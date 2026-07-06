@@ -164,8 +164,18 @@ class WebSocketServer(
                             call.respondText(combined, ContentType.Text.Plain)
                         }
 
-                        // HTTP endpoint: clear log files
+                        // HTTP endpoint: clear log files. Gated like GET: this listener is
+                        // reachable by anyone on the LAN, so honour the on-TV logging
+                        // opt-in rather than letting arbitrary peers wipe diagnostics.
                         delete("/logs") {
+                            if (!FileLogger.isEnabled()) {
+                                call.respondText(
+                                    "Logging is disabled on the TV.",
+                                    ContentType.Text.Plain,
+                                    HttpStatusCode.Forbidden
+                                )
+                                return@delete
+                            }
                             FileLogger.clearLogs()
                             call.respondText("Logs cleared.", ContentType.Text.Plain)
                         }
@@ -195,20 +205,26 @@ class WebSocketServer(
 // ... (handleConnection remains same)
 
     fun stop() {
-        try {
-            runBlocking {
-                server?.stop(500, 1000)
-                server = null
-                try { wssServer?.stop(500) } catch (e: Exception) { FileLogger.e(TAG, "Error stopping wss", e) }
-                wssServer = null
-                wssClients.clear()
-                boundWssPort = null
-                certFingerprint = null
+        // Detach references and flip state synchronously; do the (blocking) engine
+        // teardown off the caller's thread. This is invoked from ServerService.onDestroy
+        // on the main thread — the previous runBlocking teardown could stall it for
+        // 1.5s+ (ANR territory).
+        val ktor = server
+        val wss = wssServer
+        server = null
+        wssServer = null
+        wssClients.clear()
+        boundWssPort = null
+        certFingerprint = null
+        _connectionState.value = ConnectionState.Stopped
+        scope.launch {
+            try {
+                ktor?.stop(500, 1000)
+                try { wss?.stop(500) } catch (e: Exception) { FileLogger.e(TAG, "Error stopping wss", e) }
                 FileLogger.i(TAG, "Server stopped")
+            } catch (e: Exception) {
+                FileLogger.e(TAG, "Error stopping server", e)
             }
-            _connectionState.value = ConnectionState.Stopped
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Error stopping server", e)
         }
     }
 

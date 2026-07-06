@@ -887,7 +887,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     else -> FileLogger.w(TAG, "Fatal decoder error with all compatibility flags already set")
                 }
                 FileLogger.w(TAG, "Fatal Decoder Error — failing over to MPV")
-                switchPlayer("mpv")
+                switchPlayer("mpv", automatic = true)
                 return
             }
             // Live stream fell behind the available DVR window — seek back to the live edge and resume.

@@ -44,7 +44,10 @@ class ServerService : Service() {
     private lateinit var pairingStore: PairingStore
     private lateinit var overlayWindow: OverlayWindowHelper
 
-    // Track what is currently active on the TV
+    // Track what is currently active on the TV. @Volatile: written by main-thread
+    // lifecycle setters and the broadcast receiver, read by the IO-dispatcher command
+    // collector (handleMessage routes Remote/Mouse/BrowserControl on it).
+    @Volatile
     private var activeContext: String = "idle" // "player", "browser", or "idle"
 
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
@@ -870,6 +873,10 @@ class ServerService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        // Drop the static reference so the dead service (cancelled scope, stopped server)
+        // stops receiving routed calls and doesn't leak as a retained Context. Identity
+        // check: a replacement instance may already have registered itself in onCreate.
+        if (_staticInstance === this) _staticInstance = null
         try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}
         if (registrationListener != null) {
             try {
