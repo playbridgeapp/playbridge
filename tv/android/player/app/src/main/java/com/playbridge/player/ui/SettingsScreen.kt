@@ -38,7 +38,6 @@ import kotlinx.coroutines.launch
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -138,10 +137,7 @@ fun SettingsScreen(
                 modifier = Modifier.padding(start = 16.dp, bottom = 12.dp)
             )
 
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
-            ) {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(SettingsCategory.entries) { category ->
                     val isSelected = selectedCategory == category
                     ListItem(
@@ -163,26 +159,6 @@ fun SettingsScreen(
                 }
 
             }
-
-            // Pinned below the category list: fully quit the app and shut down the server.
-            ListItem(
-                selected = false,
-                onClick = { showExitDialog = true },
-                leadingContent = {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ExitToApp,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                },
-                headlineContent = { Text("Exit") },
-                supportingContent = { Text("Quit app & stop server") },
-                colors = ListItemDefaults.colors(
-                    contentColor = MaterialTheme.colorScheme.onSurface
-                ),
-                scale = ListItemDefaults.scale(focusedScale = 1.05f),
-                modifier = Modifier.padding(bottom = 24.dp)
-            )
         }
 
         // --- Content Area ---
@@ -503,6 +479,13 @@ fun SettingsScreen(
                                         showGeckoDialog = true
                                     }
                                 }
+                            )
+                        }
+                        item {
+                            SettingClickableItem(
+                                label = "Exit PlayBridge",
+                                description = "Quit the app and stop the server.",
+                                onClick = { showExitDialog = true }
                             )
                         }
                     }
