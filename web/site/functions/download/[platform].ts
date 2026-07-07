@@ -79,13 +79,25 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
 
     const releases = (await apiResponse.json()) as Array<{
       tag_name: string;
+      published_at: string;
       assets?: Array<{ name: string; browser_download_url: string }>;
     }>;
 
-    // Find the latest release matching the tag prefix
-    const release = releases.find((r) => r.tag_name && r.tag_name.startsWith(tagPrefix));
-    if (!release) {
+    // Find all releases matching the tag prefix, in order (newest first)
+    const matchingReleases = releases.filter((r) => r.tag_name && r.tag_name.startsWith(tagPrefix));
+    if (matchingReleases.length === 0) {
       throw new Error(`No release found for prefix: ${tagPrefix}`);
+    }
+
+    // Check if the latest release is at least 24 hours old.
+    // If not, and there is a previous release, take the previous one.
+    let release = matchingReleases[0];
+    const now = Date.now();
+    const twentyFourHoursMs = 24 * 60 * 60 * 1000;
+    const publishedTime = new Date(release.published_at).getTime();
+
+    if (now - publishedTime < twentyFourHoursMs && matchingReleases.length > 1) {
+      release = matchingReleases[1];
     }
 
     // Find the asset matching our pattern
