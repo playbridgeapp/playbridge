@@ -303,6 +303,11 @@ jobs:
           **macOS:** unsigned build — Gatekeeper will warn on first launch. Right-click → Open to bypass, or run `xattr -dr com.apple.quarantine PlayBridge\ Desktop.app`.
         files: output/*
         generate_release_notes: false
+        # RC gating: every CI build lands as a pre-release. The website
+        # download endpoint (and therefore the desktop self-updater) ignores
+        # pre-releases; promote via the promote-release workflow or the
+        # GitHub UI to go live.
+        prerelease: true
 
     - name: Clean up R2 after release
       if: always()

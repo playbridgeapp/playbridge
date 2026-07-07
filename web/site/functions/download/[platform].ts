@@ -79,11 +79,18 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
 
     const releases = (await apiResponse.json()) as Array<{
       tag_name: string;
+      draft?: boolean;
+      prerelease?: boolean;
       assets?: Array<{ name: string; browser_download_url: string }>;
     }>;
 
-    // Find the latest release matching the tag prefix
-    const release = releases.find((r) => r.tag_name && r.tag_name.startsWith(tagPrefix));
+    // Find the latest *promoted* release matching the tag prefix. CI publishes
+    // every build as a pre-release (an RC); nothing is served here — to the
+    // website or to the in-app updaters — until the pre-release flag is
+    // cleared (GitHub UI or the promote-release workflow).
+    const release = releases.find(
+      (r) => r.tag_name && r.tag_name.startsWith(tagPrefix) && !r.draft && !r.prerelease
+    );
     if (!release) {
       throw new Error(`No release found for prefix: ${tagPrefix}`);
     }
