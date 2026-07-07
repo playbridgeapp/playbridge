@@ -71,13 +71,16 @@ fun SettingsScreen(
     var showGeckoDialog by remember { mutableStateOf(false) }
 
     // Skip segments states
+    var skipProvider by remember { mutableStateOf(prefs.getString("skip_segments_provider", "both") ?: "both") }
     var introDbApiKey by remember { mutableStateOf(prefs.getString("introdb_api_key", "") ?: "") }
     var introDbApiUrl by remember { mutableStateOf(prefs.getString("introdb_api_url", "https://api.introdb.app") ?: "https://api.introdb.app") }
+    var theIntroDbApiUrl by remember { mutableStateOf(prefs.getString("theintrodb_api_url", "https://api.theintrodb.org") ?: "https://api.theintrodb.org") }
     var autoSkipIntro by remember { mutableStateOf(prefs.getBoolean("auto_skip_intro", false)) }
     var autoSkipRecap by remember { mutableStateOf(prefs.getBoolean("auto_skip_recap", false)) }
     var autoSkipOutro by remember { mutableStateOf(prefs.getBoolean("auto_skip_outro", false)) }
     var showApiKeyDialog by remember { mutableStateOf(false) }
     var showApiUrlDialog by remember { mutableStateOf(false) }
+    var showTheIntroDbUrlDialog by remember { mutableStateOf(false) }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -292,6 +295,24 @@ fun SettingsScreen(
                     SettingsCategory.INTEGRATIONS -> {
                         item {
                             SettingClickableItem(
+                                label = "Skip Segments Provider",
+                                description = when (skipProvider) {
+                                    "introdb" -> "IntroDB only"
+                                    "theintrodb" -> "TheIntroDB only"
+                                    else -> "Both — IntroDB first, TheIntroDB fills gaps (movies too)"
+                                },
+                                onClick = {
+                                    skipProvider = when (skipProvider) {
+                                        "both" -> "introdb"
+                                        "introdb" -> "theintrodb"
+                                        else -> "both"
+                                    }
+                                    prefs.edit().putString("skip_segments_provider", skipProvider).apply()
+                                }
+                            )
+                        }
+                        item {
+                            SettingClickableItem(
                                 label = "IntroDB API Key",
                                 description = if (introDbApiKey.isEmpty()) "Not Configured" else "••••••••",
                                 onClick = { showApiKeyDialog = true }
@@ -302,6 +323,13 @@ fun SettingsScreen(
                                 label = "IntroDB API URL",
                                 description = introDbApiUrl,
                                 onClick = { showApiUrlDialog = true }
+                            )
+                        }
+                        item {
+                            SettingClickableItem(
+                                label = "TheIntroDB API URL",
+                                description = theIntroDbApiUrl,
+                                onClick = { showTheIntroDbUrlDialog = true }
                             )
                         }
                         item {
@@ -468,18 +496,22 @@ fun SettingsScreen(
                                 onClick = { updateChecker.check(manual = true) }
                             )
                         }
-                        item {
-                            SettingClickableItem(
-                                label = "GeckoView Engine (Optional Plugin)",
-                                description = if (isGeckoInstalled) "Installed" else "Not Installed (click to learn more/sideload)",
-                                onClick = {
-                                    if (isGeckoInstalled) {
-                                        Toast.makeText(context, "GeckoView Plugin is ready to use", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        showGeckoDialog = true
+                        // Play flavor: never advertise the sideloaded plugin APK; only show
+                        // the row when the plugin is already present (informational).
+                        if (isGeckoInstalled || com.playbridge.player.FlavorConfig.SIDELOAD_LINKS_SUPPORTED) {
+                            item {
+                                SettingClickableItem(
+                                    label = "GeckoView Engine (Optional Plugin)",
+                                    description = if (isGeckoInstalled) "Installed" else "Not Installed (click to learn more/sideload)",
+                                    onClick = {
+                                        if (isGeckoInstalled) {
+                                            Toast.makeText(context, "GeckoView Plugin is ready to use", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            showGeckoDialog = true
+                                        }
                                     }
-                                }
-                            )
+                                )
+                            }
                         }
                         item {
                             SettingClickableItem(
@@ -721,6 +753,56 @@ fun SettingsScreen(
                             introDbApiUrl = finalUrl
                             prefs.edit().putString("introdb_api_url", finalUrl).apply()
                             showApiUrlDialog = false
+                        }) {
+                            Text("Save")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showTheIntroDbUrlDialog) {
+        var tempUrl by remember { mutableStateOf(theIntroDbApiUrl) }
+        com.playbridge.player.ui.theme.ThemedDialog(onDismissRequest = { showTheIntroDbUrlDialog = false }) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.width(400.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(32.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Text("TheIntroDB API URL", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "Set custom API url for TheIntroDB skip segments. Default is https://api.theintrodb.org",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = tempUrl,
+                        onValueChange = { tempUrl = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.surfaceVariant, MaterialTheme.shapes.small)
+                            .padding(16.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(onClick = { showTheIntroDbUrlDialog = false }, modifier = Modifier.padding(end = 8.dp)) {
+                            Text("Cancel")
+                        }
+                        Button(onClick = {
+                            val finalUrl = tempUrl.trim().ifEmpty { "https://api.theintrodb.org" }
+                            theIntroDbApiUrl = finalUrl
+                            prefs.edit().putString("theintrodb_api_url", finalUrl).apply()
+                            showTheIntroDbUrlDialog = false
                         }) {
                             Text("Save")
                         }

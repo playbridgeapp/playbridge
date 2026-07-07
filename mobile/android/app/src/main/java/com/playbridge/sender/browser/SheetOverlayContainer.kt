@@ -45,6 +45,13 @@ fun SheetOverlayContainer(
     onUserAgentClick: () -> Unit = {},
     userAgentActive: Boolean = false,
 
+    // Clear Data Sheet States
+    onClearDataClick: () -> Unit = {},
+    showClearDataSheet: Boolean = false,
+    onClearDataDismiss: () -> Unit = {},
+    openTabsCount: Int = 0,
+    onClearDataConfirm: (ClearDataSelection) -> Unit = {},
+
     // User Agent Sheet States
     showUserAgentSheet: Boolean = false,
     onUserAgentDismiss: () -> Unit = {},
@@ -115,7 +122,17 @@ fun SheetOverlayContainer(
                 onToggleDesktopMode = onToggleDesktopMode,
                 onToggleVideoDetect = onToggleVideoDetect,
                 userAgentActive = userAgentActive,
-                onUserAgentClick = onUserAgentClick
+                onUserAgentClick = onUserAgentClick,
+                onClearDataClick = onClearDataClick
+            )
+        }
+
+        // 1a. Clear Data Sheet
+        if (showClearDataSheet) {
+            ClearDataSheet(
+                openTabsCount = openTabsCount,
+                onDismissRequest = onClearDataDismiss,
+                onConfirm = onClearDataConfirm
             )
         }
 

@@ -173,15 +173,17 @@ private fun SettingsHubContent(
                         )
                     }
 
-                    // 3. Debrid (Shared)
-                    add(
-                        SettingsItemData(
-                            icon = Icons.Default.Cloud,
-                            title = "Debrid",
-                            subtitle = "Real-Debrid, All-Debrid, Premiumize, TorBox",
-                            onClick = onDebrid
+                    // 3. Debrid (Shared; FOSS flavor only)
+                    if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) {
+                        add(
+                            SettingsItemData(
+                                icon = Icons.Default.Cloud,
+                                title = "Debrid",
+                                subtitle = "Real-Debrid, All-Debrid, Premiumize, TorBox",
+                                onClick = onDebrid
+                            )
                         )
-                    )
+                    }
 
                     // 4. Proxy (Shared)
                     add(

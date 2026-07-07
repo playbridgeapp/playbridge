@@ -441,10 +441,6 @@ class ConnectionViewModel(
         castSessionManager.cancelReconnect() // clears retry state + selects This Device
     }
 
-    /** "Keep trying" on the reconnect popup: refresh the retry budget and continue. */
-    fun keepTryingReconnect() {
-        castSessionManager.keepTryingReconnect()
-    }
 
     fun removeDeviceFromHistory(device: TvDevice) {
         viewModelScope.launch {

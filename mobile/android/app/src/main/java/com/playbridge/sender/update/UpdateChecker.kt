@@ -222,6 +222,8 @@ class UpdateChecker(
     }.getOrNull()
 
     private fun installSource(): InstallSource {
+        // Play flavor: no sideload/install path exists in this binary - always Play.
+        if (!this.installer.selfUpdateSupported) return InstallSource.PLAY_STORE
         val pm = appContext.packageManager
         val installer = runCatching {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {

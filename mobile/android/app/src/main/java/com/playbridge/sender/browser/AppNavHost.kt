@@ -1316,7 +1316,9 @@ fun AppNavHost(
                                 if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
                                     connectionCoordinator.startLocalPlaybackSession(
                                         tmdbId = screenNumericId,
-                                        season = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.season ?: 1,
+                                        // No fabricated fallback: a metadata-less start item must
+                                        // stay unidentified rather than be attributed to season 1.
+                                        season = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.season,
                                         episodeStart = playlist.items.getOrNull(playlist.start_index)?.visual_metadata?.episode,
                                     )
                                     if (autoSwitchToRemote) {

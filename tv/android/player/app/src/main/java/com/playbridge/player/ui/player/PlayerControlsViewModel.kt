@@ -214,12 +214,16 @@ class PlayerControlsViewModel : ViewModel() {
 
         val season = metadata?.season
         val episode = metadata?.episode
-        if (imdbId != null && context != null && season != null && episode != null) {
+        val tmdbId = metadata?.tmdb_id?.takeIf { it.isNotBlank() }
+        // Episodes need season+episode; when both are absent this is a movie lookup
+        // (TheIntroDB covers movies). A half-specified episode is skipped.
+        val validShape = (season != null && episode != null) || (season == null && episode == null)
+        if ((imdbId != null || tmdbId != null) && context != null && validShape) {
             val appCtx = context.applicationContext
             skipSegmentsJob = viewModelScope.launch {
                 try {
                     val segments = com.playbridge.player.player.SkipSegmentFetcher.fetchSegments(
-                        appCtx, imdbId, season, episode
+                        appCtx, imdbId = imdbId, tmdbId = tmdbId, season = season, episode = episode
                     )
                     com.playbridge.player.logging.FileLogger.i("PlayerControlsViewModel", "Set skipSegments in state: $segments")
                     _controlsState.update { it.copy(skipSegments = segments) }
@@ -313,7 +317,7 @@ class PlayerControlsViewModel : ViewModel() {
                         if (shouldAutoSkip) {
                             lastSkippedSegment = activeSegment
                             isAutoSkipTriggered = true
-                            engine?.seekTo(activeSegment.endMs + 1000)
+                            engine?.seekTo(skipTargetMs(activeSegment, duration))
                             viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                 android.widget.Toast.makeText(context, "Auto-skipped ${activeSegment.type}", android.widget.Toast.LENGTH_SHORT).show()
                             }
@@ -478,9 +482,25 @@ class PlayerControlsViewModel : ViewModel() {
     fun skipCurrentSegment() {
         val segment = _controlsState.value.activeSkipSegment ?: return
         lastSkippedSegment = segment
-        engine?.seekTo(segment.endMs + 1000)
+        engine?.seekTo(skipTargetMs(segment, _controlsState.value.duration))
         _controlsState.update { it.copy(activeSkipSegment = null) }
         resetAutoHideTimer()
+    }
+
+    /**
+     * Seek target for skipping [segment]. Clamped to the known duration: open-ended
+     * segments carry [com.playbridge.player.player.SkipSegmentFetcher.OPEN_ENDED_MS]
+     * as their end, and while ExoPlayer clamps out-of-range seeks internally, MPV
+     * passes the raw value straight to `seek` — an unclamped Long.MAX_VALUE/2 target
+     * is undefined behavior there. Clamping to duration means "jump to the end",
+     * which is the intent for credits that run to the end of the file.
+     */
+    private fun skipTargetMs(
+        segment: com.playbridge.player.player.SkipSegment,
+        durationMs: Long,
+    ): Long {
+        val target = segment.endMs + 1000
+        return if (durationMs > 0) target.coerceAtMost(durationMs) else target
     }
 
     fun setSkipButtonFocused(focused: Boolean) {

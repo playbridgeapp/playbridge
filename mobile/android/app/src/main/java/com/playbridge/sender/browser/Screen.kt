@@ -78,7 +78,8 @@ sealed class Screen {
                         "home" -> Home
                         "remote" -> Remote
                         "library" -> Library
-                        "debridlibrary" -> DebridLibrary
+                        "debridlibrary" ->
+                            if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) DebridLibrary else Library
                         "addonsettings" -> AddonSettings
                         "dashboard" -> Dashboard
                         "phonefiles" -> PhoneFiles

@@ -158,7 +158,7 @@ object SubtitleCueLoader {
 
     private fun download(url: String, headers: Map<String, String>?): ByteArray {
         val sniffer = ContentSniffer()
-        val client = sniffer.getOkHttpClient(trustAllCerts = sniffer.isLocalUrl(url))
+        val client = sniffer.getOkHttpClient(allowLocalSelfSigned = sniffer.isLocalUrl(url))
         val builder = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0")
         headers?.forEach { (k, v) -> if (!k.equals("Host", true)) builder.header(k, v) }
         client.newCall(builder.build()).execute().use { resp ->

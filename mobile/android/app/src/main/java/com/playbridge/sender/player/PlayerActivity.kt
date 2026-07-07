@@ -388,7 +388,13 @@ class PlayerActivity : ComponentActivity() {
                     val season = plSeasons?.getOrNull(idx)?.takeIf { it > 0 } ?: singleSeason
                     val episode = plEpisodes?.getOrNull(idx)?.takeIf { it > 0 } ?: singleEpisode
                     val dur = exo.duration
-                    if (dur > 0) {
+                    // Lazy mode: currentIndex flips as soon as goTo() is called, but the
+                    // player keeps holding the PREVIOUS episode until its stream resolves
+                    // (or fails). Reporting during that window would pair the new episode's
+                    // identity with the old episode's position — a bogus resume point.
+                    val identityStale = controller != null &&
+                        (controller.isLoading.value || controller.errorMessage.value != null)
+                    if (dur > 0 && !identityStale) {
                         progressTracker.reportInAppProgress(
                             com.playbridge.sender.connection.InAppContent(
                                 tmdbId = tmdbId,

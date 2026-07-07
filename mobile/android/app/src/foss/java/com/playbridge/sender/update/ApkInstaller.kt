@@ -20,6 +20,9 @@ import java.util.concurrent.TimeUnit
  */
 class ApkInstaller(private val appContext: Context) {
 
+    /** FOSS builds may download and install release APKs directly. */
+    val selfUpdateSupported: Boolean get() = true
+
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

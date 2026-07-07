@@ -46,6 +46,7 @@ class DebridRepository(
     private fun prefs() = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     fun isConfigured(): Boolean {
+        if (!com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) return false
         return getActiveProvider() != null
     }
 
@@ -93,7 +94,8 @@ class DebridRepository(
 
     /** Providers that have a non-blank API key configured, in display order. */
     fun getConfiguredProviders(): List<String> =
-        ALL_PROVIDERS.filter { getApiKeyFor(it).isNotBlank() }
+        if (!com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) emptyList()
+        else ALL_PROVIDERS.filter { getApiKeyFor(it).isNotBlank() }
 
     fun saveConfiguration(provider: String, apiKey: String) {
         prefs().edit { putString(KEY_DEBRID_PROVIDER, provider) }
@@ -101,6 +103,8 @@ class DebridRepository(
     }
 
     fun getActiveProvider(): DebridProvider? {
+        // Play flavor: debrid is disabled entirely (Play content-policy compliance).
+        if (!com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) return null
         val providerName = getConfiguredProviderName()
         val apiKey = getApiKeyFor(providerName)
 

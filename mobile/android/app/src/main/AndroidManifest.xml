@@ -16,9 +16,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <!-- One-time user-approved exemption so Doze/OEM app-sleep can't freeze the
-         local proxy while casting phone files with the app backgrounded. -->
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- NOTE: deliberately NO REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission — Play
+         restricts it heavily. Doze protection for the cast proxy instead guides the
+         user to the system battery-optimization settings page (no permission needed);
+         see CastSessionManager.maybeRequestBatteryExemption(). -->
     <!-- Self-update: install a downloaded APK when the app was sideloaded (not from Play). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Explicitly remove QUERY_ALL_PACKAGES permission potentially merged from dependencies -->

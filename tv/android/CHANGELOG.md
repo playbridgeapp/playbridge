@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [Unreleased]
+
+### Added
+- **TheIntroDB Skip Segments** (https://theintrodb.org): second skip-segments provider alongside IntroDB. Keyless, works with TMDB or IMDb ids, and covers **movies** (credits) as well as episodes — including multiple ranges per type and open-ended credits that run to the end of the file. New "Skip Segments Provider" setting (IntroDB / TheIntroDB / Both — default Both, where IntroDB wins per segment type and TheIntroDB fills the gaps) plus a configurable TheIntroDB API URL in Settings → Integrations.
+
 ## Player [0.8.0] — 2026-07-04 (versionCode 219)
 
 ### Added

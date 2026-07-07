@@ -151,7 +151,7 @@ fun AddonSettingsScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Paste a Stremio addon URL, or a Nuvio plugin manifest URL to add local scrapers. For Torrentio with Real-Debrid, configure it at torrentio.strem.fun and copy the install URL.",
+                            text = "Paste an addon manifest URL. Addons can provide catalogs, streams, or subtitles.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -160,7 +160,7 @@ fun AddonSettingsScreen(
                             value = addonUrl,
                             onValueChange = { addonUrl = it },
                             label = { Text("Addon URL") },
-                            placeholder = { Text("https://torrentio.strem.fun/.../manifest.json") },
+                            placeholder = { Text("https://example.com/addon/manifest.json") },
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = { keyboardController?.hide() }),
@@ -227,8 +227,8 @@ fun AddonSettingsScreen(
                 }
             }
 
-            // ── Nuvio scraper plugins (per-scraper toggles) ──────────────
-            val nuvioRepos = installedAddons.filter {
+            // ── Nuvio scraper plugins (per-scraper toggles; FOSS flavor only) ──
+            val nuvioRepos = if (!com.playbridge.sender.FlavorConfig.SCRAPER_PLUGINS_SUPPORTED) emptyList() else installedAddons.filter {
                 it.resources.contains(com.playbridge.sender.data.nuvio.NuvioRepository.NUVIO_RESOURCE)
             }
             if (nuvioRepos.isNotEmpty()) {
