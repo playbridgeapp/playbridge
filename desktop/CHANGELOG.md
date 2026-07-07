@@ -4,8 +4,12 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.6.4+22] — 2026-07-07
 
+### Added
+- **Self-Update**: In-place self-update, mirroring the Android apps' update flow. Checks `playbridge.app/download/<os>` silently on launch (and manually from Settings), downloads the release archive, swaps the install via a detached helper script, and relaunches. Falls back to opening the downloads page when the install location isn't writable.
+
 ### Fixed
 - **Theme Consistency**: Bundled the Poppins font and aligned the desktop theme with the refreshed cross-app styling. (#85)
+- **About Version**: The Settings About tile showed a hardcoded `v1.0.0`; it now shows the real app version.
 
 ## [0.6.3+21] — 2026-07-03
 
