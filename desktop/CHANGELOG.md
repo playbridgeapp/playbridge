@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.4+22] — 2026-07-07
+
+### Fixed
+- **Theme Consistency**: Bundled the Poppins font and aligned the desktop theme with the refreshed cross-app styling. (#85)
+
 ## [0.6.3+21] — 2026-07-03
 
 ### Added

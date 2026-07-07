@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PlayBridge Video Detector",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Detects video URLs for PlayBridge casting",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtZQGgGin2mHxxXXJOQzUD9RHd5Fv19263KYRWrc5W7l2j8zggs4DXiWp5yqe56klCln3+ZNjNO0uUrU33dbkIQKRfj8hPhibBcCc7E+/+ZTFC1VZ+hry29LlDOLruMA+N7dg0EkdPD5qsHoYq6mhVelG7gpUDwnI/GPQOWezyAvYHFTfuP32cBcrW2lEMG7EZAcpds6rnFrYbGsBs/KACgYcvVGEy653tvGKBb4A2rU2bUv+5ph01sok/HDqVwwMFHHGD+U/LTy5ZGX85mRgmNhKLr/WE8IOdFFxIWzdC7hLtgRDxDiYaj2EOAFWE8v+VHmYvl++X1cDVpzxbV/MvQIDAQAB",
   "icons": {

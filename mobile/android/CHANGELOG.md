@@ -3,6 +3,20 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] — 2026-07-07 (versionCode 218)
+
+### Added
+- **FOSS/Play Distribution Flavors**: Play builds strip `REQUEST_INSTALL_PACKAGES` via a manifest overlay, stub out the APK installer, disable Debrid + Nuvio scraper plugins, and hide sideload links. (#90)
+- **Clear Data Sheet**: Firefox-style Clear Data sheet (Gecko StorageController + Room), paged menu sheet, and a 200 MB Gecko disk-cache cap. (#90)
+- **Battery Exemption Guidance**: Settings-page guidance replaces the restricted `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission. (#90)
+
+### Fixed
+- **Watch-Progress Tracking**: Gated skip-ahead catch-up to deliberately-started episodes only, forward-only advance detection, DLNA final resume flush, resume cleanup before rewatch dedup, and dropped the fabricated season-1 fallback. (#90)
+- **Media Notification & Background Playback**: Reworked the media notification and in-app player background playback; page/tab playback now stops when the cast sheet opens. (#87)
+- **Connection UX**: Single connection popup, no reconnect after a deliberate disconnect, removed the Keep-trying button, and restored navigation on return to shell. (#87, #90)
+- **Reactive Theme Switching**: Theme changes apply without `Activity.recreate`, plus theme/UI styling consistency fixes. (#85, #87)
+- **Touchpad Click Tracking**: Improved touchpad click tracking in the remote control and cast sheet. (#86)
+
 ## [0.9.0] — 2026-07-04 (versionCode 217)
 
 ### Added
