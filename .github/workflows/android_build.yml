@@ -378,6 +378,11 @@ jobs:
             output/phone-release-aab/*.aab
           generate_release_notes: false
           draft: false
+          # RC gating: every CI build lands as a pre-release. The website
+          # download endpoint (and therefore the in-app updaters) ignores
+          # pre-releases; promote via the promote-release workflow or the
+          # GitHub UI to go live.
+          prerelease: true
 
       - name: Create TV Player release
         if: needs.build-tv-player.outputs.skipped == 'false'
@@ -399,6 +404,11 @@ jobs:
             output/tv-player-release-aab/*.aab
           generate_release_notes: false
           draft: false
+          # RC gating: every CI build lands as a pre-release. The website
+          # download endpoint (and therefore the in-app updaters) ignores
+          # pre-releases; promote via the promote-release workflow or the
+          # GitHub UI to go live.
+          prerelease: true
 
       - name: Create TV GeckoView Plugin release
         if: needs.build-tv-geckoview-plugin.outputs.skipped == 'false'
@@ -418,6 +428,11 @@ jobs:
             output/tv-geckoview-plugin-release-aab/*.aab
           generate_release_notes: false
           draft: false
+          # RC gating: every CI build lands as a pre-release. The website
+          # download endpoint (and therefore the in-app updaters) ignores
+          # pre-releases; promote via the promote-release workflow or the
+          # GitHub UI to go live.
+          prerelease: true
 
       # Play Store publishes are independent: one failing must not block the
       # others (continue-on-error), but any failure is re-surfaced at the end.

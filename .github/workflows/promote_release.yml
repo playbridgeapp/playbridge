@@ -1,0 +1,174 @@
+# Promote a release candidate to "released".
+#
+# Every CI build lands as a GitHub *pre-release* (an RC) and — for the phone /
+# TV-player apps — on the Play Store *alpha* track. Nothing is served to end
+# users until it is promoted:
+#
+#   * The website `/download/<platform>` endpoint (which the FOSS APK updater
+#     and the desktop self-updater both read) ignores pre-releases, so clearing
+#     the pre-release flag on a GitHub release is what makes it "live" for
+#     sideload + desktop self-update.
+#   * Play Store users get it when the alpha release is promoted to the target
+#     track (production by default).
+#
+# This workflow does both in one shot. Run it from the Actions tab (or `gh
+# workflow run promote_release.yml -f tag=phone-v0.10.0`) once you're happy with
+# an RC.
+name: Promote release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to promote (e.g. phone-v0.10.0, tv-player-v0.9.0, desktop-v0.6.4)"
+        required: true
+        type: string
+      play_track:
+        description: "Play Store track to promote the alpha release into (phone / tv-player only)"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - beta
+      promote_play:
+        description: "Also promote the Play Store alpha release (ignored for tags with no Play listing)"
+        required: false
+        default: true
+        type: boolean
+
+# The tag prefix decides which app we're promoting and whether it has a Play
+# Store listing. Keep in sync with the tag_name values in android_build.yml /
+# desktop_build.yml.
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag -> Play package
+        id: resolve
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            phone-v*)          pkg="com.playbridge.sender" ;;
+            tv-player-v*)      pkg="com.playbridge.player" ;;
+            tv-geckoview-plugin-v*|desktop-v*)
+                               pkg="" ;;  # GitHub-only, no Play listing
+            *)
+              echo "::error::Unrecognised tag prefix '$TAG'. Expected one of: phone-v*, tv-player-v*, tv-geckoview-plugin-v*, desktop-v*." >&2
+              exit 1
+              ;;
+          esac
+          echo "package=$pkg" >> "$GITHUB_OUTPUT"
+          echo "Resolved '$TAG' -> Play package: '${pkg:-<none>}'"
+
+      - name: Clear GitHub pre-release flag (unblocks website / FOSS / desktop updaters)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          # Fail loudly if the release/tag doesn't exist.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::No GitHub release found for tag '$TAG'." >&2
+            exit 1
+          fi
+          gh release edit "$TAG" --prerelease=false
+          echo "Cleared pre-release flag on $TAG; the /download endpoint will now serve it."
+
+      # Promote by *reassigning the already-uploaded version* from alpha to the
+      # target track — NOT by re-uploading the AAB (Play rejects a duplicate
+      # versionCode). This is a pure Edits.tracks operation on the Play
+      # Developer API, so no bundle bytes are needed here.
+      - name: Set up Python
+        if: steps.resolve.outputs.package != '' && inputs.promote_play
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Promote alpha -> ${{ inputs.play_track }} on Play Store
+        if: steps.resolve.outputs.package != '' && inputs.promote_play
+        env:
+          PLAY_STORE_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          TARGET_TRACK: ${{ inputs.play_track }}
+          SOURCE_TRACK: alpha
+        run: |
+          set -euo pipefail
+          pip install --quiet google-api-python-client google-auth
+          python - <<'PY'
+          import json
+          import os
+
+          from google.oauth2 import service_account
+          from googleapiclient.discovery import build
+
+          pkg = os.environ["PACKAGE"]
+          source = os.environ["SOURCE_TRACK"]
+          target = os.environ["TARGET_TRACK"]
+
+          creds = service_account.Credentials.from_service_account_info(
+              json.loads(os.environ["PLAY_STORE_SERVICE_ACCOUNT_JSON"]),
+              scopes=["https://www.googleapis.com/auth/androidpublisher"],
+          )
+          service = build("androidpublisher", "v3", credentials=creds, cache_discovery=False)
+          edits = service.edits()
+
+          edit_id = edits.insert(packageName=pkg, body={}).execute()["id"]
+
+          src = edits.tracks().get(packageName=pkg, editId=edit_id, track=source).execute()
+          releases = src.get("releases") or []
+          if not releases:
+              raise SystemExit(f"No releases on the '{source}' track for {pkg}; nothing to promote.")
+
+          # The RC we just built is the highest versionCode currently on alpha.
+          def max_vc(rel):
+              return max(int(v) for v in rel.get("versionCodes", []) or [0])
+
+          rc = max(releases, key=max_vc)
+          version_codes = [str(v) for v in rc.get("versionCodes", [])]
+          print(f"Promoting {pkg} versionCodes {version_codes} from '{source}' -> '{target}'")
+
+          promoted = {"status": "completed", "versionCodes": version_codes}
+          if rc.get("name"):
+              promoted["name"] = rc["name"]
+          if rc.get("releaseNotes"):
+              promoted["releaseNotes"] = rc["releaseNotes"]
+
+          edits.tracks().update(
+              packageName=pkg,
+              editId=edit_id,
+              track=target,
+              body={"track": target, "releases": [promoted]},
+          ).execute()
+
+          edits.commit(packageName=pkg, editId=edit_id).execute()
+          print(f"Committed: {pkg} is now live on '{target}'.")
+          PY
+
+      - name: Summary
+        if: always()
+        env:
+          TAG: ${{ inputs.tag }}
+          PKG: ${{ steps.resolve.outputs.package }}
+          TRACK: ${{ inputs.play_track }}
+          PLAY: ${{ inputs.promote_play }}
+        run: |
+          {
+            echo "### Promotion summary"
+            echo ""
+            echo "- **Tag:** \`$TAG\`"
+            echo "- **GitHub release:** pre-release flag cleared -> now served by \`/download\` (FOSS APK + desktop self-update)."
+            if [ -n "$PKG" ] && [ "$PLAY" = "true" ]; then
+              echo "- **Play Store:** alpha AAB promoted to \`$TRACK\` for \`$PKG\`."
+            elif [ -n "$PKG" ]; then
+              echo "- **Play Store:** skipped (promote_play=false)."
+            else
+              echo "- **Play Store:** n/a (no listing for this tag)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
