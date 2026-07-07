@@ -234,8 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ListenableBuilder(
               listenable: widget.updateChecker,
               builder: (context, _) {
-                final checking =
-                    widget.updateChecker.state is UpdateChecking;
+                final checking = widget.updateChecker.state is UpdateChecking;
                 return _Tile(
                   icon: Icons.system_update_alt,
                   title: 'Check for updates',

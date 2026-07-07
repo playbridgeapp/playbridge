@@ -60,7 +60,8 @@ class UpdateInstaller {
       } finally {
         await sink.close();
       }
-      debugPrint('UpdateInstaller: downloaded $received bytes → ${target.path}');
+      debugPrint(
+          'UpdateInstaller: downloaded $received bytes → ${target.path}');
       return target;
     } finally {
       client.close(force: true);
@@ -73,8 +74,8 @@ class UpdateInstaller {
   /// handoff — after the script is spawned this method calls `exit(0)` and
   /// never returns.
   Future<void> installAndRestart(File archive) async {
-    final extracted = Directory(
-        '${archive.parent.path}${Platform.pathSeparator}extracted');
+    final extracted =
+        Directory('${archive.parent.path}${Platform.pathSeparator}extracted');
     extracted.createSync(recursive: true);
     await _extract(archive, extracted);
 
@@ -180,8 +181,8 @@ class UpdateInstaller {
   }
 
   void _assertWritable(Directory dir) {
-    final probe = File(
-        '${dir.path}${Platform.pathSeparator}.playbridge_write_probe');
+    final probe =
+        File('${dir.path}${Platform.pathSeparator}.playbridge_write_probe');
     try {
       probe.writeAsStringSync('x');
       probe.deleteSync();
@@ -230,8 +231,8 @@ class UpdateInstaller {
         ? 'open -n "$installDir"'
         : 'nohup "$installDir/${_basename(Platform.resolvedExecutable)}" '
             '>/dev/null 2>&1 &';
-    final script = File(
-        '${_stagingRoot().path}${Platform.pathSeparator}swap.sh');
+    final script =
+        File('${_stagingRoot().path}${Platform.pathSeparator}swap.sh');
     script.writeAsStringSync('''
 #!/bin/bash
 # PlayBridge self-update swap script (generated; safe to delete).

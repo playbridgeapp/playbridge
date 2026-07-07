@@ -55,8 +55,7 @@ class _UpdateGateState extends State<UpdateGate> {
   Widget build(BuildContext context) {
     return switch (widget.checker.state) {
       UpdateAvailable(:final info) => _barrier(_availableCard(info)),
-      UpdateDownloading(:final info, :final fraction) =>
-        _barrier(_progressCard(
+      UpdateDownloading(:final info, :final fraction) => _barrier(_progressCard(
           'Downloading v${info.version}…',
           fraction: fraction,
         )),

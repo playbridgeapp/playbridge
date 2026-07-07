@@ -29,9 +29,8 @@ class AppVersion implements Comparable<AppVersion> {
 
   @override
   int compareTo(AppVersion other) {
-    final n = parts.length > other.parts.length
-        ? parts.length
-        : other.parts.length;
+    final n =
+        parts.length > other.parts.length ? parts.length : other.parts.length;
     for (var i = 0; i < n; i++) {
       final a = i < parts.length ? parts[i] : 0;
       final b = i < other.parts.length ? other.parts[i] : 0;
