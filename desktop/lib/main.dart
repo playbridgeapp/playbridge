@@ -31,6 +31,8 @@ import 'stats_overlay.dart';
 import 'tray_controller.dart';
 import 'tv_connection_store.dart';
 import 'tv_sender_controller.dart';
+import 'update/update_checker.dart';
+import 'update/update_gate.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -140,6 +142,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final TrayController _tray;
   late final TvSenderController _sender;
   late final ExtensionBridge _extBridge;
+  final UpdateChecker _updateChecker = UpdateChecker();
 
   bool _hadMedia = false;
   String? _lastTrackedUrl;
@@ -220,6 +223,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     // editing files by hand (idempotent, best-effort).
     unawaited(NativeHostInstaller.installSilently());
     unawaited(ContextMenuInstaller.installSilently());
+
+    // Silent update check a few seconds after launch (stays quiet unless a
+    // newer desktop release exists); Settings has the manual re-check.
+    Timer(const Duration(seconds: 5), () {
+      if (mounted) unawaited(_updateChecker.check(manual: false));
+    });
 
     // Jump to the Now Playing tab when a cast starts (unless watching local
     // video here). Tracks the rising edge so it doesn't fight tab navigation.
@@ -447,6 +456,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _server.stop();
     _player.dispose();
     _showStats.dispose();
+    _updateChecker.dispose();
     super.dispose();
   }
 
@@ -747,6 +757,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                             ),
                         ],
                       ),
+                      // Self-update dialogs/banners; renders nothing while idle.
+                      UpdateGate(checker: _updateChecker),
                     ],
                   );
                 },
@@ -788,6 +800,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           store: widget.store,
           player: _player,
           showStats: _showStats,
+          updateChecker: _updateChecker,
           onNavigateToCast: () => setState(() => _dest = _Dest.cast),
           onSettingsChanged: () => setState(() {
             if (!widget.store.enableHistory && _dest == _Dest.history) {
