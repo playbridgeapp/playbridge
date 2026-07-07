@@ -116,6 +116,29 @@ object Components {
     val applicationContext: Context
         get() = appContext
     
+    /**
+     * Writes a GeckoView startup config (read via configFilePath, which works in
+     * release builds too — see Mozilla's automation docs) that caps the HTTP disk
+     * cache. By default Gecko "smart sizes" the cache off free disk space, which
+     * on a roomy phone lets it balloon to 600+ MB of media fragments and web
+     * assets. Capping at 200 MB (the ceiling Firefox itself uses on Android)
+     * with LRU eviction keeps hot assets fast without unbounded growth.
+     */
+    private fun writeGeckoConfig(): String? = try {
+        val file = java.io.File(appContext.filesDir, "geckoview-config.yaml")
+        val yaml = """
+            |prefs:
+            |  browser.cache.disk.smart_size.enabled: false
+            |  browser.cache.disk.capacity: 204800
+            |""".trimMargin() // capacity is in KB → 200 MB
+        // Avoid rewriting on every start; only touch the file when content changes.
+        if (!file.exists() || file.readText() != yaml) file.writeText(yaml)
+        file.absolutePath
+    } catch (e: Exception) {
+        Log.e(TAG, "Failed to write gecko config; cache cap disabled", e)
+        null
+    }
+
     // GeckoRuntime - the core Gecko engine
     val runtime: GeckoRuntime by lazy {
         // BuildConfig generation is disabled by default on AGP 8+; the
@@ -124,6 +147,7 @@ object Components {
                 android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         val settings = GeckoRuntimeSettings.Builder()
             .aboutConfigEnabled(true)
+            .apply { writeGeckoConfig()?.let { configFilePath(it) } }
             .webManifest(true)
             .javaScriptEnabled(true)
             // Remote debugging only in debug builds — it was previously

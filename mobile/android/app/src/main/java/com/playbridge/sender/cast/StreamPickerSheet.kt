@@ -468,7 +468,7 @@ fun StreamPickerSheet(
                             color = contentColor
                         )
                         Text(
-                            "Make sure you have addons installed with Real-Debrid configured",
+                            "Make sure you have streaming addons installed and configured",
                             style = MaterialTheme.typography.bodySmall,
                             color = subTextColor,
                             modifier = Modifier.padding(horizontal = 32.dp)

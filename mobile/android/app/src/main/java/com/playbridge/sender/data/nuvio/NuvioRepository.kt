@@ -88,7 +88,13 @@ class NuvioRepository(
      * @param preFetchedBody Optional manifest JSON already downloaded by the caller
      *   (avoids a second network round-trip during install detection).
      */
-    suspend fun installRepo(manifestUrl: String, preFetchedBody: String? = null): Boolean =
+    suspend fun installRepo(manifestUrl: String, preFetchedBody: String? = null): Boolean {
+        // Play flavor: scraper plugins are disabled entirely (see FlavorConfig).
+        if (!com.playbridge.sender.FlavorConfig.SCRAPER_PLUGINS_SUPPORTED) return false
+        return installRepoInternal(manifestUrl, preFetchedBody)
+    }
+
+    private suspend fun installRepoInternal(manifestUrl: String, preFetchedBody: String? = null): Boolean =
         withContext(Dispatchers.IO) {
             try {
                 val body = preFetchedBody ?: fetchText(manifestUrl) ?: run {
@@ -170,6 +176,9 @@ class NuvioRepository(
      * null so the caller can fall back to the standard Stremio addon install.
      */
     suspend fun tryInstall(url: String): Boolean? = withContext(Dispatchers.IO) {
+        // Play flavor: never recognize scraper manifests; the URL falls through to the
+        // regular addon installer (no scraper-plugin branding surfaces in this build).
+        if (!com.playbridge.sender.FlavorConfig.SCRAPER_PLUGINS_SUPPORTED) return@withContext null
         val body = fetchText(url) ?: return@withContext null
         if (!looksLikeNuvioManifest(body)) return@withContext null
         installRepo(url, preFetchedBody = body)
@@ -221,6 +230,8 @@ class NuvioRepository(
         season: Int?,
         episode: Int?
     ): List<ResolvedStream> {
+        // Play flavor: scraper plugins are disabled entirely (see FlavorConfig).
+        if (!com.playbridge.sender.FlavorConfig.SCRAPER_PLUGINS_SUPPORTED) return emptyList()
         // Master opt-in gate — scrapers run third-party JS, so they stay off by default.
         if (!settingsRepository.enableLocalScrapers.first()) return emptyList()
 

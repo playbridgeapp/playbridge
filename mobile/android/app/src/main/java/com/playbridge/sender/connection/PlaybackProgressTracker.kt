@@ -228,7 +228,15 @@ class PlaybackProgressTracker(
         }
 
         // Playback is reporting → user started watching: ensure a Watching row exists.
-        ensureTracked(item)
+        // Skip-ahead catch-up may only fire for the episode the user explicitly sent
+        // (it matches the send-time pointer) — NEVER for items the playlist advanced to
+        // mid-session (those are judged by the advance rules above; catching up "past"
+        // a manually-skipped episode would mark it watched and delete its resume point),
+        // and never for a stale echo of the previous content.
+        val userStartedThis = item.mediaType != "tv" ||
+            (item.season == t.nowPlayingSeason &&
+                item.episode == connectionCoordinator.nowPlayingEpisodeStart.value)
+        ensureTracked(item, allowCatchUp = userStartedThis)
 
         if (ProgressRules.isWatched(pb.positionMs, pb.durationMs)) {
             if (!thresholdArmed) return // stale near-end status from before this session
@@ -249,6 +257,15 @@ class PlaybackProgressTracker(
     ) {
         if (!enabled.value) return
         if (!targetActive || meta == null) {
+            // Session over (explicit stop / target lost) — flush a final resume point for
+            // whatever was playing, mirroring the in-app player's close flush.
+            val last = dlnaItem
+            if (last != null &&
+                dlnaLastObservedPosMs >= MIN_RESUME_POSITION_MS && dlnaLastObservedDurMs > 0 &&
+                !ProgressRules.isWatched(dlnaLastObservedPosMs, dlnaLastObservedDurMs)
+            ) {
+                saveResume(last, dlnaLastObservedPosMs, dlnaLastObservedDurMs, dlnaThrottle)
+            }
             if (!targetActive && dlnaItem != null) resetSession()
             dlnaItem = null
             dlnaLastObservedPosMs = 0L
@@ -267,7 +284,7 @@ class PlaybackProgressTracker(
         // like the native playlist-advance rule.
         val prevItem = dlnaItem
         if (prevItem != null && prevItem.key != item.key) {
-            if (prevItem.mediaType == "tv" &&
+            if (advancedForward(prevItem, item) &&
                 ProgressRules.finishedOnAdvance(dlnaLastObservedPosMs, dlnaLastObservedDurMs)
             ) {
                 markEpisodeWatched(prevItem.tmdbId, prevItem.season!!, prevItem.episode!!)
@@ -285,7 +302,13 @@ class PlaybackProgressTracker(
         if (st.positionMs > 0) dlnaLastObservedPosMs = st.positionMs
         if (st.durationMs > 0) dlnaLastObservedDurMs = st.durationMs
 
-        ensureTracked(item)
+        // Catch-up only for the item the user cast (fresh session or a show switch) —
+        // queue advances within a show must not imply earlier episodes were seen.
+        // NOTE: deliberately more conservative than the native path (which matches the
+        // send-time pointer): on DLNA a manual cast of a LATER episode of the same show
+        // mid-session is indistinguishable from a queue advance, so it won't catch up.
+        // Missing a catch-up is recoverable; marking a skipped episode watched is not.
+        ensureTracked(item, allowCatchUp = prevItem == null || prevItem.tmdbId != item.tmdbId)
 
         if (ProgressRules.isWatched(st.positionMs, st.durationMs)) {
             if (!dlnaThresholdArmed) return // stale poll from the previous item
@@ -352,7 +375,7 @@ class PlaybackProgressTracker(
         // like the native playlist-advance / DLNA item-change rule.
         val prevItem = inAppItem
         if (prevItem != null && prevItem.key != item.key) {
-            if (prevItem.mediaType == "tv" &&
+            if (advancedForward(prevItem, item) &&
                 ProgressRules.finishedOnAdvance(inAppLastObservedPosMs, inAppLastObservedDurMs)
             ) {
                 markEpisodeWatched(prevItem.tmdbId, prevItem.season!!, prevItem.episode!!)
@@ -368,7 +391,11 @@ class PlaybackProgressTracker(
         if (positionMs > 0) inAppLastObservedPosMs = positionMs
         if (durationMs > 0) inAppLastObservedDurMs = durationMs
 
-        ensureTracked(item)
+        // Catch-up only for the episode this player session was launched on — episode
+        // advances inside the player must not imply earlier episodes were seen.
+        // NOTE: same conservative trade-off as the DLNA call site above — jumping to a
+        // later episode of the same show within one player session won't catch up.
+        ensureTracked(item, allowCatchUp = prevItem == null || prevItem.tmdbId != item.tmdbId)
 
         if (ProgressRules.isWatched(positionMs, durationMs)) {
             if (!inAppThresholdArmed) return // stale near-end position before this session armed
@@ -447,6 +474,19 @@ class PlaybackProgressTracker(
         return season to connectionCoordinator.nowPlayingEpisodeStart.value
     }
 
+    /**
+     * True when [next] is a later episode of the same show as [prev] — the only kind of
+     * item change that can mean "the previous episode finished and playback advanced".
+     * Backward jumps, show switches and tv↔movie changes are user navigation: the
+     * previous item keeps a resume point instead of being marked watched.
+     */
+    private fun advancedForward(prev: PlayingItem, next: PlayingItem): Boolean =
+        prev.mediaType == "tv" && next.mediaType == "tv" &&
+            prev.tmdbId == next.tmdbId &&
+            prev.season != null && prev.episode != null &&
+            next.season != null && next.episode != null &&
+            ProgressRules.isForwardProgress(next.season, next.episode, prev.season, prev.episode)
+
     private fun resetSession() {
         markedKeys.clear()
         ensuredKeys.clear()
@@ -466,12 +506,16 @@ class PlaybackProgressTracker(
      * promotion from Plan-to-Watch/On-Hold/Dropped. Watching/Completed rows are left
      * alone (rewatches must not demote Completed).
      *
-     * Skip-ahead catch-up: starting S/E implies everything before it has been seen —
-     * the progress pointer moves (forward-only) to the episode *before* the one being
-     * started, so starting S1E3 marks E1/E2 watched and starting S3E1 marks seasons
-     * 1–2 watched. Rewatching an earlier episode never regresses the pointer.
+     * Skip-ahead catch-up ([allowCatchUp]): *deliberately starting* S/E implies
+     * everything before it has been seen — the progress pointer moves (forward-only) to
+     * the episode *before* the one being started, so starting S1E3 marks E1/E2 watched
+     * and starting S3E1 marks seasons 1–2 watched. Rewatching an earlier episode never
+     * regresses the pointer. Callers pass allowCatchUp=true ONLY for the episode the
+     * user explicitly chose to play — never for items playback advanced to mid-session,
+     * where catching up would mark a manually-skipped episode watched and delete the
+     * resume point the advance rules just saved for it.
      */
-    private suspend fun ensureTracked(item: PlayingItem) {
+    private suspend fun ensureTracked(item: PlayingItem, allowCatchUp: Boolean) {
         if (!ensuredKeys.add(item.key)) return
         writeMutex.withLock {
             val now = System.currentTimeMillis()
@@ -490,7 +534,7 @@ class PlaybackProgressTracker(
             // Skip-ahead catch-up (series only; no-op when starting S1E1).
             val season = item.season
             val episode = item.episode
-            if (item.mediaType == "tv" && season != null && episode != null &&
+            if (allowCatchUp && item.mediaType == "tv" && season != null && episode != null &&
                 (episode > 1 || season > 1)
             ) {
                 val catchUpEpisode = episode - 1 // (s, 0) = previous seasons done, this one untouched
@@ -505,9 +549,10 @@ class PlaybackProgressTracker(
     }
 
     private suspend fun markEpisodeWatched(tmdbId: Int, season: Int, episode: Int) {
-        if (!markedKeys.add("$tmdbId:$season:$episode")) return
-        // Watched → never offer to resume it again.
+        // Watched → never offer to resume it again. Runs BEFORE the dedup: a rewatch in
+        // the same session re-creates resume points that still need cleaning at 90%.
         runCatching { resumeDao.deleteByKey("tmdb:$tmdbId:$season:$episode") }
+        if (!markedKeys.add("$tmdbId:$season:$episode")) return
         writeMutex.withLock {
             val existing = watchlistDao.getByIdSync(tmdbId)
                 ?: autoAddEntity(tmdbId, mediaType = "tv")
@@ -563,9 +608,10 @@ class PlaybackProgressTracker(
     }
 
     private suspend fun markMovieWatched(tmdbId: Int) {
-        if (!markedKeys.add("movie:$tmdbId")) return
-        // Watched → never offer to resume it again.
+        // Watched → never offer to resume it again. Runs BEFORE the dedup: a rewatch in
+        // the same session re-creates resume points that still need cleaning at 90%.
         runCatching { resumeDao.deleteByKey("tmdb:$tmdbId") }
+        if (!markedKeys.add("movie:$tmdbId")) return
         writeMutex.withLock {
             val existing = watchlistDao.getByIdSync(tmdbId)
                 ?: autoAddEntity(tmdbId, mediaType = "movie")

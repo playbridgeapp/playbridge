@@ -211,6 +211,9 @@ class BrowserActivity : ComponentActivity() {
     private val connectionCoordinator: ConnectionCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
+    private val historyDao: com.playbridge.sender.data.history.HistoryDao by inject()
+    private val searchHistoryDao: com.playbridge.sender.data.history.SearchHistoryDao by inject()
+    private val downloadDao: com.playbridge.sender.data.downloads.DownloadDao by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
     private val updateChecker: com.playbridge.sender.update.UpdateChecker by inject()
 
@@ -247,6 +250,81 @@ class BrowserActivity : ComponentActivity() {
         lifecycleScope.launch { downloadRepository.enqueue(request) }
         Toast.makeText(this, "Download started", Toast.LENGTH_SHORT).show()
     }
+
+    /**
+     * Executes the Clear Data sheet's selection (Firefox-style "Delete browsing
+     * data"). Gecko-side data (cookies, caches, permissions) is cleared through
+     * the supported StorageController API — never by deleting cache dirs, which
+     * could corrupt Gecko's open files and would also nuke the compiled
+     * ad-block rulesets. App-side data (tabs, history, downloads) lives in Room.
+     */
+    private fun performClearData(selection: ClearDataSelection) {
+        // Open tabs first: GeckoView recommends closing sessions before clearing
+        // so live pages don't immediately re-accumulate the data being deleted.
+        if (selection.openTabs) {
+            val store = Components.store
+            store.state.tabs.map { it.id }.forEach { Components.tabManager.closeTab(it, store) }
+            // Land on a fresh tab (Fenix-style) instead of a dead browser view.
+            Components.tabManager.createTab("about:blank", store)
+        }
+
+        var flags = 0L
+        if (selection.cookiesAndSiteData) {
+            flags = flags or org.mozilla.geckoview.StorageController.ClearFlags.COOKIES or
+                org.mozilla.geckoview.StorageController.ClearFlags.DOM_STORAGES or
+                org.mozilla.geckoview.StorageController.ClearFlags.AUTH_SESSIONS
+        }
+        if (selection.cachedImagesAndFiles) {
+            flags = flags or org.mozilla.geckoview.StorageController.ClearFlags.ALL_CACHES
+        }
+        if (selection.sitePermissions) {
+            flags = flags or org.mozilla.geckoview.StorageController.ClearFlags.PERMISSIONS
+        }
+        // clearData is async (returns a GeckoResult) — kick it off now, await below so
+        // the confirmation toast doesn't fire before the data is actually gone.
+        val geckoClear = if (flags != 0L) {
+            Components.runtime.storageController.clearData(flags)
+        } else null
+
+        lifecycleScope.launch {
+            if (selection.browsingHistory) {
+                historyDao.clear()
+                searchHistoryDao.deleteAll()
+            }
+            if (selection.downloads) {
+                withContext(Dispatchers.IO) {
+                    // cancel() stops any running worker, wipes the temp dir, and
+                    // drops the Room row. Files already published to MediaStore
+                    // (the user's saved videos) are intentionally left alone.
+                    downloadDao.observeAll().first().forEach {
+                        downloadRepository.cancel(it.id, removeFiles = true)
+                    }
+                }
+            }
+            val geckoOk = geckoClear?.awaitSuccess("clearData") ?: true
+            Toast.makeText(
+                this@BrowserActivity,
+                if (geckoOk) "Browsing data deleted" else "Some site data could not be cleared",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    /**
+     * Suspends until this GeckoResult completes; true on success, false (never throws)
+     * on failure. Must be called from a Looper thread (Main here) — GeckoResult
+     * dispatches its callbacks via the calling thread's Handler.
+     */
+    private suspend fun <T> org.mozilla.geckoview.GeckoResult<T>.awaitSuccess(what: String): Boolean =
+        kotlinx.coroutines.suspendCancellableCoroutine { cont ->
+            accept(
+                { if (cont.isActive) cont.resume(true) {} },
+                { e ->
+                    android.util.Log.w("BrowserActivity", "Gecko $what failed", e)
+                    if (cont.isActive) cont.resume(false) {}
+                }
+            )
+        }
 
     /**
      * Best filename we can get: an explicit download filename, else a filename embedded in the
@@ -410,7 +488,9 @@ class BrowserActivity : ComponentActivity() {
                     if (!sp.contains("last_main_screen")) Screen.Dashboard
                     else when (sp.getString("last_main_screen", "browser")) {
                         "library" -> Screen.Library
-                        "debrid" -> Screen.DebridLibrary
+                        "debrid" ->
+                            if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) Screen.DebridLibrary
+                            else Screen.Library
                         else -> Screen.Browser
                     }
                 )
@@ -729,6 +809,7 @@ class BrowserActivity : ComponentActivity() {
             val sheetState = rememberModalBottomSheetState()
             var showUserAgentSheet by remember { mutableStateOf(false) }
             val userAgentSheetState = rememberModalBottomSheetState()
+            var showClearDataSheet by remember { mutableStateOf(false) }
 
             val composeScope = rememberCoroutineScope()
             // User preferences via SettingsRepository
@@ -1707,6 +1788,21 @@ class BrowserActivity : ComponentActivity() {
                         }
                     },
 
+                    // Clear Data Sheet States
+                    onClearDataClick = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showMenuSheet = false
+                            showClearDataSheet = true
+                        }
+                    },
+                    showClearDataSheet = showClearDataSheet,
+                    onClearDataDismiss = { showClearDataSheet = false },
+                    openTabsCount = store.state.tabs.size,
+                    onClearDataConfirm = { selection ->
+                        showClearDataSheet = false
+                        performClearData(selection)
+                    },
+
                     // User Agent Sheet States
                     showUserAgentSheet = showUserAgentSheet,
                     onUserAgentDismiss = { showUserAgentSheet = false },
@@ -2091,9 +2187,9 @@ class BrowserActivity : ComponentActivity() {
                     )
                 }
 
-                // Pairing/Connection Dialog Popup. Also shown across the reconnect retry
-                // cycle (linear, 3 attempts) so the user sees progress and can bail out —
-                // Cancel routes playback to This Device instead of silently retrying.
+                // Pairing/Connection Dialog Popup — the single connection popup. Also shown
+                // across the reconnect retry cycle so the user sees progress and can bail
+                // out: the primary action plays on this device; staying keeps trying.
                 val state = connectionState
                 val reconnect by connectionViewModel.reconnectStatus.collectAsState()
                 val isPairingState = state is WebSocketClient.ConnectionState.WaitingForCodeInput ||
@@ -2208,7 +2304,7 @@ class BrowserActivity : ComponentActivity() {
                                     )
                                     if (rc != null || state is WebSocketClient.ConnectionState.Connecting) {
                                         Text(
-                                            text = "Play on this device instead, or keep waiting for the TV.",
+                                            text = "Stay on this screen to keep trying, or play on this device instead.",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             textAlign = TextAlign.Center,
@@ -2228,25 +2324,24 @@ class BrowserActivity : ComponentActivity() {
                                         Text("Verify")
                                     }
                                 }
-                                // Reconnect cycle: let the user extend the retry window.
-                                reconnect != null -> {
-                                    Button(onClick = { connectionViewModel.keepTryingReconnect() }) {
-                                        Text("Keep trying")
+                                // Connecting/reconnecting: the primary (default) action is to
+                                // stop chasing the TV and play here. Simply staying on the dialog
+                                // keeps the connection attempts running — so there's no separate
+                                // "keep trying" button.
+                                !isPairingState -> {
+                                    Button(onClick = { connectionViewModel.cancelConnectingToThisDevice() }) {
+                                        Text("Play on this device")
                                     }
                                 }
                             }
                         },
                         dismissButton = {
-                            TextButton(onClick = {
-                                if (isPairingState) {
-                                    connectionViewModel.disconnect()
-                                } else {
-                                    // Connecting/reconnecting: bail out to phone-local playback.
-                                    connectionViewModel.cancelConnectingToThisDevice()
+                            // Only pairing dialogs get a Cancel; the connecting/reconnecting
+                            // dialog's single action lives in confirmButton above.
+                            if (isPairingState) {
+                                TextButton(onClick = { connectionViewModel.disconnect() }) {
+                                    Text("Cancel")
                                 }
-                            }) {
-                                // The dismiss action means "play here" everywhere except pairing.
-                                Text(if (isPairingState) "Cancel" else "Play on this device")
                             }
                         }
                     )

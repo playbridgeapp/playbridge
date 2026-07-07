@@ -360,7 +360,14 @@ class CastSessionManager(
                     }
                     is WebSocketClient.ConnectionState.Error,
                     is WebSocketClient.ConnectionState.Disconnected -> {
-                        if (_route.value is Route.NativeTv && hasConnectedThisSession) {
+                        // A deliberate disconnect (Disconnect button / route change) must NOT
+                        // trigger the reconnect cycle — only an *unexpected* drop does. Without
+                        // this guard, hitting Disconnect immediately popped a "Reconnecting…"
+                        // dialog and fought the user's action.
+                        if (_route.value is Route.NativeTv &&
+                            hasConnectedThisSession &&
+                            !webSocketClient.wasUserDisconnect
+                        ) {
                             scheduleReconnect()
                         }
                     }
@@ -398,28 +405,12 @@ class CastSessionManager(
         selectThisDevice() // also stands the supervisor down
     }
 
-    /**
-     * User pressed "Keep trying" on the reconnect popup: refresh the retry budget and,
-     * if the supervisor had stood down, kick off a new cycle.
-     */
-    fun keepTryingReconnect() {
-        scope.launch {
-            reconnectAttempt = 0
-            if (reconnectJob?.isActive != true &&
-                _route.value is Route.NativeTv &&
-                hasConnectedThisSession
-            ) {
-                scheduleReconnect()
-            }
-        }
-    }
-
     private fun scheduleReconnect() {
         if (reconnectJob?.isActive == true) return
         // Budget exhausted: how we stand down depends on whether the user is watching.
         //  - Foreground (interactive): the user was actively using the TV; a route left
         //    pointing at a dead receiver makes every play action fail, so fall back to
-        //    this phone and tell them (they can re-pick the TV, or hit "Keep trying").
+        //    this phone and tell them (they can re-pick the TV to try again).
         //  - Background: never silently change the route — a screen-off session (episode
         //    queue topping up) must resume on the TV when it returns. Just stand down and
         //    notify; the foreground-return / Wi-Fi hooks re-arm and reconnect later.
@@ -653,27 +644,42 @@ class CastSessionManager(
     }
 
     /**
-     * Ask (once, on the first cast session) to be exempted from battery optimization.
-     * Casting phone files means this app IS the media server: Doze and OEM "app sleep"
-     * managers freeze a backgrounded app's network — and eventually the process — even
-     * with the cast FGS running, killing the local proxy mid-stream. Prompted here
-     * rather than at app launch so a fresh install isn't greeted by a stack of system
-     * dialogs; a session always starts from a foreground user action, so launching
-     * the settings dialog is permitted.
+     * Guide the user (once, on the first cast session) to whitelist the app from
+     * battery optimization. Casting phone files means this app IS the media server:
+     * Doze and OEM "app sleep" managers freeze a backgrounded app's network — and
+     * eventually the process — even with the cast FGS running, killing the local
+     * proxy mid-stream.
+     *
+     * Deliberately does NOT use ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: the
+     * direct-exemption dialog requires the REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+     * permission, which Google Play restricts to a narrow allowlist. Instead we open
+     * the system battery-optimization settings page (no permission needed) with an
+     * explanatory toast, and the user flips the switch manually. Prompted here rather
+     * than at app launch so a fresh install isn't greeted by a stack of system
+     * screens; a session always starts from a foreground user action, so launching
+     * the settings screen is permitted.
      */
     private fun maybeRequestBatteryExemption() {
         val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
         if (pm.isIgnoringBatteryOptimizations(context.packageName)) return
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
         if (prefs.getBoolean("battery_exemption_prompted", false)) return
-        prefs.edit().putBoolean("battery_exemption_prompted", true).apply()
         runCatching {
+            android.widget.Toast.makeText(
+                context,
+                "To keep casting stable with the screen off, find PlayBridge in this list " +
+                    "and set battery usage to “Unrestricted” / “Don’t optimize”.",
+                android.widget.Toast.LENGTH_LONG
+            ).show()
             context.startActivity(
-                android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    .setData(android.net.Uri.parse("package:${context.packageName}"))
+                android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
                     .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-        }.onFailure { Log.w(TAG, "Battery-optimization exemption request failed", it) }
+        }.onSuccess {
+            // Only burn the one-shot AFTER the settings screen actually launched — if the
+            // intent fails (odd OEM builds), the next cast session gets another chance.
+            prefs.edit().putBoolean("battery_exemption_prompted", true).apply()
+        }.onFailure { Log.w(TAG, "Couldn't open battery-optimization settings", it) }
     }
 
     /**

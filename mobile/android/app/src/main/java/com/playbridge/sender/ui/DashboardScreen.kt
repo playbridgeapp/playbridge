@@ -377,7 +377,10 @@ fun DashboardScreen(
                     screen = Screen.CastHistory,
                     gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00))
                 )
-            )
+            ).filter {
+                // Debrid is FOSS-only; the Play flavor hides the tile entirely.
+                com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED || it.screen != Screen.DebridLibrary
+            }
 
             // Top row: 2 large cards (Browser + Library)
             Row(

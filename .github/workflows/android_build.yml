@@ -68,42 +68,42 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       run: chmod +x gradlew
 
-    - name: Build Release APK
+    # Distribution flavors: GitHub sideload releases ship the `foss` APKs
+    # (self-update + all features); the Play Store gets the `play` AAB
+    # (REQUEST_INSTALL_PACKAGES and self-update code stripped via the flavor —
+    # no manifest sed hacks needed anymore).
+    - name: Build Release APK (foss — GitHub sideload)
       if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew assembleRelease
+      run: ./gradlew assembleFossRelease
 
-    - name: Strip restricted permissions for Play Store build
-      if: steps.check_tag.outputs.skipped == 'false'
-      run: sed -i '/REQUEST_INSTALL_PACKAGES/d' app/src/main/AndroidManifest.xml
-
-    - name: Build Release AAB
+    - name: Build Release AAB (play — Play Store)
       if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew bundleRelease
+      run: ./gradlew bundlePlayRelease
 
     - name: Rename outputs
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
-        find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
+        find app/build/outputs/apk/foss/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-phone-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
-        mv app/build/outputs/bundle/release/app-release.aab \
-           app/build/outputs/bundle/release/playbridge-phone-${{ steps.version.outputs.version }}.aab
+        mv app/build/outputs/bundle/playRelease/app-play-release.aab \
+           app/build/outputs/bundle/playRelease/playbridge-phone-${{ steps.version.outputs.version }}.aab
 
     - name: List outputs (Debug)
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
         echo "APK outputs:"
-        find app/build/outputs/apk/release -maxdepth 2
+        find app/build/outputs/apk/foss/release -maxdepth 2
         echo "Bundle outputs:"
-        find app/build/outputs/bundle/release -maxdepth 2
+        find app/build/outputs/bundle/playRelease -maxdepth 2
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -112,10 +112,10 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
-        aws s3 cp app/build/outputs/apk/release/ \
+        aws s3 cp app/build/outputs/apk/foss/release/ \
           s3://${{ secrets.R2_BUCKET }}/phone-release-apk/ \
           --recursive --exclude "*" --include "*.apk"
-        aws s3 cp app/build/outputs/bundle/release/ \
+        aws s3 cp app/build/outputs/bundle/playRelease/ \
           s3://${{ secrets.R2_BUCKET }}/phone-release-aab/ \
           --recursive --exclude "*" --include "*.aab"
 
@@ -172,42 +172,39 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       run: chmod +x gradlew
 
-    - name: Build Release APK
+    # Same flavor split as the phone job: foss APKs → GitHub, play AAB → Play Store.
+    - name: Build Release APK (foss — GitHub sideload)
       if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew :player:app:assembleRelease
+      run: ./gradlew :player:app:assembleFossRelease
 
-    - name: Strip restricted permissions for Play Store build
-      if: steps.check_tag.outputs.skipped == 'false'
-      run: sed -i '/REQUEST_INSTALL_PACKAGES/d' app/src/main/AndroidManifest.xml
-
-    - name: Build Release AAB
+    - name: Build Release AAB (play — Play Store)
       if: steps.check_tag.outputs.skipped == 'false'
       env:
         PLAYBRIDGE_STORE_PASSWORD: ${{ secrets.PLAYBRIDGE_STORE_PASSWORD }}
         PLAYBRIDGE_KEY_ALIAS: ${{ secrets.PLAYBRIDGE_KEY_ALIAS }}
         PLAYBRIDGE_KEY_PASSWORD: ${{ secrets.PLAYBRIDGE_KEY_PASSWORD }}
-      run: ./gradlew :player:app:bundleRelease
+      run: ./gradlew :player:app:bundlePlayRelease
 
     - name: Rename outputs
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
-        find app/build/outputs/apk/release -name "*.apk" -type f | while read f; do
+        find app/build/outputs/apk/foss/release -name "*.apk" -type f | while read f; do
           mv "$f" "$(dirname "$f")/playbridge-tv-player-${{ steps.version.outputs.version }}-$(basename "$f")"
         done
-        mv app/build/outputs/bundle/release/app-release.aab \
-           app/build/outputs/bundle/release/playbridge-tv-player-${{ steps.version.outputs.version }}.aab
+        mv app/build/outputs/bundle/playRelease/app-play-release.aab \
+           app/build/outputs/bundle/playRelease/playbridge-tv-player-${{ steps.version.outputs.version }}.aab
 
     - name: List outputs (Debug)
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
         echo "APK outputs:"
-        find app/build/outputs/apk/release -maxdepth 2
+        find app/build/outputs/apk/foss/release -maxdepth 2
         echo "Bundle outputs:"
-        find app/build/outputs/bundle/release -maxdepth 2
+        find app/build/outputs/bundle/playRelease -maxdepth 2
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -216,10 +213,10 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
-        aws s3 cp app/build/outputs/apk/release/ \
+        aws s3 cp app/build/outputs/apk/foss/release/ \
           s3://${{ secrets.R2_BUCKET }}/tv-player-release-apk/ \
           --recursive --exclude "*" --include "*.apk"
-        aws s3 cp app/build/outputs/bundle/release/ \
+        aws s3 cp app/build/outputs/bundle/playRelease/ \
           s3://${{ secrets.R2_BUCKET }}/tv-player-release-aab/ \
           --recursive --exclude "*" --include "*.aab"
 

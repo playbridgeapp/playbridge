@@ -100,7 +100,7 @@ class SubtitleManager(
 
     private fun downloadUrlBytes(urlString: String, headers: Map<String, String>? = null): ByteArray {
         val sniffer = ContentSniffer()
-        val client = sniffer.getOkHttpClient(trustAllCerts = sniffer.isLocalUrl(urlString))
+        val client = sniffer.getOkHttpClient(allowLocalSelfSigned = sniffer.isLocalUrl(urlString))
         val requestBuilder = Request.Builder()
             .url(urlString)
             .header("User-Agent", "Mozilla/5.0")

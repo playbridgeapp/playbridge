@@ -27,7 +27,6 @@ import androidx.compose.runtime.LaunchedEffect
 import com.playbridge.sender.ui.UnifiedDevice
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -296,12 +295,18 @@ fun DeviceConnectionSheet(
                         icon = Icons.Default.Tv,
                         badge = null,
                         onDisconnect = {
+                            // A manual disconnect is a deliberate "stop watching on TV":
+                            // route back to this phone so nothing tries to reconnect.
+                            viewModel.selectThisDevice()
                             viewModel.disconnect()
                             onDismiss()
                         }
                     )
                 }
-                isConnecting -> ConnectingCard(onCancel = { viewModel.disconnect() })
+                // While connecting/reconnecting, the global connection popup (in
+                // BrowserActivity) is the single source of truth — don't also show an
+                // inline card here, which produced two overlays saying the same thing.
+                isConnecting -> Unit
             }
 
             // Player-engine picker, shown with the connected TV it configures (native
@@ -453,24 +458,6 @@ private fun ActiveDeviceCard(
             TextButton(onClick = onDisconnect) {
                 Text("Disconnect", color = MaterialTheme.colorScheme.error)
             }
-        }
-    }
-}
-
-@Composable
-private fun ConnectingCard(onCancel: () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-            Text("Connecting to TV…", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            TextButton(onClick = onCancel) { Text("Cancel") }
         }
     }
 }

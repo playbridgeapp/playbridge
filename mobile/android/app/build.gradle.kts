@@ -61,6 +61,20 @@ android {
             )
         }
     }
+    // Distribution flavors: `foss` (GitHub/sideload; includes APK self-update) vs
+    // `play` (Google Play; self-update code and REQUEST_INSTALL_PACKAGES stripped -
+    // Play policy prohibits apps updating themselves outside the Store).
+    flavorDimensions += "distribution"
+    productFlavors {
+        create("foss") {
+            dimension = "distribution"
+            isDefault = true
+        }
+        create("play") {
+            dimension = "distribution"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11

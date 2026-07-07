@@ -13,9 +13,10 @@ private const val TAG = "ContentSniffer"
  * Handles HTTP client creation and pre-flight content-type sniffing
  * (reads the first few bytes of a URL to detect HLS streams).
  *
- * SSL certificate validation is bypassed only for local-network URLs
- * (RFC 1918 private IPs, loopback, and .local hostnames) to support
- * self-signed certs on local servers (Plex, Jellyfin, etc.).
+ * For local-network URLs (RFC 1918 private IPs, loopback, and .local hostnames)
+ * a relaxed-but-validating trust path ([LocalSelfSignedTrustManager]) accepts
+ * single self-signed certificates so local servers (Plex, Jellyfin, etc.) work.
+ * Public URLs always use standard system certificate validation.
  */
 class ContentSniffer {
 
@@ -41,6 +42,11 @@ class ContentSniffer {
      */
     fun isLocalUrl(url: String): Boolean {
         val rawHost = Uri.parse(url).host ?: return false
+        return isLocalHost(rawHost)
+    }
+
+    /** Same as [isLocalUrl] but takes a bare hostname/IP (as seen by a HostnameVerifier). */
+    fun isLocalHost(rawHost: String): Boolean {
         val host = rawHost.removePrefix("[").removeSuffix("]")
 
         if (host == "localhost" || host.endsWith(".local")) return true
@@ -72,27 +78,24 @@ class ContentSniffer {
     }
 
     /**
-     * Creates an OkHttpClient. For local-network URLs, SSL certificate
-     * validation is disabled to support self-signed certificates.
-     * Public URLs always use standard certificate validation.
+     * Creates an OkHttpClient. When [allowLocalSelfSigned] is set (callers gate this
+     * on [isLocalUrl]), a single self-signed certificate is accepted after system
+     * validation fails — see [LocalSelfSignedTrustManager]. Public URLs always use
+     * standard certificate validation and strict hostname verification.
      */
-    fun getOkHttpClient(headers: Map<String, String>? = null, trustAllCerts: Boolean = false): okhttp3.OkHttpClient {
+    fun getOkHttpClient(headers: Map<String, String>? = null, allowLocalSelfSigned: Boolean = false): okhttp3.OkHttpClient {
         try {
             // Derive from a shared base client: newBuilder() shares the connection pool
             // and dispatcher threads, so per-sniff clients no longer each spin up their
             // own pool/executor.
             val builder = baseClient.newBuilder()
 
-            if (trustAllCerts) {
-                val trustManagers = arrayOf<javax.net.ssl.TrustManager>(object : javax.net.ssl.X509TrustManager {
-                    override fun checkClientTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                    override fun checkServerTrusted(chain: Array<out java.security.cert.X509Certificate>?, authType: String?) {}
-                    override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
-                })
+            if (allowLocalSelfSigned) {
+                val trustManager = LocalSelfSignedTrustManager()
                 val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
-                sslContext.init(null, trustManagers, java.security.SecureRandom())
-                builder.sslSocketFactory(sslContext.socketFactory, trustManagers[0] as javax.net.ssl.X509TrustManager)
-                       .hostnameVerifier { _, _ -> true }
+                sslContext.init(null, arrayOf<javax.net.ssl.TrustManager>(trustManager), null)
+                builder.sslSocketFactory(sslContext.socketFactory, trustManager)
+                       .hostnameVerifier(LocalHostnameVerifier(::isLocalHost))
             }
 
             if (headers != null && headers.isNotEmpty()) {
@@ -135,7 +138,7 @@ class ContentSniffer {
             try {
                 // Pass headers to the client so the interceptor applies them
                 // This ensures cookies and auth headers are sent during the sniff
-                val client = getOkHttpClient(headers, trustAllCerts = isLocalUrl(url))
+                val client = getOkHttpClient(headers, allowLocalSelfSigned = isLocalUrl(url))
                 val requestBuilder = okhttp3.Request.Builder()
                     .url(url)
                     .header("Range", "bytes=0-50")
