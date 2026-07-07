@@ -3,10 +3,23 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Player [Unreleased]
+## Player [0.9.0] — 2026-07-07 (versionCode 220)
 
 ### Added
-- **TheIntroDB Skip Segments** (https://theintrodb.org): second skip-segments provider alongside IntroDB. Keyless, works with TMDB or IMDb ids, and covers **movies** (credits) as well as episodes — including multiple ranges per type and open-ended credits that run to the end of the file. New "Skip Segments Provider" setting (IntroDB / TheIntroDB / Both — default Both, where IntroDB wins per segment type and TheIntroDB fills the gaps) plus a configurable TheIntroDB API URL in Settings → Integrations.
+- **TheIntroDB Skip Segments** (https://theintrodb.org): second skip-segments provider alongside IntroDB. Keyless, works with TMDB or IMDb ids, and covers **movies** (credits) as well as episodes — including multiple ranges per type and open-ended credits that run to the end of the file. New "Skip Segments Provider" setting (IntroDB / TheIntroDB / Both — default Both, where IntroDB wins per segment type and TheIntroDB fills the gaps) plus a configurable TheIntroDB API URL in Settings → Integrations. (#90)
+- **FOSS/Play Distribution Flavors**: Play builds strip `REQUEST_INSTALL_PACKAGES` via a manifest overlay, stub out the APK installer, and hide sideload links (GeckoView plugin prompt). (#90)
+- **Exit-App Action**: New exit-app action in Settings. (#87)
+
+### Fixed
+- **Local TLS Trust**: Replaced the `ContentSniffer` trust-all SSL with `LocalSelfSignedTrustManager` — system trust first, then a single valid self-signed cert for LAN hosts; the hostname verifier re-validates public hosts against system trust. (#90)
+- **MPV Skip Clamping**: Clamped open-ended skip seeks to media duration for MPV. (#90)
+- **Injected Input Events**: Set `SOURCE_TOUCHSCREEN` on injected events so remote touchpad input behaves like real touches. (#86)
+- **Theme & UI Styling**: Resolved theme and UI styling inconsistencies, removed `StaticAuroraBackground`, and fixed playback/connection races from a code audit. (#85, #87)
+
+## GeckoView Plugin [0.3.3] — 2026-07-07 (versionCode 211)
+
+### Fixed
+- **Injected Input Events**: Set `SOURCE_TOUCHSCREEN` on injected events and improved touchpad click tracking in the browser engine. (#86)
 
 ## Player [0.8.0] — 2026-07-04 (versionCode 219)
 

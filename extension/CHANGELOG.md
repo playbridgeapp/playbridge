@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] — 2026-07-07
+
+### Fixed
+- **XSS in Popup**: Replaced unsafe `innerHTML` assignment with safe DOM methods (`createElement`/`textContent`) in `renderSavedConnections` to prevent Cross-Site Scripting when rendering user-supplied connection data (IP and PIN). (#89)
+
 ## [0.4.0] — 2026-06-21
 
 ### Added
