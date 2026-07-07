@@ -8,6 +8,8 @@ import 'logs_screen.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'server.dart';
+import 'update/app_version.dart';
+import 'update/update_checker.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -16,6 +18,7 @@ class SettingsScreen extends StatefulWidget {
     required this.store,
     required this.player,
     required this.showStats,
+    required this.updateChecker,
     required this.onNavigateToCast,
     this.onSettingsChanged,
   });
@@ -24,6 +27,7 @@ class SettingsScreen extends StatefulWidget {
   final PairingStore store;
   final PlayerController player;
   final ValueNotifier<bool> showStats;
+  final UpdateChecker updateChecker;
   final VoidCallback onNavigateToCast;
   final VoidCallback? onSettingsChanged;
 
@@ -223,9 +227,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.info_outline,
               title: 'PlayBridge Desktop',
               trailing: Text(
-                'v1.0.0  ·  port ${widget.server.wssPort ?? kDefaultPort}',
+                'v$kAppVersion  ·  port ${widget.server.wssPort ?? kDefaultPort}',
                 style: const TextStyle(color: Colors.white38, fontSize: 12),
               ),
+            ),
+            ListenableBuilder(
+              listenable: widget.updateChecker,
+              builder: (context, _) {
+                final checking = widget.updateChecker.state is UpdateChecking;
+                return _Tile(
+                  icon: Icons.system_update_alt,
+                  title: 'Check for updates',
+                  subtitle: 'Downloads and installs the new version in place, '
+                      'then restarts the app.',
+                  trailing: checking
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : null,
+                  onTap: checking
+                      ? null
+                      : () => widget.updateChecker.check(manual: true),
+                );
+              },
             ),
           ],
         );
