@@ -44,6 +44,35 @@ class AddonRepository(
         private const val CACHE_FILE_NAME = "stream_cache.json"
     }
 
+    /**
+     * Stremio-aware type comparison: treats "tv" and "series" as equivalent.
+     *
+     * Some addons (e.g. StremVerse) declare `types: ["tv"]` in their manifest,
+     * while the app normalises "tv" to "series" for internal use. A strict
+     * equality check would exclude those addons from meta/subtitle resolution.
+     */
+    private fun String.matchesStremioType(other: String): Boolean {
+        if (this.equals(other, ignoreCase = true)) return true
+        val a = this.lowercase()
+        val b = other.lowercase()
+        return (a == "tv" && b == "series") || (a == "series" && b == "tv")
+    }
+
+    /**
+     * Maps the requested type to the type declared by the addon.
+     * Some addons (e.g. StremVerse) only support the "tv" endpoint path, while
+     * others only support "series". If they match via matchesStremioType, we map
+     * to the declared format to avoid 404s/empty responses on the addon server.
+     */
+    private fun InstalledAddonEntity.mapToSupportedType(type: String): String {
+        val declared = this.types.split(",").map { it.trim().lowercase() }
+        val req = type.lowercase()
+        if (declared.contains(req)) return type
+        if (req == "series" && declared.contains("tv")) return "tv"
+        if (req == "tv" && declared.contains("series")) return "series"
+        return type
+    }
+
     @Serializable
     private data class CacheEntry(
         val timestamp: Long,
@@ -555,7 +584,7 @@ class AddonRepository(
         val addons = addonDao.getAllSync().filter { addon ->
             addon.isFeatureEnabled("meta") &&
                 addon.supportsResource("meta") &&
-                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) } &&
+                addon.types.split(",").any { it.trim().matchesStremioType(type) } &&
                 addon.canHandleMetaId(id)
         }
 
@@ -594,7 +623,8 @@ class AddonRepository(
 
     private suspend fun fetchFromAddon(addon: InstalledAddonEntity, type: String, id: String, forcedSource: String?): StremioMetaDetail? {
         return try {
-            var url = "${addon.baseUrl}/meta/$type/$id.json"
+            val reqType = addon.mapToSupportedType(type)
+            var url = "${addon.baseUrl}/meta/$reqType/$id.json"
             // If this is the Hub (aggregating multiple sources), pass the 'src' parameter
             if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                 url += "?src=${android.net.Uri.encode(forcedSource)}"
@@ -636,7 +666,7 @@ class AddonRepository(
         val addons = addonDao.getAllSync().filter { addon ->
             addon.isFeatureEnabled("subtitles") &&
                 addon.supportsResource("subtitles") &&
-                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
+                addon.types.split(",").any { it.trim().matchesStremioType(type) }
         }
 
         if (addons.isEmpty()) {
@@ -664,7 +694,8 @@ class AddonRepository(
     ): List<StremioStream> {
         return withContext(Dispatchers.IO) {
             try {
-                val url = "${addon.baseUrl}/subtitles/$type/$id.json"
+                val reqType = addon.mapToSupportedType(type)
+                val url = "${addon.baseUrl}/subtitles/$reqType/$id.json"
                 Log.d(TAG, "Fetching subtitles from ${addon.name}: $url")
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()
@@ -1031,7 +1062,8 @@ class AddonRepository(
 
         return withContext(Dispatchers.IO) {
             try {
-                var url = "${addon.baseUrl}/stream/$type/$id.json"
+                val reqType = addon.mapToSupportedType(type)
+                var url = "${addon.baseUrl}/stream/$reqType/$id.json"
                 // If this is the Hub, pass the 'src' parameter to help it resolve correctly
                 if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                     url += "?src=${android.net.Uri.encode(forcedSource)}"
