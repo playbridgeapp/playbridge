@@ -3,6 +3,16 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.9.1] — 2026-07-08 (versionCode 221)
+
+### Changed
+- **Gradle Wrapper**: Upgraded gradle wrapper version to 9.5.1 in player.
+
+## GeckoView Plugin [0.3.4] — 2026-07-08 (versionCode 212)
+
+### Changed
+- **Gradle Wrapper**: Upgraded gradle wrapper version to 9.5.1 in geckoview plugin.
+
 ## Player [0.9.0] — 2026-07-07 (versionCode 220)
 
 ### Added

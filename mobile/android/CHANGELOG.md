@@ -3,6 +3,17 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] — 2026-07-08 (versionCode 219)
+
+### Added
+- **Nuvio DOM & Crypto Support**: Integrated JSoup `1.18.1` and implemented DOM parsing (`DomBridge`) and cryptographic helpers (`CryptoBridge`/`PluginCrypto`) inside sandboxed QuickJS scraper plugin runner.
+
+### Changed
+- **Concurrent Stream Resolution**: Refactored stream resolution to fetch from multiple Stremio/Nuvio sources concurrently using Kotlin coroutines and `channelFlow` for immediate and progressive UI updates.
+
+### Fixed
+- **Addon Loading & Navigation**: Gated addon navigation by keying on `addonBaseUrl` instead of name, mapped request types to Stremio-supported types, and made `seasonPosters` nullable to prevent deserialization crashes.
+
 ## [0.10.0] — 2026-07-07 (versionCode 218)
 
 ### Added
