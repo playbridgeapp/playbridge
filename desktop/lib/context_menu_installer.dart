@@ -58,7 +58,13 @@ class ContextMenuInstaller {
         data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
         flush: true,
       );
-      if (!Platform.isWindows) await Process.run('chmod', ['+x', out.path]);
+      if (!Platform.isWindows) {
+        await Process.run('chmod', ['+x', out.path]);
+        if (Platform.isMacOS) {
+          await Process.run('xattr', ['-c', out.path]);
+          await Process.run('codesign', ['-s', '-', '--force', out.path]);
+        }
+      }
       return out.absolute.path;
     } catch (_) {
       return null;

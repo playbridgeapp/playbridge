@@ -24,9 +24,11 @@ type StateListener = (s: BridgeState) => void;
 
 const HOST_NAME = "com.playbridge.host";
 const RECONNECT_MS = 5_000;
+const MAX_RECONNECT_ATTEMPTS = 3;
 
 let port: ReturnType<typeof browser.runtime.connectNative> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
 const listeners = new Set<StateListener>();
 // Bridge results arrive in order; correlate them to in-flight requests by FIFO.
 const pendingResults: Array<(ok: boolean, error?: string) => void> = [];
@@ -63,15 +65,29 @@ export function connect(): void {
   }
   port.onMessage.addListener(onMessage);
   port.onDisconnect.addListener(() => {
+    const err = browser.runtime.lastError;
+    if (err) {
+      console.error("[PB Bridge] Native host disconnected with error:", err.message);
+    }
     port = null;
     failPending("disconnected");
+    const wasConnected = state.desktopConnected;
     setDisconnected();
-    scheduleReconnect();
+    if (wasConnected) {
+      reconnectAttempts = 0;
+      scheduleReconnect();
+    } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+      reconnectAttempts++;
+      scheduleReconnect();
+    } else {
+      console.warn(`[PB Bridge] Reached max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}). Stopping retries.`);
+    }
   });
   send({ cmd: "list_devices" });
 }
 
 export function refresh(): void {
+  reconnectAttempts = 0;
   if (!port) {
     connect();
     return;
@@ -96,6 +112,7 @@ function request(
 ): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     if (!port) {
+      reconnectAttempts = 0;
       connect();
       resolve({ ok: false, error: "PlayBridge desktop is not running" });
       return;
@@ -114,6 +131,7 @@ function onMessage(raw: unknown): void {
   switch (msg.type) {
     case "hello":
       state = { ...state, desktopConnected: true };
+      reconnectAttempts = 0;
       emit();
       break;
     case "state":
@@ -123,6 +141,7 @@ function onMessage(raw: unknown): void {
         activeTv: (msg.activeTv as string | null) ?? null,
         devices: Array.isArray(msg.devices) ? (msg.devices as BridgeDevice[]) : [],
       };
+      reconnectAttempts = 0;
       emit();
       break;
     case "result": {
