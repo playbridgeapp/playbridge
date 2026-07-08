@@ -224,7 +224,13 @@ fun LibraryDetailScreen(
         val effectiveId = resolvedImdbId ?: id
 
         // 2. Fetch unified metadata from Hub (using resolved ID if available)
-        val metaResult = runCatching { addonRepository.fetchMetaWithSource(addonType, effectiveId, forcedSource) }.getOrNull()
+        android.util.Log.d("LibraryDetailScreen", "LaunchedEffect: effectiveId=$effectiveId, addonType=$addonType, forcedSource=$forcedSource")
+        val metaResult = runCatching { 
+            addonRepository.fetchMetaWithSource(addonType, effectiveId, forcedSource) 
+        }.onFailure {
+            android.util.Log.e("LibraryDetailScreen", "Failed to fetch metadata", it)
+        }.getOrNull()
+        android.util.Log.d("LibraryDetailScreen", "fetchMetaWithSource result: success=${metaResult != null}, source=${metaResult?.second}")
         if (metaResult != null) {
             addonMeta = metaResult.first
             addonMetaSource = metaResult.second
@@ -542,10 +548,36 @@ fun LibraryDetailScreen(
 
         resolutionJob?.cancel()
         resolutionJob = scope.launch {
-            addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
-                resolvedStreams = latest
+            var stremioStreams = emptyList<ResolvedStream>()
+            var nuvioStreams = emptyList<ResolvedStream>()
+
+            val nuvioJob = launch {
+                val tmdbId = resolvedTmdbId
+                if (tmdbId != null) {
+                    runCatching {
+                        nuvioRepository.resolveStreamsFlow(
+                            stremioType = streamType,
+                            tmdbId = tmdbId.toString(),
+                            season = episode?.season,
+                            episode = episode?.episode
+                        )
+                    }.getOrNull()?.collect { latest ->
+                        nuvioStreams = latest
+                        resolvedStreams = (stremioStreams + nuvioStreams)
+                            .distinctBy { it.stream.url }
+                            .sortedByDescending { it.stream.isDirectUrl }
+                    }
+                }
             }
-            appendNuvioStreams(streamType, episode)
+
+            addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
+                stremioStreams = latest
+                resolvedStreams = (stremioStreams + nuvioStreams)
+                    .distinctBy { it.stream.url }
+                    .sortedByDescending { it.stream.isDirectUrl }
+            }
+
+            nuvioJob.join()
             resolutionState = resolutionState.copy(isResolving = false)
 
             // Auto-pick logic
@@ -609,10 +641,36 @@ fun LibraryDetailScreen(
 
         resolutionJob?.cancel()
         resolutionJob = scope.launch {
-            addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
-                resolvedStreams = latest
+            var stremioStreams = emptyList<ResolvedStream>()
+            var nuvioStreams = emptyList<ResolvedStream>()
+
+            val nuvioJob = launch {
+                val tmdbId = resolvedTmdbId
+                if (tmdbId != null) {
+                    runCatching {
+                        nuvioRepository.resolveStreamsFlow(
+                            stremioType = streamType,
+                            tmdbId = tmdbId.toString(),
+                            season = episode?.season,
+                            episode = episode?.episode
+                        )
+                    }.getOrNull()?.collect { latest ->
+                        nuvioStreams = latest
+                        resolvedStreams = (stremioStreams + nuvioStreams)
+                            .distinctBy { it.stream.url }
+                            .sortedByDescending { it.stream.isDirectUrl }
+                    }
+                }
             }
-            appendNuvioStreams(streamType, episode)
+
+            addonRepository.resolveStreamsFlow(streamType, streamId, forcedSource).collect { latest ->
+                stremioStreams = latest
+                resolvedStreams = (stremioStreams + nuvioStreams)
+                    .distinctBy { it.stream.url }
+                    .sortedByDescending { it.stream.isDirectUrl }
+            }
+
+            nuvioJob.join()
             resolutionState = resolutionState.copy(isResolving = false)
 
             val runtimeForBitrate = if (isSeries) 45 else 120

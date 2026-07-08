@@ -196,6 +196,8 @@ dependencies {
     // QuickJS — sandboxed JS runtime for Nuvio scraper plugins
     implementation(libs.quickjs.kt)
 
+    implementation(libs.jsoup)
+
     implementation(project(":shared"))
 }
 

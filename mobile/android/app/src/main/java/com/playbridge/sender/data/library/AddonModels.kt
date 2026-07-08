@@ -420,7 +420,7 @@ data class AppExtras(
     val cast: List<CastMember> = emptyList(),
     val directors: List<CastMember> = emptyList(),
     val writers: List<CastMember> = emptyList(),
-    val seasonPosters: List<String> = emptyList()
+    val seasonPosters: List<String?> = emptyList()
 )
 
 @Serializable

@@ -276,6 +276,97 @@ class NuvioRepository(
         return results
     }
 
+    /**
+     * Resolve streams from all enabled Nuvio scrapers progressively as a Flow.
+     */
+    fun resolveStreamsFlow(
+        stremioType: String,
+        tmdbId: String,
+        season: Int?,
+        episode: Int?
+    ): kotlinx.coroutines.flow.Flow<List<ResolvedStream>> =
+        kotlinx.coroutines.flow.channelFlow {
+            // Play flavor: scraper plugins are disabled entirely (see FlavorConfig).
+            if (!com.playbridge.sender.FlavorConfig.SCRAPER_PLUGINS_SUPPORTED) {
+                send(emptyList())
+                return@channelFlow
+            }
+            // Master opt-in gate — scrapers run third-party JS, so they stay off by default.
+            if (!settingsRepository.enableLocalScrapers.first()) {
+                send(emptyList())
+                return@channelFlow
+            }
+
+            val nuvioType = if (stremioType == "series" || stremioType == "tv") "tv" else "movie"
+            val cacheKey = "$nuvioType:$tmdbId:${season ?: ""}:${episode ?: ""}"
+            streamCache[cacheKey]?.let {
+                if (System.currentTimeMillis() - it.timestamp < SCRAPER_CACHE_TTL_MS) {
+                    send(it.streams)
+                    return@channelFlow
+                }
+            }
+
+            send(emptyList()) // Immediate clear for UI feedback
+
+            // Only run scrapers whose parent repo row is enabled.
+            val enabledRepos = addonDao.getAllSync()
+                .filter { it.resources.contains(NUVIO_RESOURCE) && it.isEnabled }
+                .map { it.manifestUrl }
+                .toSet()
+            if (enabledRepos.isEmpty()) {
+                send(emptyList())
+                return@channelFlow
+            }
+
+            val scrapers = enabledRepos
+                .flatMap { scraperDao.getForRepo(it) }
+                .filter { it.isEnabled && it.supportsType(nuvioType) }
+            if (scrapers.isEmpty()) {
+                send(emptyList())
+                return@channelFlow
+            }
+
+            val accumulated = mutableListOf<ResolvedStream>()
+            val lock = Any()
+
+            coroutineScope {
+                scrapers.forEach { scraper ->
+                    launch(Dispatchers.IO) {
+                        val code = readCode(scraper)
+                        if (code != null) {
+                            val results = runCatching {
+                                runner.getStreams(
+                                    scraperName = scraper.name,
+                                    scraperCode = code,
+                                    tmdbId = tmdbId,
+                                    nuvioType = nuvioType,
+                                    season = season,
+                                    episode = episode,
+                                    settingsJson = scraper.settingsJson
+                                ).map { it.toResolvedStream(scraper.name) }
+                            }.getOrDefault(emptyList())
+                            if (results.isNotEmpty()) {
+                                val latest = synchronized(lock) {
+                                    accumulated.addAll(results)
+                                    accumulated.sortedByDescending { it.stream.isDirectUrl }.toList()
+                                }
+                                send(latest)
+                            }
+                        }
+                    }
+                }
+            }
+
+            val finalStreams = synchronized(lock) {
+                accumulated.sortedByDescending { it.stream.isDirectUrl }.toList()
+            }
+            if (finalStreams.isEmpty()) {
+                send(emptyList())
+            } else {
+                streamCache[cacheKey] = CacheEntry(System.currentTimeMillis(), finalStreams)
+            }
+        }
+
     private fun readCode(scraper: NuvioScraperEntity): String? {
         val file = File(File(nuvioDir, repoDirName(scraper.repoUrl)), "${scraper.scraperId}.js")
         return if (file.exists()) file.readText() else null
