@@ -44,6 +44,35 @@ class AddonRepository(
         private const val CACHE_FILE_NAME = "stream_cache.json"
     }
 
+    /**
+     * Stremio-aware type comparison: treats "tv" and "series" as equivalent.
+     *
+     * Some addons (e.g. StremVerse) declare `types: ["tv"]` in their manifest,
+     * while the app normalises "tv" to "series" for internal use. A strict
+     * equality check would exclude those addons from meta/subtitle resolution.
+     */
+    private fun String.matchesStremioType(other: String): Boolean {
+        if (this.equals(other, ignoreCase = true)) return true
+        val a = this.lowercase()
+        val b = other.lowercase()
+        return (a == "tv" && b == "series") || (a == "series" && b == "tv")
+    }
+
+    /**
+     * Maps the requested type to the type declared by the addon.
+     * Some addons (e.g. StremVerse) only support the "tv" endpoint path, while
+     * others only support "series". If they match via matchesStremioType, we map
+     * to the declared format to avoid 404s/empty responses on the addon server.
+     */
+    private fun InstalledAddonEntity.mapToSupportedType(type: String): String {
+        val declared = this.types.split(",").map { it.trim().lowercase() }
+        val req = type.lowercase()
+        if (declared.contains(req)) return type
+        if (req == "series" && declared.contains("tv")) return "tv"
+        if (req == "tv" && declared.contains("series")) return "series"
+        return type
+    }
+
     @Serializable
     private data class CacheEntry(
         val timestamp: Long,
@@ -545,56 +574,94 @@ class AddonRepository(
      * Returns null when no addon could provide metadata for the given type + id.
      */
     suspend fun fetchMetaWithSource(type: String, id: String, forcedSource: String? = null): Pair<StremioMetaDetail, String>? {
+        Log.d(TAG, "fetchMetaWithSource: type=$type, id=$id, forcedSource=$forcedSource")
+        
+        // Find matching direct addon first, if forcedSource is provided
+        val directAddon = if (forcedSource != null) {
+            val addonsForForced = addonDao.getAllSync().filter { addon ->
+                addon.isFeatureEnabled("meta") &&
+                    addon.supportsResource("meta") &&
+                    addon.types.split(",").any { it.trim().matchesStremioType(type) } &&
+                    addon.canHandleMetaId(id)
+            }
+            addonsForForced.find { 
+                it.baseUrl.normalizeAddonUrl() == forcedSource.normalizeAddonUrl() ||
+                it.manifestUrl.normalizeAddonUrl() == forcedSource.normalizeAddonUrl() ||
+                it.name.equals(forcedSource, ignoreCase = true)
+            }
+        } else null
+
         val cacheKey = "meta:$type:$id:${forcedSource ?: "any"}"
         val cached = metaCache[cacheKey]
         if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
-            Log.d(TAG, "Using cached meta for $cacheKey")
-            return Pair(cached.second, cached.third)
+            // Self-healing: if we have a directAddon match but the cache contains a different provider, bypass cache
+            if (directAddon != null && !cached.third.equals(directAddon.name, ignoreCase = true)) {
+                Log.d(TAG, "Bypassing cached meta: forcedSource matches ${directAddon.name} but cache holds ${cached.third}")
+                metaCache.remove(cacheKey)
+            } else {
+                Log.d(TAG, "Using cached meta for $cacheKey (source=${cached.third})")
+                return Pair(cached.second, cached.third)
+            }
         }
 
         val addons = addonDao.getAllSync().filter { addon ->
-            addon.isFeatureEnabled("meta") &&
+            val matches = addon.isFeatureEnabled("meta") &&
                 addon.supportsResource("meta") &&
-                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) } &&
+                addon.types.split(",").any { it.trim().matchesStremioType(type) } &&
                 addon.canHandleMetaId(id)
+            Log.v(TAG, "Checking addon: ${addon.name} (enabled=${addon.isEnabled}, metaEnabled=${addon.isFeatureEnabled("meta")}, supportsMeta=${addon.supportsResource("meta")}, types=${addon.types}, canHandleId=${addon.canHandleMetaId(id)}) -> matches=$matches")
+            matches
+        }
+
+        Log.d(TAG, "Found ${addons.size} meta-capable addons for type=$type, id=$id")
+        addons.forEach { addon ->
+            Log.d(TAG, "  Addon in filter list: ${addon.name}, baseUrl=${addon.baseUrl}, manifestUrl=${addon.manifestUrl}")
         }
 
         if (addons.isEmpty()) {
-            Log.d(TAG, "No meta-capable addons for type=$type")
+            Log.d(TAG, "No meta-capable addons for type=$type, id=$id")
             return null
         }
 
         return withContext(Dispatchers.IO) {
-            // 1. Try to find an addon that exactly matches the forcedSource name
-            if (forcedSource != null) {
-                val directAddon = addons.find { it.name.equals(forcedSource, ignoreCase = true) }
-                if (directAddon != null) {
-                    val result = fetchFromAddon(directAddon, type, id, null)
-                    if (result != null) {
-                        metaCache[cacheKey] = Triple(System.currentTimeMillis(), result, directAddon.name)
-                        return@withContext Pair(result, directAddon.name)
-                    }
+            // 1. Try to fetch from directAddon if it matches forcedSource
+            if (directAddon != null) {
+                Log.d(TAG, "Found forcedSource match: ${directAddon.name}. Fetching meta...")
+                val result = fetchFromAddon(directAddon, type, id, null)
+                if (result != null) {
+                    Log.d(TAG, "Successfully fetched meta from forcedSource: ${directAddon.name}")
+                    metaCache[cacheKey] = Triple(System.currentTimeMillis(), result, directAddon.name)
+                    return@withContext Pair(result, directAddon.name)
+                } else {
+                    Log.w(TAG, "Failed to fetch meta from forcedSource: ${directAddon.name}")
                 }
+            } else if (forcedSource != null) {
+                Log.d(TAG, "forcedSource '$forcedSource' did not match any meta-capable addon")
             }
 
             // 2. Try the rest of the addons
+            Log.d(TAG, "Attempting fallback meta resolution across all meta addons...")
             for (addon in addons) {
                 // Skip the one we already tried above
-                if (forcedSource != null && addon.name.equals(forcedSource, ignoreCase = true)) continue
+                if (directAddon != null && addon.manifestUrl.equals(directAddon.manifestUrl, ignoreCase = true)) continue
 
+                Log.d(TAG, "Trying fallback addon: ${addon.name}...")
                 val result = fetchFromAddon(addon, type, id, forcedSource)
                 if (result != null) {
+                    Log.d(TAG, "Successfully fetched meta from fallback addon: ${addon.name}")
                     metaCache[cacheKey] = Triple(System.currentTimeMillis(), result, addon.name)
                     return@withContext Pair(result, addon.name)
                 }
             }
+            Log.w(TAG, "Failed to resolve metadata from any addon for type=$type, id=$id")
             null
         }
     }
 
     private suspend fun fetchFromAddon(addon: InstalledAddonEntity, type: String, id: String, forcedSource: String?): StremioMetaDetail? {
         return try {
-            var url = "${addon.baseUrl}/meta/$type/$id.json"
+            val reqType = addon.mapToSupportedType(type)
+            var url = "${addon.baseUrl}/meta/$reqType/$id.json"
             // If this is the Hub (aggregating multiple sources), pass the 'src' parameter
             if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                 url += "?src=${android.net.Uri.encode(forcedSource)}"
@@ -636,7 +703,7 @@ class AddonRepository(
         val addons = addonDao.getAllSync().filter { addon ->
             addon.isFeatureEnabled("subtitles") &&
                 addon.supportsResource("subtitles") &&
-                addon.types.split(",").any { it.trim().equals(type, ignoreCase = true) }
+                addon.types.split(",").any { it.trim().matchesStremioType(type) }
         }
 
         if (addons.isEmpty()) {
@@ -664,7 +731,8 @@ class AddonRepository(
     ): List<StremioStream> {
         return withContext(Dispatchers.IO) {
             try {
-                val url = "${addon.baseUrl}/subtitles/$type/$id.json"
+                val reqType = addon.mapToSupportedType(type)
+                val url = "${addon.baseUrl}/subtitles/$reqType/$id.json"
                 Log.d(TAG, "Fetching subtitles from ${addon.name}: $url")
                 val request = Request.Builder().url(url).get().build()
                 val response = client.newCall(request).execute()
@@ -938,7 +1006,7 @@ class AddonRepository(
      * This allows the UI to show streams progressively.
      */
     fun resolveStreamsFlow(type: String, id: String, forcedSource: String? = null): kotlinx.coroutines.flow.Flow<List<ResolvedStream>> =
-        kotlinx.coroutines.flow.flow {
+        kotlinx.coroutines.flow.channelFlow {
             val cacheKey = "$type:$id"
             val cached = streamCache[cacheKey]
             if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
@@ -947,13 +1015,13 @@ class AddonRepository(
                     streamCache.remove(cacheKey)
                 } else {
                     Log.d(TAG, "Using cached streams for $cacheKey flow")
-                    emit(cached.streams)
-                    return@flow
+                    send(cached.streams)
+                    return@channelFlow
                 }
             }
 
             Log.d(TAG, "Starting fresh resolution for $cacheKey (cache empty or expired)")
-            emit(emptyList()) // Immediate clear for UI feedback
+            send(emptyList()) // Immediate clear for UI feedback
 
             // Include addons that explicitly support "stream" OR have no resource data
             // (pre-Phase 1 installs have resources = "" and must not be silently excluded).
@@ -963,31 +1031,35 @@ class AddonRepository(
             }
             if (addons.isEmpty()) {
                 Log.d(TAG, "No stream-capable addons installed")
-                emit(emptyList())
-                return@flow
+                send(emptyList())
+                return@channelFlow
             }
 
             val accumulated = mutableListOf<ResolvedStream>()
+            val lock = Any()
 
             coroutineScope {
-                addons.map { addon ->
-                    async(Dispatchers.IO) {
-                        fetchStreamsFromAddon(addon, type, id, forcedSource)
-                    }
-                }.forEach { deferred ->
-                    val result = deferred.await()
-                    if (result.isNotEmpty()) {
-                        accumulated.addAll(result)
-                        emit(accumulated.sortedByDescending { it.stream.isDirectUrl }.toList())
+                addons.forEach { addon ->
+                    launch(Dispatchers.IO) {
+                        val result = fetchStreamsFromAddon(addon, type, id, forcedSource)
+                        if (result.isNotEmpty()) {
+                            val latest = synchronized(lock) {
+                                accumulated.addAll(result)
+                                accumulated.sortedByDescending { it.stream.isDirectUrl }.toList()
+                            }
+                            send(latest)
+                        }
                     }
                 }
             }
 
-            // Final emission (even if empty) to signal completion
-            if (accumulated.isEmpty()) {
-                emit(emptyList())
+            // Final emission (even if empty) to signal completion and save cache
+            val finalStreams = synchronized(lock) {
+                accumulated.sortedByDescending { it.stream.isDirectUrl }.toList()
+            }
+            if (finalStreams.isEmpty()) {
+                send(emptyList())
             } else {
-                val finalStreams = accumulated.sortedByDescending { it.stream.isDirectUrl }.toList()
                 if (!finalStreams.hasRateLimitError()) {
                     streamCache[cacheKey] = CacheEntry(
                         timestamp = System.currentTimeMillis(),
@@ -1031,7 +1103,8 @@ class AddonRepository(
 
         return withContext(Dispatchers.IO) {
             try {
-                var url = "${addon.baseUrl}/stream/$type/$id.json"
+                val reqType = addon.mapToSupportedType(type)
+                var url = "${addon.baseUrl}/stream/$reqType/$id.json"
                 // If this is the Hub, pass the 'src' parameter to help it resolve correctly
                 if (forcedSource != null && (addon.baseUrl.contains(":8080") || addon.supportsPlayEndpoint())) {
                     url += "?src=${android.net.Uri.encode(forcedSource)}"
@@ -1145,6 +1218,12 @@ class AddonRepository(
 
         Log.d(TAG, "Normalized addon URL: $url -> $result")
         return result
+    }
+
+    private fun String.normalizeAddonUrl(): String {
+        return this.lowercase()
+            .removeSuffix("/")
+            .removeSuffix("/manifest.json")
     }
 
     private fun List<ResolvedStream>.hasRateLimitError(): Boolean {

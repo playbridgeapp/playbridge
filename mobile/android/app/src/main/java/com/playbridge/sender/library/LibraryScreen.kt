@@ -889,7 +889,10 @@ private fun LibraryScreenContent(
                                 AddonMediaRow(
                                     row = row,
                                     listState = catalogRowScrollStates.getOrPut(rowKey) { LazyListState() },
-                                    onItemClick = { item -> onAddonItemClick(item.id, item.type, row.addonName) },
+                                    onItemClick = { item ->
+                                        android.util.Log.d("LibraryScreen", "onItemClick: id=${item.id}, type=${item.type}, addonBaseUrl=${row.addonBaseUrl}")
+                                        onAddonItemClick(item.id, item.type, row.addonBaseUrl)
+                                    },
                                     onLoadMore = {
                                         viewModel.loadMoreAddonRow(row.addonBaseUrl, row.type, row.catalogId)
                                     }

@@ -48,8 +48,10 @@ wire = "5.1.0"
 koin = "3.5.6"
 quickjs = "1.0.5"
 materialKolor = "5.0.0-alpha07"
+jsoup = "1.18.1"
 
 [libraries]
+jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 androidx-palette-ktx = { group = "androidx.palette", name = "palette-ktx", version.ref = "palette" }
 androidx-compose-ui-text-google-fonts = { group = "androidx.compose.ui", name = "ui-text-google-fonts" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
