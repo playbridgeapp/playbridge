@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] — 2026-07-08
+
+### Fixed
+- **Native Bridge Reconnection**: Throttled the native messaging port's reconnection routine to at most 3 failed retries upon disconnecting without establishing a valid session. Resets on successful message events.
+
 ## [0.4.1] — 2026-07-07
 
 ### Fixed
