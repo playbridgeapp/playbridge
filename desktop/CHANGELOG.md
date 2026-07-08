@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.6+24] — 2026-07-08
+
+### Fixed
+- **macOS Installer Security**: Clear quarantine flag (`xattr -c`) and apply ad-hoc signatures (`codesign -s - --force`) when preparing the context menu and native host installation scripts to bypass macOS security blocks.
+
 ## [0.6.4+22] — 2026-07-07
 
 ### Added
