@@ -48,7 +48,6 @@ fun MenuSheet(
     onAddBookmarkClick: () -> Unit,
     onFindInPageClick: () -> Unit,
     onExtensionsClick: () -> Unit,
-    onSettingsClick: () -> Unit,
     onToggleDesktopMode: () -> Unit,
     onToggleVideoDetect: () -> Unit,
     onUserAgentClick: () -> Unit = {},
@@ -147,13 +146,8 @@ fun MenuSheet(
                                 modifier = Modifier.weight(1f),
                                 onClick = onExtensionsClick
                             )
-                            MenuGridItem(
-                                icon = Icons.Default.Settings,
-                                label = "Settings",
-                                selected = currentScreen == Screen.Settings,
-                                modifier = Modifier.weight(1f),
-                                onClick = onSettingsClick
-                            )
+                            // Settings lives on Dashboard (top-right gear) only.
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
                     1 -> Column(

@@ -70,7 +70,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
-import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.connection.WebSocketClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -97,8 +96,6 @@ fun LibraryScreen(
     addonRepository: AddonRepository,
     installedAddons: List<InstalledAddonEntity>,
     onOpenUrl: (String) -> Unit,
-    tvIp: String?,
-    tvPort: Int?,
     tvName: String? = null,
     connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
     onOpenConnectionScreen: () -> Unit = {},
@@ -137,8 +134,6 @@ fun LibraryScreen(
             addonRepository = addonRepository,
             installedAddons = installedAddons,
             onOpenUrl = onOpenUrl,
-            tvIp = tvIp,
-            tvPort = tvPort,
             tvName = tvName,
             connectionState = connectionState,
             onOpenConnectionScreen = onOpenConnectionScreen,
@@ -167,8 +162,6 @@ private fun LibraryScreenContent(
     addonRepository: AddonRepository,
     installedAddons: List<InstalledAddonEntity>,
     onOpenUrl: (String) -> Unit,
-    tvIp: String?,
-    tvPort: Int?,
     tvName: String?,
     connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
     onOpenConnectionScreen: () -> Unit = {},
@@ -493,20 +486,12 @@ private fun LibraryScreenContent(
                         label = { Text("Library") }
                     )
 
-                    // 4. Addons
+                    // 4. Addons (Settings is global — Dashboard top-right gear only)
                     NavigationBarItem(
                         selected = selectedTab == 3,
                         onClick = { viewModel.setSelectedTab(3) },
                         icon = { Icon(Icons.Default.Extension, contentDescription = "Addons") },
                         label = { Text("Addons") }
-                    )
-
-                    // 5. Settings
-                    NavigationBarItem(
-                        selected = selectedTab == 4,
-                        onClick = { viewModel.setSelectedTab(4) },
-                        icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
-                        label = { Text("Settings") }
                     )
                 }
             }
@@ -728,20 +713,6 @@ private fun LibraryScreenContent(
                         onCatalogsChanged = { viewModel.refreshCatalogsNow() }
                     )
                 }
-            } else if (tab == 4) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(bottom = innerPadding.calculateBottomPadding())
-                ) {
-                    SettingsScreen(
-                        onBack = { viewModel.setSelectedTab(0) },
-                        tvIp = tvIp,
-                        tvPort = tvPort,
-                        showBack = false,
-                        isFromLibrary = true
-                    )
-                }
             } else if (tab == 2) {
                 MyListTab(
                     watchlist = watchlistAll,
@@ -923,7 +894,7 @@ private fun LibraryScreenContent(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Text(
-                                        "Install a Stremio addon from Settings to see content here.",
+                                        "Install a Stremio addon from the Addons tab to see content here.",
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                                         textAlign = androidx.compose.ui.text.style.TextAlign.Center
