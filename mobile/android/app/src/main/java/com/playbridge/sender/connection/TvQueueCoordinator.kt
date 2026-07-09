@@ -155,11 +155,7 @@ class TvQueueCoordinator(
     /**
      * Align [queuedEpisodeIndices] / [nextToResolve] with the TV's current
      * [ConnectionCoordinator.tvPlaylistState] echo so a reconnect doesn't re-send episodes
-     * that already landed on the receiver.
-     *
-     * Rebuilds in **playlist order** (not sorted plan indices): [queuedEpisodeIndices] is
-     * parallel to TV queue positions (`getOrNull(playlistIndex)`), so sorting would break
-     * that mapping if order ever diverged from chronological S/E.
+     * that already landed on the receiver. Order is TV playlist order (see [QueueBookkeeping]).
      */
     private fun mergeTvPlaylistEcho(p: TvEpisodeQueuePlan) {
         val pl = connectionCoordinator.tvPlaylistState.value ?: return
@@ -171,35 +167,13 @@ class TvQueueCoordinator(
                 vm?.season == season && vm.episode == episode
             }
         }
-        // Preserve TV item order; drop unmapped entries; de-dupe while keeping first position.
         val echoed = pl.items.mapNotNull { episodeIndexOf(it.season, it.episode).takeIf { i -> i >= 0 } }
-            .fold(mutableListOf<Int>()) { acc, idx ->
-                if (idx !in acc) acc.add(idx)
-                acc
-            }
-        if (echoed.isEmpty()) return
-        // Only advance bookkeeping — never shrink what we already believe is queued (stale
-        // partial echoes after a brief disconnect must not rewind nextToResolve).
-        val merged = if (queuedEpisodeIndices.isEmpty()) {
-            echoed
-        } else {
-            val known = queuedEpisodeIndices.toMutableList()
-            for (idx in echoed) {
-                if (idx !in known) known.add(idx)
-            }
-            // Prefer echo order when it is a superset covering known indices; else keep
-            // known order and append newly seen plan indices.
-            if (echoed.containsAll(known)) echoed else known
-        }
-        if (merged != queuedEpisodeIndices) {
-            queuedEpisodeIndices.clear()
-            queuedEpisodeIndices.addAll(merged)
-            val maxQueued = merged.maxOrNull() ?: return
-            if (nextToResolve <= maxQueued) {
-                nextToResolve = maxQueued + 1
-            }
-            Log.d(TAG, "Merged TV playlist echo: alreadyQueued=$queuedEpisodeIndices, nextToResolve=$nextToResolve")
-        }
+        val merged = QueueBookkeeping.mergeQueuedEpisodeIndices(queuedEpisodeIndices, echoed)
+        if (merged == queuedEpisodeIndices) return
+        queuedEpisodeIndices.clear()
+        queuedEpisodeIndices.addAll(merged)
+        nextToResolve = QueueBookkeeping.nextToResolveAfter(merged, nextToResolve)
+        Log.d(TAG, "Merged TV playlist echo: alreadyQueued=$queuedEpisodeIndices, nextToResolve=$nextToResolve")
     }
 
     /** Find the plan episode whose title the TV is currently reporting (exact, then loose match). */
