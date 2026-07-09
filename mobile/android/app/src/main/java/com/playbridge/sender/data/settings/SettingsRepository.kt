@@ -43,6 +43,12 @@ class SettingsRepository(
         val CUSTOM_USER_AGENTS = stringPreferencesKey("custom_user_agents")
         /** Master switch for Nuvio local JS scrapers. Default OFF — they run third-party code. */
         val ENABLE_LOCAL_SCRAPERS = booleanPreferencesKey("enable_local_scrapers")
+        /**
+         * Keep an idle native TV WebSocket (and Connected FGS) while PlayBridge is
+         * backgrounded. Default OFF — soft-stand-down after a grace period saves battery.
+         * Casting always keeps the link regardless of this toggle.
+         */
+        val KEEP_TV_CONNECTION_IN_BACKGROUND = booleanPreferencesKey("keep_tv_connection_in_background")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -75,6 +81,12 @@ class SettingsRepository(
         .map { decodeCustomUserAgents(it[Keys.CUSTOM_USER_AGENTS] ?: "[]") }
     /** Whether Nuvio local JS scrapers may run. Default false (opt-in; runs third-party code). */
     val enableLocalScrapers: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.ENABLE_LOCAL_SCRAPERS] ?: false }
+    /**
+     * Keep idle TV link + Connected notification while the app is backgrounded.
+     * Default false — approach B stand-down (close socket after grace when not casting).
+     */
+    val keepTvConnectionInBackground: Flow<Boolean> =
+        dataStore.data.catch { handleException(it) }.map { it[Keys.KEEP_TV_CONNECTION_IN_BACKGROUND] ?: false }
 
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
@@ -96,6 +108,8 @@ class SettingsRepository(
     suspend fun setLogsExcludeFilters(value: Set<String>) = write { it[Keys.LOGS_EXCLUDE_FILTERS] = value }
     suspend fun setUserAgentPreset(value: String) = write { it[Keys.USER_AGENT_PRESET] = value }
     suspend fun setEnableLocalScrapers(value: Boolean) = write { it[Keys.ENABLE_LOCAL_SCRAPERS] = value }
+    suspend fun setKeepTvConnectionInBackground(value: Boolean) =
+        write { it[Keys.KEEP_TV_CONNECTION_IN_BACKGROUND] = value }
 
     /** Append a new saved custom user agent. */
     suspend fun addCustomUserAgent(agent: CustomUserAgent) = write { prefs ->

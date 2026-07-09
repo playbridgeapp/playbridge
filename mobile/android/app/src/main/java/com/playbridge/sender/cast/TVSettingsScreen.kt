@@ -185,6 +185,32 @@ fun TVSettingsScreen(
                 modifier = Modifier.padding(horizontal = 0.dp)
             )
 
+            // Idle link while backgrounded (default off = soft stand-down after grace).
+            val keepTvInBackground by settingsRepository.keepTvConnectionInBackground
+                .collectAsState(initial = false)
+            ListItem(
+                headlineContent = { Text("Keep connection in background") },
+                supportingContent = {
+                    Text(
+                        if (keepTvInBackground) {
+                            "Stay linked to the TV with a Connected notification when PlayBridge is in the background (uses more battery)."
+                        } else {
+                            "When nothing is casting, disconnect after ~45s in the background to save battery. Reconnects when you return to the app. Casting always stays connected."
+                        }
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = keepTvInBackground,
+                        onCheckedChange = {
+                            scope.launch { settingsRepository.setKeepTvConnectionInBackground(it) }
+                        }
+                    )
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.padding(horizontal = 0.dp)
+            )
+
             Spacer(modifier = Modifier.height(12.dp))
 
             Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)

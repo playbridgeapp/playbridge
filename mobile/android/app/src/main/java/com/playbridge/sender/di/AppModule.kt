@@ -133,6 +133,7 @@ val appModule = module {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
             connectionStore = get(),
             nsdHelper = get(),
+            settingsRepository = get(),
         )
     }
 

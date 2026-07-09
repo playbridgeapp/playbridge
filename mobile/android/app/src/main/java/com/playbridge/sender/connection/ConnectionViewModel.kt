@@ -41,7 +41,7 @@ class ConnectionViewModel(
     private val connectionStore: ConnectionStore = ConnectionStore(application),
     private val nsdHelper: NsdHelper = NsdHelper(application),
     private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
-    private val castSessionManager: CastSessionManager
+    val castSessionManager: CastSessionManager
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"

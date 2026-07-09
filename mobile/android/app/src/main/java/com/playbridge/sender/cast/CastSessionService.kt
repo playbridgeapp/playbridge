@@ -12,7 +12,9 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.playbridge.sender.R
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,7 +32,14 @@ import org.koin.core.component.inject
  * extends the same guarantee to native (WebSocket) sessions.
  *
  * Lifecycle is driven entirely by [CastSessionManager.hasActiveSession]; the notification
- * mirrors [CastSessionManager.sessionInfo] and offers a Stop action that ends the session.
+ * mirrors [CastSessionManager.sessionInfo] and exposes a state-dependent action:
+ *  - **Casting** → **Stop** ([CastSessionManager.endCastSession]) — ends playback; link may remain
+ *  - **Connected** → **Disconnect** ([CastSessionManager.disconnectSession]) — drops the link
+ *
+ * Notification persistence (Android 13+): FGS notifications are user-dismissible by default;
+ * [setOngoing] alone is insufficient on many Android 14+ OEMs. We always update via
+ * [startForeground] (never a bare [NotificationManager.notify]), set ongoing + no-clear
+ * flags, and re-promote on [ACTION_NOTIFICATION_DISMISSED] while the session is still live.
  */
 class CastSessionService : Service(), KoinComponent {
 
@@ -59,6 +68,8 @@ class CastSessionService : Service(), KoinComponent {
             setReferenceCounted(false)
         }
         // Drive the notification, FGS type, and wake lock from session info + play/idle state.
+        // Always go through startForegroundWithType — bare notify() can demote the notif from
+        // the FGS association on some OEMs and make it swipe-dismissible.
         scope.launch {
             combine(manager.sessionInfo, manager.isActivelyPlaying) { info, playing -> info to playing }
                 .collect { (info, playing) ->
@@ -66,21 +77,48 @@ class CastSessionService : Service(), KoinComponent {
                     if (playing != currentlyPlaying) {
                         currentlyPlaying = playing
                         if (playing) acquireWake() else releaseWake()
-                        // Changing the FGS type requires another startForeground() call.
-                        startForegroundWithType(info, playing)
-                    } else {
-                        val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        mgr.notify(NOTIF_ID, buildNotification(info, playing))
                     }
+                    startForegroundWithType(info, playing)
                 }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            manager.endSession()
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP_CAST -> {
+                // End playback only. If the native link stays up, hasActiveSession remains
+                // true and the notif morphs to "Connected" + Disconnect — do not stopSelf.
+                manager.endCastSession()
+                if (!manager.hasActiveSession.value) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                val playing = manager.isActivelyPlaying.value
+                currentlyPlaying = playing
+                startForegroundWithType(manager.sessionInfo.value, playing)
+                if (!playing) releaseWake()
+                return START_STICKY
+            }
+            ACTION_DISCONNECT -> {
+                manager.disconnectSession()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_NOTIFICATION_DISMISSED -> {
+                // Android 13+ lets users swipe FGS notifications. If the session is still
+                // live, re-enter foreground so the notif returns; do not end the cast/link.
+                if (manager.hasActiveSession.value) {
+                    Log.i(TAG, "Cast notification dismissed while session active — re-showing")
+                    val playing = manager.isActivelyPlaying.value
+                    currentlyPlaying = playing
+                    startForegroundWithType(manager.sessionInfo.value, playing)
+                    foregroundStarted = true
+                    if (playing) acquireWake()
+                } else {
+                    stopSelf()
+                }
+                return START_STICKY
+            }
         }
         val playing = manager.isActivelyPlaying.value
         currentlyPlaying = playing
@@ -98,16 +136,12 @@ class CastSessionService : Service(), KoinComponent {
      */
     private fun startForegroundWithType(info: CastSessionManager.SessionInfo, playing: Boolean) {
         val notif = buildNotification(info, playing)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val type = if (playing) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            } else {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            }
-            startForeground(NOTIF_ID, notif, type)
-        } else {
-            startForeground(NOTIF_ID, notif)
+        val type = when {
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> 0
+            playing -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         }
+        ServiceCompat.startForeground(this, NOTIF_ID, notif, type)
     }
 
     @android.annotation.SuppressLint("WakelockTimeout")
@@ -123,6 +157,10 @@ class CastSessionService : Service(), KoinComponent {
 
     override fun onDestroy() {
         scope.cancel()
+        // Drop the notification explicitly so a killed FGS doesn't leave a swipe-orphaned row.
+        runCatching {
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID)
+        }
         runCatching { wifiLock?.release() }
         runCatching { wakeLock?.release() }
         wifiLock = null
@@ -131,9 +169,19 @@ class CastSessionService : Service(), KoinComponent {
     }
 
     private fun buildNotification(info: CastSessionManager.SessionInfo, playing: Boolean): Notification {
-        val stopIntent = Intent(this, CastSessionService::class.java).setAction(ACTION_STOP)
-        val stopPi = PendingIntent.getService(
-            this, 1, stopIntent,
+        val stopCastPi = PendingIntent.getService(
+            this, 1,
+            Intent(this, CastSessionService::class.java).setAction(ACTION_STOP_CAST),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val disconnectPi = PendingIntent.getService(
+            this, 3,
+            Intent(this, CastSessionService::class.java).setAction(ACTION_DISCONNECT),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val dismissPi = PendingIntent.getService(
+            this, 2,
+            Intent(this, CastSessionService::class.java).setAction(ACTION_NOTIFICATION_DISMISSED),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val contentPi = packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
@@ -144,30 +192,51 @@ class CastSessionService : Service(), KoinComponent {
         }
         val title = if (playing) "Casting to ${info.deviceName}" else "Connected to ${info.deviceName}"
         val text = if (playing) (info.title ?: "Playing") else "Ready to cast"
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        // Casting → Stop (end playback, keep link). Connected → Disconnect (drop the link).
+        val actionLabel = if (playing) "Stop" else "Disconnect"
+        val actionPi = if (playing) stopCastPi else disconnectPi
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(contentPi)
-            .addAction(0, "Stop", stopPi)
+            .addAction(0, actionLabel, actionPi)
             .setOngoing(true)
+            .setAutoCancel(false)
             .setOnlyAlertOnce(true)
-            .build()
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setDeleteIntent(dismissPi)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+
+        val notification = builder.build()
+        // Belt-and-braces: some OEMs honor these flags more reliably than setOngoing alone.
+        notification.flags = notification.flags or
+            Notification.FLAG_ONGOING_EVENT or
+            Notification.FLAG_NO_CLEAR
+        return notification
     }
 
     private fun ensureChannel() {
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (mgr.getNotificationChannel(CHANNEL_ID) == null) {
             mgr.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Casting", NotificationManager.IMPORTANCE_LOW),
+                NotificationChannel(CHANNEL_ID, "Casting", NotificationManager.IMPORTANCE_LOW).apply {
+                    description = "Shown while casting or connected to a TV"
+                    setShowBadge(false)
+                },
             )
         }
     }
 
     companion object {
+        private const val TAG = "CastSessionService"
         private const val CHANNEL_ID = "cast_session_channel"
         private const val NOTIF_ID = 4712
-        private const val ACTION_STOP = "com.playbridge.sender.cast.action.STOP_SESSION"
+        private const val ACTION_STOP_CAST = "com.playbridge.sender.cast.action.STOP_CAST"
+        private const val ACTION_DISCONNECT = "com.playbridge.sender.cast.action.DISCONNECT"
+        private const val ACTION_NOTIFICATION_DISMISSED =
+            "com.playbridge.sender.cast.action.NOTIFICATION_DISMISSED"
 
         fun start(context: Context) {
             val intent = Intent(context, CastSessionService::class.java)

@@ -514,7 +514,6 @@ class BrowserActivity : ComponentActivity() {
             }
             // The screen the Dashboard was opened from, so its close (X) returns there.
             var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
-            var isSettingsFromLibrary by remember { mutableStateOf(false) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -1684,9 +1683,12 @@ class BrowserActivity : ComponentActivity() {
                         onBackPressedTimeChange = { backPressedTime = it },
                         onFinishActivity = { finish() },
                         onFullExit = {
-                            // Hard exit: kill the cast foreground service and remove the app from
-                            // recents. We do NOT send a Stop to the TV — the process (and its
-                            // local proxy) just dies, so the TV errors out when it next needs it.
+                            // Hard exit: tear down cast FGS + session keep-alive, then remove
+                            // from recents. This is "quit the app", not background — do not
+                            // leave a Connected/Casting notification or WS supervisor running.
+                            // TV playback is not stopped remotely; local proxy / queueing dies
+                            // with the process.
+                            connectionViewModel.castSessionManager.disconnectSession()
                             com.playbridge.sender.cast.CastSessionService.stop(this@BrowserActivity)
                             finishAndRemoveTask()
                         },
@@ -1714,8 +1716,6 @@ class BrowserActivity : ComponentActivity() {
                         contextMenuUrl = contextMenuUrl,
                         onContextMenuUrlChange = { contextMenuUrl = it },
                         suggestions = suggestions,
-                        isSettingsFromLibrary = isSettingsFromLibrary,
-                        onIsSettingsFromLibraryChange = { isSettingsFromLibrary = it },
                         onHandleBookmarkClick = { handleBookmarkClick() },
                         browserViewContent = { s, onLongPress ->
                             BrowserView(session = s, onLongPressLink = onLongPress)
@@ -1770,12 +1770,6 @@ class BrowserActivity : ComponentActivity() {
                         scope.launch { sheetState.hide() }.invokeOnCompletion {
                             showMenuSheet = false
                             currentScreen = Screen.Extensions
-                        }
-                    },
-                    onSettingsClick = {
-                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                            showMenuSheet = false
-                            currentScreen = Screen.Settings
                         }
                     },
                     onToggleDesktopMode = { isDesktopMode = !isDesktopMode },

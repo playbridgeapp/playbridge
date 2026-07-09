@@ -661,6 +661,30 @@ class WebSocketClient {
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected
     }
+
+    /**
+     * Close the socket without treating it as a user disconnect. Used for idle
+     * background stand-down: the link is dropped to save battery, but
+     * [wasUserDisconnect] stays false so foreground-return / auto-connect can
+     * re-open it. Pairing material is kept so the next auth is a normal reconnect.
+     */
+    fun softDisconnect(reason: String = "background idle stand-down") {
+        mainHandler.removeCallbacks(mouseFlushRunnable)
+        mouseFlushScheduled = false
+        pendingDx = 0f
+        pendingDy = 0f
+        // Deliberately do NOT set isUserDisconnect or clearPairingSecrets.
+        try {
+            webSocket?.close(1000, reason)
+        } catch (_: Exception) {
+        }
+        webSocket = null
+        if (_connectionState.value !is ConnectionState.Disconnected &&
+            _connectionState.value !is ConnectionState.Error
+        ) {
+            _connectionState.value = ConnectionState.Disconnected
+        }
+    }
     
     fun isConnected(): Boolean {
         return _connectionState.value is ConnectionState.Connected
