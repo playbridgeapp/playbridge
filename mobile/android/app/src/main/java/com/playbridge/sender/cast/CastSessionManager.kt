@@ -352,7 +352,19 @@ class CastSessionManager(
                     maybeRequestBatteryExemption()
                 } else {
                     delay(STOP_GRACE_MS)
-                    CastSessionService.stop(context)
+                    CastSessionService.stopAndCancelNotification(context)
+                }
+            }
+        }
+
+        // If TV context becomes "player" while a stand-down is pending (e.g. cold-start
+        // connected as idle, then context_query returns player after we backgrounded),
+        // cancel the soft-disconnect so we do not kill a live cast session.
+        scope.launch {
+            isActivelyPlaying.collect { playing ->
+                if (playing) {
+                    backgroundStandDownJob?.cancel()
+                    backgroundStandDownJob = null
                 }
             }
         }

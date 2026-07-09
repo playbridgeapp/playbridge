@@ -129,17 +129,22 @@ class CastSessionService : Service(), KoinComponent {
     }
 
     /**
-     * (Re)enter the foreground with the FGS type that matches the current state:
-     * mediaPlayback while playing/proxying, connectedDevice while idle-but-linked. The
-     * connectedDevice type keeps us off the "media-playback FGS with nothing playing"
-     * Play Store policy edge.
+     * (Re)enter the foreground as a **connectedDevice** session.
+     *
+     * We previously used [ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK] whenever the
+     * TV reported context "player". That is wrong: the phone is a cast remote / WS client,
+     * not a media player — there is no MediaSession. On Android 14+ the system stops
+     * mediaPlayback FGSes without a session after a short time, which made the Casting
+     * notification vanish a few seconds after cold-start reconnect (B7).
+     *
+     * [playing] still drives notification copy and the CPU wake lock (series queue top-up).
      */
     private fun startForegroundWithType(info: CastSessionManager.SessionInfo, playing: Boolean) {
         val notif = buildNotification(info, playing)
-        val type = when {
-            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q -> 0
-            playing -> ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+        } else {
+            0
         }
         ServiceCompat.startForeground(this, NOTIF_ID, notif, type)
     }
