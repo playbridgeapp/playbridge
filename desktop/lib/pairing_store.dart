@@ -46,6 +46,7 @@ class PairingStore {
   static const _kPairedDevices = 'pb.paired_devices';
   static const _kShowStats = 'pb.show_stats';
   static const _kAutoFullScreen = 'pb.auto_fullscreen';
+  static const _kPauseOnWindowHide = 'pb.pause_on_window_hide';
   static const _kEnableHistory = 'pb.enable_history';
 
   final SharedPreferences _prefs;
@@ -92,6 +93,13 @@ class PairingStore {
 
   Future<void> setAutoFullScreen(bool value) =>
       _prefs.setBool(_kAutoFullScreen, value);
+
+  /// When true, the red close button (hide to tray) also pauses local playback.
+  /// Default false: keep playing in the background like a cast receiver.
+  bool get pauseOnWindowHide => _prefs.getBool(_kPauseOnWindowHide) ?? false;
+
+  Future<void> setPauseOnWindowHide(bool value) =>
+      _prefs.setBool(_kPauseOnWindowHide, value);
 
   bool get enableHistory => _prefs.getBool(_kEnableHistory) ?? true;
 

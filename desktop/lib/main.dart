@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'package:desktop_drop/desktop_drop.dart';
+
 import 'logging/log_store.dart';
 import 'context_menu_installer.dart';
 import 'discovery.dart';
@@ -15,11 +17,13 @@ import 'extension_bridge.dart';
 import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
+import 'keyboard_shortcuts_sheet.dart';
 import 'media_session_bridge.dart';
 import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
+import 'playback_osd.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'playback_surface.dart';
@@ -177,6 +181,30 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   bool _playlistDrawerOpen = false;
   Timer? _hideTimer;
   static const _autoHide = Duration(seconds: 2);
+
+  /// Center OSD (pause / seek / volume); cleared by [_osdTimer].
+  String? _osdMessage;
+  Timer? _osdTimer;
+  /// Debounces single-tap play/pause so double-tap fullscreen isn't stolen.
+  Timer? _tapTimer;
+  bool _mainDragging = false;
+
+  static const _mediaExts = {
+    'mp4',
+    'm4v',
+    'mkv',
+    'webm',
+    'avi',
+    'mov',
+    'wmv',
+    'flv',
+    'mp3',
+    'flac',
+    'm4a',
+    'aac',
+    'ogg',
+    'wav',
+  };
 
   void _markActive() {
     if (!_videoHovered) setState(() => _videoHovered = true);
@@ -427,7 +455,23 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   @override
   void onWindowClose() async {
     final prevented = await windowManager.isPreventClose();
-    if (prevented) await windowManager.hide();
+    if (!prevented) return;
+    // Fullscreen red X = leave immersive mode only (stay visible), same end
+    // state as the green full-screen control. Windowed red X = hide to tray.
+    // Quit is tray / Settings only.
+    //
+    // Green vs red in fullscreen both end windowed+visible; they differ after
+    // that: green is “back to a normal window”, red is the first step of close
+    // (second red X then hides). Matching Safari-style progressive close.
+    if (await windowManager.isFullScreen()) {
+      await windowManager.setFullScreen(false);
+      return;
+    }
+    if (widget.store.pauseOnWindowHide &&
+        (_player.state == 'playing' || _player.state == 'buffering')) {
+      await _player.pause();
+    }
+    await windowManager.hide();
   }
 
   @override
@@ -499,9 +543,106 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
   }
 
+  void _showOsd(String message) {
+    _osdTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _osdMessage = message);
+    _osdTimer = Timer(const Duration(milliseconds: 1100), () {
+      if (mounted) setState(() => _osdMessage = null);
+    });
+  }
+
+  void _togglePlayPause({bool withOsd = true}) {
+    if (_player.state == 'playing') {
+      unawaited(_player.pause());
+      if (withOsd) _showOsd('Paused');
+    } else if (_player.state == 'paused' || _player.state == 'buffering') {
+      unawaited(_player.resume());
+      if (withOsd) _showOsd('Play');
+    }
+  }
+
+  void _seekBy(int deltaMs, {required String osd}) {
+    final dur = _player.durationMs;
+    var target = _player.positionMs + deltaMs;
+    if (target < 0) target = 0;
+    if (dur > 0 && target > dur) target = dur;
+    unawaited(_player.seek(Duration(milliseconds: target)));
+    _showOsd(osd);
+  }
+
+  void _nudgeVolume(double delta) {
+    final next = (_player.volume + delta).clamp(0.0, 1.0);
+    unawaited(_player.setVolume(next));
+    _showOsd('Volume ${(next * 100).round()}%');
+  }
+
+  /// Drop files/URLs onto the main surface: cast if a TV is linked, else play here.
+  void _onMainDrop(DropDoneDetails detail) {
+    setState(() => _mainDragging = false);
+    final files = <File>[];
+    final urls = <String>[];
+    for (final f in detail.files) {
+      final path = f.path;
+      if (path.startsWith('http://') || path.startsWith('https://')) {
+        urls.add(path);
+        continue;
+      }
+      final ext = _fileExt(path);
+      if (_mediaExts.contains(ext)) files.add(File(path));
+    }
+    if (files.isEmpty && urls.isEmpty) {
+      _showOsd('No media in drop');
+      return;
+    }
+
+    final tvLinked = _sender.isConnected;
+    if (tvLinked) {
+      if (files.isNotEmpty) {
+        unawaited(_sender.castLocalFiles(files).then((ok) {
+          if (!ok) _showOsd('Cast failed');
+        }));
+      }
+      for (final u in urls) {
+        _sender.castUrl(u);
+      }
+      if (files.isNotEmpty || urls.isNotEmpty) {
+        _showOsd('Casting…');
+        setState(() {
+          _dest = _Dest.nowCasting;
+          _showingVideo = false;
+        });
+      }
+      return;
+    }
+
+    // Local play: URLs + files as a playlist.
+    final items = <QueueItem>[
+      for (final u in urls)
+        QueueItem(url: u, title: u.split('/').last.split('?').first),
+      for (final f in files)
+        QueueItem(
+          url: f.uri.toString(),
+          title: f.uri.pathSegments.isNotEmpty
+              ? f.uri.pathSegments.last
+              : f.path,
+        ),
+    ];
+    if (items.isEmpty) return;
+    unawaited(_player.playPlaylist(items, 0, isRemote: true));
+    _showOsd(items.length == 1 ? 'Playing' : '${items.length} items');
+  }
+
+  static String _fileExt(String path) {
+    final dot = path.lastIndexOf('.');
+    return dot >= 0 ? path.substring(dot + 1).toLowerCase() : '';
+  }
+
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _osdTimer?.cancel();
+    _tapTimer?.cancel();
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
     _player.playRequests.removeListener(_handlePlayRequest);
@@ -551,46 +692,61 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               const VolumeDownIntent(),
           const SingleActivator(LogicalKeyboardKey.keyI):
               const StatsToggleIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyF):
+              const ToggleFullScreenIntent(),
+          // `?` is Shift+/ on US keyboards.
+          const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+              const ShowShortcutsIntent(),
+          const SingleActivator(LogicalKeyboardKey.slash):
+              const ShowShortcutsIntent(),
         },
         child: Actions(
           actions: {
             PlayPauseIntent: CallbackAction<PlayPauseIntent>(
-              onInvoke: (_) => _player.state == 'playing'
-                  ? _player.pause()
-                  : _player.resume(),
+              onInvoke: (_) {
+                _togglePlayPause();
+                return null;
+              },
             ),
             SeekForwardIntent: CallbackAction<SeekForwardIntent>(
               onInvoke: (_) {
-                final dur = _player.durationMs;
-                var target = _player.positionMs + 10000;
-                if (dur > 0 && target > dur) target = dur;
-                _player.seek(Duration(milliseconds: target));
+                _seekBy(10000, osd: '≫ 10s');
                 return null;
               },
             ),
             SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
               onInvoke: (_) {
-                // Clamp to 0 — a negative absolute seek makes mpv jump to EOF.
-                final target = _player.positionMs - 10000;
-                _player.seek(Duration(milliseconds: target < 0 ? 0 : target));
+                _seekBy(-10000, osd: '≪ 10s');
                 return null;
               },
             ),
             VolumeUpIntent: CallbackAction<VolumeUpIntent>(
               onInvoke: (_) {
-                _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
+                _nudgeVolume(0.05);
                 return null;
               },
             ),
             VolumeDownIntent: CallbackAction<VolumeDownIntent>(
               onInvoke: (_) {
-                _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
+                _nudgeVolume(-0.05);
                 return null;
               },
             ),
             StatsToggleIntent: CallbackAction<StatsToggleIntent>(
               onInvoke: (_) {
                 _showStats.value = !_showStats.value;
+                return null;
+              },
+            ),
+            ToggleFullScreenIntent: CallbackAction<ToggleFullScreenIntent>(
+              onInvoke: (_) {
+                unawaited(_toggleFullScreen());
+                return null;
+              },
+            ),
+            ShowShortcutsIntent: CallbackAction<ShowShortcutsIntent>(
+              onInvoke: (_) {
+                unawaited(showKeyboardShortcutsSheet(context));
                 return null;
               },
             ),
@@ -689,7 +845,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                         setState(() => _showingVideo = true),
                                   ),
                                 Expanded(
-                                  child: MouseRegion(
+                                  child: DropTarget(
+                                    onDragEntered: (_) =>
+                                        setState(() => _mainDragging = true),
+                                    onDragExited: (_) =>
+                                        setState(() => _mainDragging = false),
+                                    onDragDone: _onMainDrop,
+                                    child: MouseRegion(
                                     onEnter: (_) => _markActive(),
                                     onExit: (_) => _markInactive(),
                                     onHover: (_) => _markActive(),
@@ -714,8 +876,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                             ),
                                           ),
                                         ),
-                                        // Tap video (not controls/drawer) to play/pause.
-                                        // Below overlays so buttons/menus keep their hits.
+                                        // Tap / double-tap video (not controls).
+                                        // Below overlays so buttons/menus keep hits.
                                         if (_showingVideo && hasMedia)
                                           Positioned.fill(
                                             child: GestureDetector(
@@ -723,14 +885,22 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   HitTestBehavior.translucent,
                                               onTap: () {
                                                 _markActive();
-                                                if (_player.state == 'playing') {
-                                                  unawaited(_player.pause());
-                                                } else if (_player.state ==
-                                                        'paused' ||
-                                                    _player.state ==
-                                                        'buffering') {
-                                                  unawaited(_player.resume());
-                                                }
+                                                // Wait out a possible double-tap.
+                                                _tapTimer?.cancel();
+                                                _tapTimer = Timer(
+                                                  const Duration(
+                                                      milliseconds: 220),
+                                                  () => _togglePlayPause(),
+                                                );
+                                              },
+                                              onDoubleTap: () {
+                                                _tapTimer?.cancel();
+                                                _markActive();
+                                                final entering = !_isFullScreen;
+                                                unawaited(_toggleFullScreen());
+                                                _showOsd(entering
+                                                    ? 'Fullscreen'
+                                                    : 'Windowed');
                                               },
                                             ),
                                           ),
@@ -820,8 +990,15 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                               onStart: _dismissPrePlay,
                                             ),
                                           ),
+                                        if (_osdMessage != null)
+                                          PlaybackOsd(message: _osdMessage!),
+                                        if (_mainDragging)
+                                          const Positioned.fill(
+                                            child: _MainDropOverlay(),
+                                          ),
                                       ],
                                     ),
+                                  ),
                                   ),
                                 ),
                               ],
@@ -887,6 +1064,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               _dest = _Dest.cast;
             }
           }),
+          onQuit: () => unawaited(_tray.quit()),
         ),
     };
   }
@@ -1533,6 +1711,50 @@ class _AudioMenuButton extends StatelessWidget {
       if (title != null && title.isNotEmpty) title,
     ];
     return parts.isEmpty ? fallback : parts.join(' · ');
+  }
+}
+
+/// Full-surface hint while media is dragged onto the main player.
+class _MainDropOverlay extends StatelessWidget {
+  const _MainDropOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.55),
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: Colors.tealAccent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.tealAccent.withValues(alpha: 0.6),
+            width: 2,
+          ),
+        ),
+        child: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.file_download, size: 40, color: Colors.tealAccent),
+            SizedBox(height: 12),
+            Text(
+              'Drop to play',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(height: 4),
+            Text(
+              'TV linked → cast · otherwise plays here',
+              style: TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

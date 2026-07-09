@@ -137,7 +137,7 @@ class TrayController with TrayListener {
       case 'launch_at_login':
         _toggleLaunchAtLogin();
       case 'quit':
-        _quit();
+        unawaited(quit());
     }
   }
 
@@ -162,7 +162,9 @@ class TrayController with TrayListener {
     }
   }
 
-  Future<void> _quit() async {
+  /// Fully exit the app (window + tray + process). Used by the tray menu and
+  /// Settings → Quit.
+  Future<void> quit() async {
     await windowManager.destroy();
     exit(0);
   }

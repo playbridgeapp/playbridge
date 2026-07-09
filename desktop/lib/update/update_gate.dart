@@ -54,7 +54,8 @@ class _UpdateGateState extends State<UpdateGate> {
   @override
   Widget build(BuildContext context) {
     return switch (widget.checker.state) {
-      UpdateAvailable(:final info) => _barrier(_availableCard(info)),
+      // Quiet non-blocking strip — background checks shouldn't interrupt video.
+      UpdateAvailable(:final info) => _availableBanner(info),
       UpdateDownloading(:final info, :final fraction) => _barrier(_progressCard(
           'Downloading v${info.version}…',
           fraction: fraction,
@@ -69,6 +70,67 @@ class _UpdateGateState extends State<UpdateGate> {
       _ => const SizedBox.shrink(),
     };
   }
+
+  /// Persistent bottom strip with one-tap restart (not a modal barrier).
+  Widget _availableBanner(UpdateInfo info) => Positioned(
+        left: 0,
+        right: 0,
+        bottom: 48,
+        child: Center(
+          child: Material(
+            color: Colors.transparent,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 560),
+              margin: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E1E24),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Colors.tealAccent.withValues(alpha: 0.35),
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.4),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.system_update_alt,
+                      size: 20, color: Colors.tealAccent),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'v${info.version} is ready',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: widget.checker.dismiss,
+                    child: const Text('Later'),
+                  ),
+                  const SizedBox(width: 4),
+                  FilledButton(
+                    onPressed: () => widget.checker.accept(info),
+                    child: const Text('Restart & update'),
+                  ),
+                  IconButton(
+                    tooltip: 'Dismiss',
+                    icon: const Icon(Icons.close, size: 16),
+                    onPressed: widget.checker.dismiss,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
 
   Widget _barrier(Widget child) => Positioned.fill(
         child: Container(
@@ -92,32 +154,6 @@ class _UpdateGateState extends State<UpdateGate> {
           children: children,
         ),
       );
-
-  Widget _availableCard(UpdateInfo info) => _card(children: [
-        const Text('Update available',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 12),
-        Text(
-          'PlayBridge Desktop v${info.version} is available. The app will '
-          'download it, restart, and update itself in place.',
-          style: const TextStyle(color: Colors.white70, fontSize: 13),
-        ),
-        const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
-            TextButton(
-              onPressed: widget.checker.dismiss,
-              child: const Text('Later'),
-            ),
-            const SizedBox(width: 8),
-            FilledButton(
-              onPressed: () => widget.checker.accept(info),
-              child: const Text('Restart & update'),
-            ),
-          ],
-        ),
-      ]);
 
   Widget _progressCard(String title, {required double? fraction}) =>
       _card(children: [
