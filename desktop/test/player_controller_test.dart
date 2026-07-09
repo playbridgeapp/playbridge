@@ -63,7 +63,9 @@ class _FakeEngine extends PlayerEngine {
   }
 
   @override
-  Future<void> dispose() async {}
+  Future<void> dispose() async {
+    super.dispose();
+  }
 }
 
 void main() {
