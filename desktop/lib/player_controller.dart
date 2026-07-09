@@ -5,8 +5,22 @@ import 'engines/mpv_engine.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
-  PlayerController({EngineType initialEngine = EngineType.mpvInternal}) {
-    _setEngine(initialEngine);
+  /// [engineForTest] injects a fake engine (unit tests); production leaves it null.
+  PlayerController({
+    EngineType initialEngine = EngineType.mpvInternal,
+    PlayerEngine? engineForTest,
+  }) {
+    if (engineForTest != null) {
+      _currentType = initialEngine;
+      _engine = engineForTest;
+      if (_engine is MpvEngine) {
+        (_engine as MpvEngine).onCompleted = _onCompleted;
+      }
+      _engine.addListener(notifyListeners);
+      _hasInited = true;
+    } else {
+      _setEngine(initialEngine);
+    }
   }
 
   late PlayerEngine _engine;
@@ -31,6 +45,10 @@ class PlayerController extends ChangeNotifier {
     _hasInited = true;
     notifyListeners();
   }
+
+  /// Test hook: simulate engine end-of-file.
+  @visibleForTesting
+  void notifyCompletedForTest() => _onCompleted();
 
   bool _hasInited = false;
   EngineType get engineType => _currentType;
