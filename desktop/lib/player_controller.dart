@@ -179,6 +179,9 @@ class PlayerController extends ChangeNotifier {
     if (isRemote) {
       playRequests.value++;
     }
+    // So PlaybackSurface rebuilds with the new queue before frames arrive
+    // (pairs with mpv surface clear in openPlaylist).
+    notifyListeners();
     await _engine.openPlaylist(_queue, _currentIndex);
     unawaited(_applyStartPosition());
   }

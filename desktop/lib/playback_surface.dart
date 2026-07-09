@@ -56,7 +56,11 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
 
   @override
   Widget build(BuildContext context) {
-    if (_mpvVideo != null) {
+    // While the queue is empty the previous item's last frame can still sit on
+    // the media_kit texture. Paint black and skip [Video] so stop → later play
+    // never flashes the old thumbnail.
+    final hasMedia = widget.controller.queue.isNotEmpty;
+    if (_mpvVideo != null && hasMedia) {
       return TweenAnimationBuilder<double>(
         tween: Tween(
           end: widget.controlsVisible
