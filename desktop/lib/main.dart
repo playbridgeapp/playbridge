@@ -207,7 +207,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _tray =
         TrayController(player: _player, server: _server, store: widget.store);
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
-    _extBridge = ExtensionBridge(_sender);
+    _extBridge = ExtensionBridge(_sender, _player);
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
@@ -234,10 +234,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     // video here). Tracks the rising edge so it doesn't fight tab navigation.
     _sender.addListener(_handleSenderChange);
 
-    // Cold-start "Play on TV": cast the launched file once a TV is connected.
+    // Cold-start file open (`playbridge_cast` launched the app): cast to a TV
+    // if already linked, otherwise play on this desktop (same as extension
+    // bridge when disconnected).
     if (widget.initialCastFile != null) {
       _pendingCastFile = widget.initialCastFile;
       _sender.addListener(_maybeCastPendingFile);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _resolvePendingCastFile();
+      });
     }
   }
 
@@ -260,14 +266,37 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   String? _pendingCastFile;
 
-  /// When launched with `--cast-file`, wait for a TV connection then cast once.
+  /// Rising edge: TV connected while a cold-start file is still pending → TV.
   void _maybeCastPendingFile() {
+    if (_pendingCastFile == null || !_sender.isConnected) return;
+    _resolvePendingCastFile();
+  }
+
+  /// One-shot: send [initialCastFile] to the TV if linked, else play locally.
+  void _resolvePendingCastFile() {
     final path = _pendingCastFile;
-    if (path == null || !_sender.isConnected) return;
-    _pendingCastFile = null; // one-shot
+    if (path == null) return;
+    _pendingCastFile = null;
     _sender.removeListener(_maybeCastPendingFile);
-    unawaited(
-        _sender.castLocalFile(File(path), title: widget.initialCastTitle));
+    final file = File(path);
+    if (!file.existsSync()) {
+      debugPrint('[main] pending cast file missing: $path');
+      return;
+    }
+    final title = widget.initialCastTitle;
+    if (_sender.isConnected) {
+      unawaited(_sender.castLocalFile(file, title: title));
+      return;
+    }
+    final name = title ??
+        (file.uri.pathSegments.isNotEmpty
+            ? file.uri.pathSegments.last
+            : path);
+    unawaited(_player.playUrl(
+      file.uri.toString(),
+      title: name,
+      isRemote: true,
+    ));
   }
 
   Future<void> _initTrayAndWindow() async {

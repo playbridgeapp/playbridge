@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'bridge_paths.dart';
+import 'player_controller.dart';
 import 'tv_sender_controller.dart';
 
 /// Local IPC endpoint the browser extension reaches **via the native-messaging
@@ -18,13 +19,19 @@ import 'tv_sender_controller.dart';
 /// the host (browser-enforced allowlist) nor read the token file, so it can't
 /// drive the bridge even though there is a loopback port.
 ///
+/// Routing: when a TV/device is linked ([TvSenderController.isConnected]), cast
+/// and control go to that receiver. When nothing is connected, the same
+/// commands play on **this** desktop ([PlayerController]) so the extension
+/// always has a working target.
+///
 /// Wire format: newline-delimited JSON, one object per line.
 /// - client → app: `{"token":"…"}` (first line), then `{"cmd":…}`.
 /// - app → client: `{"type":"hello"|"state"|"result", …}`.
 class ExtensionBridge {
-  ExtensionBridge(this._controller);
+  ExtensionBridge(this._sender, this._player);
 
-  final TvSenderController _controller;
+  final TvSenderController _sender;
+  final PlayerController _player;
 
   ServerSocket? _server;
   final Set<Socket> _authed = {};
@@ -37,7 +44,8 @@ class ExtensionBridge {
     _server = server;
     await _writeBridgeInfo(server.port, _token);
     server.listen(_onClient);
-    _controller.addListener(_pushState);
+    _sender.addListener(_pushState);
+    _player.addListener(_pushState);
     debugPrint('[ext-bridge] listening on 127.0.0.1:${server.port}');
   }
 
@@ -107,19 +115,36 @@ class ExtensionBridge {
         }
         final headers =
             (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
-        final ok = _controller.castUrl(url,
-            headers: headers, title: obj['title'] as String?);
-        _send(socket, {
-          'type': 'result',
-          'ok': ok,
-          if (!ok) 'error': 'no TV connected',
-        });
+        final title = obj['title'] as String?;
+        if (_sender.isConnected) {
+          final ok = _sender.castUrl(url, headers: headers, title: title);
+          _send(socket, {
+            'type': 'result',
+            'ok': ok,
+            'target': 'tv',
+            if (!ok) 'error': 'send failed',
+          });
+        } else {
+          // No cast target — play on this machine (extension → desktop).
+          unawaited(_player.playUrl(
+            url,
+            headers: headers,
+            title: title,
+            isRemote: true,
+          ));
+          debugPrint('[ext-bridge] cast → local player: $url');
+          _send(socket, {
+            'type': 'result',
+            'ok': true,
+            'target': 'local',
+          });
+        }
         break;
       case 'cast_file':
         // Cast a local file by absolute path — used by the OS "Play on TV"
         // context-menu entry, which shells `playbridge_cast <path>` and relays
-        // it here. castLocalFile is async (it spins up the LAN file server), so
-        // reply once it resolves.
+        // it here. When a TV is linked, serve over LAN; otherwise open in the
+        // local player.
         final path = obj['path'] as String?;
         if (path == null || path.isEmpty) {
           _send(
@@ -128,22 +153,109 @@ class ExtensionBridge {
         }
         final fileTitle = obj['title'] as String?;
         unawaited(() async {
-          final ok =
-              await _controller.castLocalFile(File(path), title: fileTitle);
+          final file = File(path);
+          if (!file.existsSync()) {
+            _send(socket, {
+              'type': 'result',
+              'ok': false,
+              'error': 'file not found',
+            });
+            return;
+          }
+          if (_sender.isConnected) {
+            final ok =
+                await _sender.castLocalFile(file, title: fileTitle);
+            _send(socket, {
+              'type': 'result',
+              'ok': ok,
+              'target': 'tv',
+              if (!ok) 'error': 'send failed',
+            });
+            return;
+          }
+          final name = fileTitle ??
+              (file.uri.pathSegments.isNotEmpty
+                  ? file.uri.pathSegments.last
+                  : path);
+          await _player.playUrl(
+            file.uri.toString(),
+            title: name,
+            isRemote: true,
+          );
+          debugPrint('[ext-bridge] cast_file → local player: $path');
           _send(socket, {
             'type': 'result',
-            'ok': ok,
-            if (!ok) 'error': 'no TV connected or file not found',
+            'ok': true,
+            'target': 'local',
           });
         }());
         break;
       case 'control':
         final action = obj['action'] as String?;
-        final ok = action != null && _controller.sendControl(action);
-        _send(socket, {'type': 'result', 'ok': ok});
+        if (action == null || action.isEmpty) {
+          _send(socket, {'type': 'result', 'ok': false});
+          break;
+        }
+        final ok = _sender.isConnected
+            ? _sender.sendControl(action)
+            : _localControl(action);
+        _send(socket, {
+          'type': 'result',
+          'ok': ok,
+          'target': _sender.isConnected ? 'tv' : 'local',
+        });
         break;
       default:
         _send(socket, {'type': 'result', 'ok': false, 'error': 'unknown cmd'});
+    }
+  }
+
+  /// Apply a control action to the local [PlayerController] (same vocabulary
+  /// as the TV receiver / [TvSenderController.sendControl]).
+  bool _localControl(String action) {
+    try {
+      if (action.startsWith('seek_to:')) {
+        final ms = int.tryParse(action.substring('seek_to:'.length));
+        if (ms == null) return false;
+        final dur = _player.durationMs;
+        var target = ms < 0 ? 0 : ms;
+        if (dur > 0 && target > dur) target = dur;
+        unawaited(_player.seek(Duration(milliseconds: target)));
+        return true;
+      }
+      switch (action) {
+        case 'play':
+          unawaited(_player.resume());
+          return true;
+        case 'pause':
+          unawaited(_player.pause());
+          return true;
+        case 'toggle':
+          unawaited(_player.state == 'playing'
+              ? _player.pause()
+              : _player.resume());
+          return true;
+        case 'stop':
+          unawaited(_player.stop());
+          return true;
+        case 'seek_back':
+          final pos = _player.positionMs - 10000;
+          unawaited(
+              _player.seek(Duration(milliseconds: pos < 0 ? 0 : pos)));
+          return true;
+        case 'seek_forward':
+          final dur = _player.durationMs;
+          var target = _player.positionMs + 10000;
+          if (dur > 0 && target > dur) target = dur;
+          unawaited(_player.seek(Duration(milliseconds: target)));
+          return true;
+        default:
+          debugPrint('[ext-bridge] local control ignored: $action');
+          return false;
+      }
+    } catch (e) {
+      debugPrint('[ext-bridge] local control failed: $e');
+      return false;
     }
   }
 
@@ -157,20 +269,27 @@ class ExtensionBridge {
 
   void _sendStateTo(Socket socket) => _send(socket, _stateFrame());
 
-  Map<String, dynamic> _stateFrame() => {
-        'type': 'state',
-        'connected': _controller.isConnected,
-        'state': _controller.state.name,
-        'activeTv': _controller.activeTv?.name,
-        'devices': [
-          for (final d in _controller.discovered)
-            {
-              'uuid': d.uuid,
-              'name': d.name,
-              'paired': _controller.pairedTvs.any((p) => p.uuid == d.uuid),
-            },
-        ],
-      };
+  Map<String, dynamic> _stateFrame() {
+    final tvLinked = _sender.isConnected;
+    return {
+      'type': 'state',
+      // Always ready to accept cast — either a TV or this desktop.
+      'connected': true,
+      'target': tvLinked ? 'tv' : 'local',
+      'state': tvLinked ? _sender.state.name : _player.state,
+      'activeTv': tvLinked
+          ? _sender.activeTv?.name
+          : 'This computer',
+      'devices': [
+        for (final d in _sender.discovered)
+          {
+            'uuid': d.uuid,
+            'name': d.name,
+            'paired': _sender.pairedTvs.any((p) => p.uuid == d.uuid),
+          },
+      ],
+    };
+  }
 
   void _send(Socket socket, Map<String, dynamic> obj) {
     try {
@@ -203,7 +322,8 @@ class ExtensionBridge {
   }
 
   Future<void> stop() async {
-    _controller.removeListener(_pushState);
+    _sender.removeListener(_pushState);
+    _player.removeListener(_pushState);
     for (final s in _authed) {
       try {
         await s.close();
