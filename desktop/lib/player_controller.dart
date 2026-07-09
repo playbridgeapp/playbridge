@@ -107,6 +107,16 @@ class PlayerController extends ChangeNotifier {
   final List<QueueItem> _queue = [];
   int _currentIndex = -1;
 
+  /// True while a new playlist is being opened — UI paints black over the VO
+  /// so a stale frame can't flash (especially after the window was unfocused).
+  bool _opening = false;
+  bool get isOpening => _opening;
+
+  /// Bumped on every [stop] so [PlaybackSurface] can rebuild the media_kit
+  /// [VideoController] and drop a GPU texture frozen while the window was idle.
+  int _surfaceGeneration = 0;
+  int get surfaceGeneration => _surfaceGeneration;
+
   String? get currentTitle =>
       _currentIndex >= 0 && _currentIndex < _queue.length
           ? _queue[_currentIndex].title
@@ -172,6 +182,12 @@ class PlayerController extends ChangeNotifier {
     bool isRemote = false,
   }) async {
     if (items.isEmpty) return;
+    // Mask first so focus/reveal never paints the previous item's last frame
+    // (repro: stop A → unfocus window → cast B).
+    _opening = true;
+    notifyListeners();
+    await _engine.clearVideoSurface();
+
     _queue
       ..clear()
       ..addAll(items);
@@ -179,11 +195,14 @@ class PlayerController extends ChangeNotifier {
     if (isRemote) {
       playRequests.value++;
     }
-    // So PlaybackSurface rebuilds with the new queue before frames arrive
-    // (pairs with mpv surface clear in openPlaylist).
     notifyListeners();
-    await _engine.openPlaylist(_queue, _currentIndex);
-    unawaited(_applyStartPosition());
+    try {
+      await _engine.openPlaylist(_queue, _currentIndex);
+      unawaited(_applyStartPosition());
+    } finally {
+      _opening = false;
+      notifyListeners();
+    }
   }
 
   /// Append an item to the live queue (`queue_add`). If nothing is playing,
@@ -271,6 +290,10 @@ class PlayerController extends ChangeNotifier {
     await _engine.stop();
     _queue.clear();
     _setIndex(-1);
+    // New VO binding on next play — unfocused windows can freeze the old
+    // Metal/OpenGL texture so clear alone is not enough.
+    _surfaceGeneration++;
+    _opening = false;
     queueChanges.value++;
     notifyListeners();
   }

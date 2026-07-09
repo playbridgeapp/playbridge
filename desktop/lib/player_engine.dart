@@ -136,6 +136,12 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> seek(Duration position);
   Future<void> setVolume(double volume) async {}
   Future<void> stop();
+
+  /// Best-effort blank of the last decoded frame (mpv VO texture). No-op by
+  /// default. Call before a new open when the window may have been unfocused
+  /// since the previous stop — otherwise the GPU can still show video A.
+  Future<void> clearVideoSurface() async {}
+
   @override
   Future<void> dispose();
 }

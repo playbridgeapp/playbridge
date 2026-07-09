@@ -21,31 +21,35 @@ class PlaybackSurface extends StatefulWidget {
 
 class _PlaybackSurfaceState extends State<PlaybackSurface> {
   VideoController? _mpvVideo;
+  int _boundGeneration = -1;
 
   @override
   void initState() {
     super.initState();
-    _initMpv();
+    _syncVideoController();
     widget.controller.addListener(_onControllerChange);
   }
 
   void _onControllerChange() {
-    if (_mpvVideo == null) {
-      _initMpv();
-    }
+    _syncVideoController();
   }
 
-  void _initMpv() {
+  /// Keep a live [VideoController], recreating it after each stop so a GPU
+  /// texture frozen while the window was unfocused cannot flash video A when
+  /// video B starts.
+  void _syncVideoController() {
     final engine = widget.controller.engine;
-    if (engine is MpvEngine) {
-      _mpvVideo = VideoController(
-        engine.player,
-        configuration: VideoControllerConfiguration(
-          enableHardwareAcceleration: !Platform.isLinux,
-        ),
-      );
-      setState(() {});
-    }
+    if (engine is! MpvEngine) return;
+    final gen = widget.controller.surfaceGeneration;
+    if (_mpvVideo != null && gen == _boundGeneration) return;
+    _boundGeneration = gen;
+    _mpvVideo = VideoController(
+      engine.player,
+      configuration: VideoControllerConfiguration(
+        enableHardwareAcceleration: !Platform.isLinux,
+      ),
+    );
+    if (mounted) setState(() {});
   }
 
   @override
@@ -56,28 +60,33 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
 
   @override
   Widget build(BuildContext context) {
-    // While the queue is empty the previous item's last frame can still sit on
-    // the media_kit texture. Paint black and skip [Video] so stop → later play
-    // never flashes the old thumbnail.
     final hasMedia = widget.controller.queue.isNotEmpty;
-    if (_mpvVideo != null && hasMedia) {
-      return TweenAnimationBuilder<double>(
-        tween: Tween(
-          end: widget.controlsVisible
-              ? _kSubtitleBottomWithControls
-              : _kSubtitleBottomDefault,
-        ),
-        duration: const Duration(milliseconds: 150),
-        builder: (context, bottomPad, _) => Video(
-          controller: _mpvVideo!,
-          controls: NoVideoControls,
-          subtitleViewConfiguration: SubtitleViewConfiguration(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
-          ),
-        ),
-      );
-    }
+    final mask = !hasMedia || widget.controller.isOpening;
 
-    return const ColoredBox(color: Colors.black);
+    // Keep [Video] mounted under a black mask so stop/clear can update the VO
+    // while idle; only the mask hides stale pixels (unmounting alone left the
+    // old texture intact when the window was unfocused).
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        if (_mpvVideo != null)
+          TweenAnimationBuilder<double>(
+            tween: Tween(
+              end: widget.controlsVisible
+                  ? _kSubtitleBottomWithControls
+                  : _kSubtitleBottomDefault,
+            ),
+            duration: const Duration(milliseconds: 150),
+            builder: (context, bottomPad, _) => Video(
+              controller: _mpvVideo!,
+              controls: NoVideoControls,
+              subtitleViewConfiguration: SubtitleViewConfiguration(
+                padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
+              ),
+            ),
+          ),
+        if (mask) const ColoredBox(color: Colors.black),
+      ],
+    );
   }
 }
