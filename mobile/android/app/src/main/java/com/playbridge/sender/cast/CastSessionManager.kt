@@ -9,6 +9,7 @@ import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -213,6 +214,10 @@ class CastSessionManager(
      */
     fun ensureCastServiceRunning() {
         if (!hasActiveSession.value) return
+        if (!ProcessUtil.isMainProcess(context)) {
+            Log.w(TAG, "ensureCastServiceRunning ignored in non-main process")
+            return
+        }
         runCatching { CastSessionService.start(context) }
             .onFailure { Log.w(TAG, "Could not ensure cast session service: ${it.message}") }
     }
@@ -348,9 +353,11 @@ class CastSessionManager(
                 if (active) {
                     // From the background this can throw (FGS start restrictions); sessions
                     // begin from a user action in the foreground, so this is belt-and-braces.
+                    Log.d(TAG, "hasActiveSession=true → ensure cast FGS")
                     ensureCastServiceRunning()
                     maybeRequestBatteryExemption()
                 } else {
+                    Log.d(TAG, "hasActiveSession=false → stop cast FGS after ${STOP_GRACE_MS}ms")
                     delay(STOP_GRACE_MS)
                     CastSessionService.stopAndCancelNotification(context)
                 }

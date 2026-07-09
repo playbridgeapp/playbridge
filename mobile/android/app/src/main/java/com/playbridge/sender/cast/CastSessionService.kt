@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.playbridge.sender.R
+import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -146,6 +147,10 @@ class CastSessionService : Service(), KoinComponent {
         } else {
             0
         }
+        Log.d(
+            TAG,
+            "startForeground type=connectedDevice playing=$playing device=${info.deviceName} title=${info.title}",
+        )
         ServiceCompat.startForeground(this, NOTIF_ID, notif, type)
     }
 
@@ -244,11 +249,19 @@ class CastSessionService : Service(), KoinComponent {
             "com.playbridge.sender.cast.action.NOTIFICATION_DISMISSED"
 
         fun start(context: Context) {
+            if (!ProcessUtil.isMainProcess(context)) {
+                Log.w(TAG, "start ignored in non-main process ${ProcessUtil.processName()}")
+                return
+            }
             val intent = Intent(context, CastSessionService::class.java)
             context.startForegroundService(intent)
         }
 
         fun stop(context: Context) {
+            if (!ProcessUtil.isMainProcess(context)) {
+                Log.w(TAG, "stop ignored in non-main process ${ProcessUtil.processName()}")
+                return
+            }
             context.stopService(Intent(context, CastSessionService::class.java))
         }
 
@@ -256,8 +269,19 @@ class CastSessionService : Service(), KoinComponent {
          * Stop the service and remove the ongoing notification immediately. Use on full
          * app exit — [stop] alone can leave the shade row briefly (or stuck) if the
          * process outlives a racing [startForeground] from [CastSessionManager].
+         *
+         * Main-process only: Gecko child processes must never cancel the cast notif
+         * (package-wide NotificationManager.cancel + stopService hit the main FGS).
          */
         fun stopAndCancelNotification(context: Context) {
+            if (!ProcessUtil.isMainProcess(context)) {
+                Log.w(
+                    TAG,
+                    "stopAndCancelNotification ignored in non-main process ${ProcessUtil.processName()}",
+                )
+                return
+            }
+            Log.i(TAG, "stopAndCancelNotification")
             stop(context)
             runCatching {
                 val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -266,3 +290,4 @@ class CastSessionService : Service(), KoinComponent {
         }
     }
 }
+

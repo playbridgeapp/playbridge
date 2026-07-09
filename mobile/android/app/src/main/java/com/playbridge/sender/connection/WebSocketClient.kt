@@ -651,6 +651,9 @@ class WebSocketClient {
     }
 
     fun disconnect() {
+        // Stack trace helps attribute unexpected "User disconnect" (DevicePicker, notif
+        // action, pairing dialog, etc.) without guessing from close reason alone.
+        Log.i(TAG, "disconnect() (user-initiated)", Throwable("disconnect caller"))
         mainHandler.removeCallbacks(mouseFlushRunnable)
         mouseFlushScheduled = false
         pendingDx = 0f
@@ -669,6 +672,7 @@ class WebSocketClient {
      * re-open it. Pairing material is kept so the next auth is a normal reconnect.
      */
     fun softDisconnect(reason: String = "background idle stand-down") {
+        Log.i(TAG, "softDisconnect($reason)")
         mainHandler.removeCallbacks(mouseFlushRunnable)
         mouseFlushScheduled = false
         pendingDx = 0f
