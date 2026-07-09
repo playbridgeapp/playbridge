@@ -246,5 +246,18 @@ class CastSessionService : Service(), KoinComponent {
         fun stop(context: Context) {
             context.stopService(Intent(context, CastSessionService::class.java))
         }
+
+        /**
+         * Stop the service and remove the ongoing notification immediately. Use on full
+         * app exit — [stop] alone can leave the shade row briefly (or stuck) if the
+         * process outlives a racing [startForeground] from [CastSessionManager].
+         */
+        fun stopAndCancelNotification(context: Context) {
+            stop(context)
+            runCatching {
+                val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                mgr.cancel(NOTIF_ID)
+            }
+        }
     }
 }

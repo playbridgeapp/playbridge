@@ -1683,14 +1683,16 @@ class BrowserActivity : ComponentActivity() {
                         onBackPressedTimeChange = { backPressedTime = it },
                         onFinishActivity = { finish() },
                         onFullExit = {
-                            // Hard exit: tear down cast FGS + session keep-alive, then remove
-                            // from recents. This is "quit the app", not background — do not
-                            // leave a Connected/Casting notification or WS supervisor running.
-                            // TV playback is not stopped remotely; local proxy / queueing dies
-                            // with the process.
-                            connectionViewModel.castSessionManager.disconnectSession()
-                            com.playbridge.sender.cast.CastSessionService.stop(this@BrowserActivity)
+                            // Hard exit: stop binge queues + WS + FGS notif, remove from
+                            // recents, then kill the process. finishAndRemoveTask alone can
+                            // leave the Application (and TvQueueCoordinator) alive — users
+                            // still saw the cast notif and next-episode queue_add after Exit.
+                            // TV is not sent Stop; only the phone-side session dies.
+                            connectionViewModel.castSessionManager.shutdownForAppExit(
+                                this@BrowserActivity,
+                            )
                             finishAndRemoveTask()
+                            android.os.Process.killProcess(android.os.Process.myPid())
                         },
                         showVideoSheet = showVideoSheet,
                         onShowVideoSheetChange = { showVideoSheet = it },

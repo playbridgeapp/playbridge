@@ -79,7 +79,7 @@ class TvQueueCoordinator(
     private var window = 1
     private var autoPick = AutoPickPrefs("Auto", null, "", emptySet())
     /** Bumped on every start()/stop()/re-attach so a slow re-attach can't clobber a newer session. */
-    private var epoch = 0
+    @Volatile private var epoch = 0
     @Volatile private var reattaching = false
     /**
      * Serialises [topUp] so concurrent signal ticks / start()+signal races cannot claim the same
@@ -122,6 +122,10 @@ class TvQueueCoordinator(
     }
 
     fun stop() {
+        // Bump epoch immediately so an in-flight topUp (outside the mutex during resolve)
+        // drops its result even before the coroutine below acquires the lock — critical on
+        // app Exit where finishAndRemoveTask may leave the process alive briefly.
+        epoch++
         scope.launch { mutex.withLock { clearLocked() } }
     }
 

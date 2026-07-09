@@ -886,6 +886,7 @@ class CastSessionManager(
      * and stops the reconnect supervisor so the casting FGS does not come back.
      */
     fun disconnectSession() {
+        stopEpisodeQueues()
         connectionCoordinator.markIdle()
         val dlna = _dlnaCast.value
         if (dlna != null) {
@@ -895,6 +896,45 @@ class CastSessionManager(
         // Flag as user disconnect before close so the reconnect supervisor does not re-arm.
         webSocketClient.disconnect()
         selectThisDevice()
+    }
+
+    /**
+     * Full app quit (Dashboard **Exit PlayBridge**): stop binge queues, drop the link,
+     * tear down the cast FGS and cancel its notification immediately. Callers should
+     * then [android.app.Activity.finishAndRemoveTask] and kill the process so Koin
+     * singletons cannot keep `queue_add`-ing after the UI is gone.
+     */
+    fun shutdownForAppExit(context: Context) {
+        Log.i(TAG, "shutdownForAppExit")
+        backgroundStandDownJob?.cancel()
+        backgroundStandDownJob = null
+        stopEpisodeQueues()
+        connectionCoordinator.markIdle()
+        val dlna = _dlnaCast.value
+        if (dlna != null) {
+            scope.launch { runCatching { dlna.stop() } }
+            clearDlnaTarget()
+        }
+        webSocketClient.disconnect()
+        selectThisDevice()
+        // Cancel notifs even if stopService is async or the service was already dying —
+        // otherwise finishAndRemoveTask can leave a sticky FGS row while the process lingers.
+        CastSessionService.stopAndCancelNotification(context)
+        cancelReconnectGaveUpNotification()
+    }
+
+    /** Best-effort stop of phone-side series queues (native + DLNA). Lazy Koin to avoid ctor cycles. */
+    private fun stopEpisodeQueues() {
+        runCatching {
+            org.koin.core.context.GlobalContext.get()
+                .get<com.playbridge.sender.connection.TvQueueCoordinator>()
+                .stop()
+        }.onFailure { Log.w(TAG, "TvQueueCoordinator.stop failed: ${it.message}") }
+        runCatching {
+            org.koin.core.context.GlobalContext.get()
+                .get<com.playbridge.sender.connection.DlnaQueueCoordinator>()
+                .stop()
+        }.onFailure { Log.w(TAG, "DlnaQueueCoordinator.stop failed: ${it.message}") }
     }
 
     /** @deprecated Prefer [endCastSession] / [disconnectSession]; kept for any external call sites. */
