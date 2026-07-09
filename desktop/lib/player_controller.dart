@@ -198,7 +198,14 @@ class PlayerController extends ChangeNotifier {
   void _onCompleted() {
     if (hasNext) {
       unawaited(next());
+      return;
     }
+    // Last item (or single video) finished — clear the session. Leaving the
+    // queue loaded left mpv sitting on the final frame ("paused at end") and
+    // the UI never left the video view (main.dart only hides it when the
+    // queue empties).
+    debugPrint('[player] playlist finished — stopping');
+    unawaited(stop());
   }
 
   /// Honour the current item's `start_position_ms` (phone resume store).
