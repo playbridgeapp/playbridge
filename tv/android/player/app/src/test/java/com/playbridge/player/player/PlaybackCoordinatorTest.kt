@@ -243,6 +243,58 @@ class PlaybackCoordinatorTest {
     }
 
     @Test
+    fun `queueAdd dedupes same episode twice in one drain batch`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(episode(2, 5, "https://cdn/s2e5.mp4")), 0)
+
+        // Phone concurrent top-up / retry can land two queue_adds in pendingQueueItems
+        // before the player drains them as a single list. Filtering only against the
+        // pre-existing queue would keep both.
+        c.queueAdd(
+            listOf(
+                episode(2, 6, "https://cdn/720/s2e6.mp4"),
+                episode(2, 6, "https://cdn/1080/s2e6.mp4"),
+            )
+        )
+
+        assertEquals(2, c.playlist.size)
+        assertEquals("S2E6", c.playlist.last().title)
+        assertEquals(1, host.playlistChangedCount)
+    }
+
+    @Test
+    fun `queueAdd dedupes same url twice in one drain batch`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(payload(1)), 0)
+
+        c.queueAdd(listOf(payload(2), payload(2), payload(3)))
+
+        assertEquals(3, c.playlist.size)
+        assertEquals(listOf("Ep1", "Ep2", "Ep3"), c.playlist.map { it.title })
+    }
+
+    @Test
+    fun `queueAdd keeps only first of mixed duplicates in batch`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        c.setPlaylist(listOf(episode(1, 1, "https://cdn/s1e1.mp4")), 0)
+
+        c.queueAdd(
+            listOf(
+                episode(1, 2, "https://cdn/a/s1e2.mp4"),
+                episode(1, 1, "https://cdn/alt/s1e1.mp4"), // already on queue
+                episode(1, 2, "https://cdn/b/s1e2.mp4"), // dup of first in batch
+                episode(1, 3, "https://cdn/s1e3.mp4"),
+            )
+        )
+
+        assertEquals(3, c.playlist.size)
+        assertEquals(listOf("S1E1", "S1E2", "S1E3"), c.playlist.map { it.title })
+    }
+
+    @Test
     fun `markCurrentFailed prefixes title once`() {
         val host = FakeHost()
         val c = PlaybackCoordinator(host)

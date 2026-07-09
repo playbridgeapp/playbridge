@@ -651,6 +651,9 @@ class WebSocketClient {
     }
 
     fun disconnect() {
+        // Stack trace helps attribute unexpected "User disconnect" (DevicePicker, notif
+        // action, pairing dialog, etc.) without guessing from close reason alone.
+        Log.i(TAG, "disconnect() (user-initiated)", Throwable("disconnect caller"))
         mainHandler.removeCallbacks(mouseFlushRunnable)
         mouseFlushScheduled = false
         pendingDx = 0f
@@ -660,6 +663,31 @@ class WebSocketClient {
         webSocket?.close(1000, "User disconnect")
         webSocket = null
         _connectionState.value = ConnectionState.Disconnected
+    }
+
+    /**
+     * Close the socket without treating it as a user disconnect. Used for idle
+     * background stand-down: the link is dropped to save battery, but
+     * [wasUserDisconnect] stays false so foreground-return / auto-connect can
+     * re-open it. Pairing material is kept so the next auth is a normal reconnect.
+     */
+    fun softDisconnect(reason: String = "background idle stand-down") {
+        Log.i(TAG, "softDisconnect($reason)")
+        mainHandler.removeCallbacks(mouseFlushRunnable)
+        mouseFlushScheduled = false
+        pendingDx = 0f
+        pendingDy = 0f
+        // Deliberately do NOT set isUserDisconnect or clearPairingSecrets.
+        try {
+            webSocket?.close(1000, reason)
+        } catch (_: Exception) {
+        }
+        webSocket = null
+        if (_connectionState.value !is ConnectionState.Disconnected &&
+            _connectionState.value !is ConnectionState.Error
+        ) {
+            _connectionState.value = ConnectionState.Disconnected
+        }
     }
     
     fun isConnected(): Boolean {

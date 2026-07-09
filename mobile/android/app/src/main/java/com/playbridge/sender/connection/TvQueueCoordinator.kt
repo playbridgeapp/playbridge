@@ -79,8 +79,14 @@ class TvQueueCoordinator(
     private var window = 1
     private var autoPick = AutoPickPrefs("Auto", null, "", emptySet())
     /** Bumped on every start()/stop()/re-attach so a slow re-attach can't clobber a newer session. */
-    private var epoch = 0
+    @Volatile private var epoch = 0
     @Volatile private var reattaching = false
+    /**
+     * Serialises [topUp] so concurrent signal ticks / start()+signal races cannot claim the same
+     * [nextToResolve] and both `queue_add` the same episode before either advances the pointer.
+     * Held only as a mutual-exclusion flag — network I/O still runs outside [mutex].
+     */
+    private val topUpGate = Mutex()
 
     init {
         // Single long-lived watcher. While a plan is active it keeps the buffer full; while idle
@@ -116,6 +122,10 @@ class TvQueueCoordinator(
     }
 
     fun stop() {
+        // Bump epoch immediately so an in-flight topUp (outside the mutex during resolve)
+        // drops its result even before the coroutine below acquires the lock — critical on
+        // app Exit where finishAndRemoveTask may leave the process alive briefly.
+        epoch++
         scope.launch { mutex.withLock { clearLocked() } }
     }
 
@@ -131,13 +141,43 @@ class TvQueueCoordinator(
         }
         // Track the current episode from whichever signal is freshest (status carries the title
         // on every tick), forward-only so a stale update can't make us under-buffer.
+        //
+        // Also re-sync the already-queued set from the TV's playlist_status after a reconnect:
+        // episodes we thought failed to send may already be on the TV, and the TV may have
+        // advanced while we were offline. Extending queuedEpisodeIndices / nextToResolve from
+        // the echo prevents re-queue_add of the same S/E (duplicates).
         mutex.withLock {
             val fromTitle = sig.title?.takeIf { it.isNotBlank() }?.let { matchEpisodeByTitle(p, it) } ?: -1
             val fromPlaylist = sig.playlistIndex?.let { queuedEpisodeIndices.getOrNull(it) } ?: -1
             val derived = maxOf(fromTitle, fromPlaylist)
             if (derived > currentEpisodeIndex) currentEpisodeIndex = derived
+            mergeTvPlaylistEcho(p)
         }
         topUp()
+    }
+
+    /**
+     * Align [queuedEpisodeIndices] / [nextToResolve] with the TV's current
+     * [ConnectionCoordinator.tvPlaylistState] echo so a reconnect doesn't re-send episodes
+     * that already landed on the receiver. Order is TV playlist order (see [QueueBookkeeping]).
+     */
+    private fun mergeTvPlaylistEcho(p: TvEpisodeQueuePlan) {
+        val pl = connectionCoordinator.tvPlaylistState.value ?: return
+        if (pl.items.isEmpty()) return
+        fun episodeIndexOf(season: Int?, episode: Int?): Int {
+            if (season == null || episode == null) return -1
+            return p.items.indexOfFirst {
+                val vm = it.template.visual_metadata
+                vm?.season == season && vm.episode == episode
+            }
+        }
+        val echoed = pl.items.mapNotNull { episodeIndexOf(it.season, it.episode).takeIf { i -> i >= 0 } }
+        val merged = QueueBookkeeping.mergeQueuedEpisodeIndices(queuedEpisodeIndices, echoed)
+        if (merged == queuedEpisodeIndices) return
+        queuedEpisodeIndices.clear()
+        queuedEpisodeIndices.addAll(merged)
+        nextToResolve = QueueBookkeeping.nextToResolveAfter(merged, nextToResolve)
+        Log.d(TAG, "Merged TV playlist echo: alreadyQueued=$queuedEpisodeIndices, nextToResolve=$nextToResolve")
     }
 
     /** Find the plan episode whose title the TV is currently reporting (exact, then loose match). */
@@ -179,48 +219,69 @@ class TvQueueCoordinator(
      * current one.
      *
      * Stream resolution + subtitle fetching are network I/O and deliberately run OUTSIDE
-     * the mutex: holding it across the fetch would block stop()/start()/every signal tick
-     * for the duration of the slowest addon (a user switching series would visibly stall).
-     * The epoch/plan re-check on commit discards results that a supersession made stale —
-     * the same pattern DlnaQueueCoordinator.advance() uses.
+     * the plan [mutex]: holding that lock across the fetch would block stop()/start()/every
+     * signal tick for the duration of the slowest addon (a user switching series would
+     * visibly stall). The epoch/plan re-check on commit discards results that a supersession
+     * made stale — the same pattern DlnaQueueCoordinator.advance() uses.
+     *
+     * Only one [topUp] runs at a time ([topUpGate]): playlist_status / status ticks fire
+     * frequently and previously each could enter this loop, both snapshot the same
+     * [nextToResolve], both resolve, and both send `queue_add` before either advances the
+     * pointer — which produced duplicate episodes on the TV for series casts.
      */
     private suspend fun topUp() {
-        while (true) {
-            val work = mutex.withLock {
-                val p = plan ?: return
-                val ahead = queuedEpisodeIndices.count { it > currentEpisodeIndex }
-                if (ahead >= window || nextToResolve > p.items.lastIndex) return
-                TopUpWork(p, nextToResolve, epoch, autoPick)
-            }
-
-            // Slow part — no lock held.
-            val url = resolveBest(work.plan, work.index, work.picks)
-            val payload = if (url != null) {
-                val tmpl = work.plan.items[work.index].template
-                val subs = fetchSubtitlesFor(tmpl, url)
-                tmpl.copy(url = url, subtitles = (tmpl.subtitles + subs).distinct())
-            } else {
-                null
-            }
-
-            mutex.withLock {
-                // Superseded (stop/start/re-attach) while resolving — drop the result.
-                if (epoch != work.epoch || plan !== work.plan) return
-                // Another concurrent topUp() already advanced past this index — retry loop.
-                if (nextToResolve != work.index) return@withLock
-                if (payload != null) {
-                    if (!webSocketClient.send(createQueueAddCommandJson(payload))) {
-                        // Send failed (socket dropped) — leave nextToResolve so we retry on the next tick.
-                        Log.w(TAG, "queue_add failed for episode index ${work.index}; will retry")
-                        return
-                    }
-                    queuedEpisodeIndices.add(work.index)
+        // Serialize callers (start + frequent playlist_status ticks). withLock — not tryLock —
+        // so a start() that arrives mid-resolve still runs once the previous topUp exits and
+        // can fill the new plan's window; tryLock would drop that kick and wait for a signal.
+        topUpGate.withLock {
+            while (true) {
+                val work = mutex.withLock {
+                    val p = plan ?: return@withLock null
+                    // Don't claim indices while the socket is down — a disconnect mid-binge used
+                    // to resolve+fail-send in a loop, and a delivered-but-unacked queue_add would
+                    // be retried after reconnect as a duplicate (TV-side dedup is the backstop).
+                    if (!webSocketClient.isConnected()) return@withLock null
                     val ahead = queuedEpisodeIndices.count { it > currentEpisodeIndex }
-                    Log.d(TAG, "Queued episode index ${work.index} (current=$currentEpisodeIndex, $ahead ahead)")
+                    if (ahead >= window || nextToResolve > p.items.lastIndex) return@withLock null
+                    // Claim the index immediately so a superseding start()/re-attach that races
+                    // the resolve still sees nextToResolve past this work item; send failure
+                    // rolls the claim back below.
+                    val index = nextToResolve
+                    nextToResolve = index + 1
+                    TopUpWork(p, index, epoch, autoPick)
+                } ?: break
+
+                // Slow part — no plan mutex held.
+                val url = resolveBest(work.plan, work.index, work.picks)
+                val payload = if (url != null) {
+                    val tmpl = work.plan.items[work.index].template
+                    val subs = fetchSubtitlesFor(tmpl, url)
+                    tmpl.copy(url = url, subtitles = (tmpl.subtitles + subs).distinct())
                 } else {
-                    Log.w(TAG, "No stream resolved for episode index ${work.index}; skipping")
+                    null
                 }
-                nextToResolve++
+
+                val stop = mutex.withLock {
+                    // Superseded (stop/start/re-attach) while resolving — drop the result.
+                    // nextToResolve was already advanced by the claim (or reset by the superseder).
+                    if (epoch != work.epoch || plan !== work.plan) return@withLock true
+                    if (payload != null) {
+                        if (!webSocketClient.send(createQueueAddCommandJson(payload))) {
+                            // Send failed (socket dropped) — re-claim so the next tick retries.
+                            // Serial topUp means nothing past this claim is in-flight.
+                            if (nextToResolve > work.index) nextToResolve = work.index
+                            Log.w(TAG, "queue_add failed for episode index ${work.index}; will retry")
+                            return@withLock true
+                        }
+                        queuedEpisodeIndices.add(work.index)
+                        val ahead = queuedEpisodeIndices.count { it > currentEpisodeIndex }
+                        Log.d(TAG, "Queued episode index ${work.index} (current=$currentEpisodeIndex, $ahead ahead)")
+                    } else {
+                        Log.w(TAG, "No stream resolved for episode index ${work.index}; skipping")
+                    }
+                    false
+                }
+                if (stop) break
             }
         }
     }

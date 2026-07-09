@@ -139,10 +139,6 @@ fun AppNavHost(
     onContextMenuUrlChange: (String?) -> Unit,
     suggestions: List<HistoryEntity>,
 
-    // Settings Flags
-    isSettingsFromLibrary: Boolean,
-    onIsSettingsFromLibraryChange: (Boolean) -> Unit,
-
     // Helper functions
     onHandleBookmarkClick: () -> Unit,
     browserViewContent: @Composable (EngineSession, (String) -> Unit) -> Unit,
@@ -740,27 +736,14 @@ fun AppNavHost(
                     )
                 }
                 Screen.Settings -> {
-                    BackHandler {
-                        if (isSettingsFromLibrary) {
-                            onScreenChange(Screen.Library)
-                            libraryViewModel.setSelectedTab(0)
-                        } else {
-                            onScreenChange(lastMainScreen)
-                        }
-                    }
+                    // Global Settings (Dashboard gear only). Back returns to where Settings was
+                    // opened from — typically Dashboard when using the gear.
+                    BackHandler { onScreenChange(lastMainScreen) }
                     SettingsScreen(
-                        onBack = {
-                            if (isSettingsFromLibrary) {
-                                onScreenChange(Screen.Library)
-                                libraryViewModel.setSelectedTab(0)
-                            } else {
-                                onScreenChange(lastMainScreen)
-                            }
-                        },
+                        onBack = { onScreenChange(lastMainScreen) },
                         tvIp = if (connectionState is WebSocketClient.ConnectionState.Connected) tvDevice?.ip else null,
                         tvPort = if (connectionState is WebSocketClient.ConnectionState.Connected) tvDevice?.port else null,
-                        showBack = !isSettingsFromLibrary,
-                        isFromLibrary = isSettingsFromLibrary
+                        showBack = true,
                     )
                 }
                 Screen.Bookmarks -> {
@@ -954,8 +937,6 @@ fun AppNavHost(
                             session?.loadUrl(url)
                             onScreenChange(Screen.Browser)
                         },
-                        tvIp = tvDevice?.ip,
-                        tvPort = tvDevice?.port,
                         tvName = tvDevice?.name,
                         connectionState = connectionState,
                         onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
@@ -1246,6 +1227,13 @@ fun AppNavHost(
                             }
                         },
                         onPlayPlaylistToTv = onPlayPlaylist@{ playlist ->
+                            // A full Hub playlist replaces the TV queue, so any lazy binge plan
+                            // still held by the episode coordinators is now stale — tear it down
+                            // the same way single-item cast does. Without this, an earlier no-Hub
+                            // series session keeps `queue_add`-ing onto the Hub list (often the
+                            // same S/E at a different stream URL, which used to show as duplicates).
+                            tvQueueCoordinator.stop()
+                            dlnaQueueCoordinator.stop()
                             // DLNA: no renderer-side playlist — run the Hub playlist through the
                             // phone-driven advancer (items already carry resolved/Hub urls).
                             activeDlnaTarget?.let { dlna ->
@@ -1406,6 +1394,11 @@ fun AppNavHost(
                         },
                         onExit = onFullExit,
                         onClose = { onScreenChange(dashboardReturnScreen) },
+                        onSettings = {
+                            // So Settings back lands on Dashboard (not Browser/Library).
+                            onLastMainScreenChange(Screen.Dashboard)
+                            onScreenChange(Screen.Settings)
+                        },
                     )
                 }
                 Screen.PhoneFiles -> {
@@ -1500,11 +1493,9 @@ fun AppNavHost(
             // Hidden on Browser (bottom toolbar), Remote (redundant), and full-bleed screens.
             // Note: excluded on Dashboard (overlays the "Exit" button) and on Connection
             // (the device picker lives there already).
-            // The Library hosts its Settings (tab 4) and Addon settings (tab 3) inline while
-            // staying on Screen.Library — hide the bar there so it doesn't overlay settings.
+            // Hide on Library Addons tab so the bar doesn't overlay addon management.
             val libSelectedTab by libraryViewModel.selectedTab.collectAsState()
-            val libraryInSettings = targetScreen == Screen.Library &&
-                (libSelectedTab == 3 || libSelectedTab == 4)
+            val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
             val showNowPlayingBar = (targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
                 targetScreen == Screen.DebridLibrary ||
@@ -1512,7 +1503,7 @@ fun AppNavHost(
                 targetScreen == Screen.Iptv ||
                 targetScreen is Screen.IptvDetail ||
                 targetScreen == Screen.Collections ||
-                targetScreen is Screen.CollectionDetail) && !libraryInSettings
+                targetScreen is Screen.CollectionDetail) && !libraryAddonsTab
             if (showNowPlayingBar) {
                 val dlnaActive = activeDlnaTarget != null
                 // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even

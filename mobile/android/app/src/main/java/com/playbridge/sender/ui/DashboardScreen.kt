@@ -52,6 +52,8 @@ fun DashboardScreen(
     // Close the Dashboard (top-left X) → return to the screen it was opened from.
     // Defaults to the active main screen to preserve the old behavior.
     onClose: () -> Unit = { onNavigate(currentScreen) },
+    /** Global Settings entry (top-right gear). Defaults to [Screen.Settings]. */
+    onSettings: () -> Unit = { onNavigate(Screen.Settings) },
 ) {
     // ── Entrance animations ─────────────────────────────────────────────────
     var visible by remember { mutableStateOf(false) }
@@ -466,6 +468,21 @@ fun DashboardScreen(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close Dashboard",
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                )
+            }
+            // Single global Settings entry — not in Browser menu or Library bottom nav.
+            IconButton(
+                onClick = onSettings,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Settings",
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                 )
             }

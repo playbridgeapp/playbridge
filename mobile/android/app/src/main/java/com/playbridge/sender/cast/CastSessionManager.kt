@@ -7,7 +7,9 @@ import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -37,6 +39,9 @@ import kotlinx.coroutines.launch
  *  - Starts/stops [CastSessionService] (foreground service) while a session is live, so
  *    the WebSocket session, [com.playbridge.sender.connection.TvQueueCoordinator] episode
  *    top-ups, and the DLNA local proxy all survive screen-off and app backgrounding.
+ *  - Idle background stand-down (default): after a grace period with nothing casting,
+ *    soft-close the native socket and drop the Connected FGS to save battery unless the
+ *    user opts into [SettingsRepository.keepTvConnectionInBackground].
  *
  * A session is considered active while a DLNA renderer is selected, or while the native
  * receiver is in the "player" context with a live (or in-flight) connection.
@@ -48,6 +53,7 @@ class CastSessionManager(
     private val scope: CoroutineScope,
     private val connectionStore: com.playbridge.sender.connection.ConnectionStore,
     private val nsdHelper: com.playbridge.sender.connection.NsdHelper,
+    private val settingsRepository: SettingsRepository,
 ) {
     private val TAG = "CastSessionManager"
 
@@ -173,11 +179,14 @@ class CastSessionManager(
     /**
      * True while a cast session should keep the process alive (drives the FGS).
      *
-     * Stage B: keep the process alive whenever a DLNA renderer is selected, OR the routing
-     * intent is the native TV and the socket is up/connecting — regardless of whether
-     * something is actively playing. This makes an *idle* native link survive screen-off /
-     * backgrounding so it doesn't silently die, and gives the reconnect supervisor a live
-     * process to run in. (Previously this required tvActiveContext == "player".)
+     * - DLNA target selected
+     * - Live native WebSocket (connected/connecting), any non-DLNA route — includes
+     *   auto-connect while the persisted route is still "This Device", so a cold start
+     *   still surfaces the Connected notification
+     * - Reconnecting after an unexpected drop (NativeTv route)
+     * - Sticky player: we still believe the TV is playing across a drop, so the FGS is
+     *   not torn down before `_reconnecting` arms (Android 12+ blocks restarting FGS
+     *   from the background after a stop)
      */
     val hasActiveSession: StateFlow<Boolean> = combine(
         _activeDlnaTarget,
@@ -188,15 +197,33 @@ class CastSessionManager(
     ) { dlna, state, ctx, route, reconnecting ->
         val connectedOrConnecting = state is WebSocketClient.ConnectionState.Connected ||
             state is WebSocketClient.ConnectionState.Connecting
-        // Always keep alive while actually playing on the native TV (preserves the original
-        // behaviour regardless of how routing intent was set).
-        val nativePlaying = ctx == "player" && connectedOrConnecting
-        // Stage B: also keep an *idle* native link alive when that's the routing intent…
-        val nativeIdleLinked = route is Route.NativeTv && connectedOrConnecting
-        // …and across the reconnect backoff so the process survives the retry window.
+        // Any live native socket — casting or idle-linked. Route.ThisDevice only means
+        // "prefer local play", not "hide the link"; Disconnect closes the socket.
+        val nativeLive = connectedOrConnecting && route !is Route.Dlna
         val nativeReconnecting = route is Route.NativeTv && reconnecting
-        dlna != null || nativePlaying || nativeIdleLinked || nativeReconnecting
+        // Keep FGS across a drop while we still think content is on the TV.
+        val nativeStickyPlaying = ctx == "player" && route !is Route.Dlna
+        dlna != null || nativeLive || nativeReconnecting || nativeStickyPlaying
     }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    /**
+     * Start (or re-enter) [CastSessionService] when a session is live. Safe to call
+     * repeatedly. Needed after "Exit PlayBridge" which stops the FGS without flipping
+     * [hasActiveSession] — on reopen the flow never re-emits `true`, so nothing would
+     * restart the notification without an explicit ensure.
+     */
+    fun ensureCastServiceRunning() {
+        if (!hasActiveSession.value) return
+        if (!ProcessUtil.isMainProcess(context)) {
+            Log.w(TAG, "ensureCastServiceRunning ignored in non-main process")
+            return
+        }
+        runCatching { CastSessionService.start(context) }
+            .onFailure { Log.w(TAG, "Could not ensure cast session service: ${it.message}") }
+    }
+
+    /** Last known native receiver name — used for the FGS title while the socket is down. */
+    private var lastNativeDeviceName: String? = null
 
     /**
      * True while the phone is actually playing/proxying bytes (vs merely linked-but-idle).
@@ -220,11 +247,24 @@ class CastSessionManager(
         webSocketClient.connectionState,
         connectionCoordinator.tvPlayback,
         _dlnaMediaTitle,
-    ) { dlna, state, playback, dlnaTitle ->
+        connectionCoordinator.tvActiveContext,
+    ) { dlna, state, playback, dlnaTitle, ctx ->
+        if (state is WebSocketClient.ConnectionState.Connected) {
+            lastNativeDeviceName = state.serverName
+        }
         val device = dlna?.name
             ?: (state as? WebSocketClient.ConnectionState.Connected)?.serverName
+            ?: lastNativeDeviceName
             ?: "TV"
-        SessionInfo(deviceName = device, title = if (dlna != null) dlnaTitle else playback?.title)
+        // Prefer the live title; while reconnecting with sticky player context and a
+        // cleared snapshot, still surface "Playing" so the notif doesn't flip to the
+        // idle "Ready to cast" copy mid-drop.
+        val title = if (dlna != null) {
+            dlnaTitle
+        } else {
+            playback?.title ?: if (ctx == "player") "Playing" else null
+        }
+        SessionInfo(deviceName = device, title = title)
     }.stateIn(scope, SharingStarted.Eagerly, SessionInfo("TV", null))
 
     init {
@@ -313,12 +353,25 @@ class CastSessionManager(
                 if (active) {
                     // From the background this can throw (FGS start restrictions); sessions
                     // begin from a user action in the foreground, so this is belt-and-braces.
-                    runCatching { CastSessionService.start(context) }
-                        .onFailure { Log.w(TAG, "Could not start cast session service: ${it.message}") }
+                    Log.d(TAG, "hasActiveSession=true → ensure cast FGS")
+                    ensureCastServiceRunning()
                     maybeRequestBatteryExemption()
                 } else {
+                    Log.d(TAG, "hasActiveSession=false → stop cast FGS after ${STOP_GRACE_MS}ms")
                     delay(STOP_GRACE_MS)
-                    CastSessionService.stop(context)
+                    CastSessionService.stopAndCancelNotification(context)
+                }
+            }
+        }
+
+        // If TV context becomes "player" while a stand-down is pending (e.g. cold-start
+        // connected as idle, then context_query returns player after we backgrounded),
+        // cancel the soft-disconnect so we do not kill a live cast session.
+        scope.launch {
+            isActivelyPlaying.collect { playing ->
+                if (playing) {
+                    backgroundStandDownJob?.cancel()
+                    backgroundStandDownJob = null
                 }
             }
         }
@@ -352,11 +405,15 @@ class CastSessionManager(
                 when (state) {
                     is WebSocketClient.ConnectionState.Connected -> {
                         hasConnectedThisSession = true
+                        lastNativeDeviceName = state.serverName
                         reconnectAttempt = 0
                         reconnectJob?.cancel()
                         _reconnecting.value = false
                         _reconnectStatus.value = null
                         cancelReconnectGaveUpNotification()
+                        // Cold start / auto-connect / reconnect: always re-assert the FGS.
+                        // Also covers "Exit PlayBridge" (service stopped, session still live).
+                        ensureCastServiceRunning()
                     }
                     is WebSocketClient.ConnectionState.Error,
                     is WebSocketClient.ConnectionState.Disconnected -> {
@@ -364,7 +421,24 @@ class CastSessionManager(
                         // trigger the reconnect cycle — only an *unexpected* drop does. Without
                         // this guard, hitting Disconnect immediately popped a "Reconnecting…"
                         // dialog and fought the user's action.
-                        if (_route.value is Route.NativeTv &&
+                        //
+                        // Also arm reconnect when we still believe the TV is playing even if
+                        // the route never flipped to NativeTv (e.g. cold-start cast before the
+                        // route-capture collector ran). Sticky FGS depends on NativeTv, so
+                        // promote the route here the same way live playback does.
+                        val playingOnNative = connectionCoordinator.tvActiveContext.value == "player" &&
+                            _route.value !is Route.Dlna
+                        if (playingOnNative && _route.value !is Route.NativeTv) {
+                            _route.value = Route.NativeTv
+                            persistBaseRoute("native")
+                        }
+                        // Idle background stand-down uses softDisconnect (not user-initiated).
+                        // Do not arm the reconnect supervisor for that — wait for foreground /
+                        // network recovery instead of burning battery retrying in the background.
+                        if (idleBackgroundStandDown) {
+                            idleBackgroundStandDown = false
+                            Log.d(TAG, "Ignoring disconnect for reconnect (idle background stand-down)")
+                        } else if (_route.value is Route.NativeTv &&
                             hasConnectedThisSession &&
                             !webSocketClient.wasUserDisconnect
                         ) {
@@ -417,6 +491,12 @@ class CastSessionManager(
         if (reconnectAttempt >= RECONNECT_GIVE_UP) {
             _reconnecting.value = false
             _reconnectStatus.value = null
+            // Drop the sticky "still casting" belief so the FGS/casting notification can
+            // tear down. The TV may still be playing at home, but we can't reach it — when
+            // the link comes back, context_query re-asserts "player" and the notif returns.
+            // Without this, background give-up left route=NativeTv + ctx=player forever and
+            // the "Casting to …" notification never went away after leaving the house.
+            connectionCoordinator.markIdle()
             if (isForeground) {
                 Log.i(TAG, "Reconnect: gave up after $reconnectAttempt attempts (foreground) — routing to This Device")
                 selectThisDevice()
@@ -474,6 +554,12 @@ class CastSessionManager(
      * (screen off, episode queue topping up) resumes on the TV when it returns.
      */
     @Volatile private var isForeground = false
+    /**
+     * Set just before [WebSocketClient.softDisconnect] for idle background stand-down so the
+     * connection-state collector does not arm [scheduleReconnect].
+     */
+    @Volatile private var idleBackgroundStandDown = false
+    private var backgroundStandDownJob: Job? = null
 
     private fun registerForegroundObserver() {
         // ProcessLifecycleOwner must be touched on the main thread; Koin may build this
@@ -488,13 +574,58 @@ class CastSessionManager(
 
                     override fun onStop(owner: androidx.lifecycle.LifecycleOwner) {
                         isForeground = false
+                        onAppBackgrounded()
                     }
                 }
             )
         }
     }
 
-    private fun onAppForegrounded() = attemptRecovery("app foregrounded")
+    private fun onAppForegrounded() {
+        // Cancel a pending idle stand-down (quick app-switcher peeks / multitasking).
+        backgroundStandDownJob?.cancel()
+        backgroundStandDownJob = null
+        // Exit PlayBridge / warm process: re-assert FGS if a session is still live.
+        ensureCastServiceRunning()
+        attemptRecovery("app foregrounded")
+    }
+
+    /**
+     * When the app leaves the foreground and nothing is casting, optionally soft-close the
+     * native TV socket after [IDLE_BACKGROUND_GRACE_MS] so we do not hold a Connected FGS +
+     * Wi-Fi lock while the user watches YouTube, etc. Casting always keeps the link.
+     * Opt out via Settings → TV → "Keep connection in background".
+     */
+    private fun onAppBackgrounded() {
+        backgroundStandDownJob?.cancel()
+        backgroundStandDownJob = scope.launch {
+            delay(IDLE_BACKGROUND_GRACE_MS)
+            if (isForeground) return@launch
+            val keepAlive = runCatching {
+                settingsRepository.keepTvConnectionInBackground.first()
+            }.getOrDefault(false)
+            if (keepAlive) {
+                Log.d(TAG, "Background idle stand-down skipped (keep connection in background)")
+                return@launch
+            }
+            // Casting / DLNA media / sticky player context — keep the session.
+            if (isActivelyPlaying.value) {
+                Log.d(TAG, "Background idle stand-down skipped (actively casting)")
+                return@launch
+            }
+            // DLNA target selected with no media still holds the FGS; leave it — stand-down
+            // is for the native WebSocket keep-alive path.
+            if (_activeDlnaTarget.value != null) return@launch
+            val state = webSocketClient.connectionState.value
+            val linked = state is WebSocketClient.ConnectionState.Connected ||
+                state is WebSocketClient.ConnectionState.Connecting
+            if (!linked) return@launch
+            Log.i(TAG, "Idle background stand-down: soft-closing TV socket after grace")
+            idleBackgroundStandDown = true
+            webSocketClient.softDisconnect()
+            // hasActiveSession drops → CastSessionService tears down via its collector.
+        }
+    }
 
     /**
      * Try to re-establish a dropped link right now, from the saved device record.
@@ -736,25 +867,109 @@ class CastSessionManager(
         }
     }
 
-    /** Stop playback on the active target and end the session (notification Stop action). */
-    fun endSession() {
+    /**
+     * Stop what's playing (notification **Stop** while casting).
+     *
+     * Native: marks context idle immediately (so the FGS morphs to **Connected** +
+     * **Disconnect** without waiting on the socket) and sends `stop` to the TV. The
+     * socket and Native TV route stay so a new cast is one tap away.
+     *
+     * DLNA: stops the renderer and clears the target — there is no separate "linked idle"
+     * DLNA session worth keeping.
+     */
+    fun endCastSession() {
         val dlna = _dlnaCast.value
         if (dlna != null) {
             scope.launch { runCatching { dlna.stop() } }
             clearDlnaTarget()
             return
         }
-        val native = _nativeTarget.value
-        if (native != null) {
-            scope.launch { runCatching { native.stop() } } // also flips tvActiveContext → "idle"
-        } else {
-            connectionCoordinator.markIdle()
+        // Idle first so isActivelyPlaying flips before the WS round-trip; the notif
+        // action then becomes Disconnect while we still hold the link.
+        connectionCoordinator.markIdle()
+        if (_nativeTarget.value != null) {
+            scope.launch {
+                runCatching {
+                    webSocketClient.send(
+                        com.playbridge.shared.protocol.createControlCommandJson("stop")
+                    )
+                }
+            }
         }
     }
+
+    /**
+     * Drop the link entirely (notification **Disconnect** while connected/idle).
+     *
+     * User-initiated: tears down the WebSocket (or DLNA target), routes to This Device,
+     * and stops the reconnect supervisor so the casting FGS does not come back.
+     */
+    fun disconnectSession() {
+        stopEpisodeQueues()
+        connectionCoordinator.markIdle()
+        val dlna = _dlnaCast.value
+        if (dlna != null) {
+            scope.launch { runCatching { dlna.stop() } }
+            clearDlnaTarget()
+        }
+        // Flag as user disconnect before close so the reconnect supervisor does not re-arm.
+        webSocketClient.disconnect()
+        selectThisDevice()
+    }
+
+    /**
+     * Full app quit (Dashboard **Exit PlayBridge**): stop binge queues, drop the link,
+     * tear down the cast FGS and cancel its notification immediately. Callers should
+     * then [android.app.Activity.finishAndRemoveTask] and kill the process so Koin
+     * singletons cannot keep `queue_add`-ing after the UI is gone.
+     */
+    fun shutdownForAppExit(context: Context) {
+        Log.i(TAG, "shutdownForAppExit")
+        backgroundStandDownJob?.cancel()
+        backgroundStandDownJob = null
+        stopEpisodeQueues()
+        connectionCoordinator.markIdle()
+        val dlna = _dlnaCast.value
+        if (dlna != null) {
+            scope.launch { runCatching { dlna.stop() } }
+            clearDlnaTarget()
+        }
+        webSocketClient.disconnect()
+        selectThisDevice()
+        // Cancel notifs even if stopService is async or the service was already dying —
+        // otherwise finishAndRemoveTask can leave a sticky FGS row while the process lingers.
+        CastSessionService.stopAndCancelNotification(context)
+        cancelReconnectGaveUpNotification()
+    }
+
+    /** Best-effort stop of phone-side series queues (native + DLNA). Lazy Koin to avoid ctor cycles. */
+    private fun stopEpisodeQueues() {
+        runCatching {
+            org.koin.core.context.GlobalContext.get()
+                .get<com.playbridge.sender.connection.TvQueueCoordinator>()
+                .stop()
+        }.onFailure { Log.w(TAG, "TvQueueCoordinator.stop failed: ${it.message}") }
+        runCatching {
+            org.koin.core.context.GlobalContext.get()
+                .get<com.playbridge.sender.connection.DlnaQueueCoordinator>()
+                .stop()
+        }.onFailure { Log.w(TAG, "DlnaQueueCoordinator.stop failed: ${it.message}") }
+    }
+
+    /** @deprecated Prefer [endCastSession] / [disconnectSession]; kept for any external call sites. */
+    fun endSession() = endCastSession()
 
     companion object {
         /** How long a session may be "inactive" before the FGS is torn down. */
         private const val STOP_GRACE_MS = 3_000L
+
+        /**
+         * How long the app may stay backgrounded while idle-linked before soft-closing the
+         * TV socket (unless "Keep connection in background" is on). Long enough to survive
+         * app-switcher peeks / permission dialogs; short enough to free battery when the
+         * user moves on to YouTube etc.
+         */
+        private const val IDLE_BACKGROUND_GRACE_MS = 45_000L
 
         // Linear retry pacing: a fixed pause before each attempt (no exponential backoff).
         private const val RECONNECT_DELAY_MS = 3_000L

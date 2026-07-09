@@ -130,7 +130,8 @@ class LibraryViewModel(
     val selectedTab: StateFlow<Int> = _selectedTab.asStateFlow()
 
     fun setSelectedTab(tab: Int) {
-        _selectedTab.value = tab
+        // Tabs: 0 Home, 1 Discover, 2 Library, 3 Addons (Settings removed — Dashboard only).
+        _selectedTab.value = tab.coerceIn(0, 3)
     }
 
     // Consolidated Discovery filters state

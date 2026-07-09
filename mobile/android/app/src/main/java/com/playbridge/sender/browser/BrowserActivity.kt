@@ -514,7 +514,6 @@ class BrowserActivity : ComponentActivity() {
             }
             // The screen the Dashboard was opened from, so its close (X) returns there.
             var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
-            var isSettingsFromLibrary by remember { mutableStateOf(false) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -1684,11 +1683,16 @@ class BrowserActivity : ComponentActivity() {
                         onBackPressedTimeChange = { backPressedTime = it },
                         onFinishActivity = { finish() },
                         onFullExit = {
-                            // Hard exit: kill the cast foreground service and remove the app from
-                            // recents. We do NOT send a Stop to the TV — the process (and its
-                            // local proxy) just dies, so the TV errors out when it next needs it.
-                            com.playbridge.sender.cast.CastSessionService.stop(this@BrowserActivity)
+                            // Hard exit: stop binge queues + WS + FGS notif, remove from
+                            // recents, then kill the process. finishAndRemoveTask alone can
+                            // leave the Application (and TvQueueCoordinator) alive — users
+                            // still saw the cast notif and next-episode queue_add after Exit.
+                            // TV is not sent Stop; only the phone-side session dies.
+                            connectionViewModel.castSessionManager.shutdownForAppExit(
+                                this@BrowserActivity,
+                            )
                             finishAndRemoveTask()
+                            android.os.Process.killProcess(android.os.Process.myPid())
                         },
                         showVideoSheet = showVideoSheet,
                         onShowVideoSheetChange = { showVideoSheet = it },
@@ -1714,8 +1718,6 @@ class BrowserActivity : ComponentActivity() {
                         contextMenuUrl = contextMenuUrl,
                         onContextMenuUrlChange = { contextMenuUrl = it },
                         suggestions = suggestions,
-                        isSettingsFromLibrary = isSettingsFromLibrary,
-                        onIsSettingsFromLibraryChange = { isSettingsFromLibrary = it },
                         onHandleBookmarkClick = { handleBookmarkClick() },
                         browserViewContent = { s, onLongPress ->
                             BrowserView(session = s, onLongPressLink = onLongPress)
@@ -1770,12 +1772,6 @@ class BrowserActivity : ComponentActivity() {
                         scope.launch { sheetState.hide() }.invokeOnCompletion {
                             showMenuSheet = false
                             currentScreen = Screen.Extensions
-                        }
-                    },
-                    onSettingsClick = {
-                        scope.launch { sheetState.hide() }.invokeOnCompletion {
-                            showMenuSheet = false
-                            currentScreen = Screen.Settings
                         }
                     },
                     onToggleDesktopMode = { isDesktopMode = !isDesktopMode },
