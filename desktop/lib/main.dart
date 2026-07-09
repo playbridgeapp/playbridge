@@ -15,6 +15,7 @@ import 'extension_bridge.dart';
 import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
+import 'media_session_bridge.dart';
 import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
 import 'pairing_store.dart';
@@ -142,6 +143,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final TrayController _tray;
   late final TvSenderController _sender;
   late final ExtensionBridge _extBridge;
+  late final MediaSessionBridge _mediaSession;
   final UpdateChecker _updateChecker = UpdateChecker();
 
   bool _hadMedia = false;
@@ -208,16 +210,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         TrayController(player: _player, server: _server, store: widget.store);
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
     _extBridge = ExtensionBridge(_sender, _player);
+    _mediaSession = MediaSessionBridge(_player);
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
     _player.playRequests.addListener(_handlePlayRequest);
+    _server.addListener(_handlePairingPrompt);
 
     _bootServerThenDiscovery();
     _resolveHost();
     _initTrayAndWindow();
     unawaited(_sender.start());
     unawaited(_extBridge.start());
+    // Now Playing / SMTC so Bluetooth headset play-pause reaches this player.
+    unawaited(_mediaSession.start());
     // Register the browser native-messaging host + the OS "Play on TV" context
     // menu so the extension and file manager can reach us without the user
     // editing files by hand (idempotent, best-effort).
@@ -395,6 +401,29 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
   }
 
+  /// Rising edge into a pairing UI phase: bring the window forward (no
+  /// fullscreen) so the user can enter the code even if the app was hidden
+  /// or another app was focused — same idea as cast playback reveal.
+  PairingPhase _lastPairingPhase = PairingPhase.idle;
+  void _handlePairingPrompt() {
+    final phase = _server.phase;
+    final pairing = phase == PairingPhase.awaitingCode ||
+        phase == PairingPhase.awaitingApproval;
+    final wasPairing = _lastPairingPhase == PairingPhase.awaitingCode ||
+        _lastPairingPhase == PairingPhase.awaitingApproval;
+    _lastPairingPhase = phase;
+    if (!pairing || wasPairing) return;
+
+    unawaited(_revealWindow(fullScreen: false));
+    if (!mounted) return;
+    setState(() {
+      // Pair UI lives on the Cast tab; leave the video view so the code is
+      // visible even if something was playing.
+      _dest = _Dest.cast;
+      _showingVideo = false;
+    });
+  }
+
   @override
   void onWindowClose() async {
     final prevented = await windowManager.isPreventClose();
@@ -476,9 +505,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
     _player.playRequests.removeListener(_handlePlayRequest);
+    _server.removeListener(_handlePairingPrompt);
     _tray.dispose();
     _sender.removeListener(_handleSenderChange);
     if (_pendingCastFile != null) _sender.removeListener(_maybeCastPendingFile);
+    unawaited(_mediaSession.dispose());
     _extBridge.stop();
     _sender.dispose();
     _discovery.stop();
@@ -683,6 +714,26 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                             ),
                                           ),
                                         ),
+                                        // Tap video (not controls/drawer) to play/pause.
+                                        // Below overlays so buttons/menus keep their hits.
+                                        if (_showingVideo && hasMedia)
+                                          Positioned.fill(
+                                            child: GestureDetector(
+                                              behavior:
+                                                  HitTestBehavior.translucent,
+                                              onTap: () {
+                                                _markActive();
+                                                if (_player.state == 'playing') {
+                                                  unawaited(_player.pause());
+                                                } else if (_player.state ==
+                                                        'paused' ||
+                                                    _player.state ==
+                                                        'buffering') {
+                                                  unawaited(_player.resume());
+                                                }
+                                              },
+                                            ),
+                                          ),
                                         if (!_showingVideo)
                                           Positioned.fill(
                                               child: _buildScreen()),
