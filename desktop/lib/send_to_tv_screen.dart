@@ -199,11 +199,6 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
             label: const Text('Set up browser casting'),
           ),
         ),
-        const SizedBox(height: 24),
-        _SelfCastToggle(
-          value: controller.allowSelfCast,
-          onChanged: (v) => controller.allowSelfCast = v,
-        ),
       ],
     );
   }
@@ -336,29 +331,6 @@ class _DropOverlay extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-class _SelfCastToggle extends StatelessWidget {
-  const _SelfCastToggle({required this.value, required this.onChanged});
-
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            'Show this device (for testing on one machine)',
-            style: TextStyle(
-                fontSize: 12, color: Colors.white.withValues(alpha: 0.5)),
-          ),
-        ),
-        Switch(value: value, onChanged: onChanged),
-      ],
     );
   }
 }
