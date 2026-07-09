@@ -247,11 +247,6 @@ class MpvEngine extends PlayerEngine {
     // Ensure demuxer/network tuning is live before the first open (race fix).
     await _configured;
 
-    // Drop the previous item's last decoded frame before demuxing the next
-    // one. Without this, stop→wait→play B briefly shows A's final frame
-    // (media_kit / mpv leave the VO texture intact across stop/open).
-    await clearVideoSurface();
-
     // Resolve any HLS *master* playlist to a single H.264 variant first — see
     // hls_master_resolver.dart for why mpv chokes on multi-rendition masters.
     final medias = await Future.wait(items.map((i) async {
@@ -278,6 +273,11 @@ class MpvEngine extends PlayerEngine {
         }
       }
     }
+    // Ensure video is on — never leave a prior "no" selection sticky (that
+    // produced a permanent black picture after the stale-frame experiments).
+    try {
+      await player.setVideoTrack(VideoTrack.auto());
+    } catch (_) {}
     await player.play();
     unawaited(_reapplyTrackPrefs());
   }
@@ -291,21 +291,7 @@ class MpvEngine extends PlayerEngine {
   @override
   Future<void> setVolume(double volume) => player.setVolume(volume * 100.0);
   @override
-  Future<void> stop() async {
-    await player.stop();
-    await clearVideoSurface();
-  }
-
-  /// Disable video output so the last frame is not held on the texture.
-  /// [open] re-selects the default video track for the next item.
-  @override
-  Future<void> clearVideoSurface() async {
-    try {
-      await player.setVideoTrack(VideoTrack.no());
-    } catch (e) {
-      debugPrint('[mpv] clear video surface failed: $e');
-    }
-  }
+  Future<void> stop() => player.stop();
 
   @override
   Future<void> dispose() async {

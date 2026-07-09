@@ -21,35 +21,31 @@ class PlaybackSurface extends StatefulWidget {
 
 class _PlaybackSurfaceState extends State<PlaybackSurface> {
   VideoController? _mpvVideo;
-  int _boundGeneration = -1;
 
   @override
   void initState() {
     super.initState();
-    _syncVideoController();
+    _initMpv();
     widget.controller.addListener(_onControllerChange);
   }
 
   void _onControllerChange() {
-    _syncVideoController();
+    // Rebuild for isOpening / queue changes (black mask).
+    if (mounted) setState(() {});
+    if (_mpvVideo == null) _initMpv();
   }
 
-  /// Keep a live [VideoController], recreating it after each stop so a GPU
-  /// texture frozen while the window was unfocused cannot flash video A when
-  /// video B starts.
-  void _syncVideoController() {
+  void _initMpv() {
     final engine = widget.controller.engine;
-    if (engine is! MpvEngine) return;
-    final gen = widget.controller.surfaceGeneration;
-    if (_mpvVideo != null && gen == _boundGeneration) return;
-    _boundGeneration = gen;
-    _mpvVideo = VideoController(
-      engine.player,
-      configuration: VideoControllerConfiguration(
-        enableHardwareAcceleration: !Platform.isLinux,
-      ),
-    );
-    if (mounted) setState(() {});
+    if (engine is MpvEngine) {
+      _mpvVideo = VideoController(
+        engine.player,
+        configuration: VideoControllerConfiguration(
+          enableHardwareAcceleration: !Platform.isLinux,
+        ),
+      );
+      if (mounted) setState(() {});
+    }
   }
 
   @override
@@ -61,30 +57,33 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
   @override
   Widget build(BuildContext context) {
     final hasMedia = widget.controller.queue.isNotEmpty;
+    // Cover the VO while idle or while the next item is still opening so a
+    // frozen last-frame of the previous title cannot flash (esp. after unfocus).
     final mask = !hasMedia || widget.controller.isOpening;
 
-    // Keep [Video] mounted under a black mask so stop/clear can update the VO
-    // while idle; only the mask hides stale pixels (unmounting alone left the
-    // old texture intact when the window was unfocused).
+    if (_mpvVideo == null) {
+      return const ColoredBox(color: Colors.black);
+    }
+
     return Stack(
       fit: StackFit.expand,
       children: [
-        if (_mpvVideo != null)
-          TweenAnimationBuilder<double>(
-            tween: Tween(
-              end: widget.controlsVisible
-                  ? _kSubtitleBottomWithControls
-                  : _kSubtitleBottomDefault,
-            ),
-            duration: const Duration(milliseconds: 150),
-            builder: (context, bottomPad, _) => Video(
-              controller: _mpvVideo!,
-              controls: NoVideoControls,
-              subtitleViewConfiguration: SubtitleViewConfiguration(
-                padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
-              ),
+        // Keep Video mounted so the texture stays bound; mask hides stale pixels.
+        TweenAnimationBuilder<double>(
+          tween: Tween(
+            end: widget.controlsVisible
+                ? _kSubtitleBottomWithControls
+                : _kSubtitleBottomDefault,
+          ),
+          duration: const Duration(milliseconds: 150),
+          builder: (context, bottomPad, _) => Video(
+            controller: _mpvVideo!,
+            controls: NoVideoControls,
+            subtitleViewConfiguration: SubtitleViewConfiguration(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
             ),
           ),
+        ),
         if (mask) const ColoredBox(color: Colors.black),
       ],
     );

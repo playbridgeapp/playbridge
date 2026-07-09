@@ -107,15 +107,11 @@ class PlayerController extends ChangeNotifier {
   final List<QueueItem> _queue = [];
   int _currentIndex = -1;
 
-  /// True while a new playlist is being opened — UI paints black over the VO
-  /// so a stale frame can't flash (especially after the window was unfocused).
+  /// True while a new item is opening — [PlaybackSurface] paints black over the
+  /// VO so a frozen last-frame of the previous item cannot flash (esp. after
+  /// the window was unfocused). Lifted only after the engine has real media.
   bool _opening = false;
   bool get isOpening => _opening;
-
-  /// Bumped on every [stop] so [PlaybackSurface] can rebuild the media_kit
-  /// [VideoController] and drop a GPU texture frozen while the window was idle.
-  int _surfaceGeneration = 0;
-  int get surfaceGeneration => _surfaceGeneration;
 
   String? get currentTitle =>
       _currentIndex >= 0 && _currentIndex < _queue.length
@@ -182,11 +178,10 @@ class PlayerController extends ChangeNotifier {
     bool isRemote = false,
   }) async {
     if (items.isEmpty) return;
-    // Mask first so focus/reveal never paints the previous item's last frame
-    // (repro: stop A → unfocus window → cast B).
+    // Mask before queue/reveal so stop→unfocus→play B never flashes video A.
+    // Do not disable the mpv video track — that left a permanent black picture.
     _opening = true;
     notifyListeners();
-    await _engine.clearVideoSurface();
 
     _queue
       ..clear()
@@ -199,6 +194,12 @@ class PlayerController extends ChangeNotifier {
     try {
       await _engine.openPlaylist(_queue, _currentIndex);
       unawaited(_applyStartPosition());
+      // Keep the mask until the demuxer has real media so the first paint is B.
+      var retries = 0;
+      while (_engine.durationMs <= 0 && retries < 40) {
+        await Future.delayed(const Duration(milliseconds: 50));
+        retries++;
+      }
     } finally {
       _opening = false;
       notifyListeners();
@@ -290,9 +291,6 @@ class PlayerController extends ChangeNotifier {
     await _engine.stop();
     _queue.clear();
     _setIndex(-1);
-    // New VO binding on next play — unfocused windows can freeze the old
-    // Metal/OpenGL texture so clear alone is not enough.
-    _surfaceGeneration++;
     _opening = false;
     queueChanges.value++;
     notifyListeners();
