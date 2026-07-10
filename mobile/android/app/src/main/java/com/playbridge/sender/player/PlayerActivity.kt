@@ -68,6 +68,7 @@ import android.os.Environment
 import android.widget.Toast
 import android.os.Build
 import android.app.PictureInPictureParams
+import android.util.Log
 import android.util.Rational
 import android.view.View
 import android.view.ViewGroup
@@ -117,7 +118,6 @@ import androidx.media3.common.Tracks
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
-import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -139,6 +139,63 @@ import org.koin.android.ext.android.inject
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
+
+/** `adb logcat -s PB_PLAYER LocalContainerSniffer` */
+private const val PB_PLAYER = "PB_PLAYER"
+
+/** Prepare only after PlayerView is attached (TextureView surface ready). */
+private fun ensurePrepared(player: ExoPlayer) {
+    if (player.playbackState == Player.STATE_IDLE) {
+        player.prepare()
+        player.playWhenReady = true
+    } else if (!player.playWhenReady && player.playbackState != Player.STATE_ENDED) {
+        player.playWhenReady = true
+    }
+}
+
+/**
+ * True hang: a frame has painted (or we have real buffer) but the clock never leaves
+ * BUFFERING. Requires [hasRenderedFrame] so slow remote opens (buffered but not playing
+ * yet) are not mistaken for stuck audio and "recovered" into silence.
+ */
+private fun isPlaybackStuck(player: ExoPlayer, hasRenderedFrame: Boolean): Boolean {
+    if (!hasRenderedFrame) return false
+    if (player.trackSelectionParameters.disabledTrackTypes.contains(
+            androidx.media3.common.C.TRACK_TYPE_AUDIO,
+        )
+    ) {
+        return false // already dropped audio — nothing left for stuck recovery
+    }
+    return player.playbackState == Player.STATE_BUFFERING &&
+        player.playWhenReady &&
+        !player.isPlaying &&
+        player.bufferedPosition > 500
+}
+
+private fun safeUrl(url: String): String {
+    val cut = url.indexOf('?').let { if (it < 0) url.length else it }
+    val base = url.substring(0, cut.coerceAtMost(180))
+    return if (url.length > cut) "$base?…" else base
+}
+
+/** TV-style audio recovery (discontinuity / decoder-init). Never mutes as first response. */
+private fun recoverFromPlayerError(player: ExoPlayer, error: PlaybackException) {
+    val isAudioDiscontinuity =
+        error.errorCode == PlaybackException.ERROR_CODE_AUDIO_TRACK_WRITE_FAILED ||
+            error.cause is androidx.media3.exoplayer.audio.AudioSink.UnexpectedDiscontinuityException
+    val isDecoderInit =
+        error.cause is androidx.media3.exoplayer.mediacodec.MediaCodecRenderer.DecoderInitializationException
+    when {
+        isAudioDiscontinuity -> {
+            Log.w(PB_PLAYER, "audio discontinuity — reinit")
+            PhoneExoPlayerFactory.recoverAudio(player, "reinit")
+        }
+        isDecoderInit -> {
+            Log.w(PB_PLAYER, "decoder init failed — clear audio override")
+            PhoneExoPlayerFactory.recoverAudio(player, "clear-override")
+        }
+    }
+}
 
 /**
  * A single sidecar subtitle track to attach to playback.
@@ -270,7 +327,14 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         val title = intent.getStringExtra(EXTRA_TITLE)
-        val contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
+        // MediaStore/SAF mime can lie (e.g. MPEG-TS saved as video/mp4). For local
+        // content:// and file:// URIs, sniff the header and override before prepare.
+        val claimedContentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
+        val contentType = when {
+            !url.isNullOrBlank() && LocalContainerSniffer.isLocalUri(url) ->
+                LocalContainerSniffer.resolveMime(this, url, claimedContentType)
+            else -> claimedContentType
+        }
 
         @Suppress("UNCHECKED_CAST")
         val headers: Map<String, String> = androidx.core.content.IntentCompat.getSerializableExtra(
@@ -309,6 +373,13 @@ class PlayerActivity : ComponentActivity() {
         val startPositionMs = intent.getLongExtra(EXTRA_START_POSITION_MS, 0L)
         tracksProgress = tmdbId > 0
 
+        Log.i(
+            PB_PLAYER,
+            "start title=${title?.take(80)} mime=$contentType " +
+                "local=${url != null && LocalContainerSniffer.isLocalUri(url)} " +
+                "url=${url?.let { safeUrl(it) }}",
+        )
+
         val exo = buildPlayer(this, headers)
         this.player = exo
 
@@ -330,6 +401,11 @@ class PlayerActivity : ComponentActivity() {
                 } else {
                     ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                 }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                Log.e(PB_PLAYER, "error ${error.errorCodeName}: ${error.message}", error)
+                recoverFromPlayerError(exo, error)
             }
         })
 
@@ -373,8 +449,7 @@ class PlayerActivity : ComponentActivity() {
             exo.setMediaItem(buildMediaItem(url!!, contentType, title, subtitles), startPositionMs)
             initialTitle = title
         }
-        exo.prepare()
-        exo.playWhenReady = true
+        // prepare() is deferred until PlayerView attaches (see ensurePrepared).
 
         // ── Report playback to the watch-progress tracker (library content only) ──
         // The in-app player is a third transport; it pushes ticks here exactly like the
@@ -443,6 +518,12 @@ class PlayerActivity : ComponentActivity() {
         // a deliberate choice rather than a sticky leftover.
         stopBackgroundMediaSession()
         backgroundModeState.value = false
+        // Resume if the user returned while content was ready (onStop pauses).
+        player?.let { p ->
+            if (p.playbackState != Player.STATE_IDLE && p.playbackState != Player.STATE_ENDED) {
+                p.playWhenReady = true
+            }
+        }
     }
 
     override fun onStop() {
@@ -501,35 +582,9 @@ class PlayerActivity : ComponentActivity() {
 
         @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
         private fun buildPlayer(context: Context, headers: Map<String, String>): ExoPlayer {
-            // Hub/proxy stream URLs can be slow to respond (server-side resolve), so the
-            // default 8s timeout is too aggressive when switching episodes.
-            val httpFactory = DefaultHttpDataSource.Factory()
-                .setAllowCrossProtocolRedirects(true)
-                .setConnectTimeoutMs(30_000)
-                .setReadTimeoutMs(30_000)
-                .setUserAgent(headers["User-Agent"] ?: DEFAULT_UA)
-            if (headers.isNotEmpty()) httpFactory.setDefaultRequestProperties(headers)
-
-            val dataSourceFactory: DataSource.Factory = DefaultDataSource.Factory(context, httpFactory)
-
-            val loadControl = DefaultLoadControl.Builder()
-                .setBufferDurationsMs(
-                    /* minBufferMs = */ 300_000,
-                    /* maxBufferMs = */ 300_000,
-                    /* bufferForPlaybackMs = */ 2_500,
-                    /* bufferForPlaybackAfterRebufferMs = */ 5_000
-                )
-                .setBackBuffer(
-                    /* backBufferDurationMs = */ 60_000,
-                    /* retainBackBufferFromKeyframe = */ true
-                )
-                .setTargetBufferBytes(128 * 1024 * 1024)
-                .build()
-
-            return ExoPlayer.Builder(context)
-                .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
-                .setLoadControl(loadControl)
-                .build()
+            // TV-aligned factory: sync MediaCodec, decoder fallback, audio offload off,
+            // hardware-first video (see PhoneExoPlayerFactory / shared ExoPlayerEngine).
+            return PhoneExoPlayerFactory.create(context, headers)
         }
 
         /**
@@ -560,18 +615,10 @@ class PlayerActivity : ComponentActivity() {
         ): MediaItem {
             val builder = MediaItem.Builder().setUri(url)
 
-            // Hint the container so DefaultMediaSourceFactory picks HLS/DASH even when
-            // the URL has no recognizable extension.
-            val mime = when {
-                url.contains(".m3u8", ignoreCase = true) ||
-                    url.startsWith("data:application/x-mpegurl", ignoreCase = true) ||
-                    contentType?.contains("mpegurl", ignoreCase = true) == true -> MimeTypes.APPLICATION_M3U8
-
-                url.contains(".mpd", ignoreCase = true) ||
-                    contentType?.contains("dash", ignoreCase = true) == true -> MimeTypes.APPLICATION_MPD
-
-                else -> null
-            }
+            // Only force mime when it changes MediaSource selection (HLS/DASH/TS).
+            // Progressive containers are left unset so extractors sniff — matches
+            // PhoneExoPlayerFactory.mapContentTypeToMime.
+            val mime = PhoneExoPlayerFactory.mapContentTypeToMime(contentType, url)
             if (mime != null) builder.setMimeType(mime)
 
             if (!title.isNullOrBlank()) {
@@ -874,6 +921,9 @@ private fun PlayerScreen(
     // Playback state
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
     var isBuffering by remember { mutableStateOf(true) }
+    // Once a frame is on screen, hide the spinner even if ExoPlayer briefly
+    // stays in STATE_BUFFERING (seen on Samsung with local content:// MP4s).
+    var hasRenderedFrame by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
@@ -1015,7 +1065,7 @@ private fun PlayerScreen(
                 nativeIndex = player.currentMediaItemIndex
 
                 // On media item transition (seeking to previous/next or auto-advance), certain hardware
-                // decoders fail to hand off the SurfaceView correctly, causing a black screen.
+                // decoders fail to hand off the surface correctly, causing a black screen.
                 // Re-preparing the player forces codec recreation and clean rendering.
                 if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK ||
                     reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO ||
@@ -1044,10 +1094,36 @@ private fun PlayerScreen(
             override fun onPlayerError(error: PlaybackException) {
                 errorMessage = error.message ?: "Playback error"
                 isBuffering = false
+                recoverFromPlayerError(player, error)
+            }
+            override fun onRenderedFirstFrame() {
+                hasRenderedFrame = true
+                isBuffering = false
             }
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+
+    // Safety net after first frame: reinit only. Do NOT drop audio when FFmpeg is
+    // available — silent video was the bug FFmpeg fixed; muting would reintroduce it.
+    // Drop-audio is a last resort only if the extension AAR failed to load.
+    LaunchedEffect(player, hasRenderedFrame) {
+        if (!hasRenderedFrame) return@LaunchedEffect
+        delay(1_500)
+        if (!isPlaybackStuck(player, hasRenderedFrame = true)) return@LaunchedEffect
+        Log.w(PB_PLAYER, "stuck BUFFERING after first frame — reinit")
+        PhoneExoPlayerFactory.recoverAudio(player, "reinit")
+        delay(2_000)
+        if (!isPlaybackStuck(player, hasRenderedFrame = true)) return@LaunchedEffect
+        if (PhoneExoPlayerFactory.isFfmpegAvailable()) {
+            // FFmpeg path is the fix for no-audio; clear overrides and re-prepare once more.
+            Log.w(PB_PLAYER, "still stuck with FFmpeg — clear-override (not mute)")
+            PhoneExoPlayerFactory.recoverAudio(player, "clear-override")
+        } else {
+            Log.w(PB_PLAYER, "still stuck, FFmpeg missing — drop audio last resort")
+            PhoneExoPlayerFactory.recoverAudio(player, "drop-audio")
+        }
     }
 
     // Poll position/buffer while not actively scrubbing/seeking.
@@ -1222,10 +1298,13 @@ private fun PlayerScreen(
             ) {
                 AndroidView(
                     factory = { ctx ->
-                        // Inflated from XML so it uses a SurfaceView surface (see player_view.xml).
+                        // TextureView-backed PlayerView — surface ready when attached
+                        // (SurfaceView is async and left Compose in permanent BUFFERING).
                         (LayoutInflater.from(ctx).inflate(R.layout.player_view, FrameLayout(ctx), false) as PlayerView).apply {
                             this.player = player
                             this.resizeMode = resizeMode
+                            ensurePrepared(player)
+                            post { ensurePrepared(player) }
 
                             // Remove ugly dark background boxes from subtitles and use a high-contrast text outline
                             subtitleView?.apply {
@@ -1244,7 +1323,13 @@ private fun PlayerScreen(
                             }
                         }
                     },
-                    update = { it.resizeMode = resizeMode },
+                    update = { view ->
+                        view.resizeMode = resizeMode
+                        if (view.player !== player) {
+                            view.player = player
+                            ensurePrepared(player)
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .graphicsLayer(
@@ -1256,8 +1341,13 @@ private fun PlayerScreen(
                 )
             }
 
-            // Buffering spinner (suppressed while a gesture HUD is showing).
-            if ((isBuffering || isResolvingEpisode) && dragMode == DragMode.NONE && errorMessage == null) {
+            // Buffering spinner — hide once a frame has painted even if ExoPlayer
+            // still reports BUFFERING (local content:// edge case).
+            if ((isBuffering || isResolvingEpisode) &&
+                !hasRenderedFrame &&
+                dragMode == DragMode.NONE &&
+                errorMessage == null
+            ) {
                 CircularProgressIndicator(
                     modifier = Modifier.align(Alignment.Center),
                     color = Color.White
@@ -2305,6 +2395,19 @@ private fun formatTime(ms: Long): String {
 }
 
 private fun captureFrame(playerView: PlayerView, onCaptured: (Bitmap?) -> Unit) {
+    // TextureView path (current player_view.xml).
+    val textureView = findTextureView(playerView)
+    if (textureView != null) {
+        val bmp = try {
+            textureView.bitmap
+        } catch (_: Exception) {
+            null
+        }
+        onCaptured(bmp)
+        return
+    }
+
+    // SurfaceView fallback (if layout is switched back).
     val surfaceView = findSurfaceView(playerView)
     if (surfaceView == null) {
         onCaptured(null)
@@ -2347,6 +2450,17 @@ private fun findSurfaceView(view: View): SurfaceView? {
         for (i in 0 until view.childCount) {
             val child = view.getChildAt(i)
             val res = findSurfaceView(child)
+            if (res != null) return res
+        }
+    }
+    return null
+}
+
+private fun findTextureView(view: View): android.view.TextureView? {
+    if (view is android.view.TextureView) return view
+    if (view is ViewGroup) {
+        for (i in 0 until view.childCount) {
+            val res = findTextureView(view.getChildAt(i))
             if (res != null) return res
         }
     }

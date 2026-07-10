@@ -44,10 +44,13 @@ class MpvEngine extends PlayerEngine {
   MpvEngine() {
     _subs.addAll([
       player.stream.playing.listen((playing) {
-        if (playing) _audioRouteArmed = true;
+        if (playing) _maybeArmAudioRoute();
         notifyListeners();
       }),
-      player.stream.position.listen((_) => _emitThrottled()),
+      player.stream.position.listen((_) {
+        _maybeArmAudioRoute();
+        _emitThrottled();
+      }),
       player.stream.duration.listen((_) => notifyListeners()),
       player.stream.buffering.listen((_) => notifyListeners()),
       player.stream.volume.listen((_) => notifyListeners()),
@@ -72,8 +75,11 @@ class MpvEngine extends PlayerEngine {
   final List<StreamSubscription> _subs = [];
   VoidCallback? onCompleted;
 
-  /// Ignore the first device enumeration until something has actually played.
+  /// Ignore device flaps until playback has been stable for a bit — arming on
+  /// the first `playing` tick races mpv's open path (auto→concrete device) and
+  /// was pausing casts mid-buffer.
   bool _audioRouteArmed = false;
+  DateTime? _playingSince;
   String? _lastAudioDeviceName;
 
   /// mpv tuning is applied asynchronously; opens must await it so the very first
@@ -89,6 +95,27 @@ class MpvEngine extends PlayerEngine {
     if (now.difference(_lastPositionEmit) < _positionEmitInterval) return;
     _lastPositionEmit = now;
     notifyListeners();
+  }
+
+  void _maybeArmAudioRoute() {
+    if (_audioRouteArmed) return;
+    if (!player.state.playing) {
+      _playingSince = null;
+      return;
+    }
+    // Still demuxing the open — device names thrash here.
+    if (player.state.buffering && player.state.position.inMilliseconds < 500) {
+      _playingSince = null;
+      return;
+    }
+    _playingSince ??= DateTime.now();
+    if (DateTime.now().difference(_playingSince!) <
+        const Duration(seconds: 2)) {
+      return;
+    }
+    _audioRouteArmed = true;
+    _lastAudioDeviceName = player.state.audioDevice.name;
+    debugPrint('[mpv] audio-route watch armed ($_lastAudioDeviceName)');
   }
 
   void _onAudioDevice(AudioDevice device) {
@@ -305,11 +332,18 @@ class MpvEngine extends PlayerEngine {
         }
       }
     }
-    // Ensure video is on — never leave a prior "no" selection sticky (that
-    // produced a permanent black picture after the stale-frame experiments).
+    // Only re-enable video if a prior "no" selection stuck — always forcing
+    // VideoTrack.auto() mid-open can disrupt demux of slow/tokenized HTTP
+    // streams (EOF / Failed to open races observed on CDN casts).
     try {
-      await player.setVideoTrack(VideoTrack.auto());
+      final vid = player.state.track.video;
+      if (vid.id == 'no') {
+        await player.setVideoTrack(VideoTrack.auto());
+      }
     } catch (_) {}
+    // Disarm route-watch for the new item so open-time device flaps don't pause.
+    _audioRouteArmed = false;
+    _playingSince = null;
     await player.play();
     unawaited(_reapplyTrackPrefs());
   }

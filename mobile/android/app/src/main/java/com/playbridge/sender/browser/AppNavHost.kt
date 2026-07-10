@@ -976,14 +976,11 @@ fun AppNavHost(
                         viewModel = libraryViewModel,
                         tvName = tvDevice?.name,
                         isTvConnected = connectionState is WebSocketClient.ConnectionState.Connected,
-                        isDlnaActive = activeDlnaTarget != null,
                         routeTargetsTv = routeTargetsTv,
                         onSetWatchRoute = { toTv ->
                             if (toTv) connectionViewModel.selectNativeRoute() else connectionViewModel.selectThisDevice()
                         },
                         onDominantColorChange = { libraryDetailAccent = it },
-                        selectedTvDevice = tvDevice,
-                        onTvDeviceSelect = { device -> connectionViewModel.connect(device) },
                         onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
                         onPlayTrailer = { trailerUrl ->
                             onCastSheetInitialModeChange("browse")

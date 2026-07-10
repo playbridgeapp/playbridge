@@ -8,13 +8,15 @@ class _FakeEngine extends PlayerEngine {
   int openCount = 0;
   int stopCount = 0;
   int lastOpenIndex = -1;
+  int positionMsValue = 0;
+  int durationMsValue = 1000;
 
   @override
   String get state => _state;
   @override
-  int get positionMs => 0;
+  int get positionMs => positionMsValue;
   @override
-  int get durationMs => 1000;
+  int get durationMs => durationMsValue;
   @override
   dynamic get tracks => null;
   @override
@@ -90,7 +92,7 @@ void main() {
   });
 
   test('completion on last item stops and clears the queue', () async {
-    final engine = _FakeEngine();
+    final engine = _FakeEngine()..positionMsValue = 5000;
     final c = PlayerController(engineForTest: engine);
     await c.playPlaylist([item(1), item(2)], 1);
     expect(c.currentIndex, 1);
@@ -107,7 +109,7 @@ void main() {
   });
 
   test('completion of a single video stops', () async {
-    final engine = _FakeEngine();
+    final engine = _FakeEngine()..positionMsValue = 5000;
     final c = PlayerController(engineForTest: engine);
     await c.playPlaylist([item(1)], 0);
 
@@ -118,5 +120,20 @@ void main() {
     expect(engine.stopCount, 1);
     expect(c.queue, isEmpty);
     expect(c.state, 'idle');
+  });
+
+  test('early completed while still at pos 0 does not stop', () async {
+    final engine = _FakeEngine()
+      ..positionMsValue = 0
+      ..durationMsValue = 0;
+    final c = PlayerController(engineForTest: engine);
+    await c.playPlaylist([item(1)], 0);
+
+    c.notifyCompletedForTest();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(engine.stopCount, 0);
+    expect(c.queue, isNotEmpty);
   });
 }

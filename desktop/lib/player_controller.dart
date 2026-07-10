@@ -241,10 +241,21 @@ class PlayerController extends ChangeNotifier {
       unawaited(next());
       return;
     }
-    // Last item (or single video) finished — clear the session. Leaving the
-    // queue loaded left mpv sitting on the final frame ("paused at end") and
-    // the UI never left the video view (main.dart only hides it when the
-    // queue empties).
+    // media_kit can emit completed=true on demuxer EOF while still opening /
+    // buffering a progressive HTTP URL (token CDNs that stall). Tearing down
+    // immediately looks like "never waits for buffer". Only stop after real
+    // playback progressed; true end-of-file is always past that threshold.
+    final pos = positionMs;
+    final dur = durationMs;
+    final meaningfullyPlayed = pos >= 1500 || (dur > 0 && pos >= 500);
+    if (!meaningfullyPlayed) {
+      debugPrint(
+          '[player] ignoring early completed (pos=${pos}ms dur=${dur}ms) — still buffering?');
+      return;
+    }
+    // Last item finished — clear the session. Leaving the queue loaded left
+    // mpv sitting on the final frame ("paused at end") and the UI never left
+    // the video view (main.dart only hides it when the queue empties).
     debugPrint('[player] playlist finished — stopping');
     unawaited(stop());
   }

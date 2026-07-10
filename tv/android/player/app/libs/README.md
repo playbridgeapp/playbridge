@@ -1,6 +1,16 @@
 # tv/app/libs
 
-Prebuilt native libraries bundled for the TV player app.
+Prebuilt native libraries for the TV player app (TV-only).
+
+## Shared with phone
+
+**FFmpeg decoder** lives at the repo root (single copy):
+
+```
+prebuilt/media3/lib-decoder-ffmpeg-release.aar
+```
+
+See `prebuilt/media3/README.md`.
 
 ## mpv-android.aar — Internal (MPV) player mode
 
