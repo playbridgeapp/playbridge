@@ -108,6 +108,11 @@ class NuvioRepository(
                 val previous = scraperDao.getForRepo(manifestUrl).associateBy { it.scraperId }
 
                 // Repo row in installed_addons — reuses addon enable/remove UI.
+                // New repos go last (lowest priority); refresh preserves order/settings.
+                val existingAddons = addonDao.getAllSync()
+                val existingMatch = existingAddons.find { it.manifestUrl == manifestUrl }
+                val sortOrder = existingMatch?.sortOrder
+                    ?: ((existingAddons.maxOfOrNull { it.sortOrder } ?: -1) + 1)
                 addonDao.insert(
                     InstalledAddonEntity(
                         manifestUrl = manifestUrl,
@@ -117,7 +122,11 @@ class NuvioRepository(
                         version = manifest.version,
                         types = "movie,series",
                         resources = json.encodeToString(listOf(NUVIO_RESOURCE)),
-                        resourceDetailsJson = ""
+                        resourceDetailsJson = "",
+                        sortOrder = sortOrder,
+                        isEnabled = existingMatch?.isEnabled ?: true,
+                        disabledFeatures = existingMatch?.disabledFeatures ?: "",
+                        installedAt = existingMatch?.installedAt ?: System.currentTimeMillis(),
                     )
                 )
 

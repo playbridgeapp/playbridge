@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   bonsoir_windows
   desktop_drop
   file_selector_windows
+  flutter_media_session
   media_kit_libs_windows_video
   media_kit_video
   screen_retriever_windows

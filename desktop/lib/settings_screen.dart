@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'auto_launch.dart';
+import 'keyboard_shortcuts_sheet.dart';
 import 'logging/log_store.dart';
 import 'logs_screen.dart';
 import 'pairing_store.dart';
@@ -21,6 +22,7 @@ class SettingsScreen extends StatefulWidget {
     required this.updateChecker,
     required this.onNavigateToCast,
     this.onSettingsChanged,
+    this.onQuit,
   });
 
   final ReceiverServer server;
@@ -30,6 +32,9 @@ class SettingsScreen extends StatefulWidget {
   final UpdateChecker updateChecker;
   final VoidCallback onNavigateToCast;
   final VoidCallback? onSettingsChanged;
+
+  /// Fully quit the app (same as tray → Quit). Red window X only hides.
+  final VoidCallback? onQuit;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -106,6 +111,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   if (mounted) setState(() {});
                 },
               ),
+            ),
+            _Tile(
+              icon: Icons.visibility_off_outlined,
+              title: 'Pause when window is hidden',
+              subtitle:
+                  'Red close button hides to the menu bar. On: pause playback. '
+                  'Off: keep playing in the background (default).',
+              trailing: Switch(
+                value: widget.store.pauseOnWindowHide,
+                onChanged: (v) async {
+                  await widget.store.setPauseOnWindowHide(v);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            _Tile(
+              icon: Icons.keyboard,
+              title: 'Keyboard shortcuts',
+              subtitle: 'Space, arrows, F, I, and gestures — press ? anytime.',
+              onTap: () => showKeyboardShortcutsSheet(context),
             ),
             _Tile(
               icon: Icons.insights,
@@ -253,10 +278,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 );
               },
             ),
+            if (widget.onQuit != null) ...[
+              const SizedBox(height: 12),
+              _Tile(
+                icon: Icons.power_settings_new,
+                title: 'Quit PlayBridge',
+                subtitle:
+                    'Stop the receiver and exit. The red window button only '
+                    'hides to the menu bar.',
+                danger: true,
+                onTap: () => _confirmQuit(context),
+              ),
+            ],
           ],
         );
       },
     );
+  }
+
+  Future<void> _confirmQuit(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Quit PlayBridge?'),
+        content: const Text(
+          'The desktop receiver will stop. Phones won’t be able to cast here '
+          'until you open PlayBridge again.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Quit'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true) widget.onQuit?.call();
   }
 }
 

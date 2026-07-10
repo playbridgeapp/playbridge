@@ -7,6 +7,8 @@ import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'package:desktop_drop/desktop_drop.dart';
+
 import 'logging/log_store.dart';
 import 'context_menu_installer.dart';
 import 'discovery.dart';
@@ -15,10 +17,13 @@ import 'extension_bridge.dart';
 import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
+import 'keyboard_shortcuts_sheet.dart';
+import 'media_session_bridge.dart';
 import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
+import 'playback_osd.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'playback_surface.dart';
@@ -142,6 +147,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final TrayController _tray;
   late final TvSenderController _sender;
   late final ExtensionBridge _extBridge;
+  late final MediaSessionBridge _mediaSession;
   final UpdateChecker _updateChecker = UpdateChecker();
 
   bool _hadMedia = false;
@@ -176,6 +182,31 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Timer? _hideTimer;
   static const _autoHide = Duration(seconds: 2);
 
+  /// Center OSD (pause / seek / volume); cleared by [_osdTimer].
+  String? _osdMessage;
+  Timer? _osdTimer;
+
+  /// Debounces single-tap play/pause so double-tap fullscreen isn't stolen.
+  Timer? _tapTimer;
+  bool _mainDragging = false;
+
+  static const _mediaExts = {
+    'mp4',
+    'm4v',
+    'mkv',
+    'webm',
+    'avi',
+    'mov',
+    'wmv',
+    'flv',
+    'mp3',
+    'flac',
+    'm4a',
+    'aac',
+    'ogg',
+    'wav',
+  };
+
   void _markActive() {
     if (!_videoHovered) setState(() => _videoHovered = true);
     _hideTimer?.cancel();
@@ -207,17 +238,21 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _tray =
         TrayController(player: _player, server: _server, store: widget.store);
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
-    _extBridge = ExtensionBridge(_sender);
+    _extBridge = ExtensionBridge(_sender, _player);
+    _mediaSession = MediaSessionBridge(_player);
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
     _player.playRequests.addListener(_handlePlayRequest);
+    _server.addListener(_handlePairingPrompt);
 
     _bootServerThenDiscovery();
     _resolveHost();
     _initTrayAndWindow();
     unawaited(_sender.start());
     unawaited(_extBridge.start());
+    // Now Playing / SMTC so Bluetooth headset play-pause reaches this player.
+    unawaited(_mediaSession.start());
     // Register the browser native-messaging host + the OS "Play on TV" context
     // menu so the extension and file manager can reach us without the user
     // editing files by hand (idempotent, best-effort).
@@ -234,10 +269,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     // video here). Tracks the rising edge so it doesn't fight tab navigation.
     _sender.addListener(_handleSenderChange);
 
-    // Cold-start "Play on TV": cast the launched file once a TV is connected.
+    // Cold-start file open (`playbridge_cast` launched the app): cast to a TV
+    // if already linked, otherwise play on this desktop (same as extension
+    // bridge when disconnected).
     if (widget.initialCastFile != null) {
       _pendingCastFile = widget.initialCastFile;
       _sender.addListener(_maybeCastPendingFile);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _resolvePendingCastFile();
+      });
     }
   }
 
@@ -260,14 +301,35 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   String? _pendingCastFile;
 
-  /// When launched with `--cast-file`, wait for a TV connection then cast once.
+  /// Rising edge: TV connected while a cold-start file is still pending → TV.
   void _maybeCastPendingFile() {
+    if (_pendingCastFile == null || !_sender.isConnected) return;
+    _resolvePendingCastFile();
+  }
+
+  /// One-shot: send [initialCastFile] to the TV if linked, else play locally.
+  void _resolvePendingCastFile() {
     final path = _pendingCastFile;
-    if (path == null || !_sender.isConnected) return;
-    _pendingCastFile = null; // one-shot
+    if (path == null) return;
+    _pendingCastFile = null;
     _sender.removeListener(_maybeCastPendingFile);
-    unawaited(
-        _sender.castLocalFile(File(path), title: widget.initialCastTitle));
+    final file = File(path);
+    if (!file.existsSync()) {
+      debugPrint('[main] pending cast file missing: $path');
+      return;
+    }
+    final title = widget.initialCastTitle;
+    if (_sender.isConnected) {
+      unawaited(_sender.castLocalFile(file, title: title));
+      return;
+    }
+    final name = title ??
+        (file.uri.pathSegments.isNotEmpty ? file.uri.pathSegments.last : path);
+    unawaited(_player.playUrl(
+      file.uri.toString(),
+      title: name,
+      isRemote: true,
+    ));
   }
 
   Future<void> _initTrayAndWindow() async {
@@ -366,10 +428,49 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
   }
 
+  /// Rising edge into a pairing UI phase: bring the window forward (no
+  /// fullscreen) so the user can enter the code even if the app was hidden
+  /// or another app was focused — same idea as cast playback reveal.
+  PairingPhase _lastPairingPhase = PairingPhase.idle;
+  void _handlePairingPrompt() {
+    final phase = _server.phase;
+    final pairing = phase == PairingPhase.awaitingCode ||
+        phase == PairingPhase.awaitingApproval;
+    final wasPairing = _lastPairingPhase == PairingPhase.awaitingCode ||
+        _lastPairingPhase == PairingPhase.awaitingApproval;
+    _lastPairingPhase = phase;
+    if (!pairing || wasPairing) return;
+
+    unawaited(_revealWindow(fullScreen: false));
+    if (!mounted) return;
+    setState(() {
+      // Pair UI lives on the Cast tab; leave the video view so the code is
+      // visible even if something was playing.
+      _dest = _Dest.cast;
+      _showingVideo = false;
+    });
+  }
+
   @override
   void onWindowClose() async {
     final prevented = await windowManager.isPreventClose();
-    if (prevented) await windowManager.hide();
+    if (!prevented) return;
+    // Fullscreen red X = leave immersive mode only (stay visible), same end
+    // state as the green full-screen control. Windowed red X = hide to tray.
+    // Quit is tray / Settings only.
+    //
+    // Green vs red in fullscreen both end windowed+visible; they differ after
+    // that: green is “back to a normal window”, red is the first step of close
+    // (second red X then hides). Matching Safari-style progressive close.
+    if (await windowManager.isFullScreen()) {
+      await windowManager.setFullScreen(false);
+      return;
+    }
+    if (widget.store.pauseOnWindowHide &&
+        (_player.state == 'playing' || _player.state == 'buffering')) {
+      await _player.pause();
+    }
+    await windowManager.hide();
   }
 
   @override
@@ -441,15 +542,113 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
   }
 
+  void _showOsd(String message) {
+    _osdTimer?.cancel();
+    if (!mounted) return;
+    setState(() => _osdMessage = message);
+    _osdTimer = Timer(const Duration(milliseconds: 1100), () {
+      if (mounted) setState(() => _osdMessage = null);
+    });
+  }
+
+  void _togglePlayPause({bool withOsd = true}) {
+    if (_player.state == 'playing') {
+      unawaited(_player.pause());
+      if (withOsd) _showOsd('Paused');
+    } else if (_player.state == 'paused' || _player.state == 'buffering') {
+      unawaited(_player.resume());
+      if (withOsd) _showOsd('Play');
+    }
+  }
+
+  void _seekBy(int deltaMs, {required String osd}) {
+    final dur = _player.durationMs;
+    var target = _player.positionMs + deltaMs;
+    if (target < 0) target = 0;
+    if (dur > 0 && target > dur) target = dur;
+    unawaited(_player.seek(Duration(milliseconds: target)));
+    _showOsd(osd);
+  }
+
+  void _nudgeVolume(double delta) {
+    final next = (_player.volume + delta).clamp(0.0, 1.0);
+    unawaited(_player.setVolume(next));
+    _showOsd('Volume ${(next * 100).round()}%');
+  }
+
+  /// Drop files/URLs onto the main surface: cast if a TV is linked, else play here.
+  void _onMainDrop(DropDoneDetails detail) {
+    setState(() => _mainDragging = false);
+    final files = <File>[];
+    final urls = <String>[];
+    for (final f in detail.files) {
+      final path = f.path;
+      if (path.startsWith('http://') || path.startsWith('https://')) {
+        urls.add(path);
+        continue;
+      }
+      final ext = _fileExt(path);
+      if (_mediaExts.contains(ext)) files.add(File(path));
+    }
+    if (files.isEmpty && urls.isEmpty) {
+      _showOsd('No media in drop');
+      return;
+    }
+
+    final tvLinked = _sender.isConnected;
+    if (tvLinked) {
+      if (files.isNotEmpty) {
+        unawaited(_sender.castLocalFiles(files).then((ok) {
+          if (!ok) _showOsd('Cast failed');
+        }));
+      }
+      for (final u in urls) {
+        _sender.castUrl(u);
+      }
+      if (files.isNotEmpty || urls.isNotEmpty) {
+        _showOsd('Casting…');
+        setState(() {
+          _dest = _Dest.nowCasting;
+          _showingVideo = false;
+        });
+      }
+      return;
+    }
+
+    // Local play: URLs + files as a playlist.
+    final items = <QueueItem>[
+      for (final u in urls)
+        QueueItem(url: u, title: u.split('/').last.split('?').first),
+      for (final f in files)
+        QueueItem(
+          url: f.uri.toString(),
+          title:
+              f.uri.pathSegments.isNotEmpty ? f.uri.pathSegments.last : f.path,
+        ),
+    ];
+    if (items.isEmpty) return;
+    unawaited(_player.playPlaylist(items, 0, isRemote: true));
+    _showOsd(items.length == 1 ? 'Playing' : '${items.length} items');
+  }
+
+  static String _fileExt(String path) {
+    final dot = path.lastIndexOf('.');
+    return dot >= 0 ? path.substring(dot + 1).toLowerCase() : '';
+  }
+
   @override
   void dispose() {
     _hideTimer?.cancel();
+    _osdTimer?.cancel();
+    _tapTimer?.cancel();
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
     _player.playRequests.removeListener(_handlePlayRequest);
+    _server.removeListener(_handlePairingPrompt);
     _tray.dispose();
     _sender.removeListener(_handleSenderChange);
     if (_pendingCastFile != null) _sender.removeListener(_maybeCastPendingFile);
+    unawaited(_mediaSession.dispose());
     _extBridge.stop();
     _sender.dispose();
     _discovery.stop();
@@ -491,46 +690,61 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               const VolumeDownIntent(),
           const SingleActivator(LogicalKeyboardKey.keyI):
               const StatsToggleIntent(),
+          const SingleActivator(LogicalKeyboardKey.keyF):
+              const ToggleFullScreenIntent(),
+          // `?` is Shift+/ on US keyboards.
+          const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+              const ShowShortcutsIntent(),
+          const SingleActivator(LogicalKeyboardKey.slash):
+              const ShowShortcutsIntent(),
         },
         child: Actions(
           actions: {
             PlayPauseIntent: CallbackAction<PlayPauseIntent>(
-              onInvoke: (_) => _player.state == 'playing'
-                  ? _player.pause()
-                  : _player.resume(),
+              onInvoke: (_) {
+                _togglePlayPause();
+                return null;
+              },
             ),
             SeekForwardIntent: CallbackAction<SeekForwardIntent>(
               onInvoke: (_) {
-                final dur = _player.durationMs;
-                var target = _player.positionMs + 10000;
-                if (dur > 0 && target > dur) target = dur;
-                _player.seek(Duration(milliseconds: target));
+                _seekBy(10000, osd: '≫ 10s');
                 return null;
               },
             ),
             SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
               onInvoke: (_) {
-                // Clamp to 0 — a negative absolute seek makes mpv jump to EOF.
-                final target = _player.positionMs - 10000;
-                _player.seek(Duration(milliseconds: target < 0 ? 0 : target));
+                _seekBy(-10000, osd: '≪ 10s');
                 return null;
               },
             ),
             VolumeUpIntent: CallbackAction<VolumeUpIntent>(
               onInvoke: (_) {
-                _player.setVolume((_player.volume + 0.05).clamp(0.0, 1.0));
+                _nudgeVolume(0.05);
                 return null;
               },
             ),
             VolumeDownIntent: CallbackAction<VolumeDownIntent>(
               onInvoke: (_) {
-                _player.setVolume((_player.volume - 0.05).clamp(0.0, 1.0));
+                _nudgeVolume(-0.05);
                 return null;
               },
             ),
             StatsToggleIntent: CallbackAction<StatsToggleIntent>(
               onInvoke: (_) {
                 _showStats.value = !_showStats.value;
+                return null;
+              },
+            ),
+            ToggleFullScreenIntent: CallbackAction<ToggleFullScreenIntent>(
+              onInvoke: (_) {
+                unawaited(_toggleFullScreen());
+                return null;
+              },
+            ),
+            ShowShortcutsIntent: CallbackAction<ShowShortcutsIntent>(
+              onInvoke: (_) {
+                unawaited(showKeyboardShortcutsSheet(context));
                 return null;
               },
             ),
@@ -629,118 +843,164 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                         setState(() => _showingVideo = true),
                                   ),
                                 Expanded(
-                                  child: MouseRegion(
-                                    onEnter: (_) => _markActive(),
-                                    onExit: (_) => _markInactive(),
-                                    onHover: (_) => _markActive(),
-                                    child: Stack(
-                                      fit: StackFit.expand,
-                                      children: [
-                                        // Video is always in the tree (Offstage) so
-                                        // mpv is never torn down on screen switch.
-                                        Positioned.fill(
-                                          child: Offstage(
-                                            offstage:
-                                                !_showingVideo || !hasMedia,
-                                            child: Container(
-                                              color: Colors.black,
-                                              child: PlaybackSurface(
-                                                controller: _player,
-                                                controlsVisible:
-                                                    _videoHovered ||
-                                                        _playlistDrawerOpen ||
-                                                        _menusOpen > 0,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                        if (!_showingVideo)
+                                  child: DropTarget(
+                                    onDragEntered: (_) =>
+                                        setState(() => _mainDragging = true),
+                                    onDragExited: (_) =>
+                                        setState(() => _mainDragging = false),
+                                    onDragDone: _onMainDrop,
+                                    child: MouseRegion(
+                                      onEnter: (_) => _markActive(),
+                                      onExit: (_) => _markInactive(),
+                                      onHover: (_) => _markActive(),
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          // Video is always in the tree (Offstage) so
+                                          // mpv is never torn down on screen switch.
                                           Positioned.fill(
-                                              child: _buildScreen()),
-                                        if (_showingVideo &&
-                                            hasMedia &&
-                                            _showStats.value &&
-                                            _player.engine is MpvEngine)
-                                          Positioned(
-                                            top: 16,
-                                            left: 16,
-                                            child: StatsOverlay(
-                                              engine:
-                                                  _player.engine as MpvEngine,
-                                            ),
-                                          ),
-                                        if (_showingVideo && hasMedia)
-                                          Positioned(
-                                            left: 0,
-                                            right: 0,
-                                            bottom: 0,
-                                            child: _PlayerControlsBar(
-                                              player: _player,
-                                              store: widget.store,
-                                              visible: _videoHovered ||
-                                                  _playlistDrawerOpen ||
-                                                  _menusOpen > 0,
-                                              showQueueControls: hasQueue,
-                                              onTogglePlaylist: () => setState(
-                                                () => _playlistDrawerOpen =
-                                                    !_playlistDrawerOpen,
-                                              ),
-                                              playlistOpen: _playlistDrawerOpen,
-                                              onMenuOpened: () =>
-                                                  setState(() => _menusOpen++),
-                                              onMenuClosed: () => setState(
-                                                () => _menusOpen =
-                                                    (_menusOpen - 1)
-                                                        .clamp(0, 99),
-                                              ),
-                                              isFullScreen: _isFullScreen,
-                                              onToggleFullScreen:
-                                                  _toggleFullScreen,
-                                            ),
-                                          ),
-                                        if (_showingVideo &&
-                                            hasQueue &&
-                                            _playlistDrawerOpen)
-                                          Positioned(
-                                            right: 0,
-                                            top: 0,
-                                            bottom: 0,
-                                            width: 360,
-                                            child: _PlaylistDrawer(
-                                              player: _player,
-                                              onClose: () => setState(
-                                                () =>
-                                                    _playlistDrawerOpen = false,
+                                            child: Offstage(
+                                              offstage:
+                                                  !_showingVideo || !hasMedia,
+                                              child: Container(
+                                                color: Colors.black,
+                                                child: PlaybackSurface(
+                                                  controller: _player,
+                                                  controlsVisible:
+                                                      _videoHovered ||
+                                                          _playlistDrawerOpen ||
+                                                          _menusOpen > 0,
+                                                ),
                                               ),
                                             ),
                                           ),
-                                        // Title scrim along the top — same
-                                        // visibility as the controls bar, so
-                                        // the title is reachable in fullscreen.
-                                        if (_showingVideo && hasMedia)
-                                          Positioned(
-                                            left: 0,
-                                            right: 0,
-                                            top: 0,
-                                            child: _TitleOverlay(
-                                              player: _player,
-                                              visible: _videoHovered ||
-                                                  _playlistDrawerOpen ||
-                                                  _menusOpen > 0,
+                                          // Tap / double-tap video (not controls).
+                                          // Below overlays so buttons/menus keep hits.
+                                          if (_showingVideo && hasMedia)
+                                            Positioned.fill(
+                                              child: GestureDetector(
+                                                behavior:
+                                                    HitTestBehavior.translucent,
+                                                onTap: () {
+                                                  _markActive();
+                                                  // Wait out a possible double-tap.
+                                                  _tapTimer?.cancel();
+                                                  _tapTimer = Timer(
+                                                    const Duration(
+                                                        milliseconds: 220),
+                                                    () => _togglePlayPause(),
+                                                  );
+                                                },
+                                                onDoubleTap: () {
+                                                  _tapTimer?.cancel();
+                                                  _markActive();
+                                                  final entering =
+                                                      !_isFullScreen;
+                                                  unawaited(
+                                                      _toggleFullScreen());
+                                                  _showOsd(entering
+                                                      ? 'Fullscreen'
+                                                      : 'Windowed');
+                                                },
+                                              ),
                                             ),
-                                          ),
-                                        // Pre-play screen for casts with
-                                        // metadata; sits above everything.
-                                        if (_showingVideo &&
-                                            _prePlayItem != null)
-                                          Positioned.fill(
-                                            child: PrePlayOverlay(
-                                              key: ValueKey(_prePlayItem!.url),
-                                              item: _prePlayItem!,
-                                              onStart: _dismissPrePlay,
+                                          if (!_showingVideo)
+                                            Positioned.fill(
+                                                child: _buildScreen()),
+                                          if (_showingVideo &&
+                                              hasMedia &&
+                                              _showStats.value &&
+                                              _player.engine is MpvEngine)
+                                            Positioned(
+                                              top: 16,
+                                              left: 16,
+                                              child: StatsOverlay(
+                                                engine:
+                                                    _player.engine as MpvEngine,
+                                              ),
                                             ),
-                                          ),
-                                      ],
+                                          if (_showingVideo && hasMedia)
+                                            Positioned(
+                                              left: 0,
+                                              right: 0,
+                                              bottom: 0,
+                                              child: _PlayerControlsBar(
+                                                player: _player,
+                                                store: widget.store,
+                                                visible: _videoHovered ||
+                                                    _playlistDrawerOpen ||
+                                                    _menusOpen > 0,
+                                                showQueueControls: hasQueue,
+                                                onTogglePlaylist: () =>
+                                                    setState(
+                                                  () => _playlistDrawerOpen =
+                                                      !_playlistDrawerOpen,
+                                                ),
+                                                playlistOpen:
+                                                    _playlistDrawerOpen,
+                                                onMenuOpened: () => setState(
+                                                    () => _menusOpen++),
+                                                onMenuClosed: () => setState(
+                                                  () => _menusOpen =
+                                                      (_menusOpen - 1)
+                                                          .clamp(0, 99),
+                                                ),
+                                                isFullScreen: _isFullScreen,
+                                                onToggleFullScreen:
+                                                    _toggleFullScreen,
+                                              ),
+                                            ),
+                                          if (_showingVideo &&
+                                              hasQueue &&
+                                              _playlistDrawerOpen)
+                                            Positioned(
+                                              right: 0,
+                                              top: 0,
+                                              bottom: 0,
+                                              width: 360,
+                                              child: _PlaylistDrawer(
+                                                player: _player,
+                                                onClose: () => setState(
+                                                  () => _playlistDrawerOpen =
+                                                      false,
+                                                ),
+                                              ),
+                                            ),
+                                          // Title scrim along the top — same
+                                          // visibility as the controls bar, so
+                                          // the title is reachable in fullscreen.
+                                          if (_showingVideo && hasMedia)
+                                            Positioned(
+                                              left: 0,
+                                              right: 0,
+                                              top: 0,
+                                              child: _TitleOverlay(
+                                                player: _player,
+                                                visible: _videoHovered ||
+                                                    _playlistDrawerOpen ||
+                                                    _menusOpen > 0,
+                                              ),
+                                            ),
+                                          // Pre-play screen for casts with
+                                          // metadata; sits above everything.
+                                          if (_showingVideo &&
+                                              _prePlayItem != null)
+                                            Positioned.fill(
+                                              child: PrePlayOverlay(
+                                                key:
+                                                    ValueKey(_prePlayItem!.url),
+                                                item: _prePlayItem!,
+                                                onStart: _dismissPrePlay,
+                                              ),
+                                            ),
+                                          if (_osdMessage != null)
+                                            PlaybackOsd(message: _osdMessage!),
+                                          if (_mainDragging)
+                                            const Positioned.fill(
+                                              child: _MainDropOverlay(),
+                                            ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -807,6 +1067,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               _dest = _Dest.cast;
             }
           }),
+          onQuit: () => unawaited(_tray.quit()),
         ),
     };
   }
@@ -1453,6 +1714,50 @@ class _AudioMenuButton extends StatelessWidget {
       if (title != null && title.isNotEmpty) title,
     ];
     return parts.isEmpty ? fallback : parts.join(' · ');
+  }
+}
+
+/// Full-surface hint while media is dragged onto the main player.
+class _MainDropOverlay extends StatelessWidget {
+  const _MainDropOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withValues(alpha: 0.55),
+      alignment: Alignment.center,
+      child: Container(
+        padding: const EdgeInsets.all(28),
+        decoration: BoxDecoration(
+          color: Colors.tealAccent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: Colors.tealAccent.withValues(alpha: 0.6),
+            width: 2,
+          ),
+        ),
+        child: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.file_download, size: 40, color: Colors.tealAccent),
+            SizedBox(height: 12),
+            Text(
+              'Drop to play',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+            SizedBox(height: 4),
+            Text(
+              'TV linked → cast · otherwise plays here',
+              style: TextStyle(fontSize: 13, color: Colors.white70),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

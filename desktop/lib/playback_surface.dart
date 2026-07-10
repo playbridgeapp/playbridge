@@ -30,9 +30,9 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
   }
 
   void _onControllerChange() {
-    if (_mpvVideo == null) {
-      _initMpv();
-    }
+    // Rebuild for isOpening / queue changes (black mask).
+    if (mounted) setState(() {});
+    if (_mpvVideo == null) _initMpv();
   }
 
   void _initMpv() {
@@ -44,7 +44,7 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
           enableHardwareAcceleration: !Platform.isLinux,
         ),
       );
-      setState(() {});
+      if (mounted) setState(() {});
     }
   }
 
@@ -56,24 +56,36 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
 
   @override
   Widget build(BuildContext context) {
-    if (_mpvVideo != null) {
-      return TweenAnimationBuilder<double>(
-        tween: Tween(
-          end: widget.controlsVisible
-              ? _kSubtitleBottomWithControls
-              : _kSubtitleBottomDefault,
-        ),
-        duration: const Duration(milliseconds: 150),
-        builder: (context, bottomPad, _) => Video(
-          controller: _mpvVideo!,
-          controls: NoVideoControls,
-          subtitleViewConfiguration: SubtitleViewConfiguration(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
-          ),
-        ),
-      );
+    final hasMedia = widget.controller.queue.isNotEmpty;
+    // Cover the VO while idle or while the next item is still opening so a
+    // frozen last-frame of the previous title cannot flash (esp. after unfocus).
+    final mask = !hasMedia || widget.controller.isOpening;
+
+    if (_mpvVideo == null) {
+      return const ColoredBox(color: Colors.black);
     }
 
-    return const ColoredBox(color: Colors.black);
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // Keep Video mounted so the texture stays bound; mask hides stale pixels.
+        TweenAnimationBuilder<double>(
+          tween: Tween(
+            end: widget.controlsVisible
+                ? _kSubtitleBottomWithControls
+                : _kSubtitleBottomDefault,
+          ),
+          duration: const Duration(milliseconds: 150),
+          builder: (context, bottomPad, _) => Video(
+            controller: _mpvVideo!,
+            controls: NoVideoControls,
+            subtitleViewConfiguration: SubtitleViewConfiguration(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),
+            ),
+          ),
+        ),
+        if (mask) const ColoredBox(color: Colors.black),
+      ],
+    );
   }
 }

@@ -43,7 +43,10 @@ Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
 class MpvEngine extends PlayerEngine {
   MpvEngine() {
     _subs.addAll([
-      player.stream.playing.listen((_) => notifyListeners()),
+      player.stream.playing.listen((playing) {
+        if (playing) _audioRouteArmed = true;
+        notifyListeners();
+      }),
       player.stream.position.listen((_) => _emitThrottled()),
       player.stream.duration.listen((_) => notifyListeners()),
       player.stream.buffering.listen((_) => notifyListeners()),
@@ -58,12 +61,20 @@ class MpvEngine extends PlayerEngine {
         debugPrint('[mpv] error: $e');
         notifyListeners();
       }),
+      // Headphone unplug / output route change: pause so audio doesn't jump to
+      // speakers at full volume (same idea as phone media apps).
+      player.stream.audioDevice.listen(_onAudioDevice),
+      player.stream.audioDevices.listen(_onAudioDevices),
     ]);
   }
 
   final Player player = Player();
   final List<StreamSubscription> _subs = [];
   VoidCallback? onCompleted;
+
+  /// Ignore the first device enumeration until something has actually played.
+  bool _audioRouteArmed = false;
+  String? _lastAudioDeviceName;
 
   /// mpv tuning is applied asynchronously; opens must await it so the very first
   /// stream gets the same demuxer/network config as every later one (otherwise a
@@ -78,6 +89,27 @@ class MpvEngine extends PlayerEngine {
     if (now.difference(_lastPositionEmit) < _positionEmitInterval) return;
     _lastPositionEmit = now;
     notifyListeners();
+  }
+
+  void _onAudioDevice(AudioDevice device) {
+    final prev = _lastAudioDeviceName;
+    _lastAudioDeviceName = device.name;
+    if (!_audioRouteArmed || !player.state.playing) return;
+    if (prev == null || prev == device.name) return;
+    // "auto" ↔ concrete name can flap on open; only react to real switches.
+    if (prev == 'auto' || device.name == 'auto') return;
+    debugPrint('[mpv] audio output changed ($prev → ${device.name}); pausing');
+    unawaited(player.pause());
+  }
+
+  void _onAudioDevices(List<AudioDevice> devices) {
+    if (!_audioRouteArmed || !player.state.playing) return;
+    final cur = player.state.audioDevice;
+    if (cur.name.isEmpty || cur.name == 'auto') return;
+    final stillThere = devices.any((d) => d.name == cur.name);
+    if (stillThere) return;
+    debugPrint('[mpv] audio device removed (${cur.name}); pausing');
+    unawaited(player.pause());
   }
 
   @override
@@ -273,6 +305,11 @@ class MpvEngine extends PlayerEngine {
         }
       }
     }
+    // Ensure video is on — never leave a prior "no" selection sticky (that
+    // produced a permanent black picture after the stale-frame experiments).
+    try {
+      await player.setVideoTrack(VideoTrack.auto());
+    } catch (_) {}
     await player.play();
     unawaited(_reapplyTrackPrefs());
   }

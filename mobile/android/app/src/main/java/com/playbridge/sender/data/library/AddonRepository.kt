@@ -215,6 +215,13 @@ class AddonRepository(
                 val resourceDetailsJson = json.encodeToString(manifest.resources)
                 val catalogsJson = json.encodeToString(manifest.catalogs)
 
+                // New installs go last (lowest priority). sortOrder defaults to 0, which is
+                // highest priority and would jump ahead of every existing addon.
+                val existing = addonDao.getAllSync()
+                val existingMatch = existing.find { it.manifestUrl == manifestUrl }
+                val sortOrder = existingMatch?.sortOrder
+                    ?: ((existing.maxOfOrNull { it.sortOrder } ?: -1) + 1)
+
                 val entity = InstalledAddonEntity(
                     manifestUrl = manifestUrl,
                     name = manifest.name.ifBlank { "Unknown Addon" },
@@ -226,11 +233,16 @@ class AddonRepository(
                     resourceDetailsJson = resourceDetailsJson,
                     catalogsJson = catalogsJson,
                     playEndpoint = manifest.behaviorHints?.playEndpoint ?: "",
-                    isConfigurable = manifest.behaviorHints?.configurable ?: false
+                    isConfigurable = manifest.behaviorHints?.configurable ?: false,
+                    // Re-install of the same URL (REPLACE) keeps order; brand-new → end of list.
+                    sortOrder = sortOrder,
+                    isEnabled = existingMatch?.isEnabled ?: true,
+                    disabledFeatures = existingMatch?.disabledFeatures ?: "",
+                    installedAt = existingMatch?.installedAt ?: System.currentTimeMillis(),
                 )
 
                 addonDao.insert(entity)
-                Log.d(TAG, "Installed addon: ${entity.name} from $manifestUrl")
+                Log.d(TAG, "Installed addon: ${entity.name} sortOrder=$sortOrder from $manifestUrl")
                 entity
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to install addon", e)

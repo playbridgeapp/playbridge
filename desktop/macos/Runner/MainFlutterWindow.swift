@@ -2,6 +2,9 @@ import Cocoa
 import FlutterMacOS
 
 class MainFlutterWindow: NSWindow {
+  /// Observers for fullscreen enter/exit (menu-bar / Control Center access).
+  private var fullscreenObservers: [NSObjectProtocol] = []
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
@@ -46,6 +49,55 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    // Bluetooth headset / media-key remote control (Now Playing + togglePlayPause).
+    MediaRemoteHandler.shared.register(
+      with: flutterViewController.engine.binaryMessenger
+    )
+
+    // Agent apps (LSUIElement) run as .accessory and permanently suppress the
+    // menu bar in fullscreen. Promote to .regular while fullscreen so the
+    // system menu bar / Control Center / Notification Center can auto-show
+    // when the cursor hits the top of the screen (like Safari, IINA, etc.).
+    registerFullscreenMenuBarFix()
+
     super.awakeFromNib()
+  }
+
+  deinit {
+    for o in fullscreenObservers {
+      NotificationCenter.default.removeObserver(o)
+    }
+  }
+
+  private func registerFullscreenMenuBarFix() {
+    let nc = NotificationCenter.default
+    fullscreenObservers.append(
+      nc.addObserver(
+        forName: NSWindow.willEnterFullScreenNotification,
+        object: self,
+        queue: .main
+      ) { _ in
+        // Become a normal app for this Space so macOS auto-hides/shows the
+        // menu bar on the top edge (and unlocks Control Center / NC).
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+      }
+    )
+    fullscreenObservers.append(
+      nc.addObserver(
+        forName: NSWindow.didExitFullScreenNotification,
+        object: self,
+        queue: .main
+      ) { [weak self] _ in
+        // Back to tray/agent behavior (no Dock icon) matching LSUIElement.
+        // setActivationPolicy(.accessory) can re-key the previously front app;
+        // re-assert focus after the policy settles so playback keeps the window.
+        NSApp.setActivationPolicy(.accessory)
+        DispatchQueue.main.async {
+          NSApp.activate(ignoringOtherApps: true)
+          self?.makeKeyAndOrderFront(nil)
+        }
+      }
+    )
   }
 }

@@ -38,7 +38,6 @@ class TvSenderController extends ChangeNotifier {
   StreamSubscription<String>? _sasSub;
 
   List<DiscoveredTv> _discoveredRaw = const [];
-  bool _allowSelfCast = false;
   SenderConnectionState _state = SenderConnectionState.disconnected;
   DiscoveredTv? _pending; // target of the in-flight / most recent connect
   TvRecord? _activeTv;
@@ -55,22 +54,12 @@ class TvSenderController extends ChangeNotifier {
   List<({int index, String title})> _castPlaylist = const [];
   int _castIndex = -1;
 
-  /// Discovered TVs, excluding this device's own receiver advertisement unless
-  /// [allowSelfCast] is enabled (single-machine testing).
-  List<DiscoveredTv> get discovered => _allowSelfCast
-      ? _discoveredRaw
-      : _discoveredRaw
-          .where((t) => t.uuid != _identity.deviceId)
-          .toList(growable: false);
-
-  /// Whether to show this device's own receiver as a cast target (off in normal
-  /// use; on for testing the sender and receiver on one machine).
-  bool get allowSelfCast => _allowSelfCast;
-  set allowSelfCast(bool value) {
-    if (_allowSelfCast == value) return;
-    _allowSelfCast = value;
-    notifyListeners();
-  }
+  /// Discovered TVs on the LAN, always excluding this app's own receiver
+  /// advertisement. Local playback is the default when nothing is linked
+  /// (extension bridge / cold-start file); self-cast is not offered.
+  List<DiscoveredTv> get discovered => _discoveredRaw
+      .where((t) => t.uuid != _identity.deviceId)
+      .toList(growable: false);
 
   List<TvRecord> get pairedTvs => _store.tvs;
   SenderConnectionState get state => _state;
