@@ -32,6 +32,7 @@ class SettingsScreen extends StatefulWidget {
   final UpdateChecker updateChecker;
   final VoidCallback onNavigateToCast;
   final VoidCallback? onSettingsChanged;
+
   /// Fully quit the app (same as tray → Quit). Red window X only hides.
   final VoidCallback? onQuit;
 

@@ -54,20 +54,24 @@ class MediaSessionBridge {
   Future<void> _startMac() async {
     await _macMethod.invokeMethod('activate');
     _macEvents = _macEventsCh.receiveBroadcastStream().listen(
-      _onMacEvent,
-      onError: (e) => debugPrint('[media-session] event error: $e'),
-    );
+          _onMacEvent,
+          onError: (e) => debugPrint('[media-session] event error: $e'),
+        );
     _player.addListener(_pushMacState);
     // Prefer mpv streams for timely playing/paused updates.
     final engine = _player.engine;
     if (engine is MpvEngine) {
-      _macMpvSubs.add(engine.player.stream.playing.listen((_) => _pushMacState()));
-      _macMpvSubs.add(engine.player.stream.completed.listen((_) => _pushMacState()));
-      _macMpvSubs.add(engine.player.stream.duration.listen((_) => _pushMacState()));
+      _macMpvSubs
+          .add(engine.player.stream.playing.listen((_) => _pushMacState()));
+      _macMpvSubs
+          .add(engine.player.stream.completed.listen((_) => _pushMacState()));
+      _macMpvSubs
+          .add(engine.player.stream.duration.listen((_) => _pushMacState()));
       _macMpvSubs.add(engine.player.stream.position.listen((_) {
         // Throttle position pushes to Now Playing.
         final now = DateTime.now();
-        if (now.difference(_lastMacPosPush) < const Duration(milliseconds: 800)) {
+        if (now.difference(_lastMacPosPush) <
+            const Duration(milliseconds: 800)) {
           return;
         }
         _lastMacPosPush = now;
@@ -239,14 +243,14 @@ class _PluginAdapter implements MediaSessionAdapter {
     unawaited(
       FlutterMediaSessionPlatform.instance
           .updateMetadata(
-            MediaMetadata(
-              title: (title != null && title.isNotEmpty) ? title : 'PlayBridge',
-              artist: 'PlayBridge',
-              artworkUri: item?.posterUrl ?? item?.backdropUrl,
-              duration:
-                  Duration(milliseconds: _player.durationMs.clamp(0, 1 << 30)),
-            ),
-          )
+        MediaMetadata(
+          title: (title != null && title.isNotEmpty) ? title : 'PlayBridge',
+          artist: 'PlayBridge',
+          artworkUri: item?.posterUrl ?? item?.backdropUrl,
+          duration:
+              Duration(milliseconds: _player.durationMs.clamp(0, 1 << 30)),
+        ),
+      )
           .catchError((Object e) {
         debugPrint('[media-session] metadata: $e');
       }),
@@ -266,30 +270,28 @@ class _PluginAdapter implements MediaSessionAdapter {
     unawaited(
       FlutterMediaSessionPlatform.instance
           .updatePlaybackState(
-            PlaybackState(
-              status: status,
-              position: Duration(
-                  milliseconds: _player.positionMs.clamp(0, 1 << 30)),
-            ),
-          )
+        PlaybackState(
+          status: status,
+          position:
+              Duration(milliseconds: _player.positionMs.clamp(0, 1 << 30)),
+        ),
+      )
           .catchError((Object e) {
         debugPrint('[media-session] state: $e');
       }),
     );
 
     unawaited(
-      FlutterMediaSessionPlatform.instance
-          .updateAvailableActions({
-            MediaAction.play,
-            MediaAction.pause,
-            MediaAction.stop,
-            MediaAction.seekTo,
-            MediaAction.rewind,
-            MediaAction.fastForward,
-            if (_player.hasNext) MediaAction.skipToNext,
-            if (_player.hasPrevious) MediaAction.skipToPrevious,
-          })
-          .catchError((Object e) {
+      FlutterMediaSessionPlatform.instance.updateAvailableActions({
+        MediaAction.play,
+        MediaAction.pause,
+        MediaAction.stop,
+        MediaAction.seekTo,
+        MediaAction.rewind,
+        MediaAction.fastForward,
+        if (_player.hasNext) MediaAction.skipToNext,
+        if (_player.hasPrevious) MediaAction.skipToPrevious,
+      }).catchError((Object e) {
         debugPrint('[media-session] actions: $e');
       }),
     );

@@ -163,8 +163,7 @@ class ExtensionBridge {
             return;
           }
           if (_sender.isConnected) {
-            final ok =
-                await _sender.castLocalFile(file, title: fileTitle);
+            final ok = await _sender.castLocalFile(file, title: fileTitle);
             _send(socket, {
               'type': 'result',
               'ok': ok,
@@ -231,17 +230,15 @@ class ExtensionBridge {
           unawaited(_player.pause());
           return true;
         case 'toggle':
-          unawaited(_player.state == 'playing'
-              ? _player.pause()
-              : _player.resume());
+          unawaited(
+              _player.state == 'playing' ? _player.pause() : _player.resume());
           return true;
         case 'stop':
           unawaited(_player.stop());
           return true;
         case 'seek_back':
           final pos = _player.positionMs - 10000;
-          unawaited(
-              _player.seek(Duration(milliseconds: pos < 0 ? 0 : pos)));
+          unawaited(_player.seek(Duration(milliseconds: pos < 0 ? 0 : pos)));
           return true;
         case 'seek_forward':
           final dur = _player.durationMs;
@@ -277,9 +274,7 @@ class ExtensionBridge {
       'connected': true,
       'target': tvLinked ? 'tv' : 'local',
       'state': tvLinked ? _sender.state.name : _player.state,
-      'activeTv': tvLinked
-          ? _sender.activeTv?.name
-          : 'This computer',
+      'activeTv': tvLinked ? _sender.activeTv?.name : 'This computer',
       'devices': [
         for (final d in _sender.discovered)
           {

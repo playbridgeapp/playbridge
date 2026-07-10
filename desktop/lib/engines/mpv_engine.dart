@@ -108,8 +108,7 @@ class MpvEngine extends PlayerEngine {
     if (cur.name.isEmpty || cur.name == 'auto') return;
     final stillThere = devices.any((d) => d.name == cur.name);
     if (stillThere) return;
-    debugPrint(
-        '[mpv] audio device removed (${cur.name}); pausing');
+    debugPrint('[mpv] audio device removed (${cur.name}); pausing');
     unawaited(player.pause());
   }
 
