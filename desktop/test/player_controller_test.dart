@@ -74,7 +74,7 @@ void main() {
   QueueItem item(int n) => QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n');
 
   test('completion with next item advances the queue', () async {
-    final engine = _FakeEngine();
+    final engine = _FakeEngine()..positionMsValue = 5000;
     final c = PlayerController(engineForTest: engine);
     await c.playPlaylist([item(1), item(2), item(3)], 0);
     expect(c.currentIndex, 0);
@@ -135,5 +135,22 @@ void main() {
 
     expect(engine.stopCount, 0);
     expect(c.queue, isNotEmpty);
+  });
+
+  test('early completed does not skip to the next playlist item', () async {
+    final engine = _FakeEngine()
+      ..positionMsValue = 0
+      ..durationMsValue = 0;
+    final c = PlayerController(engineForTest: engine);
+    await c.playPlaylist([item(1), item(2)], 0);
+    final opensBefore = engine.openCount;
+
+    c.notifyCompletedForTest();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(c.currentIndex, 0);
+    expect(engine.openCount, opensBefore);
+    expect(engine.stopCount, 0);
   });
 }

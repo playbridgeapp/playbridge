@@ -140,7 +140,7 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/** `adb logcat -s PB_PLAYER LocalContainerSniffer` */
+/** `adb logcat -s PB_PLAYER` */
 private const val PB_PLAYER = "PB_PLAYER"
 
 /** Prepare only after PlayerView is attached (TextureView surface ready). */
@@ -327,14 +327,7 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         val title = intent.getStringExtra(EXTRA_TITLE)
-        // MediaStore/SAF mime can lie (e.g. MPEG-TS saved as video/mp4). For local
-        // content:// and file:// URIs, sniff the header and override before prepare.
-        val claimedContentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
-        val contentType = when {
-            !url.isNullOrBlank() && LocalContainerSniffer.isLocalUri(url) ->
-                LocalContainerSniffer.resolveMime(this, url, claimedContentType)
-            else -> claimedContentType
-        }
+        val contentType = intent.getStringExtra(EXTRA_CONTENT_TYPE)
 
         @Suppress("UNCHECKED_CAST")
         val headers: Map<String, String> = androidx.core.content.IntentCompat.getSerializableExtra(
@@ -376,7 +369,6 @@ class PlayerActivity : ComponentActivity() {
         Log.i(
             PB_PLAYER,
             "start title=${title?.take(80)} mime=$contentType " +
-                "local=${url != null && LocalContainerSniffer.isLocalUri(url)} " +
                 "url=${url?.let { safeUrl(it) }}",
         )
 
@@ -1094,7 +1086,6 @@ private fun PlayerScreen(
             override fun onPlayerError(error: PlaybackException) {
                 errorMessage = error.message ?: "Playback error"
                 isBuffering = false
-                recoverFromPlayerError(player, error)
             }
             override fun onRenderedFirstFrame() {
                 hasRenderedFrame = true

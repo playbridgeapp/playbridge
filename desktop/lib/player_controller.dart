@@ -237,10 +237,6 @@ class PlayerController extends ChangeNotifier {
   }
 
   void _onCompleted() {
-    if (hasNext) {
-      unawaited(next());
-      return;
-    }
     // media_kit can emit completed=true on demuxer EOF while still opening /
     // buffering a progressive HTTP URL (token CDNs that stall). Tearing down
     // immediately looks like "never waits for buffer". Only stop after real
@@ -251,6 +247,10 @@ class PlayerController extends ChangeNotifier {
     if (!meaningfullyPlayed) {
       debugPrint(
           '[player] ignoring early completed (pos=${pos}ms dur=${dur}ms) — still buffering?');
+      return;
+    }
+    if (hasNext) {
+      unawaited(next());
       return;
     }
     // Last item finished — clear the session. Leaving the queue loaded left
