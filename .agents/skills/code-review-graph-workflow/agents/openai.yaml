@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Review Graph Workflow"
+  short_description: "Graph-guided review, debugging, and refactors"
+  default_prompt: "Use $code-review-graph-workflow to investigate this code change with the repository graph."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release and Publish"
+  short_description: "Version, changelog, and publish releases"
+  default_prompt: "Use $release-and-publish to prepare and publish a PlayBridge release."
