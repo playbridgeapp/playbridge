@@ -1,11 +1,13 @@
 ---
 name: code-review-graph-workflow
-description: Use PlayBridge's code-review-graph MCP for codebase exploration, debugging, change review, impact analysis, test discovery, and scoped refactoring. Use when structural code relationships or blast radius matter; fall back to focused text/file inspection when the graph lacks coverage.
+description: Use an available code-review graph for codebase exploration, debugging, change review, impact analysis, test discovery, and scoped refactoring. Use when structural code relationships or blast radius matter; fall back to focused text and file inspection when graph tools are unavailable or lack coverage.
 ---
 
 # Code-review graph workflow
 
 Start with `get_minimal_context(task="...")`, then select only the tools needed for the task.
+
+If the code-review graph tools are unavailable, continue with repository-native search, focused file inspection, version-control history, and relevant tests.
 
 ## Explore
 
@@ -17,12 +19,14 @@ Start with `get_minimal_context(task="...")`, then select only the tools needed 
 
 - Locate the failing behavior with `semantic_search_nodes`.
 - Trace callers/callees or flows, then compare recent changes with `detect_changes` when regression history matters.
+- Use `get_impact_radius` before changing a suspected high-impact entity.
 - Confirm hypotheses with focused source reads, logs, and tests; graph relationships are evidence, not proof of runtime behavior.
 
 ## Review
 
 - Use `detect_changes` against the correct base, followed by `get_affected_flows` or `get_impact_radius` for risky changes.
 - Query `tests_for` on high-risk entities and inspect exact changed lines before reporting a finding.
+- Identify changed behavior without coverage and suggest concrete tests for it.
 - Report actionable defects first with file/line evidence. Do not inflate generic coverage gaps into defects.
 
 ## Refactor
