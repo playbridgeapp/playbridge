@@ -1,168 +1,98 @@
-# PlayBridge — AGENTS.md
+# PlayBridge — Agent Guide
 
-Cross-agent project baseline (Codex, Claude, Gemini, Grok, Cursor, and others that load `AGENTS.md` / compatible rules). Prefer this file for always-on conventions; use **Agent Skills** for on-demand workflows.
+PlayBridge is a multi-platform casting suite. Treat its Android, Flutter, Apple, extension, and web trees as separate projects; run commands from the project that owns the change.
 
-## Agent Skills (shared)
+## Shared skills
 
-Tracked skills live under [`.agents/skills/`](.agents/skills/) as `SKILL.md` packages (Agent Skills open format). Codex and Grok discover this path by default; Claude/Gemini may need `.claude/skills` or `.agent/skills` copies/symlinks of the same content.
+Project skills live in `.agents/skills/`:
 
 | Skill | Use when |
 |---|---|
-| `uprev-and-publish` | Bump versions, changelogs, commit, push, open PR |
-| `debug-issue` | Graph-powered debugging |
-| `explore-codebase` | Navigate structure via the knowledge graph |
-| `refactor-safely` | Safe refactors with dependency analysis |
-| `review-changes` | Structured review with impact analysis |
+| `release-and-publish` | The user explicitly requests an uprev or release |
+| `commit-and-open-pr` | Commit, push, or create/update a pull request without an implicit uprev |
+| `code-review-graph-workflow` | Explore, debug, review, or refactor using the repository graph |
 
-When the user asks for uprev/publish, review, explore, debug, or refactor, load the matching skill from `.agents/skills/<name>/SKILL.md` and follow it.
+Load the matching `SKILL.md` only when its description matches the request. A normal commit, push, or PR request must not change versions unless the user also requests an uprev or release.
 
-## Project Overview & Structure
-PlayBridge is an Android app suite casting web video from phones to Android TV.
-Written in Kotlin with Jetpack Compose (Phone) and Leanback/TV Material (TV).
-This repository contains multiple **independent Gradle projects** (not a monorepo build).
+## Project layout
 
-| Module | Path | Role |
+| Project | Path | Notes |
 |---|---|---|
-| Phone | `phone/` | Sender app with GeckoView, Debrid, WebSocket client. |
-| TV | `tv/` | Receiver app with MPV/VLC, WebSocket server (Ktor), Leanback UI. |
-| Shared | `shared/` | KMP logic (Protocol messages, Stremio, Resume sync). |
-| Extension | `extension/` | Desktop Firefox extension, pure JS, raw WebSocket JSON. |
-| Hub | `hub/` | Go-based content aggregator and redirection engine. |
+| Android phone | `mobile/android/` | Kotlin, Compose, GeckoView; Gradle modules `:app` and `:shared` |
+| Android TV | `tv/android/` | Kotlin, TV UI, MPV/VLC; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
+| Shared Kotlin | `shared/` | KMP protocol and shared playback/domain logic, included by both Android builds |
+| Apple phone | `mobile/apple/` | Swift/Xcode project |
+| Apple TV | `tv/apple/` | Swift/Xcode project |
+| Desktop | `desktop/` | Flutter receiver for macOS, Windows, and Linux |
+| Extension | `extension/` | Browser extension, JavaScript/TypeScript |
+| Web | `web/` | Svelte site |
+| Protocol assets | `protocol/` | Protocol definitions and generated artifacts |
 
-## Build & Run Commands
-**Always run from the specific project directory (`phone/`, `tv/`, or `shared/`)!**
-**CRITICAL: Always wrap `./gradlew` commands in `zsh -c "..."` to ensure consistent environment loading on macOS.**
+## Build and test
 
-```bash
-# Android/KMP
-zsh -c "source ~/.zshrc && ./gradlew app:assembleDebug"       # Build Debug APK
-zsh -c "source ~/.zshrc && ./gradlew app:assembleRelease"     # Build Release APK
-zsh -c "source ~/.zshrc && ./gradlew app:bundleRelease"       # Build Release AAB
-zsh -c "source ~/.zshrc && ./gradlew build"                   # Build Shared/Protocol module
-zsh -c "source ~/.zshrc && ./gradlew clean app:assembleDebug" # Clean and build
-
-# Hub (Go) - Run from hub/server
-go run .                                                      # Standard run
-~/.goenv/shims/go run .                                       # Run via goenv shims (macOS)
-```
-
-## Testing & Linting Commands
-**Agent note:** It is highly encouraged to run a single test when verifying small changes for faster iteration.
+On macOS, always run Gradle through `zsh -c "source ~/.zshrc && ./gradlew ..."` from the relevant Gradle root.
 
 ```bash
-# Run all unit tests
+# Phone — from mobile/android
+zsh -c "source ~/.zshrc && ./gradlew :app:assembleDebug"
+zsh -c "source ~/.zshrc && ./gradlew :app:testFossDebugUnitTest"
+zsh -c "source ~/.zshrc && ./gradlew :app:lintFossDebug"
+
+# TV — from tv/android
+zsh -c "source ~/.zshrc && ./gradlew :player:app:assembleDebug"
 zsh -c "source ~/.zshrc && ./gradlew test"
-
-# Run a specific unit test class
-zsh -c "source ~/.zshrc && ./gradlew test --tests \"com.playbridge.sender.browser.DownloadUtilsTest\""
-
-# Run a specific test method (BEST for quick iteration)
-zsh -c "source ~/.zshrc && ./gradlew test --tests \"com.playbridge.sender.browser.DownloadUtilsTest.testMethodName\""
-
-# Run instrumented tests (requires emulator/device)
-zsh -c "source ~/.zshrc && ./gradlew connectedAndroidTest"
-
-# Run a specific Compose UI test class
-zsh -c "source ~/.zshrc && ./gradlew app:connectedAndroidTest --tests \"*ComposeTest\""
-
-# Run Android Lint
 zsh -c "source ~/.zshrc && ./gradlew lint"
+
+# Desktop — from desktop
+flutter test
+flutter analyze
+
+# Prefer a focused test while iterating
+zsh -c "source ~/.zshrc && ./gradlew :app:testFossDebugUnitTest --tests \"fully.qualified.TestClass.methodName\""
+flutter test test/path_to_test.dart
 ```
 
-## Code Style & Guidelines
+The root `shared/` directory has no standalone Gradle wrapper. Validate shared changes through both Android Gradle roots when they affect both consumers.
 
-### Language & Formatting
-- **Kotlin**: Follow official [Kotlin coding conventions](https://kotlinlang.org/docs/coding-conventions.html).
-- **Format**: No external formatters (ktlint/detekt) are configured. Rely on standard Android Studio / Kotlin formatting rules.
-- **Commits**: Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, etc.).
+## Repository rules
 
-### Imports
-- Use **explicit imports** (strictly no wildcard `*` imports).
-- Group imports: Standard library -> AndroidX -> Third-party -> Internal.
-- Always remove unused imports before committing.
+- Follow Kotlin conventions and existing local style; no ktlint/detekt formatter is configured.
+- Use explicit imports, remove unused imports, prefer non-nullable types, and expose Compose state through `StateFlow`.
+- Use Conventional Commits.
+- Preserve unrelated user changes in a dirty worktree; stage only files belonging to the requested task.
+- Never log Debrid tokens, signing credentials, authenticated stream URLs, or other secrets.
 
-### Types & Data
-- Prefer strict typing and non-nullable types where possible. Use `?` only when logically necessary.
-- Use `StateFlow` over `LiveData` for modern state management in Compose.
-- **Sealed classes** are heavily used for defining states and protocol messages.
+## Critical cross-project constraints
 
-### Naming Conventions
-- **Classes / Interfaces**: `PascalCase` (`BrowserActivity`, `Message`).
-- **Functions / Properties / Variables**: `camelCase` (`sendCommand()`, `isConnected`).
-- **Constants**: `UPPER_SNAKE_CASE` in `companion object` or top-level.
-- **Composables**: `PascalCase` (`HomeScreen()`, `VideoPlayer()`).
-- **XML Resources**: `snake_case` (`activity_browser.xml`, `ic_play.xml`).
+### Protocol ripple
 
-### Architecture
-- **MVVM Pattern**: ViewModel handles logic, exposes UI state via `StateFlow`.
-- **Repository Pattern**: Used for all data access (Room, Network, Debrid).
-- **UI**: Jetpack Compose on Phone (Material 3); Leanback / TV Material on TV.
+Changes to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt` must be checked against:
 
-### Error Handling
-- Use Kotlin `Result<T>` or specific sealed classes for modeling success/failure states.
-- Surface errors cleanly to the UI through ViewModel state.
-- **Security**: Never log sensitive data like Debrid API tokens or signing credentials. Use specific `try-catch` blocks around IO/Network operations.
+- `mobile/android/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
+- `tv/android/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
+- `extension/src/background.js`, which manually handles protocol JSON
 
-## Critical Gotchas (Agent Must-Reads)
+### Shared dependency versions
 
-### 1. Protocol Ripple Effect (CRITICAL)
-Any change to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt` MUST be mirrored in:
-- `phone/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
-- `tv/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
-- `extension/src/background.js` (Manual JSON parsing/formatting since JS can't import Kotlin).
+Phone and TV consume the root `gradle/libs.versions.toml`. Keep GeckoView/Media3 changes compatible with both Android projects and the shared decoder AARs under `prebuilt/media3/`.
 
-### 2. GeckoView Version Sync
-Phone and TV both depend on GeckoView. The version in `gradle/libs.versions.toml` MUST be identical across both modules to prevent runtime divergence.
+### TV networking
 
-### 3. TV Specifics
-- Uses `SYSTEM_ALERT_WINDOW` as a workaround for Android 14+ background limits.
-- `network_security_config.xml` permits cleartext traffic. The scoped `domain-config` (loopback + RFC-1918 LAN) is required so the player can reach local/`http://` stream sources. The blanket `base-config cleartextTrafficPermitted="true"` is **intentionally retained** — many direct/torrent/`http://` streams make cleartext a functional requirement (decision logged in `DESKTOP_BRIDGE_PLAN.md`, deferred 2026-06-15), not an outstanding "remove before production" item.
-- `ContentSniffer.kt` trust-all SSL is **scoped to local/private URLs only** (`isLocalUrl()` gates `trustAllCerts` at every call site; the unconditional `getUnsafeOkHttpClient()` was removed). The empty-`checkServerTrusted` `X509TrustManager` is flagged by lint and suppressed via baseline, so Play pre-launch may still note it — defensible, not a blanket bypass.
+The TV app intentionally permits cleartext stream traffic, including a blanket cleartext base configuration, because direct and torrent streams may use HTTP. Do not “harden” this away without an explicit product decision. Local/private URL checks scope the exceptional TLS behavior in `ContentSniffer.kt`; do not broaden it to public hosts.
 
-### 4. Phone Specifics
-- Debrid APIs are highly sensitive to token management.
-- WebExtension support is embedded natively via `assets/extensions/video_detector/`.
+## Knowledge graph first
+
+Before Grep/Glob/Read exploration, use the `code-review-graph` MCP tools:
+
+1. Start with `get_minimal_context` for the task.
+2. Use `detect_changes` for reviews, `semantic_search_nodes` for discovery, and `query_graph` for callers/callees/imports/tests.
+3. Use `get_impact_radius` or `get_affected_flows` when blast radius matters.
+4. Fall back to `rg` and focused file reads when the graph lacks coverage or exact text is required.
+
+The graph updates through repository hooks. Do not impose fixed tool-call or token quotas when additional evidence is needed.
 
 ## Environment
-- **Target SDK**: 36 | **Min SDK**: 26 (Phone)
-- **JDK**: 17 | **AGP**: 9.0.1 | **Kotlin**: 2.2.10
-- **Shell Requirement**: Always execute `./gradlew` via `zsh -c "source ~/.zshrc && ./gradlew ..."` on macOS.
 
-<!-- code-review-graph MCP tools -->
-## MCP Tools: code-review-graph
-
-**IMPORTANT: This project has a knowledge graph. ALWAYS use the
-code-review-graph MCP tools BEFORE using Grep/Glob/Read to explore
-the codebase.** The graph is faster, cheaper (fewer tokens), and gives
-you structural context (callers, dependents, test coverage) that file
-scanning cannot.
-
-### When to use graph tools FIRST
-
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
-
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
-
-### Key Tools
-
-| Tool | Use when |
-| ------ | ---------- |
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
-| `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
-
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
+- Target SDK 36; phone min SDK 26
+- JDK 17; AGP 9.0.1; Kotlin 2.2.10
+- Root version catalog: `gradle/libs.versions.toml`
