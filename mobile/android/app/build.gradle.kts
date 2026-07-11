@@ -188,6 +188,11 @@ dependencies {
     implementation(libs.androidx.media3.common)
     implementation(libs.androidx.media3.ui)
     implementation(libs.androidx.media3.effect) // HDR→SDR tone mapping via the playback effects pipeline
+    // Shared Media3 FFmpeg audio decoder (repo prebuilt/media3/ — also used by TV).
+    // PhoneExoPlayerFactory: EXTENSION_RENDERER_MODE_PREFER → FfmpegAudioRenderer.
+    implementation(
+        files("${rootProject.projectDir}/../../prebuilt/media3/lib-decoder-ffmpeg-release.aar"),
+    )
 
     // Koin Dependency Injection
     implementation(libs.koin.android)

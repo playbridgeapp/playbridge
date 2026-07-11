@@ -126,13 +126,15 @@ class ExtensionBridge {
           });
         } else {
           // No cast target — play on this machine (extension → desktop).
+          final headerCount = headers?.length ?? 0;
+          debugPrint(
+              '[ext-bridge] cast → local player: $url (headers=$headerCount)');
           unawaited(_player.playUrl(
             url,
             headers: headers,
             title: title,
             isRemote: true,
           ));
-          debugPrint('[ext-bridge] cast → local player: $url');
           _send(socket, {
             'type': 'result',
             'ok': true,

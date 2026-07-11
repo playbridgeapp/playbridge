@@ -178,7 +178,11 @@ dependencies {
     implementation(files("libs/mpv-android.aar"))
 
     // ExoPlayer Extensions (Software Decoders)
-    implementation(files("libs/lib-decoder-ffmpeg-release.aar"))
+    // FFmpeg is shared with phone under repo prebuilt/media3/ (single copy).
+    // rootProject = tv/android → ../../prebuilt/media3
+    implementation(
+        files("${rootProject.projectDir}/../../prebuilt/media3/lib-decoder-ffmpeg-release.aar"),
+    )
     implementation(files("libs/lib-decoder-av1-release.aar"))
     implementation(files("libs/lib-decoder-iamf-release.aar"))
 

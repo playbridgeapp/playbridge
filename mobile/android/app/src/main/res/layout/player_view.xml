@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  PlayerView backed by a SurfaceView (the default). SurfaceView enables the Android
-  system compositor to pass the raw video buffer directly to the display hardware,
-  allowing correct, native hardware-accelerated HDR tone-mapping and full brightness.
+  TextureView (not SurfaceView): required for Compose AndroidView.
+
+  SurfaceView creates its surface only after a later layout pass. Preparing
+  ExoPlayer before that leaves the video renderer surface-less → permanent
+  STATE_BUFFERING (spinner) even with tracks/duration/buffer already loaded.
+
+  TextureView's surface is available as soon as the view is attached, which
+  matches Compose's AndroidView lifecycle. HDR path is slightly less ideal
+  than SurfaceView, but playback reliability wins for the in-app player.
 -->
 <androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -10,6 +16,6 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@android:color/black"
-    app:surface_type="surface_view"
+    app:surface_type="texture_view"
     app:use_controller="false"
     app:resize_mode="fit" />

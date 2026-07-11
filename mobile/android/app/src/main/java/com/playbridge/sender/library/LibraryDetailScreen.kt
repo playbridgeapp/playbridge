@@ -63,7 +63,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import kotlin.math.roundToInt
-import com.playbridge.sender.model.TvDevice
 
 /**
  * Unified detail screen for movies, TV shows, and addon-native content.
@@ -94,14 +93,10 @@ fun LibraryDetailScreen(
     viewModel: LibraryViewModel,
     tvName: String? = null,
     isTvConnected: Boolean = false,
-    /** A DLNA renderer is the active cast target (no WS session) — suppresses native reconnects. */
-    isDlnaActive: Boolean = false,
     /** Authoritative routing intent (reactive): true = a TV/DLNA target, false = This Device. */
     routeTargetsTv: Boolean = false,
     /** Change the authoritative route from this screen's Watch-on-TV / This-Device toggle. */
     onSetWatchRoute: (Boolean) -> Unit = {},
-    selectedTvDevice: TvDevice? = null,
-    onTvDeviceSelect: ((TvDevice) -> Unit)? = null,
     onOpenConnectionScreen: () -> Unit = {},
     onSendStreamToTv: (url: String, title: String, headers: Map<String, String>?, contentType: String?) -> Unit = { _, _, _, _ -> },
     onBack: () -> Unit,
@@ -187,10 +182,9 @@ fun LibraryDetailScreen(
     val proxyAvailable = mediaflowProxyEnabled && mediaflowProxyUrl.isNotBlank()
     var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
 
-    // Intentionally NO auto-connect on screen entry. Silently connecting when merely
-    // opening a title was a source of "connects to the TV out of nowhere". The connection
-    // is established lazily only when the user actually sends to the TV — see the reconnect
-    // guard inside triggerWatch (forPhone == false).
+    // Intentionally NO auto-connect on this screen (entry or Watch/Resume). Connecting
+    // is left to the Connection sheet — see onOpenConnectionScreen. Watch only resolves
+    // streams and casts/plays on the current route.
 
     val episodeListState = rememberLazyListState()
     var episodesAscending by remember { mutableStateOf(true) }
@@ -707,12 +701,8 @@ fun LibraryDetailScreen(
     }
 
     val triggerWatch: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = triggerWatch@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
-        // Reconnect attempt before sending — covers the case where auto-connect
-        // failed or the socket dropped while the user was on this screen. Never
-        // while a DLNA renderer is the target: connecting natively would clear it.
-        if (!forPhone && !isTvConnected && !isDlnaActive && selectedTvDevice != null) {
-            onTvDeviceSelect?.invoke(selectedTvDevice)
-        }
+        // Do not reconnect from Watch/Resume — pairing lives on the Connection sheet.
+        // If the TV route is selected but offline, cast will fail cleanly; user reconnects there.
 
         // 1. Proxy path (only for auto-play; long-press should still use picker)
         if (!forPhone && !forcePicker && proxyMode != MediaflowProxy.Mode.OFF && proxyAvailable) {
