@@ -83,8 +83,8 @@ stream-resolver/*.exe
 # Added by code-review-graph
 .code-review-graph/
 
-# AI agent / planning artifacts
-AGENTS.md
+# AI agent / planning artifacts (local only)
+# AGENTS.md is tracked as the cross-agent project baseline.
 GEMINI.md
 CLAUDE.md
 AI_CONTEXT.md
@@ -112,7 +112,11 @@ mobile/android/store/icon_variants/_generated/
 mobile/android/store/icon_variants/*.svg
 
 # Local AI, agent, and custom environment configurations
-.agents/
+# Track shared Agent Skills under .agents/skills/ (Codex/Grok and other SKILL.md clients).
+# Keep other local agent state private.
+.agents/*
+!.agents/skills/
+!.agents/skills/**
 .gemini/
 .kiro/
 .qoder/
