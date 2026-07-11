@@ -2,6 +2,12 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.7+25] — 2026-07-11
+
+### Fixed
+- **Cast / local open stability**: Delay mpv audio-route arming until playback is stable (~2s) so open-time device flaps no longer pause casts mid-buffer; only re-enable video when the track is stuck on `"no"` (forcing `VideoTrack.auto()` mid-open could disrupt demux on token CDNs). (#103)
+- **False end-of-file**: Ignore early `completed` while still near position 0 so progressive HTTP streams that emit demuxer EOF during buffer do not tear down the session. (#103)
+
 ## [0.6.6+24] — 2026-07-08
 
 ### Fixed

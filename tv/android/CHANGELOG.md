@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.9.2] — 2026-07-11 (versionCode 222)
+
+### Changed
+- **FFmpeg decoder AAR**: Moved to shared `prebuilt/media3/lib-decoder-ffmpeg-release.aar` (single copy with phone). Gradle path updated; runtime behavior unchanged. (#103)
+
 ## Player [0.9.1] — 2026-07-08 (versionCode 221)
 
 ### Changed

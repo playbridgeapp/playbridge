@@ -29,8 +29,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 219
-        versionName = "0.11.0"
+        versionCode = 220
+        versionName = "0.11.1"
 
         ndk {
             abiFilters.add("armeabi-v7a")
