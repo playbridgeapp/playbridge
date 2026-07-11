@@ -3,6 +3,15 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.1] — 2026-07-11 (versionCode 220)
+
+### Fixed
+- **In-app player (no video / silent video)**: TV-aligned ExoPlayer factory with Media3 **FFmpeg audio PREFER** (`prebuilt/media3/lib-decoder-ffmpeg-release.aar`), hardware-first video, decoder fallback, and memory-aware load control. TextureView + deferred `prepare()` until the surface is attached (Compose SurfaceView left permanent buffering). Stuck recovery only after first frame and does not mute audio when FFmpeg is loaded. (#103)
+- **Library Watch**: No longer auto-reconnects to the TV from the detail screen; pairing stays on the Connection sheet. (#103)
+
+### Changed
+- **FFmpeg packaging**: Phone depends on the shared repo prebuilt FFmpeg decoder AAR (same artifact as TV). (#103)
+
 ## [0.11.0] — 2026-07-08 (versionCode 219)
 
 ### Added
