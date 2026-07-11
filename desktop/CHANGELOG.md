@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.8+26] — 2026-07-11
+
+### Fixed
+- **Windows MSVC compatibility**: Allow the `flutter_media_session` plugin's legacy experimental coroutine header to compile with Visual Studio 18 / MSVC 14.51 while the dependency migrates to standard C++ coroutines.
+
 ## [0.6.7+25] — 2026-07-11
 
 ### Fixed
