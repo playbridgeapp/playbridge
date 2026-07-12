@@ -1,6 +1,17 @@
 import SwiftUI
 import AVKit
 
+final class ActivityAVPlayerViewController: AVPlayerViewController {
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if StillWatchingGate.isPrompting {
+            NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
+            return
+        }
+        NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+        super.pressesBegan(presses, with: event)
+    }
+}
+
 /// Using UIViewControllerRepresentable is much more stable on tvOS for custom headers and MKVs
 struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
@@ -15,7 +26,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let onBroadcast: ([String: Any]) -> Void
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
+        let controller = ActivityAVPlayerViewController()
         controller.delegate = context.coordinator
 
         // Setup Audio Session for TV output
@@ -101,6 +112,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         let onBroadcast: ([String: Any]) -> Void
 
         private var timeObserver: Any?
+        private var timeControlObservation: NSKeyValueObservation?
         private var didBroadcastTracks = false
         // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
         // synchronously by broadcastTracks/selectTrack. Avoids the deprecated sync accessor.
@@ -128,17 +140,29 @@ struct NativePlayerView: UIViewControllerRepresentable {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(onResync),
                 name: WebSocketServer.resyncRequest, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(onStillWatchingPause),
+                name: .playBridgeStillWatchingPause, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(onStillWatchingResume),
+                name: .playBridgeStillWatchingResume, object: nil)
         }
 
         /// Called once the player exists: drive periodic now-playing status to the phone.
         func attach(player: AVPlayer) {
             self.player = player
+            timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) {
+                [weak self] _, _ in
+                DispatchQueue.main.async { self?.broadcastStatus() }
+            }
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main
             ) { [weak self] _ in self?.broadcastStatus() }
         }
 
         func teardown() {
+            timeControlObservation?.invalidate()
+            timeControlObservation = nil
             if let token = timeObserver { player?.removeTimeObserver(token); timeObserver = nil }
             NotificationCenter.default.removeObserver(self)
         }
@@ -146,11 +170,13 @@ struct NativePlayerView: UIViewControllerRepresentable {
         deinit { teardown() }
 
         @objc func toggleLoop(_ action: UIAction) {
+            NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
             isLooping.toggle()
             action.state = isLooping ? .on : .off
         }
 
         @objc func invokeSwitch() {
+            NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
             onSwitch(player?.currentTime().seconds ?? 0)
         }
 
@@ -170,7 +196,12 @@ struct NativePlayerView: UIViewControllerRepresentable {
             willEndFullScreenPresentation interactivelyDismissed: Bool
         ) {
             // User pressed Menu/Back on the Siri Remote
-            onExit()
+            if StillWatchingGate.isPrompting {
+                NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
+            } else {
+                NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+                onExit()
+            }
         }
 
         // MARK: - Phone Now-Playing Sync
@@ -194,6 +225,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
             ]
             if let t = title, !t.isEmpty { json["title"] = t }
             onBroadcast(json)
+            NotificationCenter.default.post(
+                name: .playBridgePlaybackActivity, object: nil,
+                userInfo: ["isPlaying": player.timeControlStatus == .playing])
 
             // Track lists become available once the item is ready; load the selection groups once
             // (async on tvOS 16+), cache them, then broadcast.
@@ -245,6 +279,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         @objc private func onControl(_ note: Notification) {
             guard let cmd = note.userInfo?["command"] as? String, let player else { return }
+            if StillWatchingGate.isPrompting { return }
             switch cmd {
             case "play": player.play()
             case "pause": player.pause()
@@ -271,6 +306,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         @objc private func onRemote(_ note: Notification) {
             guard let key = note.userInfo?["key"] as? String, let player else { return }
+            if StillWatchingGate.isPrompting { return }
             switch key {
             case "dpad_center":
                 if player.timeControlStatus == .playing { player.pause() } else { player.play() }
@@ -279,6 +315,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
             default: break
             }
         }
+
+        @objc private func onStillWatchingPause() { player?.pause(); broadcastStatus() }
+        @objc private func onStillWatchingResume() { player?.play(); broadcastStatus() }
 
         private func seek(by delta: Double) {
             guard let player else { return }

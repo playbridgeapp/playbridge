@@ -18,7 +18,10 @@ class InputHandler(
     private val audioManager: AudioManager,
     private val engine: PlayerEngineAdapter,
     private val controls: PlayerControlsViewModel,
-    private val isExternalOverlayVisible: () -> Boolean = { false }
+    private val isExternalOverlayVisible: () -> Boolean = { false },
+    private val isStillWatchingVisible: () -> Boolean = { false },
+    private val onContinueWatching: () -> Unit = {},
+    private val onUserActivity: () -> Unit = {},
 ) {
 
     /**
@@ -26,6 +29,16 @@ class InputHandler(
      */
     fun handleControlCommand(command: String?) {
         Log.i(TAG, "Control command: $command")
+
+        if (isStillWatchingVisible()) {
+            if (command == "stop") {
+                activity.finish()
+            } else if (command != null) {
+                onContinueWatching()
+            }
+            return
+        }
+        if (command != null) onUserActivity()
 
         // Absolute seek from the phone seekbar: "seek_to:<positionMs>"
         if (command != null && command.startsWith("seek_to:")) {
@@ -100,6 +113,11 @@ class InputHandler(
      */
     fun handleRemoteCommand(key: String?) {
         Log.i(TAG, "Remote command: $key")
+        if (key != null && isStillWatchingVisible()) {
+            onContinueWatching()
+            return
+        }
+        if (key != null) onUserActivity()
 
         val keyCode = when (key) {
             "dpad_up" -> KeyEvent.KEYCODE_DPAD_UP
@@ -129,6 +147,17 @@ class InputHandler(
     fun handleKeyEvent(keyCode: Int, event: KeyEvent?): Boolean {
         // Only handle ACTION_DOWN
         if (event?.action != KeyEvent.ACTION_DOWN) return false
+
+        if (isStillWatchingVisible()) {
+            if (keyCode == KeyEvent.KEYCODE_MEDIA_STOP) {
+                activity.finish()
+                return true
+            }
+            onContinueWatching()
+            return true
+        }
+
+        onUserActivity()
 
         val state = controls.controlsState.value
         val isExtVisible = isExternalOverlayVisible()

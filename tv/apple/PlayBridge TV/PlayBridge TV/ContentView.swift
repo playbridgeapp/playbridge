@@ -16,10 +16,15 @@ struct ContentView: View {
     @StateObject private var historyStore = HistoryStore()
     @StateObject private var playlistStore = PlaylistStore()
     @StateObject private var server: WebSocketServer
+    @StateObject private var stillWatching = StillWatchingController()
     @AppStorage("enable_history") var enableHistory: Bool = true
+    @AppStorage("still_watching_enabled") var stillWatchingEnabled: Bool = false
+    @AppStorage("still_watching_threshold_min") var stillWatchingThreshold: Int = StillWatchingController.defaultThreshold
+    @AppStorage("still_watching_response_sec") var stillWatchingResponseSeconds: Int = StillWatchingController.defaultResponseSeconds
     @State private var currentScreen: AppScreen = .pairing
     @State private var time = 0.0
     @State private var playerStarted: Bool = false
+    @State private var playbackSessionID = 0
     @Environment(\.scenePhase) private var scenePhase
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
@@ -103,10 +108,12 @@ struct ContentView: View {
                 ZStack {
                     // PlayerView always renders so it can buffer in the background.
                     // isPreBuffering=true keeps it muted and UI-hidden during preplay.
-                    PlayerView(payload: request, isPreBuffering: isPreBuffering) {
+                    PlayerView(payload: request, isPreBuffering: isPreBuffering, stillWatching: stillWatching) {
+                        playlistStore.clear()
+                        stillWatching.reset()
                         withAnimation { server.currentPlayRequest = nil }
                     }
-                    .id(request.url)
+                    .id(playbackSessionID)
                     .zIndex(5)
                     .edgesIgnoringSafeArea(.all)
 
@@ -130,21 +137,16 @@ struct ContentView: View {
         }
         .onAppear {
             server.start()
-            // Keep the Apple TV awake while the receiver is foregrounded: otherwise the idle
-            // timer sleeps the device (dropping the WebSocket server, so casts can't reach it),
-            // and during MPV/VLC playback — which render into a custom layer the system doesn't
-            // recognise as "video playing" — the screensaver can interrupt mid-playback. AVPlayer
-            // suppresses this on its own, but this covers all engines + the idle receiver.
-            UIApplication.shared.isIdleTimerDisabled = true
+            UIApplication.shared.isIdleTimerDisabled = false
         }
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
                 server.restart()
-                UIApplication.shared.isIdleTimerDisabled = true
+                stillWatching.foregroundChanged(true)
             case .background:
                 server.stop()
-                UIApplication.shared.isIdleTimerDisabled = false  // allow normal sleep when backgrounded
+                stillWatching.foregroundChanged(false)
             default: break
             }
         }
@@ -153,9 +155,14 @@ struct ContentView: View {
                 currentScreen = .pairing
             }
         }
+        .onChange(of: stillWatchingEnabled) { _, _ in stillWatching.settingsChanged() }
+        .onChange(of: stillWatchingThreshold) { _, _ in stillWatching.settingsChanged() }
+        .onChange(of: stillWatchingResponseSeconds) { _, _ in stillWatching.settingsChanged() }
         .onReceive(server.$currentPlayRequest) { request in
-            // Reset playerStarted for every new incoming request
+            guard request != nil else { return }
             playerStarted = false
+            playbackSessionID &+= 1
+            stillWatching.reset()
         }
         .environmentObject(historyStore)
         .environmentObject(playlistStore)
@@ -164,7 +171,3 @@ struct ContentView: View {
 }
 
 // MARK: - Focusable Components
-
-
-
-

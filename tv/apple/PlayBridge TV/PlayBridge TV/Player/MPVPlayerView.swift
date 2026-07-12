@@ -10,6 +10,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let headers: [String: String]?
     let subtitles: [String]?
     let initialTime: Double
+    let mediaIdentity: Int
     let isPreBuffering: Bool
     let title: String?
     let onDismiss: () -> Void
@@ -24,6 +25,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         vc.headers = headers
         vc.subtitles = subtitles
         vc.initialTime = initialTime
+        vc.mediaIdentity = mediaIdentity
         vc.isPreBuffering = isPreBuffering
         vc.mediaTitle = title
         vc.onDismiss = onDismiss
@@ -44,7 +46,8 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         // handle, render layer, caches) is reused — `loadfile replace` swaps the
         // media. This is what makes back-to-back episodes start fast and gapless
         // instead of paying a full mpv re-init per item.
-        if uiViewController.url != url {
+        if uiViewController.url != url || uiViewController.mediaIdentity != mediaIdentity {
+            uiViewController.mediaIdentity = mediaIdentity
             uiViewController.loadNewItem(
                 url: url,
                 headers: headers,
@@ -73,6 +76,7 @@ class MPVViewController: UIViewController {
     var headers: [String: String]?
     var subtitles: [String]?
     var initialTime: Double = 0.0
+    var mediaIdentity = 0
     var mediaTitle: String?
     var onDismiss: (() -> Void)?
     var onExit: (() -> Void)?
@@ -463,6 +467,12 @@ class MPVViewController: UIViewController {
                 mpv_get_property(handle, "demuxer-cache-duration", MPV_FORMAT_DOUBLE, &cacheDur)
             }
             print("[MPV] paused-for-cache: \(stalled ? "STALLED (network can't keep up)" : "resumed") — demuxer cache ahead = \(String(format: "%.1f", cacheDur))s")
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                NotificationCenter.default.post(
+                    name: .playBridgePlaybackActivity, object: nil,
+                    userInfo: ["isPlaying": self.playbackState.isPlaying && !stalled])
+            }
 
         case "duration":
             guard prop.format == MPV_FORMAT_DOUBLE,
@@ -477,6 +487,9 @@ class MPVViewController: UIViewController {
             DispatchQueue.main.async { [weak self] in
                 self?.playbackState.isPlaying = !isPaused
                 self?.broadcastStatus()
+                NotificationCenter.default.post(
+                    name: .playBridgePlaybackActivity, object: nil,
+                    userInfo: ["isPlaying": !isPaused])
             }
 
         case "current-ao":
@@ -720,6 +733,9 @@ class MPVViewController: UIViewController {
         } else {
             setPropertyAsync("mute", value: "no")
             showUI(autoHide: true)
+            NotificationCenter.default.post(
+                name: .playBridgePlaybackActivity, object: nil,
+                userInfo: ["isPlaying": !playbackState.userPaused])
         }
     }
 
@@ -838,8 +854,13 @@ class MPVViewController: UIViewController {
     // MARK: - Siri Remote
 
     override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        if StillWatchingGate.isPrompting {
+            NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
+            return
+        }
         if isPreBuffering { super.pressesBegan(presses, with: event); return }
         guard let type = presses.first?.type else { super.pressesBegan(presses, with: event); return }
+        NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
 
         if type == .menu {
             if playbackState.showSubtitleMenu  { playbackState.showSubtitleMenu = false; return }
@@ -987,6 +1008,12 @@ class MPVViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(onResyncRequest),
             name: WebSocketServer.resyncRequest, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onStillWatchingPause),
+            name: .playBridgeStillWatchingPause, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onStillWatchingResume),
+            name: .playBridgeStillWatchingResume, object: nil)
 
         // Periodic status (covers live position) — 1s cadence matches the Android receiver.
         statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -1022,13 +1049,18 @@ class MPVViewController: UIViewController {
         broadcastTracks()
     }
 
+    @objc private func onStillWatchingPause() { setPropertyAsync("pause", value: "yes") }
+    @objc private func onStillWatchingResume() { setPropertyAsync("pause", value: "no") }
+
     @objc private func onControlNotification(_ note: Notification) {
         guard let cmd = note.userInfo?["command"] as? String else { return }
+        if StillWatchingGate.isPrompting { return }
         handleControlCommand(cmd)
     }
 
     @objc private func onRemoteNotification(_ note: Notification) {
         guard let key = note.userInfo?["key"] as? String else { return }
+        if StillWatchingGate.isPrompting { return }
         switch key {
         case "dpad_center": togglePlayPause()
         case "dpad_left":   skipBackward()

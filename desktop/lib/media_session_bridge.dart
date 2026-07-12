@@ -18,9 +18,19 @@ import 'player_controller.dart';
 /// * **Windows** — `flutter_media_session` SMTC.
 /// * **Linux** — no-op (no MPRIS backend yet).
 class MediaSessionBridge {
-  MediaSessionBridge(this._player);
+  MediaSessionBridge(
+    this._player, {
+    this.isPlaybackPromptActive,
+    this.onPromptContinue,
+    this.onPromptStop,
+    this.onPlaybackActivity,
+  });
 
   final PlayerController _player;
+  final bool Function()? isPlaybackPromptActive;
+  final VoidCallback? onPromptContinue;
+  final VoidCallback? onPromptStop;
+  final VoidCallback? onPlaybackActivity;
   final FlutterMediaSession _pluginSession = FlutterMediaSession();
   _PluginAdapter? _pluginAdapter;
   StreamSubscription? _macEvents;
@@ -114,6 +124,8 @@ class MediaSessionBridge {
     final action = raw['action'] as String?;
     if (action == null) return;
     debugPrint('[media-session] mac action: $action');
+    if (_handlePromptAction(action)) return;
+    onPlaybackActivity?.call();
     switch (action) {
       case 'toggle':
         if (_player.state == 'playing') {
@@ -151,6 +163,16 @@ class MediaSessionBridge {
     }
   }
 
+  bool _handlePromptAction(String action) {
+    if (!(isPlaybackPromptActive?.call() ?? false)) return false;
+    if (action == 'stop') {
+      onPromptStop?.call();
+    } else {
+      onPromptContinue?.call();
+    }
+    return true;
+  }
+
   Future<void> _startPlugin() async {
     if (Platform.isWindows) {
       await _pluginSession.setWindowsAppUserModelId(
@@ -162,7 +184,13 @@ class MediaSessionBridge {
         forwardSeconds: 10, backwardSeconds: 10);
     await _pluginSession.setAutoHandleInterruptions(false);
     await _pluginSession.activate();
-    _pluginAdapter = _PluginAdapter(_player);
+    _pluginAdapter = _PluginAdapter(
+      _player,
+      isPlaybackPromptActive: isPlaybackPromptActive,
+      onPromptContinue: onPromptContinue,
+      onPromptStop: onPromptStop,
+      onPlaybackActivity: onPlaybackActivity,
+    );
     _pluginSession.bind(_pluginAdapter!);
   }
 
@@ -192,9 +220,19 @@ class MediaSessionBridge {
 
 /// Windows (and future non-mac) adapter via flutter_media_session.
 class _PluginAdapter implements MediaSessionAdapter {
-  _PluginAdapter(this._player);
+  _PluginAdapter(
+    this._player, {
+    this.isPlaybackPromptActive,
+    this.onPromptContinue,
+    this.onPromptStop,
+    this.onPlaybackActivity,
+  });
 
   final PlayerController _player;
+  final bool Function()? isPlaybackPromptActive;
+  final VoidCallback? onPromptContinue;
+  final VoidCallback? onPromptStop;
+  final VoidCallback? onPlaybackActivity;
   final List<StreamSubscription<dynamic>> _subs = [];
   FlutterMediaSession? _session;
 
@@ -299,6 +337,15 @@ class _PluginAdapter implements MediaSessionAdapter {
 
   void _onAction(MediaAction action) {
     debugPrint('[media-session] plugin action: ${action.name}');
+    if (isPlaybackPromptActive?.call() ?? false) {
+      if (action.name == 'stop') {
+        onPromptStop?.call();
+      } else {
+        onPromptContinue?.call();
+      }
+      return;
+    }
+    onPlaybackActivity?.call();
     switch (action.name) {
       case 'play':
         unawaited(_player.resume());

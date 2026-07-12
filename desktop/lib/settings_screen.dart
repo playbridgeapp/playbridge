@@ -127,6 +127,106 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _Tile(
+              icon: Icons.bedtime_outlined,
+              title: 'Still watching reminder',
+              subtitle:
+                  'Pause after continuous viewing and stop if nobody responds.',
+              trailing: Switch(
+                value: widget.store.stillWatchingEnabled,
+                onChanged: (v) async {
+                  await widget.store.setStillWatchingEnabled(v);
+                  if (mounted) setState(() {});
+                  widget.onSettingsChanged?.call();
+                },
+              ),
+            ),
+            _Tile(
+              icon: Icons.timer_outlined,
+              title: 'Reminder interval',
+              subtitle: 'Only active playback counts toward this time.',
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  border: Border.all(color: Colors.white12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: widget.store.stillWatchingThresholdMinutes,
+                    borderRadius: BorderRadius.circular(10),
+                    dropdownColor: const Color(0xFF202126),
+                    icon: const Icon(Icons.expand_more, size: 18),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    onChanged: widget.store.stillWatchingEnabled
+                        ? (v) async {
+                            if (v == null) return;
+                            await widget.store
+                                .setStillWatchingThresholdMinutes(v);
+                            if (mounted) setState(() {});
+                            widget.onSettingsChanged?.call();
+                          }
+                        : null,
+                    items: PairingStore.stillWatchingPresets
+                        .map((minutes) => DropdownMenuItem(
+                              value: minutes,
+                              child: Text(minutes < 60
+                                  ? '$minutes min'
+                                  : '${minutes ~/ 60}${minutes % 60 == 0 ? '' : '.5'} hr'),
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ),
+            ),
+            _Tile(
+              icon: Icons.hourglass_bottom,
+              title: 'Response time',
+              subtitle: 'Time to respond before playback stops.',
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  border: Border.all(color: Colors.white12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<int>(
+                    value: widget.store.stillWatchingResponseSeconds,
+                    borderRadius: BorderRadius.circular(10),
+                    dropdownColor: const Color(0xFF202126),
+                    icon: const Icon(Icons.expand_more, size: 18),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    onChanged: widget.store.stillWatchingEnabled
+                        ? (v) async {
+                            if (v == null) return;
+                            await widget.store
+                                .setStillWatchingResponseSeconds(v);
+                            if (mounted) setState(() {});
+                            widget.onSettingsChanged?.call();
+                          }
+                        : null,
+                    items: PairingStore.stillWatchingResponsePresets
+                        .map((seconds) => DropdownMenuItem(
+                              value: seconds,
+                              child: Text(seconds < 60
+                                  ? '$seconds sec'
+                                  : '${seconds ~/ 60} min'),
+                            ))
+                        .toList(),
+                  ),
+                ),
+              ),
+            ),
+            _Tile(
               icon: Icons.keyboard,
               title: 'Keyboard shortcuts',
               subtitle: 'Space, arrows, F, I, and gestures — press ? anytime.',

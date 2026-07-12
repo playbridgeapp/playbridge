@@ -41,6 +41,9 @@ class PairedDeviceRecord {
 class PairingStore {
   PairingStore._(this._prefs);
 
+  /// Creates a store around injected preferences for deterministic tests.
+  PairingStore.forTest(SharedPreferences prefs) : _prefs = prefs;
+
   static const _kDeviceId = 'pb.device_id';
   static const _kDeviceName = 'pb.device_name';
   static const _kEngineType = 'pb.engine_type';
@@ -49,6 +52,12 @@ class PairingStore {
   static const _kAutoFullScreen = 'pb.auto_fullscreen';
   static const _kPauseOnWindowHide = 'pb.pause_on_window_hide';
   static const _kEnableHistory = 'pb.enable_history';
+  static const _kStillWatchingEnabled = 'pb.still_watching_enabled';
+  static const _kStillWatchingThresholdMin = 'pb.still_watching_threshold_min';
+  static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
+
+  static const stillWatchingPresets = <int>[30, 60, 90, 120, 180, 240];
+  static const stillWatchingResponsePresets = <int>[30, 60, 120, 300, 600];
 
   final SharedPreferences _prefs;
 
@@ -106,6 +115,32 @@ class PairingStore {
 
   Future<void> setEnableHistory(bool value) =>
       _prefs.setBool(_kEnableHistory, value);
+
+  bool get stillWatchingEnabled =>
+      _prefs.getBool(_kStillWatchingEnabled) ?? false;
+
+  Future<void> setStillWatchingEnabled(bool value) =>
+      _prefs.setBool(_kStillWatchingEnabled, value);
+
+  int get stillWatchingThresholdMinutes {
+    final saved = _prefs.getInt(_kStillWatchingThresholdMin);
+    return stillWatchingPresets.contains(saved) ? saved! : 90;
+  }
+
+  Future<void> setStillWatchingThresholdMinutes(int value) => _prefs.setInt(
+        _kStillWatchingThresholdMin,
+        stillWatchingPresets.contains(value) ? value : 90,
+      );
+
+  int get stillWatchingResponseSeconds {
+    final saved = _prefs.getInt(_kStillWatchingResponseSec);
+    return stillWatchingResponsePresets.contains(saved) ? saved! : 300;
+  }
+
+  Future<void> setStillWatchingResponseSeconds(int value) => _prefs.setInt(
+        _kStillWatchingResponseSec,
+        stillWatchingResponsePresets.contains(value) ? value : 300,
+      );
 
   // ─── Paired devices ──────────────────────────────────────────────────────
 

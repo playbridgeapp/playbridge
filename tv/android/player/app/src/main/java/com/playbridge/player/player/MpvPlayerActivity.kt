@@ -151,6 +151,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // Playlist queue / auto-advance — single source of truth, shared with ExoPlayerActivity.
     private val coordinator = PlaybackCoordinator(object : PlaybackCoordinator.Host {
         override fun loadItem(item: playbridge.PlayPayload, displayTitle: String?) {
+            recordStillWatchingMediaChanged()
             runOnUiThread {
                 displayTitle?.takeIf { it.isNotBlank() }?.let {
                     Toast.makeText(this@MpvPlayerActivity, it, Toast.LENGTH_SHORT).show()
@@ -255,6 +256,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             }
         )
 
+        setupStillWatching(controlsViewModel)
         setContentView(R.layout.activity_mpv_player)
         surfaceView = findViewById(R.id.surface_view)
         composeView = findViewById(R.id.modern_controls_view)
@@ -263,8 +265,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             setContent {
                 PlayBridgeTVTheme {
                     val state by controlsViewModel.controlsState.collectAsState()
+                    val stillWatching by stillWatchingController.state.collectAsState()
                     PlayerControlsOverlay(
                         state = state,
+                        stillWatchingState = stillWatching,
+                        onContinueWatching = stillWatchingController::continueWatching,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
                         onTrackSelection = {
                             updateUnifiedTracks()
@@ -406,7 +411,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             engine = engineAdapter,
             controls = controlsViewModel,
-            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
+            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE },
+            isStillWatchingVisible = { stillWatchingController.state.value.isPrompting },
+            onContinueWatching = stillWatchingController::continueWatching,
+            onUserActivity = stillWatchingController::onUserActivity,
         )
 
         controlsViewModel.setEngine(engineAdapter, "mpv", this)
@@ -534,6 +542,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             // Must post to the UI thread: this callback fires on MPV's native event thread.
             runOnUiThread {
                 controlsViewModel.setPlaying(!value)
+                if (value) {
+                    if (!stillWatchingController.state.value.isPrompting) {
+                        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    }
+                } else {
+                    window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
                 // Invariant: controls/overlays are only shown while paused. On the
                 // play→playing transition (pause property false) dismiss any leftover overlay.
                 if (!value) controlsViewModel.hideControls()
@@ -701,6 +716,11 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 }
                 ServerService.ACTION_CONTROL -> {
                     val cmd = intent.getStringExtra(ServerService.EXTRA_COMMAND)
+                    if (stillWatchingController.state.value.isPrompting && cmd != "stop") {
+                        stillWatchingController.continueWatching()
+                        return
+                    }
+                    if (cmd != null && cmd != "stop") recordStillWatchingActivity()
                     when {
                         cmd?.startsWith("audio_track:") == true ->
                             applyMpvTrackSelection("audio", cmd.removePrefix("audio_track:"))
@@ -718,6 +738,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     }
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
+                    recordStillWatchingActivity()
                     coordinator.queueAdd(ServerService.drainPendingQueueItems())
                     controlsViewModel.setPlaylistVisible(true)
                 }
@@ -750,6 +771,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private fun handleIntent(intent: Intent?) {
         if (isFinishing) return
+        recordStillWatchingMediaChanged()
         setupPlaybackExtras(intent)
 
         // Read playlist if present
