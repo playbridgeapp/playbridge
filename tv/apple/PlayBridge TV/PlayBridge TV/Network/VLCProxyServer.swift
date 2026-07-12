@@ -66,7 +66,7 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
 
         print("[Proxy] T\(task.taskIdentifier) upstream request: \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "?")")
         if let headers = request.allHTTPHeaderFields, !headers.isEmpty {
-            print("[Proxy] T\(task.taskIdentifier) request headers: \(headers)")
+            print("[Proxy] T\(task.taskIdentifier) request headers: \(headers.count) field(s)")
         }
 
         // Watch for VLC closing its end of the connection. Capture only the
@@ -555,7 +555,7 @@ class VLCProxyServer {
                 switch k.lowercased() {
                 case "range", "accept-encoding", "accept":
                     urlRequest.setValue(v, forHTTPHeaderField: k)
-                    print("[Proxy] Forwarding VLC header: \(k): \(v)")
+                    print("[Proxy] Forwarding VLC header: \(k)")
                 default: break
                 }
             }

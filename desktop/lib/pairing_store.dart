@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:crypto/crypto.dart';
 
 import 'player_engine.dart';
 
@@ -126,29 +127,40 @@ class PairingStore {
       _prefs.setString(
           _kPairedDevices, jsonEncode(devices.map((d) => d.toJson()).toList()));
 
-  bool isTokenAuthorized(String token) =>
-      pairedDevices.any((d) => d.token == token);
+  bool isTokenAuthorized(String token) {
+    final digest = _tokenDigest(token);
+    return pairedDevices.any((d) => d.token == token || d.token == digest);
+  }
 
   Future<void> addPairedDevice(PairedDeviceRecord device) async {
     final devices = pairedDevices.toList();
+    final protected = PairedDeviceRecord(
+      deviceUUID: device.deviceUUID,
+      deviceName: device.deviceName,
+      token: _tokenDigest(device.token),
+      lastConnected: device.lastConnected,
+    );
     final idx = devices.indexWhere((d) => d.deviceUUID == device.deviceUUID);
     if (idx >= 0) {
-      devices[idx] = device;
+      devices[idx] = protected;
     } else {
-      devices.add(device);
+      devices.add(protected);
     }
     await _savePairedDevices(devices);
   }
 
   Future<void> updateLastConnected(String token) async {
     final devices = pairedDevices.toList();
-    final idx = devices.indexWhere((d) => d.token == token);
+    final digest = _tokenDigest(token);
+    final idx =
+        devices.indexWhere((d) => d.token == token || d.token == digest);
     if (idx < 0) return;
     final d = devices[idx];
     devices[idx] = PairedDeviceRecord(
       deviceUUID: d.deviceUUID,
       deviceName: d.deviceName,
-      token: d.token,
+      // Transparently migrate legacy plaintext records after successful auth.
+      token: digest,
       lastConnected: DateTime.now(),
     );
     await _savePairedDevices(devices);
@@ -161,6 +173,9 @@ class PairingStore {
   }
 
   Future<void> forgetAllDevices() => _prefs.remove(_kPairedDevices);
+
+  static String _tokenDigest(String token) =>
+      'sha256:${sha256.convert(utf8.encode(token))}';
 
   static String _defaultName() {
     try {

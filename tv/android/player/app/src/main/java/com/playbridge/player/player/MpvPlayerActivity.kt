@@ -845,7 +845,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
         FileLogger.i(TAG, "URL: $url")
         FileLogger.i(TAG, "Title: ${controlsViewModel.getTitle()}")
-        FileLogger.i(TAG, "Headers: $headers")
+        FileLogger.i(TAG, "Request headers: ${headers?.size ?: 0} field(s)")
         FileLogger.i(TAG, "Start Paused: $startPaused")
         FileLogger.i(TAG, "===========================================")
 

@@ -608,17 +608,60 @@ class WebSocketServer: ObservableObject {
         )
         savePairedDevice(device)
 
-        var approved: [String: Any] = ["type": "pairing_approved", "token": token]
-        if let fp = certFingerprint { approved["certFingerprint"] = fp }
-        approved["players"] = Self.capabilityPlayers
-        send(json: approved, to: connection)
+        guard let commitBytes = Data(base64Encoded: handshake.commit),
+              let senderEphPub = handshake.senderEphPub,
+              let nonceS = handshake.nonceS,
+              let sharedSecret = handshake.sharedSecret else {
+            send(json: ["type": "pairing_denied"], to: connection)
+            removeConnection(connection)
+            return
+        }
+        var transcript = Data()
+        transcript.append(commitBytes)
+        transcript.append(handshake.tvEphPub)
+        transcript.append(handshake.nonceT)
+        transcript.append(senderEphPub)
+        transcript.append(nonceS)
+
+        do {
+            let transcriptHash = SasCrypto.sha256(transcript)
+            let prk = SasCrypto.hkdfExtract(salt: nil, ikm: sharedSecret)
+            let credentialKey = SasCrypto.hkdfExpand(
+                prk: prk,
+                info: "playbridgeCredentialKey-v1".data(using: .utf8),
+                length: 32
+            )
+            let credentialNonce = SasCrypto.generateNonce(size: 12)
+            var credentials: [String: Any] = [
+                "token": token,
+                "players": Self.capabilityPlayers,
+            ]
+            if let fp = certFingerprint { credentials["certFingerprint"] = fp }
+            let plaintext = try JSONSerialization.data(withJSONObject: credentials)
+            let ciphertext = try SasCrypto.aesGcmEncrypt(
+                key: credentialKey,
+                nonce: credentialNonce,
+                plaintext: plaintext,
+                aad: transcriptHash
+            )
+            send(json: [
+                "type": "pairing_approved",
+                "nonce": credentialNonce.base64EncodedString(),
+                "ciphertext": ciphertext.base64EncodedString(),
+            ], to: connection)
+        } catch {
+            print("[server] Failed to protect pairing credentials")
+            send(json: ["type": "pairing_denied"], to: connection)
+            removeConnection(connection)
+            return
+        }
         
         let ip = getIPAddress(from: connection)
         failedAttempts.removeValue(forKey: ip)
         lockoutUntil.removeValue(forKey: ip)
         
         inProgressHandshakes.removeValue(forKey: ObjectIdentifier(connection))
-        completeAuth(from: connection, token: token)
+        completeAuth(from: connection, token: token, sendAuthResponse: false)
         pendingPairingRequest = nil
     }
 
@@ -702,15 +745,22 @@ class WebSocketServer: ObservableObject {
         }
     }
 
-    private func completeAuth(from connection: NWConnection, token: String) {
+    private func completeAuth(
+        from connection: NWConnection,
+        token: String,
+        sendAuthResponse: Bool = true
+    ) {
         DispatchQueue.main.async {
             self.isAuthenticated = true
             self.connectedConnections.append(connection)
             self.connectedCount = self.connectedConnections.count
-            var response: [String: Any] = ["type": "auth_response", "success": true, "token": token]
-            if let fp = self.certFingerprint { response["certFingerprint"] = fp }
-            response["players"] = Self.capabilityPlayers
-            self.send(json: response, to: connection)
+            if sendAuthResponse {
+                // Safe on reconnect: the sender has already pinned this TLS identity.
+                var response: [String: Any] = ["type": "auth_response", "success": true, "token": token]
+                if let fp = self.certFingerprint { response["certFingerprint"] = fp }
+                response["players"] = Self.capabilityPlayers
+                self.send(json: response, to: connection)
+            }
             // Re-sync now-playing for a client that connected mid-playback: context + a nudge
             // for the active player to re-broadcast its status/tracks.
             self.broadcast(["type": "context", "active": self.currentPlayRequest != nil ? "player" : "idle"])

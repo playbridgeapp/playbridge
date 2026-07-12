@@ -32,6 +32,7 @@ class CertManager {
     final tlsDir = dir ??
         Directory('${(await getApplicationSupportDirectory()).path}/tls');
     if (!tlsDir.existsSync()) tlsDir.createSync(recursive: true);
+    await _restrictPermissions(tlsDir.path, directory: true);
 
     final cert = File('${tlsDir.path}/$_certFile');
     final key = File('${tlsDir.path}/$_keyFile');
@@ -61,6 +62,9 @@ class CertManager {
       await key.writeAsString(keyPem, flush: true);
       await pin.writeAsString(fingerprint, flush: true);
     }
+    await _restrictPermissions(cert.path);
+    await _restrictPermissions(key.path);
+    await _restrictPermissions(pin.path);
 
     final ctx = SecurityContext()
       ..useCertificateChainBytes(utf8.encode(certPem))
@@ -80,5 +84,15 @@ class CertManager {
     final der = base64.decode(b64);
     final digest = crypto.sha256.convert(der).bytes;
     return 'sha256/${base64.encode(digest)}';
+  }
+
+  static Future<void> _restrictPermissions(String path,
+      {bool directory = false}) async {
+    if (Platform.isWindows) return;
+    try {
+      await Process.run('chmod', [directory ? '700' : '600', path]);
+    } catch (_) {
+      // Best effort on filesystems without POSIX permissions.
+    }
   }
 }

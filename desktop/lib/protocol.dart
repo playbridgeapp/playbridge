@@ -239,17 +239,13 @@ Command parseCommand(String json) {
 String pongJson() => jsonEncode({'type': 'pong'});
 
 String pairingApprovedJson(
-  String token, {
-  String? certFingerprint,
-  List<String> players = const [],
-  List<String> browsers = const [],
-}) =>
+  String nonce,
+  String ciphertext,
+) =>
     jsonEncode({
       'type': 'pairing_approved',
-      'token': token,
-      if (certFingerprint != null) 'certFingerprint': certFingerprint,
-      if (players.isNotEmpty) 'players': players,
-      if (browsers.isNotEmpty) 'browsers': browsers,
+      'nonce': nonce,
+      'ciphertext': ciphertext,
     });
 
 String pairingDeniedJson() => jsonEncode({'type': 'pairing_denied'});

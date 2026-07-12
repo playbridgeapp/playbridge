@@ -10,7 +10,6 @@ import 'package:uuid/uuid.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'cert_manager.dart';
-import 'logging/log_store.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
@@ -114,6 +113,7 @@ class ReceiverServer extends ChangeNotifier {
 
   /// In-progress SAS handshakes keyed by WebSocket channel.
   final Map<WebSocketChannel, _ConnectionHandshake> _inProgressHandshakes = {};
+  final Map<WebSocketChannel, Timer> _handshakeTimers = {};
 
   /// Rate-limiting: failed pairing attempts by IP.
   final Map<String, int> _failedAttempts = {};
@@ -121,14 +121,13 @@ class ReceiverServer extends ChangeNotifier {
   /// Rate-limiting: lockout expiry (epoch ms) by IP.
   final Map<String, int> _lockoutUntil = {};
 
-  /// Remote IPs of pending ws upgrades, consumed in accept order by [_onClient].
-  /// shelf_web_socket's onConnection callback doesn't carry the request, so we
-  /// capture the IP in the route wrapper and hand it off here.
-  final List<String> _pendingClientIps = [];
-
   /// Source IP per connected channel, so pairing rate-limiting/lockout keys on a
   /// real address instead of the (per-connection, trivially-rotated) channel identity.
   final Map<WebSocketChannel, String> _channelIps = {};
+
+  static const int _maxConnections = 32;
+  static const int _maxMessageChars = 1024 * 1024;
+  static const Duration _handshakeTimeout = Duration(seconds: 15);
 
   // Dedupe rapid-fire duplicate play commands from the phone.
   String? _lastPlayUrl;
@@ -164,7 +163,7 @@ class ReceiverServer extends ChangeNotifier {
   /// (Re)binds the wss:// (always) and ws:// (opt-in) listeners. Re-runnable
   /// after [reloadListeners] closes the previous sockets.
   Future<void> _bindListeners() async {
-    final handler = _withLogsRoute(webSocketHandler(_onClient));
+    final handler = _requestHandler();
 
     // Encrypted wss:// on port — the default, preferred transport.
     var wssUp = false;
@@ -194,42 +193,21 @@ class ReceiverServer extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Wraps the WebSocket handler so `GET /logs` (download) and `DELETE /logs`
-  /// (clear) are served as plain HTTP, falling through to the ws upgrade for
-  /// every other request. Gated: returns 403 when logging is disabled so a device
-  /// on the LAN can't pull logs (which may contain stream URLs and headers).
-  Handler _withLogsRoute(Handler wsHandler) {
+  /// Associates the request address directly with its upgraded channel. Logs are
+  /// intentionally unavailable over LAN; use the in-app diagnostics screen.
+  Handler _requestHandler() {
     return (Request request) {
       if (request.url.path == 'logs') {
-        if (request.method == 'GET') {
-          if (!LogStore.instance.enabled) {
-            return Response.forbidden('Logging is disabled on this device.');
-          }
-          final text = LogStore.instance.combinedText();
-          return Response.ok(
-            text.isEmpty ? 'No log entries.' : text,
-            headers: {
-              'content-type': 'text/plain',
-              'content-disposition':
-                  'attachment; filename="playbridge_desktop_logs.txt"',
-            },
-          );
-        }
-        if (request.method == 'DELETE') {
-          LogStore.instance.clear();
-          return Response.ok('Logs cleared.');
-        }
+        return Response.notFound('');
       }
-      // Capture the client IP for the upcoming ws upgrade so pairing rate-limiting
-      // keys on a real address. Only ws-upgrade requests reach here (the /logs HTTP
-      // routes returned above), and upgrades fire onConnection in accept order.
       final ip =
           (request.context['shelf.io.connection_info'] as HttpConnectionInfo?)
                   ?.remoteAddress
                   .address ??
               'unknown';
-      _pendingClientIps.add(ip);
-      return wsHandler(request);
+      return webSocketHandler(
+        (channel, subprotocol) => _onClient(channel, subprotocol, ip),
+      )(request);
     };
   }
 
@@ -248,8 +226,11 @@ class ReceiverServer extends ChangeNotifier {
     _authed.clear();
     _pendingPairingRequest = null;
     _inProgressHandshakes.clear();
+    for (final timer in _handshakeTimers.values) {
+      timer.cancel();
+    }
+    _handshakeTimers.clear();
     _channelIps.clear();
-    _pendingClientIps.clear();
     for (final s in _servers) {
       await s.close(force: true);
     }
@@ -267,11 +248,11 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
-  void _onClient(WebSocketChannel channel, String? subprotocol) {
-    // Pair this channel with the IP captured for its upgrade (accept-order FIFO).
-    final ip = _pendingClientIps.isNotEmpty
-        ? _pendingClientIps.removeAt(0)
-        : 'unknown';
+  void _onClient(WebSocketChannel channel, String? subprotocol, String ip) {
+    if (_all.length >= _maxConnections) {
+      unawaited(channel.sink.close(1013, 'Server busy'));
+      return;
+    }
     _channelIps[channel] = ip;
     debugPrint('[server] client connected');
     _all.add(channel);
@@ -279,8 +260,13 @@ class ReceiverServer extends ChangeNotifier {
     channel.stream.listen(
       (raw) {
         if (raw is! String) return;
+        if (raw.length > _maxMessageChars) {
+          unawaited(channel.sink.close(1009, 'Message too large'));
+          return;
+        }
         final isAuthed = _authed.contains(channel);
-        debugPrint('[recv${isAuthed ? '' : ' pre-auth'}] $raw');
+        debugPrint(
+            '[recv${isAuthed ? '' : ' pre-auth'}] ${_safeFrameSummary(raw)}');
         if (isAuthed) {
           _handleAuthed(channel, raw);
         } else {
@@ -297,6 +283,7 @@ class ReceiverServer extends ChangeNotifier {
         _all.remove(channel);
         _authed.remove(channel);
         _inProgressHandshakes.remove(channel);
+        _handshakeTimers.remove(channel)?.cancel();
         _channelIps.remove(channel);
         // Clear pending request if this was the pending channel
         if (_pendingPairingRequest?.channel == channel) {
@@ -311,6 +298,7 @@ class ReceiverServer extends ChangeNotifier {
         _all.remove(channel);
         _authed.remove(channel);
         _inProgressHandshakes.remove(channel);
+        _handshakeTimers.remove(channel)?.cancel();
         _channelIps.remove(channel);
         if (_pendingPairingRequest?.channel == channel) {
           _approvalTimeout?.cancel();
@@ -377,6 +365,13 @@ class ReceiverServer extends ChangeNotifier {
     String deviceName,
     String deviceUUID,
   ) {
+    if (!_validB64Length(commit, 32) ||
+        deviceName.length > 128 ||
+        deviceUUID.length > 128) {
+      channel.sink.add(pairingDeniedJson());
+      _recordPairingFailure(channel);
+      return false;
+    }
     // Rate-limiting: check lockout (keyed on the captured remote IP).
     final ip = _ipFor(channel);
     final lockout = _lockoutUntil[ip];
@@ -404,6 +399,7 @@ class ReceiverServer extends ChangeNotifier {
       tvEphPub: tvKey.publicKey,
       nonceT: nonceT,
     );
+    _resetHandshakeTimer(channel);
 
     // Send challenge.
     channel.sink.add(pairingChallengeJson(
@@ -423,6 +419,11 @@ class ReceiverServer extends ChangeNotifier {
       return;
     }
 
+    if (!_validB64Length(senderEphPubB64, 32) ||
+        !_validB64Length(nonceSB64, 16)) {
+      _denyMalformedHandshake(channel);
+      return;
+    }
     final senderEphPub = Uint8List.fromList(base64.decode(senderEphPubB64));
     final nonceS = Uint8List.fromList(base64.decode(nonceSB64));
 
@@ -468,6 +469,7 @@ class ReceiverServer extends ChangeNotifier {
       channel: channel,
       approval: approval,
     );
+    _handshakeTimers.remove(channel)?.cancel();
 
     // Auto-deny after 60 seconds.
     _approvalTimeout?.cancel();
@@ -493,10 +495,26 @@ class ReceiverServer extends ChangeNotifier {
         );
         unawaited(store.addPairedDevice(device));
 
+        final transcriptHash = SasCrypto.sha256(_transcript(handshake));
+        final prk = SasCrypto.hkdfExtract(ikm: handshake.sharedSecret!);
+        final credentialKey = SasCrypto.hkdfExpand(prk,
+            info: Uint8List.fromList('playbridgeCredentialKey-v1'.codeUnits),
+            length: 32);
+        final nonce = SasCrypto.generateNonce(12);
+        final plaintext = utf8.encode(jsonEncode({
+          'token': token,
+          'certFingerprint': _certFingerprint,
+          'players': _capabilityPlayers,
+        }));
+        final ciphertext = SasCrypto.aesGcmEncrypt(
+          key: credentialKey,
+          nonce: nonce,
+          plaintext: Uint8List.fromList(plaintext),
+          aad: transcriptHash,
+        );
         channel.sink.add(pairingApprovedJson(
-          token,
-          certFingerprint: _certFingerprint,
-          players: _capabilityPlayers,
+          base64.encode(nonce),
+          base64.encode(ciphertext),
         ));
         _authed.add(channel);
       } else {
@@ -505,6 +523,7 @@ class ReceiverServer extends ChangeNotifier {
       }
 
       _inProgressHandshakes.remove(channel);
+      _handshakeTimers.remove(channel)?.cancel();
       _pendingPairingRequest = null;
       notifyListeners();
       if (approved) _sendPlaylistStatusTo(channel);
@@ -520,6 +539,10 @@ class ReceiverServer extends ChangeNotifier {
       return;
     }
     if (pending.approval.isCompleted) return;
+    if (!_validB64Length(mac, 32)) {
+      pending.approval.complete(false);
+      return;
+    }
 
     // Derive confirmation key and expected MAC.
     final commitBytes = Uint8List.fromList(base64.decode(handshake.commit));
@@ -560,6 +583,55 @@ class ReceiverServer extends ChangeNotifier {
       _failedAttempts.remove(ip);
       debugPrint('[server] IP $ip locked out after $count failed pairings');
     }
+  }
+
+  Uint8List _transcript(_ConnectionHandshake h) => Uint8List.fromList(
+        base64.decode(h.commit) +
+            h.tvEphPub +
+            h.nonceT +
+            h.senderEphPub! +
+            h.nonceS!,
+      );
+
+  bool _validB64Length(String value, int expectedBytes) {
+    if (value.length > expectedBytes * 2) return false;
+    try {
+      return base64.decode(value).length == expectedBytes;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _resetHandshakeTimer(WebSocketChannel channel) {
+    _handshakeTimers.remove(channel)?.cancel();
+    _handshakeTimers[channel] = Timer(_handshakeTimeout, () {
+      if (_inProgressHandshakes.remove(channel) != null) {
+        channel.sink.add(pairingDeniedJson());
+        unawaited(channel.sink.close(1008, 'Pairing timed out'));
+        notifyListeners();
+      }
+      _handshakeTimers.remove(channel);
+    });
+  }
+
+  void _denyMalformedHandshake(WebSocketChannel channel) {
+    channel.sink.add(pairingDeniedJson());
+    _inProgressHandshakes.remove(channel);
+    _handshakeTimers.remove(channel)?.cancel();
+    _recordPairingFailure(channel);
+    notifyListeners();
+  }
+
+  String _safeFrameSummary(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        final type = decoded['type']?.toString() ?? 'unknown';
+        final action = decoded['action']?.toString();
+        return action == null ? 'type=$type' : 'type=$type action=$action';
+      }
+    } catch (_) {}
+    return 'invalid-json (${raw.length} chars)';
   }
 
   // No manual "approve" entry point: approval is driven exclusively by the SAS

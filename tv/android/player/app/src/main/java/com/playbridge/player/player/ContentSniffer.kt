@@ -108,7 +108,7 @@ class ContentSniffer {
                         requestBuilder.header(key, value)
                     }
                     val finalRequest = requestBuilder.build()
-                    Log.d("OkHttpInterceptor", "Intercepted request to $url with headers: ${finalRequest.headers}")
+                    Log.d("OkHttpInterceptor", "Prepared request with ${finalRequest.headers.size} header(s)")
                     chain.proceed(finalRequest)
                 }
             }

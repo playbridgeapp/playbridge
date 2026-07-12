@@ -1,7 +1,7 @@
 package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
-import com.playbridge.shared.protocol.createPairingApprovedJson
+import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -17,17 +17,12 @@ class ProtocolJsonTest {
     private fun obj(json: String) = Json.parseToJsonElement(json).jsonObject
 
     @Test
-    fun pairingApprovedIncludesCertFingerprintWhenPresent() {
-        val o = obj(createPairingApprovedJson("tok", "sha256/abc"))
+    fun pairingApprovedContainsOnlyProtectedCredentialEnvelope() {
+        val o = obj(createProtectedPairingApprovedJson("nonce-b64", "ciphertext-b64"))
         assertEquals("pairing_approved", o["type"]?.jsonPrimitive?.content)
-        assertEquals("tok", o["token"]?.jsonPrimitive?.content)
-        assertEquals("sha256/abc", o["certFingerprint"]?.jsonPrimitive?.content)
-    }
-
-    @Test
-    fun pairingApprovedOmitsCertFingerprintWhenNull() {
-        val o = obj(createPairingApprovedJson("tok"))
-        assertEquals("tok", o["token"]?.jsonPrimitive?.content)
+        assertEquals("nonce-b64", o["nonce"]?.jsonPrimitive?.content)
+        assertEquals("ciphertext-b64", o["ciphertext"]?.jsonPrimitive?.content)
+        assertNull(o["token"])
         assertNull(o["certFingerprint"])
     }
 
@@ -68,22 +63,6 @@ class ProtocolJsonTest {
         val o = obj(createAuthResponseJson(success = true))
         assertNull(o["players"])
         assertNull(o["browsers"])
-    }
-
-    @Test
-    fun pairingApprovedIncludesCapabilitiesAndOmitsGeckoWhenNotInstalled() {
-        // The browsers list models a TV without the GeckoView plugin: webview only.
-        val o = obj(createPairingApprovedJson(
-            token = "tok",
-            players = listOf("exo", "mpv"),
-            browsers = listOf("webview"),
-        ))
-        assertEquals("tok", o["token"]?.jsonPrimitive?.content)
-        assertEquals(
-            listOf("exo", "mpv"),
-            o["players"]?.jsonArray?.map { it.jsonPrimitive.content }
-        )
-        assertEquals(listOf("webview"), o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content })
     }
 
     @Test
