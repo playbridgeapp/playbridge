@@ -1,6 +1,7 @@
 package com.playbridge.player.server
 
 import java.util.Base64
+import java.util.UUID
 import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter
 import org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder
 import org.bouncycastle.operator.jcajce.JcaContentSignerBuilder
@@ -27,27 +28,47 @@ import javax.net.ssl.SSLContext
  */
 object TlsIdentity {
     private const val ENTRY = "playbridge"
-    private val PASSWORD = "playbridge".toCharArray()
     private const val FILE_NAME = "playbridge_tls.p12"
+    private const val PW_FILE_NAME = "playbridge_tls_pw.txt"
 
     data class Result(val sslContext: SSLContext, val fingerprint: String)
 
+    private fun getOrGeneratePassword(dir: File): CharArray {
+        val pwFile = File(dir, PW_FILE_NAME)
+        val ksFile = File(dir, FILE_NAME)
+        if (pwFile.exists()) {
+            return pwFile.readText().toCharArray()
+        }
+
+        // Backward compatibility: If the keystore exists but no password file, it's a legacy install.
+        // Fall back to the old hardcoded password so we don't break existing connections.
+        val newPw = if (ksFile.exists()) {
+            "playbridge".toCharArray()
+        } else {
+            UUID.randomUUID().toString().toCharArray()
+        }
+
+        pwFile.writeText(String(newPw))
+        return newPw
+    }
+
     fun loadOrCreate(dir: File, commonName: String = "PlayBridge TV"): Result {
         val file = File(dir, FILE_NAME)
+        val password = getOrGeneratePassword(dir)
         val ks = KeyStore.getInstance("PKCS12")
         if (file.exists()) {
-            file.inputStream().use { ks.load(it, PASSWORD) }
+            file.inputStream().use { ks.load(it, password) }
         } else {
             ks.load(null, null)
             val keyPair = generateKeyPair()
             val cert = selfSignedCert(keyPair, commonName)
-            ks.setKeyEntry(ENTRY, keyPair.private, PASSWORD, arrayOf(cert))
-            file.outputStream().use { ks.store(it, PASSWORD) }
+            ks.setKeyEntry(ENTRY, keyPair.private, password, arrayOf(cert))
+            file.outputStream().use { ks.store(it, password) }
         }
 
         val cert = ks.getCertificate(ENTRY) as X509Certificate
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-        kmf.init(ks, PASSWORD)
+        kmf.init(ks, password)
         val sslContext = SSLContext.getInstance("TLS").apply {
             init(kmf.keyManagers, null, null)
         }
