@@ -4,6 +4,7 @@
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha">
   <img src="https://img.shields.io/badge/license-GPLv3-blue" alt="License: GPLv3">
   <a href="https://github.com/playbridgeapp/playbridge/releases"><img src="https://img.shields.io/github/v/release/playbridgeapp/playbridge?label=latest%20release" alt="Latest release"></a>
+  <a href="https://ko-fi.com/playbridgeapp"><img src="https://img.shields.io/badge/Ko--fi-Support%20us-F16061?logo=ko-fi&logoColor=white" alt="Support us on Ko-fi"></a>
 </p>
 
 <p align="center">
@@ -215,5 +216,7 @@ It also bundles third-party software under their own (GPLv3-compatible) licenses
 ## Contact
 
 For questions, feedback, or support, please reach out to us at [playbridgeapp@gmail.com](mailto:playbridgeapp@gmail.com).
+
+If you'd like to support development, you can [buy us a coffee on Ko-fi (kofi)](https://ko-fi.com/playbridgeapp).
 
 For security-related issues, please refer to our [Security Policy](SECURITY.md).
