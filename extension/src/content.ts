@@ -76,6 +76,12 @@ let rafId: number | null = null;
 let mutationObserver: MutationObserver | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let lastCandidateUrl: string | null = null;
+/**
+ * Stable stream association for each DOM player. Network detections are scoped
+ * to a frame, not an individual <video>, so a newer preview/ad request must not
+ * replace the stream already selected for the primary player.
+ */
+let candidateBindings = new WeakMap<HTMLVideoElement, string>();
 let listenersAttached = false;
 /** Cast chrome currently shown (not auto-hidden). */
 let chromeVisible = true;
@@ -299,6 +305,47 @@ function rankCandidate(
   // with no DOM signal, still pick the best-ranked (newest high-priority).
   // Ambiguous multi-player pages are a known limitation.
   return sorted[0] ?? null;
+}
+
+/**
+ * Resolve a candidate without allowing unrelated, later requests in the same
+ * frame to steal an established player binding. Exact DOM matches remain
+ * authoritative and may replace a fallback binding. A source lifecycle event
+ * explicitly clears the binding before this function runs for a new stream.
+ */
+function resolveCandidate(
+  video: HTMLVideoElement,
+  records: DetectedVideo[],
+): DetectedVideo | null {
+  const playable = records.filter(
+    (record) =>
+      record.url &&
+      !isBlobOrData(record.url) &&
+      !isExcludedMedia(record.url, record.detectedBy),
+  );
+
+  const exactUrls = domSourceUrls(video).filter((url) => !isBlobOrData(url));
+  for (const url of exactUrls) {
+    const normalized = normalizeUrl(url);
+    const exact = playable.find(
+      (record) => normalizeUrl(record.url) === normalized,
+    );
+    if (exact) {
+      candidateBindings.set(video, exact.url);
+      return exact;
+    }
+  }
+
+  const boundUrl = candidateBindings.get(video);
+  if (boundUrl) {
+    const bound = playable.find((record) => record.url === boundUrl);
+    if (bound) return bound;
+    candidateBindings.delete(video);
+  }
+
+  const initial = rankCandidate(video, playable);
+  if (initial) candidateBindings.set(video, initial.url);
+  return initial;
 }
 
 // ── Overlay UI ───────────────────────────────────────────────────────────────
@@ -795,7 +842,7 @@ async function resolveAndRender(): Promise<void> {
   const records = await fetchDetectedVideos();
   if (!enabled) return;
 
-  const candidate = rankCandidate(primaryVideo, records);
+  const candidate = resolveCandidate(primaryVideo, records);
   lastCandidateUrl = candidate?.url ?? null;
 
   if (!candidate) {
@@ -828,7 +875,7 @@ async function onCastClick(e: Event): Promise<void> {
 
   try {
     const records = await fetchDetectedVideos();
-    const candidate = rankCandidate(primaryVideo, records);
+    const candidate = resolveCandidate(primaryVideo, records);
     lastCandidateUrl = candidate?.url ?? null;
 
     if (!candidate) {
@@ -913,7 +960,17 @@ function onFullscreenChange(): void {
   scheduleResolve();
 }
 
-function onMediaSourceChange(): void {
+function onMediaSourceChange(event: Event): void {
+  const video = event.currentTarget;
+  if (
+    video instanceof HTMLVideoElement &&
+    (event.type === "loadstart" || event.type === "emptied")
+  ) {
+    // These events indicate that this player is starting a new resource. Allow
+    // it to establish a fresh fallback binding; ordinary detections and play or
+    // metadata events intentionally keep the existing association sticky.
+    candidateBindings.delete(video);
+  }
   scheduleResolve();
 }
 
@@ -1025,6 +1082,7 @@ function stopOverlayFeature(): void {
   detachGlobalListeners();
   destroyOverlay();
   lastCandidateUrl = null;
+  candidateBindings = new WeakMap<HTMLVideoElement, string>();
 }
 
 function applyEnabled(next: boolean): void {
@@ -1055,6 +1113,9 @@ function onRuntimeMessage(message: unknown): void {
   if (!enabled || !settingLoaded) return;
   const msg = message as { type?: string };
   // New detection or bridge status — re-rank without high-frequency polling.
+  if (msg?.type === "overlay_navigation") {
+    candidateBindings = new WeakMap<HTMLVideoElement, string>();
+  }
   if (
     msg?.type === "video_detected" ||
     msg?.type === "ws_status_update" ||
