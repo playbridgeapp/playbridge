@@ -1,9 +1,14 @@
 // @ts-nocheck
 import browser from "../browser";
+import {
+    getShowVideoCastOverlay,
+    setShowVideoCastOverlay,
+} from "../settings";
 
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
+const showVideoCastOverlayToggle = document.getElementById('show-video-cast-overlay');
 
 const videosList = document.getElementById('videos-list');
 const noVideosMsg = document.getElementById('no-videos-msg');
@@ -627,8 +632,30 @@ window.addEventListener('message', (event) => {
     }
 });
 
+// Settings: on-video cast overlay toggle (persisted; content scripts sync via storage.onChanged)
+async function loadOverlaySetting() {
+    if (!showVideoCastOverlayToggle) return;
+    const enabled = await getShowVideoCastOverlay(browser.storage.local);
+    showVideoCastOverlayToggle.checked = enabled;
+}
+
+if (showVideoCastOverlayToggle) {
+    showVideoCastOverlayToggle.addEventListener('change', async () => {
+        const enabled = !!showVideoCastOverlayToggle.checked;
+        try {
+            await setShowVideoCastOverlay(browser.storage.local, enabled);
+            showToast(enabled ? 'Cast button on videos enabled' : 'Cast button on videos disabled');
+        } catch (e) {
+            console.error('Failed to save overlay setting', e);
+            showVideoCastOverlayToggle.checked = !enabled;
+            showToast('Could not save setting');
+        }
+    });
+}
+
 // Init
 window.addEventListener('DOMContentLoaded', () => {
     loadStatus();
     loadVideos();
+    loadOverlaySetting();
 });

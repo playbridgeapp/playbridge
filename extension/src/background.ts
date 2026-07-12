@@ -41,6 +41,8 @@ interface VideoData {
   detectedBy: string;
   originUrl: string;
   timestamp: number;
+  /** webRequest frame id when known; older session records may omit this. */
+  frameId?: number;
   headers?: Record<string, string>;
   subtitles?: string[];
   subtitlePreview?: string;
@@ -187,6 +189,7 @@ browser.tabs.onRemoved.addListener((tabId) => cleanupTab(tabId));
 function handleNavigation(details: { frameId: number; tabId: number; url: string }) {
   if (details.frameId !== 0) return;
   cleanupTab(details.tabId);
+  browser.tabs.sendMessage(details.tabId, { type: "overlay_navigation" }).catch(() => {});
 }
 
 if (browser.webNavigation) {
@@ -224,7 +227,14 @@ function notifyContentScript(video: VideoData, tabId: number, headers: Record<st
   persistVideos(tabId);
 
   // Notify an open popup (if any) so it can refresh its list live.
-  browser.runtime.sendMessage({ type: "video_detected", ...video }).catch(() => {});
+  browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
+  // runtime.sendMessage is not a reliable way to target content scripts.
+  // Notify the owning frame directly without exposing captured request headers.
+  if (tabId >= 0) {
+    const message = { type: "video_detected", video: publicVideoView(video) };
+    const options = typeof video.frameId === "number" ? { frameId: video.frameId } : undefined;
+    browser.tabs.sendMessage(tabId, message, options).catch(() => {});
+  }
 }
 
 function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -241,7 +251,12 @@ function updateStoredVideo(video: VideoData, tabId: number) {
   const idx = videos.findIndex((v) => v.url === video.url);
   if (idx !== -1) videos[idx] = { ...videos[idx], ...video };
   persistVideos(tabId);
-  browser.runtime.sendMessage({ type: "video_detected", ...video }).catch(() => {});
+  browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
+  if (tabId >= 0) {
+    const message = { type: "video_detected", video: publicVideoView(video) };
+    const options = typeof video.frameId === "number" ? { frameId: video.frameId } : undefined;
+    browser.tabs.sendMessage(tabId, message, options).catch(() => {});
+  }
 }
 
 function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Record<string, string> | null) {
@@ -317,9 +332,39 @@ function broadcastStatus() {
 
 bridge.onState(() => broadcastStatus());
 
-function castVideo(video: VideoData): Promise<{ ok: boolean; error?: string }> {
-  const title = video.url.split("/").pop() || video.url;
-  return bridge.cast(video.url, video.headers ?? {}, title);
+/**
+ * Stream title for the TV: prefer the website/tab title, never the raw URL
+ * basename unless the tab title is unavailable.
+ */
+async function resolveStreamTitle(
+  tabId: number | undefined,
+  fallbackUrl: string,
+  preferred?: string | null,
+): Promise<string> {
+  const fromPreferred = preferred?.trim();
+  if (fromPreferred) return fromPreferred;
+
+  if (tabId != null && tabId >= 0) {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      const fromTab = tab?.title?.trim();
+      if (fromTab) return fromTab;
+    } catch {
+      /* tab may already be closed */
+    }
+  }
+
+  // Last resort only — better than an empty title on the TV.
+  return fallbackUrl.split("/").pop() || fallbackUrl;
+}
+
+function castVideo(
+  video: VideoData,
+  titleHint?: string | null,
+): Promise<{ ok: boolean; error?: string }> {
+  return resolveStreamTitle(video.tabId, video.url, titleHint).then((title) =>
+    bridge.cast(video.url, video.headers ?? {}, title),
+  );
 }
 
 // ==================== Request header capture ====================
@@ -411,10 +456,26 @@ browser.webRequest.onHeadersReceived.addListener(
     else if (isVideoExtMatch || hasVideoExt) { isVideo = true; detectedBy = "url_extension"; }
     else if (hasSubExt) { isVideo = true; detectedBy = "subtitle_extension"; }
 
+    // Prefer the request's frameId when the browser provided a real tab; for
+    // tabId:-1 recoveries we still record frameId when present so content
+    // scripts in that frame can associate detections later.
+    const frameId =
+      typeof details.frameId === "number" && details.frameId >= 0
+        ? details.frameId
+        : undefined;
+
     if (isVideo) {
-      plog("  ✓ DETECTED:", detectedBy, "| ct:", contentType || "(none)", "| tabId:", tabId, "|", short(details.url));
+      plog("  ✓ DETECTED:", detectedBy, "| ct:", contentType || "(none)", "| tabId:", tabId, "| frameId:", frameId, "|", short(details.url));
       processAndNotifyVideo(
-        { url: details.url, tabId, contentType, detectedBy, originUrl: details.originUrl ?? "", timestamp: Date.now() },
+        {
+          url: details.url,
+          tabId,
+          contentType,
+          detectedBy,
+          originUrl: details.originUrl ?? "",
+          timestamp: Date.now(),
+          frameId,
+        },
         tabId,
         stored?.headers ?? null,
       );
@@ -440,7 +501,15 @@ browser.webRequest.onHeadersReceived.addListener(
               if (acc.trim().startsWith("#EXTM3U")) {
                 plog("  ✓ DETECTED via body sniff (#EXTM3U):", short(details.url));
                 processAndNotifyVideo(
-                  { url: details.url, tabId, contentType, detectedBy: "body_content_m3u8", originUrl: details.originUrl ?? "", timestamp: Date.now() },
+                  {
+                    url: details.url,
+                    tabId,
+                    contentType,
+                    detectedBy: "body_content_m3u8",
+                    originUrl: details.originUrl ?? "",
+                    timestamp: Date.now(),
+                    frameId,
+                  },
                   tabId,
                   stored?.headers ?? null,
                 );
@@ -463,18 +532,58 @@ browser.webRequest.onHeadersReceived.addListener(
 
 // ==================== Runtime message handler ====================
 
+/** Strip sensitive fields before sending detection records to content scripts. */
+function publicVideoView(v: VideoData): Omit<VideoData, "headers"> {
+  const { headers: _headers, ...rest } = v;
+  return rest;
+}
+
+function videosForSender(
+  sender: browser.Runtime.MessageSender,
+  options: { preferFrame?: boolean } = {},
+): VideoData[] {
+  const tabId = sender.tab?.id;
+  if (tabId == null || tabId < 0) return [];
+  const all = tabVideos.get(tabId) ?? [];
+  if (!options.preferFrame) return all;
+  const frameId = sender.frameId;
+  if (typeof frameId !== "number" || frameId < 0) return all;
+  const sameFrame = all.filter((v) => v.frameId === frameId);
+  // Legacy/session records without frame metadata are safe fallback candidates.
+  // Never expose a record explicitly owned by a different frame.
+  const unframed = all.filter((v) => typeof v.frameId !== "number");
+  return [...sameFrame, ...unframed];
+}
+
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const msg = message as Record<string, unknown>;
 
   if (msg.action === "getVideos") {
-    const tabId = (msg.tabId ?? sender.tab?.id) as number | undefined;
+    // Content scripts must not choose arbitrary tab/frame IDs. Popup/extension
+    // pages have no sender.tab and may pass an explicit tabId for the active tab.
+    const fromContent = sender.tab?.id != null;
+    const tabId = fromContent
+      ? sender.tab!.id!
+      : ((msg.tabId ?? sender.tab?.id) as number | undefined);
     // Await rehydration so a freshly-woken MV3 service worker doesn't reply with
     // an empty list before storage.session has been merged back in.
     hydrated.then(() => {
-      const videos = tabId ? (tabVideos.get(tabId) ?? []) : [];
-      plog("getVideos query for tabId", tabId, "→", videos.length, "videos.",
-        "All tabs with videos:", [...tabVideos.entries()].map(([t, v]) => `${t}:${v.length}`).join(", ") || "(none)");
-      sendResponse({ videos, count: videos.length });
+      let videos: VideoData[];
+      if (fromContent) {
+        videos = videosForSender(sender, { preferFrame: true });
+        // Never expose captured auth headers to page-isolated content scripts.
+        sendResponse({
+          videos: videos.map(publicVideoView),
+          count: videos.length,
+          frameId: sender.frameId,
+          tabId,
+        });
+      } else {
+        videos = tabId != null ? (tabVideos.get(tabId) ?? []) : [];
+        plog("getVideos query for tabId", tabId, "→", videos.length, "videos.",
+          "All tabs with videos:", [...tabVideos.entries()].map(([t, v]) => `${t}:${v.length}`).join(", ") || "(none)");
+        sendResponse({ videos, count: videos.length });
+      }
     });
     return true; // async response
   }
@@ -524,15 +633,101 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (msg.action === "wsPlayOnTv") {
+    // Popup path: may pass a full video object (including quality-selected URL).
+    // Content-script path: only accept a URL identifier; headers always come
+    // from the stored detection record for the sender's tab.
+    const fromContent = sender.tab?.id != null;
+    if (fromContent) {
+      const url = typeof msg.url === "string" ? msg.url : (msg.video as VideoData | undefined)?.url;
+      if (!url || typeof url !== "string") {
+        sendResponse({ success: false, reason: "Video not found" });
+        return true;
+      }
+      const tabVideosList = getTabVideos(sender.tab!.id!);
+      const stored = tabVideosList.find((v) => v.url === url);
+      if (!stored) {
+        sendResponse({ success: false, reason: "Video not found" });
+        return true;
+      }
+      // Prefer the live tab title from sender (website title).
+      const titleHint = sender.tab?.title;
+      castVideo(stored, titleHint).then((r) =>
+        sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+      );
+      return true;
+    }
+
     const tabId = (sender.tab?.id ?? msg.tabId) as number | undefined;
-    const videos = tabId ? getTabVideos(tabId) : [];
-    const video = videos.find((v) => v.url === msg.url) ?? (msg.video as VideoData | undefined);
+    const videos = tabId != null ? getTabVideos(tabId) : [];
+    const video =
+      (typeof msg.url === "string" ? videos.find((v) => v.url === msg.url) : undefined) ??
+      (msg.video as VideoData | undefined);
     if (!video) {
       sendResponse({ success: false, reason: "Video not found" });
       return true;
     }
-    if (msg.subtitleUrl) video.subtitles = [msg.subtitleUrl as string];
-    castVideo(video).then((r) =>
+    // Prefer stored headers for the same URL when available (popup quality pick
+    // may change the URL to a variant that still lacks a stored record).
+    const stored =
+      videos.find((v) => v.url === video.url) ??
+      (video.tabId != null ? getTabVideos(video.tabId).find((v) => v.url === video.url) : undefined);
+    const toCast: VideoData = stored
+      ? { ...stored, ...video, headers: stored.headers ?? video.headers }
+      : { ...video };
+    if (msg.subtitleUrl) toCast.subtitles = [msg.subtitleUrl as string];
+
+    // Popup messages have no sender.tab — use the video's tabId or the active tab
+    // so the stream title is the website title, not a URL basename.
+    const ensureTabId = async (): Promise<number | undefined> => {
+      if (toCast.tabId != null && toCast.tabId >= 0) return toCast.tabId;
+      if (tabId != null && tabId >= 0) {
+        toCast.tabId = tabId;
+        return tabId;
+      }
+      try {
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+        const id = tabs[0]?.id;
+        if (id != null) toCast.tabId = id;
+        return id;
+      } catch {
+        return undefined;
+      }
+    };
+
+    ensureTabId()
+      .then(() => castVideo(toCast))
+      .then((r) =>
+        sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+      );
+    return true;
+  }
+
+  // Content-script cast: URL identifier only; tab/frame from sender; headers from store.
+  if (msg.action === "castDetectedVideo") {
+    const tabId = sender.tab?.id;
+    if (tabId == null || tabId < 0) {
+      sendResponse({ success: false, reason: "Invalid sender" });
+      return true;
+    }
+    const url = msg.url;
+    if (typeof url !== "string" || !url || url.startsWith("blob:") || url.startsWith("data:")) {
+      sendResponse({ success: false, reason: "Invalid media URL" });
+      return true;
+    }
+    const videos = getTabVideos(tabId);
+    const frameId = sender.frameId;
+    const stored = videos.find(
+      (v) =>
+        v.url === url &&
+        (typeof frameId !== "number" ||
+          typeof v.frameId !== "number" ||
+          v.frameId === frameId),
+    );
+    if (!stored) {
+      sendResponse({ success: false, reason: "Video not found" });
+      return true;
+    }
+    castVideo({ ...stored, tabId }, sender.tab?.title).then((r) =>
       sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
     );
     return true;
@@ -541,8 +736,19 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (msg.action === "wsSendToTv") {
     if (msg.target === "player") {
       const url = msg.url as string;
-      bridge.cast(url, {}, url.split("/").pop() || url).then((r) =>
-        sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+      const tabId = (sender.tab?.id ?? msg.tabId) as number | undefined;
+      // Popup often has no sender.tab — resolve active tab for the website title.
+      const resolveTabId = tabId != null && tabId >= 0
+        ? Promise.resolve(tabId)
+        : browser.tabs.query({ active: true, currentWindow: true })
+            .then((tabs) => tabs[0]?.id)
+            .catch(() => undefined);
+      resolveTabId.then((resolvedTabId) =>
+        resolveStreamTitle(resolvedTabId, url, sender.tab?.title).then((title) =>
+          bridge.cast(url, {}, title).then((r) =>
+            sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+          ),
+        ),
       );
     } else {
       sendResponse({ success: false, reason: "Unsupported target" });
@@ -592,7 +798,12 @@ menusApi.onClicked.addListener((info, tab) => {
     info.menuItemId === "playbridge-play"
       ? (info.srcUrl ?? info.linkUrl)
       : (info.linkUrl ?? info.pageUrl ?? tab?.url);
-  if (url) bridge.cast(url, {}, url.split("/").pop() || url);
+  if (url) {
+    const titleHint = tab?.title?.trim() || null;
+    void resolveStreamTitle(tab?.id, url, titleHint).then((title) =>
+      bridge.cast(url, {}, title),
+    );
+  }
 });
 
 // ==================== Startup ====================
