@@ -871,6 +871,15 @@ class WebSocketServer: ObservableObject {
         case "control":
             if let p = try? Playbridge_ControlPayload(jsonString: payloadJson), !p.command.isEmpty {
                 DispatchQueue.main.async {
+                    if StillWatchingGate.isPrompting {
+                        if p.command == "stop" {
+                            NotificationCenter.default.post(name: .playBridgeStillWatchingStop, object: nil)
+                        } else {
+                            NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
+                        }
+                        return
+                    }
+                    NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
                     NotificationCenter.default.post(
                         name: Self.controlCommand, object: nil, userInfo: ["command": p.command])
                 }
@@ -878,6 +887,11 @@ class WebSocketServer: ObservableObject {
         case "remote":
             if let p = try? Playbridge_RemotePayload(jsonString: payloadJson), !p.key.isEmpty {
                 DispatchQueue.main.async {
+                    if StillWatchingGate.isPrompting {
+                        NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
+                        return
+                    }
+                    NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
                     NotificationCenter.default.post(
                         name: Self.remoteKey, object: nil, userInfo: ["key": p.key])
                 }

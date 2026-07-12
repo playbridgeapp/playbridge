@@ -38,11 +38,16 @@ struct PlayerView: View {
     @State private var sessionEngine: String? = nil
     @State private var resumeTime: Double = 0.0
     @State private var showPlaylist: Bool = false
+    @State private var latestPlaybackIsPlaying = false
+    @State private var mediaGeneration = 0
+    @ObservedObject var stillWatching: StillWatchingController
     let isPreBuffering: Bool
 
-    init(payload: Playbridge_PlayPayload, isPreBuffering: Bool, onDismiss: @escaping () -> Void) {
+    init(payload: Playbridge_PlayPayload, isPreBuffering: Bool,
+         stillWatching: StillWatchingController, onDismiss: @escaping () -> Void) {
         self.payload = payload
         self.isPreBuffering = isPreBuffering
+        self.stillWatching = stillWatching
         self.onDismiss = onDismiss
     }
 
@@ -95,6 +100,8 @@ struct PlayerView: View {
     }
 
     private func handleNext() {
+        stillWatching.reset()
+        mediaGeneration &+= 1
         consumeStartPosition(at: playlistStore.currentIndex)
         if let nextRequest = playlistStore.next(), let nextURL = nextRequest.validURL {
             historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil)
@@ -105,6 +112,8 @@ struct PlayerView: View {
     }
 
     private func handleJump(to index: Int) {
+        stillWatching.reset()
+        mediaGeneration &+= 1
         consumeStartPosition(at: playlistStore.currentIndex)
         if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
             historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil)
@@ -135,13 +144,14 @@ struct PlayerView: View {
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
-                    .id(currentURL)
+                    .id("vlc-\(mediaGeneration)")
                 } else if effectiveEngine(for: currentRequest) == "mpv" {
                     MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
                         subtitles: currentRequest.subtitlesOrNil,
                         initialTime: initialSeekTime(for: currentRequest),
+                        mediaIdentity: mediaGeneration,
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,
@@ -170,7 +180,7 @@ struct PlayerView: View {
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
-                    .id(currentURL)
+                    .id("avplayer-\(mediaGeneration)")
                     .onExitCommand { onDismiss() }
                 }
             } else {
@@ -192,12 +202,53 @@ struct PlayerView: View {
                 )
                 .zIndex(20)
             }
+
+            if stillWatching.isPrompting {
+                StillWatchingPrompt(
+                    secondsRemaining: stillWatching.secondsRemaining,
+                    title: (playlistStore.currentItem ?? payload).titleOrNil,
+                    onContinue: stillWatching.continueWatching
+                )
+                .zIndex(100)
+            }
         }
         .onAppear {
             isPlayerFocused = true
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TogglePlaylist"))) { _ in
+            guard !stillWatching.isPrompting else { return }
             withAnimation { showPlaylist.toggle() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .playBridgePlaybackActivity)) { note in
+            guard let playing = note.userInfo?["isPlaying"] as? Bool else { return }
+            latestPlaybackIsPlaying = playing
+            stillWatching.playbackChanged(isPlaying: playing && !isPreBuffering)
+        }
+        .onChange(of: isPreBuffering) { wasPreBuffering, preBuffering in
+            if wasPreBuffering && !preBuffering {
+                stillWatching.playbackChanged(isPlaying: latestPlaybackIsPlaying)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .playBridgeUserActivity)) { _ in
+            stillWatching.onUserActivity()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: WebSocketServer.controlCommand)) { note in
+            guard stillWatching.isPrompting,
+                  let command = note.userInfo?["command"] as? String else { return }
+            switch command {
+            case "play": stillWatching.continueWatching()
+            case "stop": stillWatching.stopNow(onDismiss)
+            default: break
+            }
+        }
+        .onChange(of: stillWatching.didExpire) { _, expired in
+            if expired { stillWatching.stopNow(onDismiss) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .playBridgeStillWatchingResume)) { _ in
+            if stillWatching.isPrompting { stillWatching.continueWatching() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .playBridgeStillWatchingStop)) { _ in
+            if stillWatching.isPrompting { stillWatching.stopNow(onDismiss) }
         }
     }
 }

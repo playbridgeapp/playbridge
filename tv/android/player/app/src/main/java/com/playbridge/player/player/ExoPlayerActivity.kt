@@ -132,6 +132,7 @@ class ExoPlayerActivity : PlayerActivity() {
     // Playlist queue / auto-advance — single source of truth, shared with MpvPlayerActivity.
     private val coordinator = PlaybackCoordinator(object : PlaybackCoordinator.Host {
         override fun loadItem(item: playbridge.PlayPayload, displayTitle: String?) {
+            recordStillWatchingMediaChanged()
             displayTitle?.takeIf { it.isNotBlank() }?.let {
                 android.widget.Toast.makeText(this@ExoPlayerActivity, it, android.widget.Toast.LENGTH_SHORT).show()
             }
@@ -188,6 +189,11 @@ class ExoPlayerActivity : PlayerActivity() {
             when (intent?.action) {
                 ServerService.ACTION_CONTROL -> {
                     val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
+                    if (stillWatchingController.state.value.isPrompting && command != "stop") {
+                        stillWatchingController.continueWatching()
+                        return
+                    }
+                    if (command != null && command != "stop") recordStillWatchingActivity()
                     when {
                         command == "loop_on"  -> setLooping(true)
                         command == "loop_off" -> setLooping(false)
@@ -218,11 +224,13 @@ class ExoPlayerActivity : PlayerActivity() {
                     val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
 
                     if (url != null) {
+                        recordStillWatchingMediaChanged()
                         stopPlayback()
                         playVideo(url, title, contentType, detectedBy, headers, subtitles)
                     }
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
+                    recordStillWatchingActivity()
                     coordinator.queueAdd(ServerService.drainPendingQueueItems())
                     controlsViewModel.setPlaylistVisible(true)
                 }
@@ -271,6 +279,7 @@ class ExoPlayerActivity : PlayerActivity() {
         windowInsetsController.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
 
         // Initialize View Bindings
+        setupStillWatching(controlsViewModel)
         setContentView(com.playbridge.player.R.layout.activity_player)
         playerView = findViewById(com.playbridge.player.R.id.player_view)
 
@@ -278,8 +287,11 @@ class ExoPlayerActivity : PlayerActivity() {
             setContent {
                 PlayBridgeTVTheme {
                     val state by controlsViewModel.controlsState.collectAsState()
+                    val stillWatching by stillWatchingController.state.collectAsState()
                     PlayerControlsOverlay(
                         state = state,
+                        stillWatchingState = stillWatching,
+                        onContinueWatching = stillWatchingController::continueWatching,
                         onTogglePlay = { controlsViewModel.togglePlayPause() },
                         onTrackSelection = {
                             updateUnifiedTracks()
@@ -426,7 +438,10 @@ class ExoPlayerActivity : PlayerActivity() {
             audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
             engine = engineAdapter,
             controls = controlsViewModel,
-            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE }
+            isExternalOverlayVisible = { controlsViewModel.controlsState.value.prePlayMetadata != null || controlsViewModel.controlsState.value.activeOverlay != ActiveOverlay.NONE },
+            isStillWatchingVisible = { stillWatchingController.state.value.isPrompting },
+            onContinueWatching = stillWatchingController::continueWatching,
+            onUserActivity = stillWatchingController::onUserActivity,
         )
         
         controlsViewModel.setEngine(engineAdapter, "exo", this)
@@ -460,6 +475,7 @@ class ExoPlayerActivity : PlayerActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         FileLogger.i(TAG, "onNewIntent received")
+        recordStillWatchingMediaChanged()
 
         launchJob?.cancel()
 
@@ -468,6 +484,7 @@ class ExoPlayerActivity : PlayerActivity() {
     }
 
     private fun handleIntent(intent: Intent?) {
+        recordStillWatchingMediaChanged()
         setupPlaybackExtras(intent)
 
         // Read playlist if present - needed early for button visibility logic
@@ -1093,7 +1110,9 @@ class ExoPlayerActivity : PlayerActivity() {
                 // during buffering, pre-play, or an engine switch and never got hidden.
                 controlsViewModel.hideControls()
             } else {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                if (!stillWatchingController.state.value.isPrompting) {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
                 // Hide spinner if we paused while buffering
                 controlsViewModel.setBuffering(false)
             }

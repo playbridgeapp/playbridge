@@ -28,8 +28,69 @@ import kotlinx.coroutines.flow.map
 import com.playbridge.player.ui.player.PlayerControlsState
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.UnifiedTrack
+import android.content.SharedPreferences
 
 abstract class PlayerActivity : ComponentActivity() {
+
+    protected lateinit var stillWatchingController: StillWatchingController
+        private set
+    private var stillWatchingControls: PlayerControlsViewModel? = null
+    private var stillWatchingPrefsListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    protected fun setupStillWatching(controls: PlayerControlsViewModel) {
+        stillWatchingControls = controls
+        stillWatchingController = StillWatchingController(
+            scope = lifecycleScope,
+            pausePlayback = {
+                pause()
+                controls.setPlaying(false)
+            },
+            resumePlayback = {
+                play()
+                controls.setPlaying(true)
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            },
+            stopPlayback = { finish() },
+            onPromptChanged = { prompting ->
+                if (prompting || controls.controlsState.value.isPlaying) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            },
+        )
+        val prefs = getSharedPreferences(STILL_WATCHING_PREFS, Context.MODE_PRIVATE)
+        fun applySettings() = stillWatchingController.updateSettings(
+            prefs.getBoolean(PREF_STILL_WATCHING_ENABLED, false),
+            normalizeStillWatchingThreshold(prefs.getInt(PREF_STILL_WATCHING_THRESHOLD_MIN, 90)),
+            normalizeStillWatchingResponseSeconds(prefs.getInt(PREF_STILL_WATCHING_RESPONSE_SEC, 300)),
+        )
+        applySettings()
+        stillWatchingPrefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            if (key == PREF_STILL_WATCHING_ENABLED ||
+                key == PREF_STILL_WATCHING_THRESHOLD_MIN ||
+                key == PREF_STILL_WATCHING_RESPONSE_SEC
+            ) applySettings()
+        }.also(prefs::registerOnSharedPreferenceChangeListener)
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                try {
+                    controls.controlsState.map { it.isPlaying && !it.isBuffering }.distinctUntilChanged()
+                        .collect(stillWatchingController::onPlayingChanged)
+                } finally {
+                    stillWatchingController.onPlayingChanged(false)
+                }
+            }
+        }
+    }
+
+    protected fun recordStillWatchingActivity() {
+        if (::stillWatchingController.isInitialized) stillWatchingController.onUserActivity()
+    }
+
+    protected fun recordStillWatchingMediaChanged() {
+        if (::stillWatchingController.isInitialized) stillWatchingController.onMediaChanged()
+    }
 
     protected var launchJob: Job? = null
     protected var watchdogJob: Job? = null
@@ -260,8 +321,7 @@ abstract class PlayerActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Keep screen on
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Playback engines set this flag only while media is actively playing.
 
         // Handle window insets
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -326,6 +386,11 @@ abstract class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (::stillWatchingController.isInitialized) stillWatchingController.dispose()
+        stillWatchingPrefsListener?.let {
+            getSharedPreferences(STILL_WATCHING_PREFS, Context.MODE_PRIVATE)
+                .unregisterOnSharedPreferenceChangeListener(it)
+        }
         if (current?.get() === this) {
             current = null
             // Only reset activeContext when THIS is genuinely the last player being torn down —
@@ -337,6 +402,18 @@ abstract class PlayerActivity : ComponentActivity() {
             ServerService.notifyContextIdle()
         }
         super.onDestroy()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (stillWatchingControls?.controlsState?.value?.isPlaying == true) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    override fun onStop() {
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        super.onStop()
     }
 
 
@@ -689,6 +766,19 @@ abstract class PlayerActivity : ComponentActivity() {
     companion object {
         @Volatile
         private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
+
+        const val STILL_WATCHING_PREFS = "browser_prefs"
+        const val PREF_STILL_WATCHING_ENABLED = "still_watching_enabled"
+        const val PREF_STILL_WATCHING_THRESHOLD_MIN = "still_watching_threshold_min"
+        const val PREF_STILL_WATCHING_RESPONSE_SEC = "still_watching_response_sec"
+        val STILL_WATCHING_PRESETS = setOf(30, 60, 90, 120, 180, 240)
+        val STILL_WATCHING_RESPONSE_PRESETS = setOf(30, 60, 120, 300, 600)
+
+        fun normalizeStillWatchingThreshold(value: Int): Int =
+            value.takeIf { it in STILL_WATCHING_PRESETS } ?: 90
+
+        fun normalizeStillWatchingResponseSeconds(value: Int): Int =
+            value.takeIf { it in STILL_WATCHING_RESPONSE_PRESETS } ?: 300
 
         /** Intent extra carrying how many automatic engine failovers this session has done. */
         private const val EXTRA_AUTO_SWITCH_COUNT = "extra_auto_engine_switch_count"

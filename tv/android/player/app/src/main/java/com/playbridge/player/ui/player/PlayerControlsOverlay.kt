@@ -26,11 +26,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import com.playbridge.player.player.PlaylistPickerDialog
 import com.playbridge.player.player.SwitchPlayerDialog
 import com.playbridge.player.ui.theme.TvExpressiveMotion
+import com.playbridge.player.player.StillWatchingState
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
 fun PlayerControlsOverlay(
     state: PlayerControlsState,
+    stillWatchingState: StillWatchingState = StillWatchingState(),
+    onContinueWatching: () -> Unit = {},
     onTogglePlay: () -> Unit,
     onTrackSelection: () -> Unit,
     onSubtitles: () -> Unit,
@@ -304,6 +307,47 @@ fun PlayerControlsOverlay(
                 onStartNow = onPrePlayStartNow,
                 onBack = onPrePlayBack
             )
+        }
+
+        if (stillWatchingState.isPrompting) {
+            StillWatchingDialog(
+                title = state.title,
+                secondsRemaining = stillWatchingState.secondsRemaining,
+                onContinue = onContinueWatching,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun StillWatchingDialog(
+    title: String,
+    secondsRemaining: Int,
+    onContinue: () -> Unit,
+) {
+    val continueFocus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { continueFocus.requestFocus() }
+    Box(
+        Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.78f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier.width(560.dp).background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp)).padding(36.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp),
+        ) {
+            Text("Are you still watching?", color = MaterialTheme.colorScheme.onSurface, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+            if (title.isNotBlank()) Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp)
+            Text(
+                "Playback will stop in ${secondsRemaining.coerceAtLeast(0) / 60}:${(secondsRemaining.coerceAtLeast(0) % 60).toString().padStart(2, '0')}",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Surface(
+                onClick = onContinue,
+                modifier = Modifier.focusRequester(continueFocus),
+                shape = ClickableSurfaceDefaults.shape(RoundedCornerShape(12.dp)),
+            ) { Text("Continue watching", Modifier.padding(horizontal = 24.dp, vertical = 14.dp)) }
         }
     }
 }

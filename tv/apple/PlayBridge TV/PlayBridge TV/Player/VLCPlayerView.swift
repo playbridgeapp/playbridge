@@ -453,6 +453,9 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 hideControlsTimer?.invalidate()
             } else {
                 showUI(autoHide: true)
+                NotificationCenter.default.post(
+                    name: .playBridgePlaybackActivity, object: nil,
+                    userInfo: ["isPlaying": mediaPlayer.isPlaying])
             }
         }
 
@@ -483,6 +486,9 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 if self.playbackState.isPlaying != self.mediaPlayer.isPlaying {
                     self.playbackState.isPlaying = self.mediaPlayer.isPlaying
                 }
+                NotificationCenter.default.post(
+                    name: .playBridgePlaybackActivity, object: nil,
+                    userInfo: ["isPlaying": newState == .playing && self.mediaPlayer.isPlaying])
                 self.broadcastStatus()
 
                 // libvlc needs the input running before slaves attach to the current playback;
@@ -565,6 +571,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         private var virtualScrubTickTimer: Timer?
 
         override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+            if StillWatchingGate.isPrompting {
+                NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
+                return
+            }
             // During pre-buffering, PrePlayView owns all input — pass everything through.
             if isPreBuffering {
                 super.pressesBegan(presses, with: event)
@@ -575,6 +585,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 super.pressesBegan(presses, with: event)
                 return
             }
+            NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
 
             // Intercept Menu/Back button to close popups before exiting
             if type == .menu {
@@ -808,6 +819,12 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(onResyncRequest),
                 name: WebSocketServer.resyncRequest, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(onStillWatchingPause),
+                name: .playBridgeStillWatchingPause, object: nil)
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(onStillWatchingResume),
+                name: .playBridgeStillWatchingResume, object: nil)
 
             // Periodic position broadcast. 2s (was 1s) and only while actually playing — the JSON
             // build + WebSocket send is wasted work while paused/buffering (state transitions are
@@ -846,14 +863,19 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             broadcastTracks()
         }
 
+        @objc private func onStillWatchingPause() { if mediaPlayer.isPlaying { mediaPlayer.pause() } }
+        @objc private func onStillWatchingResume() { if !mediaPlayer.isPlaying { mediaPlayer.play() } }
+
         @objc private func onControlNotification(_ note: Notification) {
             guard let cmd = note.userInfo?["command"] as? String else { return }
+            if StillWatchingGate.isPrompting { return }
             handleControlCommand(cmd)
             broadcastStatus()
         }
 
         @objc private func onRemoteNotification(_ note: Notification) {
             guard let key = note.userInfo?["key"] as? String else { return }
+            if StillWatchingGate.isPrompting { return }
             switch key {
             case "dpad_center": togglePlayPause()
             case "dpad_left":   seek(toMs: max(0, mediaPlayer.time.intValue - 15000))

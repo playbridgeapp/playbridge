@@ -28,10 +28,23 @@ import 'tv_sender_controller.dart';
 /// - client → app: `{"token":"…"}` (first line), then `{"cmd":…}`.
 /// - app → client: `{"type":"hello"|"state"|"result", …}`.
 class ExtensionBridge {
-  ExtensionBridge(this._sender, this._player);
+  ExtensionBridge(
+    this._sender,
+    this._player, {
+    this.isPlaybackPromptActive,
+    this.onPromptContinue,
+    this.onPromptStop,
+    this.onPlaybackActivity,
+    this.onNewMedia,
+  });
 
   final TvSenderController _sender;
   final PlayerController _player;
+  final bool Function()? isPlaybackPromptActive;
+  final VoidCallback? onPromptContinue;
+  final VoidCallback? onPromptStop;
+  final VoidCallback? onPlaybackActivity;
+  final VoidCallback? onNewMedia;
 
   ServerSocket? _server;
   final Set<Socket> _authed = {};
@@ -125,6 +138,7 @@ class ExtensionBridge {
             if (!ok) 'error': 'send failed',
           });
         } else {
+          onNewMedia?.call();
           // No cast target — play on this machine (extension → desktop).
           final headerCount = headers?.length ?? 0;
           debugPrint(
@@ -178,6 +192,7 @@ class ExtensionBridge {
               (file.uri.pathSegments.isNotEmpty
                   ? file.uri.pathSegments.last
                   : path);
+          onNewMedia?.call();
           await _player.playUrl(
             file.uri.toString(),
             title: name,
@@ -215,6 +230,19 @@ class ExtensionBridge {
   /// as the TV receiver / [TvSenderController.sendControl]).
   bool _localControl(String action) {
     try {
+      if (isPlaybackPromptActive?.call() ?? false) {
+        if (action == 'play') {
+          onPromptContinue?.call();
+          return true;
+        }
+        if (action == 'stop') {
+          onPromptStop?.call();
+          return true;
+        }
+        onPromptContinue?.call();
+        return true;
+      }
+      onPlaybackActivity?.call();
       if (action.startsWith('seek_to:')) {
         final ms = int.tryParse(action.substring('seek_to:'.length));
         if (ms == null) return false;

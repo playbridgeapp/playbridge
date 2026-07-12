@@ -33,6 +33,8 @@ import 'server.dart';
 import 'settings_screen.dart';
 import 'shader_background.dart';
 import 'stats_overlay.dart';
+import 'still_watching_controller.dart';
+import 'still_watching_prompt.dart';
 import 'tray_controller.dart';
 import 'tv_connection_store.dart';
 import 'tv_sender_controller.dart';
@@ -141,6 +143,8 @@ class ReceiverApp extends StatefulWidget {
 }
 
 class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
+  final FocusNode _keyboardFocusNode =
+      FocusNode(debugLabel: 'desktop-shortcuts');
   late final PlayerController _player;
   late final ReceiverServer _server;
   late final DiscoveryPublisher _discovery;
@@ -148,6 +152,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   late final TvSenderController _sender;
   late final ExtensionBridge _extBridge;
   late final MediaSessionBridge _mediaSession;
+  late final StillWatchingController _stillWatching;
   final UpdateChecker _updateChecker = UpdateChecker();
 
   bool _hadMedia = false;
@@ -229,7 +234,23 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showStats = ValueNotifier<bool>(widget.store.showStats);
     _showStats.addListener(() => widget.store.setShowStats(_showStats.value));
     _player = PlayerController(initialEngine: widget.store.engineType);
-    _server = ReceiverServer(player: _player, store: widget.store);
+    _stillWatching = StillWatchingController(
+      player: _player,
+      enabled: widget.store.stillWatchingEnabled,
+      threshold: Duration(minutes: widget.store.stillWatchingThresholdMinutes),
+      gracePeriod: Duration(seconds: widget.store.stillWatchingResponseSeconds),
+      onAutoStop: () => _server.broadcastIdleContext(),
+    );
+    _stillWatching.addListener(_handleStillWatchingChange);
+    _server = ReceiverServer(
+      player: _player,
+      store: widget.store,
+      isPlaybackPromptActive: () => _stillWatching.isPrompting,
+      onPromptContinue: () => unawaited(_stillWatching.continueWatching()),
+      onPromptStop: () => unawaited(_stillWatching.stopWatching()),
+      onPlaybackActivity: _stillWatching.recordUserActivity,
+      onNewMedia: _stillWatching.resetForNewMedia,
+    );
     _discovery = DiscoveryPublisher(
       serviceName: widget.store.deviceName,
       port: kDefaultPort,
@@ -238,8 +259,22 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _tray =
         TrayController(player: _player, server: _server, store: widget.store);
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
-    _extBridge = ExtensionBridge(_sender, _player);
-    _mediaSession = MediaSessionBridge(_player);
+    _extBridge = ExtensionBridge(
+      _sender,
+      _player,
+      isPlaybackPromptActive: () => _stillWatching.isPrompting,
+      onPromptContinue: () => unawaited(_stillWatching.continueWatching()),
+      onPromptStop: () => unawaited(_stillWatching.stopWatching()),
+      onPlaybackActivity: _stillWatching.recordUserActivity,
+      onNewMedia: _stillWatching.resetForNewMedia,
+    );
+    _mediaSession = MediaSessionBridge(
+      _player,
+      isPlaybackPromptActive: () => _stillWatching.isPrompting,
+      onPromptContinue: () => unawaited(_stillWatching.continueWatching()),
+      onPromptStop: () => unawaited(_stillWatching.stopWatching()),
+      onPlaybackActivity: _stillWatching.recordUserActivity,
+    );
 
     windowManager.addListener(this);
     _player.addListener(_handlePlayerChange);
@@ -269,6 +304,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     // video here). Tracks the rising edge so it doesn't fight tab navigation.
     _sender.addListener(_handleSenderChange);
 
+    // `autofocus` is not enough on desktop once widgets/platform views have
+    // had a chance to take focus, so explicitly claim the shortcut focus.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _keyboardFocusNode.requestFocus();
+    });
+
     // Cold-start file open (`playbridge_cast` launched the app): cast to a TV
     // if already linked, otherwise play on this desktop (same as extension
     // bridge when disconnected).
@@ -283,6 +324,25 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   bool _senderWasCasting = false;
+  bool _wasStillWatchingPrompting = false;
+
+  void _handleStillWatchingChange() {
+    final prompting = _stillWatching.isPrompting;
+    if (prompting && !_wasStillWatchingPrompting) {
+      unawaited(_revealWindow());
+    }
+    _wasStillWatchingPrompting = prompting;
+    if (mounted) setState(() {});
+  }
+
+  void _applyStillWatchingSettings() {
+    _stillWatching.updateSettings(
+      enabled: widget.store.stillWatchingEnabled,
+      threshold: Duration(minutes: widget.store.stillWatchingThresholdMinutes),
+      gracePeriod: Duration(seconds: widget.store.stillWatchingResponseSeconds),
+    );
+  }
+
   void _handleSenderChange() {
     final casting = _sender.isCasting;
     if (casting == _senderWasCasting) return; // only react to edges
@@ -341,6 +401,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   void _handlePlayRequest() {
+    _stillWatching.resetForNewMedia();
     unawaited(_revealWindow(fullScreen: widget.store.autoFullScreen));
     if (!_showingVideo) {
       setState(() => _showingVideo = true);
@@ -641,6 +702,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _hideTimer?.cancel();
     _osdTimer?.cancel();
     _tapTimer?.cancel();
+    _keyboardFocusNode.dispose();
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
     _player.playRequests.removeListener(_handlePlayRequest);
@@ -653,6 +715,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _sender.dispose();
     _discovery.stop();
     _server.stop();
+    _stillWatching.removeListener(_handleStillWatchingChange);
+    _stillWatching.dispose();
     _player.dispose();
     _showStats.dispose();
     _updateChecker.dispose();
@@ -662,372 +726,412 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PlayBridge Desktop',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData.dark(useMaterial3: true).copyWith(
-        scaffoldBackgroundColor: Colors.transparent,
-        canvasColor: Colors.transparent,
-        // Brand font shared with the Android apps. Applies app-wide through the
-        // text theme; explicit monospace styles (logs) are unaffected.
-        textTheme: ThemeData.dark(useMaterial3: true).textTheme.apply(
-              fontFamily: 'Poppins',
-            ),
-        primaryTextTheme: ThemeData.dark(useMaterial3: true)
-            .primaryTextTheme
-            .apply(fontFamily: 'Poppins'),
-      ),
-      home: Shortcuts(
-        shortcuts: {
-          const SingleActivator(LogicalKeyboardKey.space):
-              const PlayPauseIntent(),
-          const SingleActivator(LogicalKeyboardKey.arrowRight):
-              const SeekForwardIntent(),
-          const SingleActivator(LogicalKeyboardKey.arrowLeft):
-              const SeekBackwardIntent(),
-          const SingleActivator(LogicalKeyboardKey.arrowUp):
-              const VolumeUpIntent(),
-          const SingleActivator(LogicalKeyboardKey.arrowDown):
-              const VolumeDownIntent(),
-          const SingleActivator(LogicalKeyboardKey.keyI):
-              const StatsToggleIntent(),
-          const SingleActivator(LogicalKeyboardKey.keyF):
-              const ToggleFullScreenIntent(),
-          // `?` is Shift+/ on US keyboards.
-          const SingleActivator(LogicalKeyboardKey.slash, shift: true):
-              const ShowShortcutsIntent(),
-          const SingleActivator(LogicalKeyboardKey.slash):
-              const ShowShortcutsIntent(),
-        },
-        child: Actions(
-          actions: {
-            PlayPauseIntent: CallbackAction<PlayPauseIntent>(
-              onInvoke: (_) {
-                _togglePlayPause();
-                return null;
-              },
-            ),
-            SeekForwardIntent: CallbackAction<SeekForwardIntent>(
-              onInvoke: (_) {
-                _seekBy(10000, osd: '≫ 10s');
-                return null;
-              },
-            ),
-            SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
-              onInvoke: (_) {
-                _seekBy(-10000, osd: '≪ 10s');
-                return null;
-              },
-            ),
-            VolumeUpIntent: CallbackAction<VolumeUpIntent>(
-              onInvoke: (_) {
-                _nudgeVolume(0.05);
-                return null;
-              },
-            ),
-            VolumeDownIntent: CallbackAction<VolumeDownIntent>(
-              onInvoke: (_) {
-                _nudgeVolume(-0.05);
-                return null;
-              },
-            ),
-            StatsToggleIntent: CallbackAction<StatsToggleIntent>(
-              onInvoke: (_) {
-                _showStats.value = !_showStats.value;
-                return null;
-              },
-            ),
-            ToggleFullScreenIntent: CallbackAction<ToggleFullScreenIntent>(
-              onInvoke: (_) {
-                unawaited(_toggleFullScreen());
-                return null;
-              },
-            ),
-            ShowShortcutsIntent: CallbackAction<ShowShortcutsIntent>(
-              onInvoke: (_) {
-                unawaited(showKeyboardShortcutsSheet(context));
-                return null;
-              },
-            ),
+        title: 'PlayBridge Desktop',
+        debugShowCheckedModeBanner: false,
+        theme: ThemeData.dark(useMaterial3: true).copyWith(
+          scaffoldBackgroundColor: Colors.transparent,
+          canvasColor: Colors.transparent,
+          // Brand font shared with the Android apps. Applies app-wide through the
+          // text theme; explicit monospace styles (logs) are unaffected.
+          textTheme: ThemeData.dark(useMaterial3: true).textTheme.apply(
+                fontFamily: 'Poppins',
+              ),
+          primaryTextTheme: ThemeData.dark(useMaterial3: true)
+              .primaryTextTheme
+              .apply(fontFamily: 'Poppins'),
+        ),
+        home: Shortcuts(
+          shortcuts: {
+            const SingleActivator(LogicalKeyboardKey.space):
+                const PlayPauseIntent(),
+            const SingleActivator(LogicalKeyboardKey.arrowRight):
+                const SeekForwardIntent(),
+            const SingleActivator(LogicalKeyboardKey.arrowLeft):
+                const SeekBackwardIntent(),
+            const SingleActivator(LogicalKeyboardKey.arrowUp):
+                const VolumeUpIntent(),
+            const SingleActivator(LogicalKeyboardKey.arrowDown):
+                const VolumeDownIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyI):
+                const StatsToggleIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyF):
+                const ToggleFullScreenIntent(),
+            // `?` is Shift+/ on US keyboards.
+            const SingleActivator(LogicalKeyboardKey.slash, shift: true):
+                const ShowShortcutsIntent(),
+            const SingleActivator(LogicalKeyboardKey.slash):
+                const ShowShortcutsIntent(),
           },
-          child: Focus(
-            autofocus: true,
-            child: Scaffold(
-              backgroundColor: Colors.transparent,
-              // Deliberately NOT listening to _player here: it notifies on every
-              // ~200ms position tick, and rebuilding the whole shell (backdrop
-              // blurs included) at 5Hz steals frame time from the video. The
-              // controls/status bars listen to the player themselves; structural
-              // changes arrive via the coarse setState in _handlePlayerChange.
-              body: AnimatedBuilder(
-                animation: Listenable.merge([_server, _showStats]),
-                builder: (context, _) {
-                  final hasMedia = _player.queue.isNotEmpty;
-                  final hasQueue = _player.queue.length > 1;
-                  const titleBarHeight = 28.0;
-                  // Hide every piece of chrome (title bar, sidebar, status bar)
-                  // when the user is watching video in full-screen — the video
-                  // should fill the entire monitor, not be framed by panels.
-                  final hideChrome = _isFullScreen && _showingVideo && hasMedia;
+          child: Actions(
+            actions: {
+              PlayPauseIntent: CallbackAction<PlayPauseIntent>(
+                onInvoke: (_) {
+                  _togglePlayPause();
+                  return null;
+                },
+              ),
+              SeekForwardIntent: CallbackAction<SeekForwardIntent>(
+                onInvoke: (_) {
+                  _seekBy(10000, osd: '≫ 10s');
+                  return null;
+                },
+              ),
+              SeekBackwardIntent: CallbackAction<SeekBackwardIntent>(
+                onInvoke: (_) {
+                  _seekBy(-10000, osd: '≪ 10s');
+                  return null;
+                },
+              ),
+              VolumeUpIntent: CallbackAction<VolumeUpIntent>(
+                onInvoke: (_) {
+                  _nudgeVolume(0.05);
+                  return null;
+                },
+              ),
+              VolumeDownIntent: CallbackAction<VolumeDownIntent>(
+                onInvoke: (_) {
+                  _nudgeVolume(-0.05);
+                  return null;
+                },
+              ),
+              StatsToggleIntent: CallbackAction<StatsToggleIntent>(
+                onInvoke: (_) {
+                  _showStats.value = !_showStats.value;
+                  return null;
+                },
+              ),
+              ToggleFullScreenIntent: CallbackAction<ToggleFullScreenIntent>(
+                onInvoke: (_) {
+                  unawaited(_toggleFullScreen());
+                  return null;
+                },
+              ),
+              ShowShortcutsIntent: CallbackAction<ShowShortcutsIntent>(
+                onInvoke: (_) {
+                  unawaited(showKeyboardShortcutsSheet(context));
+                  return null;
+                },
+              ),
+            },
+            child: Focus(
+              focusNode: _keyboardFocusNode,
+              autofocus: true,
+              onKeyEvent: (_, event) {
+                if (event is KeyDownEvent && !_stillWatching.isPrompting) {
+                  _stillWatching.recordUserActivity();
+                }
+                return KeyEventResult.ignored;
+              },
+              child: Listener(
+                behavior: HitTestBehavior.translucent,
+                onPointerDown: (_) {
+                  if (_stillWatching.isPrompting) {
+                    unawaited(_stillWatching.continueWatching());
+                  } else {
+                    _stillWatching.recordUserActivity();
+                  }
+                  if (!_keyboardFocusNode.hasFocus) {
+                    _keyboardFocusNode.requestFocus();
+                  }
+                },
+                onPointerHover: (_) => _stillWatching.recordUserActivity(),
+                child: Scaffold(
+                  backgroundColor: Colors.transparent,
+                  // Deliberately NOT listening to _player here: it notifies on every
+                  // ~200ms position tick, and rebuilding the whole shell (backdrop
+                  // blurs included) at 5Hz steals frame time from the video. The
+                  // controls/status bars listen to the player themselves; structural
+                  // changes arrive via the coarse setState in _handlePlayerChange.
+                  body: AnimatedBuilder(
+                    animation: Listenable.merge([_server, _showStats]),
+                    builder: (context, _) {
+                      final hasMedia = _player.queue.isNotEmpty;
+                      final hasQueue = _player.queue.length > 1;
+                      const titleBarHeight = 28.0;
+                      // Hide every piece of chrome (title bar, sidebar, status bar)
+                      // when the user is watching video in full-screen — the video
+                      // should fill the entire monitor, not be framed by panels.
+                      final hideChrome =
+                          _isFullScreen && _showingVideo && hasMedia;
 
-                  return Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      // Aurora background — only rendered when the user is NOT
-                      // watching video. Six-octave FBM + domain warping is expensive,
-                      // and during playback the video texture covers most of it
-                      // anyway, so leaving it running just steals GPU from mpv.
-                      if (!_showingVideo)
-                        const Positioned.fill(child: AuroraBackground()),
-
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                      return Stack(
+                        fit: StackFit.expand,
                         children: [
-                          if (!hideChrome)
-                            SizedBox(
-                              height: titleBarHeight,
-                              child: ClipRect(
-                                child: BackdropFilter(
-                                  filter:
-                                      ImageFilter.blur(sigmaX: 30, sigmaY: 30),
-                                  child: DragToMoveArea(
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        gradient: LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Colors.white
-                                                .withValues(alpha: 0.10),
-                                            Colors.black
-                                                .withValues(alpha: 0.20),
-                                          ],
-                                        ),
-                                        border: Border(
-                                          bottom: BorderSide(
-                                            color: Colors.white
-                                                .withValues(alpha: 0.08),
+                          // Aurora background — only rendered when the user is NOT
+                          // watching video. Six-octave FBM + domain warping is expensive,
+                          // and during playback the video texture covers most of it
+                          // anyway, so leaving it running just steals GPU from mpv.
+                          if (!_showingVideo)
+                            const Positioned.fill(child: AuroraBackground()),
+
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              if (!hideChrome)
+                                SizedBox(
+                                  height: titleBarHeight,
+                                  child: ClipRect(
+                                    child: BackdropFilter(
+                                      filter: ImageFilter.blur(
+                                          sigmaX: 30, sigmaY: 30),
+                                      child: DragToMoveArea(
+                                        child: Container(
+                                          decoration: BoxDecoration(
+                                            gradient: LinearGradient(
+                                              begin: Alignment.topCenter,
+                                              end: Alignment.bottomCenter,
+                                              colors: [
+                                                Colors.white
+                                                    .withValues(alpha: 0.10),
+                                                Colors.black
+                                                    .withValues(alpha: 0.20),
+                                              ],
+                                            ),
+                                            border: Border(
+                                              bottom: BorderSide(
+                                                color: Colors.white
+                                                    .withValues(alpha: 0.08),
+                                              ),
+                                            ),
+                                          ),
+                                          child: Row(
+                                            children: [
+                                              const SizedBox(width: 78),
+                                              Expanded(
+                                                child: Container(
+                                                    color: Colors.transparent),
+                                              ),
+                                            ],
                                           ),
                                         ),
-                                      ),
-                                      child: Row(
-                                        children: [
-                                          const SizedBox(width: 78),
-                                          Expanded(
-                                            child: Container(
-                                                color: Colors.transparent),
-                                          ),
-                                        ],
                                       ),
                                     ),
                                   ),
+                                ),
+                              Expanded(
+                                child: Row(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (!hideChrome)
+                                      _NavSidebar(
+                                        dest: _dest,
+                                        showingVideo: _showingVideo,
+                                        hasMedia: hasMedia,
+                                        playerState: _player.state,
+                                        senderCasting: _sender.isCasting,
+                                        enableHistory:
+                                            widget.store.enableHistory,
+                                        onDestSelect: (d) => setState(() {
+                                          _dest = d;
+                                          _showingVideo = false;
+                                        }),
+                                        onShowVideo: () => setState(
+                                            () => _showingVideo = true),
+                                      ),
+                                    Expanded(
+                                      child: DropTarget(
+                                        onDragEntered: (_) => setState(
+                                            () => _mainDragging = true),
+                                        onDragExited: (_) => setState(
+                                            () => _mainDragging = false),
+                                        onDragDone: _onMainDrop,
+                                        child: MouseRegion(
+                                          onEnter: (_) => _markActive(),
+                                          onExit: (_) => _markInactive(),
+                                          onHover: (_) => _markActive(),
+                                          child: Stack(
+                                            fit: StackFit.expand,
+                                            children: [
+                                              // Video is always in the tree (Offstage) so
+                                              // mpv is never torn down on screen switch.
+                                              Positioned.fill(
+                                                child: Offstage(
+                                                  offstage: !_showingVideo ||
+                                                      !hasMedia,
+                                                  child: Container(
+                                                    color: Colors.black,
+                                                    child: PlaybackSurface(
+                                                      controller: _player,
+                                                      controlsVisible:
+                                                          _videoHovered ||
+                                                              _playlistDrawerOpen ||
+                                                              _menusOpen > 0,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              // Tap / double-tap video (not controls).
+                                              // Below overlays so buttons/menus keep hits.
+                                              if (_showingVideo && hasMedia)
+                                                Positioned.fill(
+                                                  child: GestureDetector(
+                                                    behavior: HitTestBehavior
+                                                        .translucent,
+                                                    onTap: () {
+                                                      _markActive();
+                                                      // Wait out a possible double-tap.
+                                                      _tapTimer?.cancel();
+                                                      _tapTimer = Timer(
+                                                        const Duration(
+                                                            milliseconds: 220),
+                                                        () =>
+                                                            _togglePlayPause(),
+                                                      );
+                                                    },
+                                                    onDoubleTap: () {
+                                                      _tapTimer?.cancel();
+                                                      _markActive();
+                                                      final entering =
+                                                          !_isFullScreen;
+                                                      unawaited(
+                                                          _toggleFullScreen());
+                                                      _showOsd(entering
+                                                          ? 'Fullscreen'
+                                                          : 'Windowed');
+                                                    },
+                                                  ),
+                                                ),
+                                              if (!_showingVideo)
+                                                Positioned.fill(
+                                                    child: _buildScreen()),
+                                              if (_showingVideo &&
+                                                  hasMedia &&
+                                                  _showStats.value &&
+                                                  _player.engine is MpvEngine)
+                                                Positioned(
+                                                  top: 16,
+                                                  left: 16,
+                                                  child: StatsOverlay(
+                                                    engine: _player.engine
+                                                        as MpvEngine,
+                                                  ),
+                                                ),
+                                              if (_showingVideo && hasMedia)
+                                                Positioned(
+                                                  left: 0,
+                                                  right: 0,
+                                                  bottom: 0,
+                                                  child: _PlayerControlsBar(
+                                                    player: _player,
+                                                    store: widget.store,
+                                                    visible: _videoHovered ||
+                                                        _playlistDrawerOpen ||
+                                                        _menusOpen > 0,
+                                                    showQueueControls: hasQueue,
+                                                    onTogglePlaylist: () =>
+                                                        setState(
+                                                      () => _playlistDrawerOpen =
+                                                          !_playlistDrawerOpen,
+                                                    ),
+                                                    playlistOpen:
+                                                        _playlistDrawerOpen,
+                                                    onMenuOpened: () =>
+                                                        setState(
+                                                            () => _menusOpen++),
+                                                    onMenuClosed: () =>
+                                                        setState(
+                                                      () => _menusOpen =
+                                                          (_menusOpen - 1)
+                                                              .clamp(0, 99),
+                                                    ),
+                                                    isFullScreen: _isFullScreen,
+                                                    onToggleFullScreen:
+                                                        _toggleFullScreen,
+                                                  ),
+                                                ),
+                                              if (_showingVideo &&
+                                                  hasQueue &&
+                                                  _playlistDrawerOpen)
+                                                Positioned(
+                                                  right: 0,
+                                                  top: 0,
+                                                  bottom: 0,
+                                                  width: 360,
+                                                  child: _PlaylistDrawer(
+                                                    player: _player,
+                                                    onClose: () => setState(
+                                                      () =>
+                                                          _playlistDrawerOpen =
+                                                              false,
+                                                    ),
+                                                  ),
+                                                ),
+                                              // Title scrim along the top — same
+                                              // visibility as the controls bar, so
+                                              // the title is reachable in fullscreen.
+                                              if (_showingVideo && hasMedia)
+                                                Positioned(
+                                                  left: 0,
+                                                  right: 0,
+                                                  top: 0,
+                                                  child: _TitleOverlay(
+                                                    player: _player,
+                                                    visible: _videoHovered ||
+                                                        _playlistDrawerOpen ||
+                                                        _menusOpen > 0,
+                                                  ),
+                                                ),
+                                              // Pre-play screen for casts with
+                                              // metadata; sits above everything.
+                                              if (_showingVideo &&
+                                                  _prePlayItem != null)
+                                                Positioned.fill(
+                                                  child: PrePlayOverlay(
+                                                    key: ValueKey(
+                                                        _prePlayItem!.url),
+                                                    item: _prePlayItem!,
+                                                    onStart: _dismissPrePlay,
+                                                  ),
+                                                ),
+                                              if (_osdMessage != null)
+                                                PlaybackOsd(
+                                                    message: _osdMessage!),
+                                              if (_mainDragging)
+                                                const Positioned.fill(
+                                                  child: _MainDropOverlay(),
+                                                ),
+                                              if (_stillWatching.isPrompting)
+                                                Positioned.fill(
+                                                  child: StillWatchingPrompt(
+                                                    remainingSeconds:
+                                                        _stillWatching
+                                                            .remainingSeconds,
+                                                    title: _player.currentTitle,
+                                                    onContinue: () => unawaited(
+                                                        _stillWatching
+                                                            .continueWatching()),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
-                            ),
-                          Expanded(
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                if (!hideChrome)
-                                  _NavSidebar(
-                                    dest: _dest,
-                                    showingVideo: _showingVideo,
-                                    hasMedia: hasMedia,
-                                    playerState: _player.state,
-                                    senderCasting: _sender.isCasting,
-                                    enableHistory: widget.store.enableHistory,
-                                    onDestSelect: (d) => setState(() {
-                                      _dest = d;
-                                      _showingVideo = false;
-                                    }),
-                                    onShowVideo: () =>
-                                        setState(() => _showingVideo = true),
-                                  ),
-                                Expanded(
-                                  child: DropTarget(
-                                    onDragEntered: (_) =>
-                                        setState(() => _mainDragging = true),
-                                    onDragExited: (_) =>
-                                        setState(() => _mainDragging = false),
-                                    onDragDone: _onMainDrop,
-                                    child: MouseRegion(
-                                      onEnter: (_) => _markActive(),
-                                      onExit: (_) => _markInactive(),
-                                      onHover: (_) => _markActive(),
-                                      child: Stack(
-                                        fit: StackFit.expand,
-                                        children: [
-                                          // Video is always in the tree (Offstage) so
-                                          // mpv is never torn down on screen switch.
-                                          Positioned.fill(
-                                            child: Offstage(
-                                              offstage:
-                                                  !_showingVideo || !hasMedia,
-                                              child: Container(
-                                                color: Colors.black,
-                                                child: PlaybackSurface(
-                                                  controller: _player,
-                                                  controlsVisible:
-                                                      _videoHovered ||
-                                                          _playlistDrawerOpen ||
-                                                          _menusOpen > 0,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                          // Tap / double-tap video (not controls).
-                                          // Below overlays so buttons/menus keep hits.
-                                          if (_showingVideo && hasMedia)
-                                            Positioned.fill(
-                                              child: GestureDetector(
-                                                behavior:
-                                                    HitTestBehavior.translucent,
-                                                onTap: () {
-                                                  _markActive();
-                                                  // Wait out a possible double-tap.
-                                                  _tapTimer?.cancel();
-                                                  _tapTimer = Timer(
-                                                    const Duration(
-                                                        milliseconds: 220),
-                                                    () => _togglePlayPause(),
-                                                  );
-                                                },
-                                                onDoubleTap: () {
-                                                  _tapTimer?.cancel();
-                                                  _markActive();
-                                                  final entering =
-                                                      !_isFullScreen;
-                                                  unawaited(
-                                                      _toggleFullScreen());
-                                                  _showOsd(entering
-                                                      ? 'Fullscreen'
-                                                      : 'Windowed');
-                                                },
-                                              ),
-                                            ),
-                                          if (!_showingVideo)
-                                            Positioned.fill(
-                                                child: _buildScreen()),
-                                          if (_showingVideo &&
-                                              hasMedia &&
-                                              _showStats.value &&
-                                              _player.engine is MpvEngine)
-                                            Positioned(
-                                              top: 16,
-                                              left: 16,
-                                              child: StatsOverlay(
-                                                engine:
-                                                    _player.engine as MpvEngine,
-                                              ),
-                                            ),
-                                          if (_showingVideo && hasMedia)
-                                            Positioned(
-                                              left: 0,
-                                              right: 0,
-                                              bottom: 0,
-                                              child: _PlayerControlsBar(
-                                                player: _player,
-                                                store: widget.store,
-                                                visible: _videoHovered ||
-                                                    _playlistDrawerOpen ||
-                                                    _menusOpen > 0,
-                                                showQueueControls: hasQueue,
-                                                onTogglePlaylist: () =>
-                                                    setState(
-                                                  () => _playlistDrawerOpen =
-                                                      !_playlistDrawerOpen,
-                                                ),
-                                                playlistOpen:
-                                                    _playlistDrawerOpen,
-                                                onMenuOpened: () => setState(
-                                                    () => _menusOpen++),
-                                                onMenuClosed: () => setState(
-                                                  () => _menusOpen =
-                                                      (_menusOpen - 1)
-                                                          .clamp(0, 99),
-                                                ),
-                                                isFullScreen: _isFullScreen,
-                                                onToggleFullScreen:
-                                                    _toggleFullScreen,
-                                              ),
-                                            ),
-                                          if (_showingVideo &&
-                                              hasQueue &&
-                                              _playlistDrawerOpen)
-                                            Positioned(
-                                              right: 0,
-                                              top: 0,
-                                              bottom: 0,
-                                              width: 360,
-                                              child: _PlaylistDrawer(
-                                                player: _player,
-                                                onClose: () => setState(
-                                                  () => _playlistDrawerOpen =
-                                                      false,
-                                                ),
-                                              ),
-                                            ),
-                                          // Title scrim along the top — same
-                                          // visibility as the controls bar, so
-                                          // the title is reachable in fullscreen.
-                                          if (_showingVideo && hasMedia)
-                                            Positioned(
-                                              left: 0,
-                                              right: 0,
-                                              top: 0,
-                                              child: _TitleOverlay(
-                                                player: _player,
-                                                visible: _videoHovered ||
-                                                    _playlistDrawerOpen ||
-                                                    _menusOpen > 0,
-                                              ),
-                                            ),
-                                          // Pre-play screen for casts with
-                                          // metadata; sits above everything.
-                                          if (_showingVideo &&
-                                              _prePlayItem != null)
-                                            Positioned.fill(
-                                              child: PrePlayOverlay(
-                                                key:
-                                                    ValueKey(_prePlayItem!.url),
-                                                item: _prePlayItem!,
-                                                onStart: _dismissPrePlay,
-                                              ),
-                                            ),
-                                          if (_osdMessage != null)
-                                            PlaybackOsd(message: _osdMessage!),
-                                          if (_mainDragging)
-                                            const Positioned.fill(
-                                              child: _MainDropOverlay(),
-                                            ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
+                              if (!hideChrome)
+                                _StatusBar(
+                                  player: _player,
+                                  hostInfo: _hostInfo,
+                                  serverError: _serverError,
+                                  discoveryError: _discoveryError,
+                                  phase: _server.phase,
                                 ),
-                              ],
-                            ),
+                            ],
                           ),
-                          if (!hideChrome)
-                            _StatusBar(
-                              player: _player,
-                              hostInfo: _hostInfo,
-                              serverError: _serverError,
-                              discoveryError: _discoveryError,
-                              phase: _server.phase,
-                            ),
+                          // Self-update dialogs/banners; renders nothing while idle.
+                          UpdateGate(checker: _updateChecker),
                         ],
-                      ),
-                      // Self-update dialogs/banners; renders nothing while idle.
-                      UpdateGate(checker: _updateChecker),
-                    ],
-                  );
-                },
+                      );
+                    },
+                  ),
+                ),
               ),
             ),
           ),
-        ),
-      ),
-    );
+        ));
   }
 
   Widget _buildScreen() {
@@ -1062,11 +1166,14 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           showStats: _showStats,
           updateChecker: _updateChecker,
           onNavigateToCast: () => setState(() => _dest = _Dest.cast),
-          onSettingsChanged: () => setState(() {
-            if (!widget.store.enableHistory && _dest == _Dest.history) {
-              _dest = _Dest.cast;
-            }
-          }),
+          onSettingsChanged: () {
+            _applyStillWatchingSettings();
+            setState(() {
+              if (!widget.store.enableHistory && _dest == _Dest.history) {
+                _dest = _Dest.cast;
+              }
+            });
+          },
           onQuit: () => unawaited(_tray.quit()),
         ),
     };

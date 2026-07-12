@@ -74,10 +74,29 @@ class PendingPairingRequest {
 }
 
 class ReceiverServer extends ChangeNotifier {
-  ReceiverServer({required this.player, required this.store});
+  ReceiverServer({
+    required this.player,
+    required this.store,
+    this.isPlaybackPromptActive,
+    this.onPromptContinue,
+    this.onPromptStop,
+    this.onPlaybackActivity,
+    this.onNewMedia,
+  });
 
   final PlayerController player;
   final PairingStore store;
+  final bool Function()? isPlaybackPromptActive;
+  final VoidCallback? onPromptContinue;
+  final VoidCallback? onPromptStop;
+  final VoidCallback? onPlaybackActivity;
+  final VoidCallback? onNewMedia;
+
+  void broadcastIdleContext() {
+    for (final c in _authed) {
+      c.sink.add(contextJson('idle'));
+    }
+  }
 
   final List<HttpServer> _servers = [];
   Timer? _statusTimer;
@@ -672,6 +691,7 @@ class ReceiverServer extends ChangeNotifier {
           debugPrint('[server] dropping duplicate play for $startUrl');
           break;
         }
+        onNewMedia?.call();
         _lastPlayUrl = startUrl;
         _lastPlayAt = now;
         unawaited(player.playPlaylist(
@@ -681,14 +701,31 @@ class ReceiverServer extends ChangeNotifier {
         ));
         _broadcastPlaylistStatus();
       case PlaylistJumpCmd(:final index):
+        onNewMedia?.call();
         unawaited(player.jumpTo(index));
         _broadcastPlaylistStatus();
       case QueueAddCmd(:final item):
+        if (isPlaybackPromptActive?.call() ?? false) {
+          onPromptContinue?.call();
+        } else {
+          onPlaybackActivity?.call();
+        }
         // Appends to the live queue; if idle, starts playback.
         // playlist_status broadcast happens via the queueChanges listener.
         unawaited(player.queueAdd(_toQueueItem(item), isRemote: true));
       case ControlCmd(:final command):
         debugPrint('[server] control: $command');
+        if (isPlaybackPromptActive?.call() ?? false) {
+          if (command == 'play') {
+            onPromptContinue?.call();
+          } else if (command == 'stop') {
+            onPromptStop?.call();
+          } else {
+            onPromptContinue?.call();
+          }
+          break;
+        }
+        onPlaybackActivity?.call();
         // Parameterized commands (phone seekbar + track pickers).
         if (command.startsWith('seek_to:')) {
           final ms = int.tryParse(command.substring('seek_to:'.length));
@@ -722,9 +759,7 @@ class ReceiverServer extends ChangeNotifier {
             // Real stop: clear the queue and report idle so the phone's
             // remote leaves player mode (Android finishes the activity here).
             unawaited(player.stop());
-            for (final c in _authed) {
-              c.sink.add(contextJson('idle'));
-            }
+            broadcastIdleContext();
           case 'seek_back':
             final pos = player.positionMs - 10000;
             unawaited(player.seek(Duration(milliseconds: pos < 0 ? 0 : pos)));
@@ -735,6 +770,11 @@ class ReceiverServer extends ChangeNotifier {
             unawaited(player.seek(Duration(milliseconds: target)));
         }
       case RemoteCmd(:final key):
+        if (isPlaybackPromptActive?.call() ?? false) {
+          onPromptContinue?.call();
+          break;
+        }
+        onPlaybackActivity?.call();
         _handleRemoteKey(key);
       case UnknownCmd(:final type):
         debugPrint('[server] unknown command: $type');
