@@ -10,7 +10,7 @@ const TARGETS = [
   { name: "chrome", manifest: "manifests/chrome.json", outDir: "dist/chrome" },
 ];
 
-const entryPoints = ["src/background.ts", "src/ui/popup.ts"];
+const entryPoints = ["src/background.ts", "src/content.ts", "src/ui/popup.ts"];
 
 const sharedOpts = {
   bundle: true,
