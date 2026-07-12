@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Android Keystore keys are device-bound, so their encrypted TLS data cannot be restored. -->
+    <exclude domain="file" path="tls/" />
+</full-backup-content>
