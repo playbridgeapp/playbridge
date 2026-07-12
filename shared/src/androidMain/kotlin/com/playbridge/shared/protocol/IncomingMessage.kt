@@ -274,18 +274,11 @@ fun createPairingConfirmationJson(mac: String): String =
         PairingConfirmationMessage(type = "pairing_confirmation", mac = mac)
     )
 
-fun createPairingApprovedJson(
-    token: String,
-    certFingerprint: String? = null,
-    players: List<String> = emptyList(),
-    browsers: List<String> = emptyList(),
-): String =
+fun createProtectedPairingApprovedJson(nonce: String, ciphertext: String): String =
     buildJsonObject {
         put("type", "pairing_approved")
-        put("token", token)
-        if (certFingerprint != null) put("certFingerprint", certFingerprint)
-        if (players.isNotEmpty()) put("players", buildJsonArray { players.forEach { add(it) } })
-        if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })
+        put("nonce", nonce)
+        put("ciphertext", ciphertext)
     }.toString()
 
 fun createPairingDeniedJson(): String = """{"type":"pairing_denied"}"""

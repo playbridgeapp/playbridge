@@ -270,7 +270,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             .entries
             .joinToString(",") { "${it.key}: ${it.value.replace("\\", "\\\\").replace(",", "\\,")}" }
         if (headerString.isNotEmpty()) {
-            logger.d(TAG, "Setting http-header-fields: $headerString")
+            logger.d(TAG, "Setting ${payload.headers.size} HTTP header field(s)")
             MPVLib.setOptionString("http-header-fields", headerString)
         }
 

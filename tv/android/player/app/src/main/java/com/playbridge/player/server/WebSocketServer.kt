@@ -3,7 +3,7 @@ package com.playbridge.player.server
 import android.util.Log
 import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createAuthResponseJson
-import com.playbridge.shared.protocol.createPairingApprovedJson
+import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
 import com.playbridge.shared.protocol.createPairingDeniedJson
 import com.playbridge.shared.protocol.createPairingChallengeJson
 import com.playbridge.shared.protocol.createPongJson
@@ -26,6 +26,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.put
 
 private const val TAG = "WebSocketServer"
 
@@ -462,7 +466,25 @@ class WebSocketServer(
                         val token = onPairingApproved(handshake.deviceName, handshake.deviceUUID)
                         val caps = capabilities()
                         if (conn.isOpen) {
-                            conn.send(createPairingApprovedJson(token, certFingerprint, caps.players, caps.browsers))
+                            val transcriptHash = SasCrypto.sha256(transcript)
+                            val prk = SasCrypto.hkdfExtract(salt = null, ikm = sharedSecret)
+                            val credentialKey = SasCrypto.hkdfExpand(
+                                prk, info = "playbridgeCredentialKey-v1".toByteArray(), length = 32
+                            )
+                            val credentialNonce = SasCrypto.generateNonce(12)
+                            val plaintext = buildJsonObject {
+                                put("token", token)
+                                certFingerprint?.let { put("certFingerprint", it) }
+                                put("players", buildJsonArray { caps.players.forEach { add(it) } })
+                                put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
+                            }.toString().toByteArray()
+                            val ciphertext = SasCrypto.aesGcmEncrypt(
+                                credentialKey, credentialNonce, plaintext, transcriptHash
+                            )
+                            conn.send(createProtectedPairingApprovedJson(
+                                Base64.getEncoder().encodeToString(credentialNonce),
+                                Base64.getEncoder().encodeToString(ciphertext),
+                            ))
                         }
                         registerAuthed(conn)
                         inProgressHandshakes.remove(conn)

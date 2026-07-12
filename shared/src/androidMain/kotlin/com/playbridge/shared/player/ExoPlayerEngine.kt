@@ -156,7 +156,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, ignoreCase = true) Chrome/120.0.0.0 Safari/537.36"
         requestProperties["User-Agent"] = userAgent
 
-        logger.i(TAG, "Final Request Headers: $requestProperties")
+        logger.i(TAG, "Prepared ${requestProperties.size} request header(s)")
 
         // Network stack:
         // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.

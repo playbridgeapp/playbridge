@@ -3,6 +3,8 @@ package com.playbridge.shared.crypto
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.Mac
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import org.bouncycastle.crypto.generators.X25519KeyPairGenerator
 import org.bouncycastle.crypto.params.X25519KeyGenerationParameters
@@ -114,5 +116,24 @@ object SasCrypto {
         val nonce = ByteArray(size)
         SecureRandom().nextBytes(nonce)
         return nonce
+    }
+
+    /** Decrypt AES-256-GCM ciphertext whose final 16 bytes are the authentication tag. */
+    fun aesGcmDecrypt(key: ByteArray, nonce: ByteArray, ciphertext: ByteArray, aad: ByteArray): ByteArray {
+        require(key.size == 32) { "AES-256 key must be 32 bytes" }
+        require(nonce.size == 12) { "GCM nonce must be 12 bytes" }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
+        cipher.updateAAD(aad)
+        return cipher.doFinal(ciphertext)
+    }
+
+    fun aesGcmEncrypt(key: ByteArray, nonce: ByteArray, plaintext: ByteArray, aad: ByteArray): ByteArray {
+        require(key.size == 32) { "AES-256 key must be 32 bytes" }
+        require(nonce.size == 12) { "GCM nonce must be 12 bytes" }
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, nonce))
+        cipher.updateAAD(aad)
+        return cipher.doFinal(plaintext)
     }
 }

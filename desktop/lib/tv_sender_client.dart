@@ -317,8 +317,66 @@ class TvSenderClient {
   }
 
   void _handlePairingApproved(Map<dynamic, dynamic> obj) {
-    final token = obj['token'] as String?;
-    final certFp = (obj['certFingerprint'] as String?)?.trim();
+    try {
+      final nonceB64 = obj['nonce'] as String?;
+      final ciphertextB64 = obj['ciphertext'] as String?;
+      if (nonceB64 == null || ciphertextB64 == null) {
+        throw const FormatException('missing protected credentials');
+      }
+      final nonce = Uint8List.fromList(base64.decode(nonceB64));
+      final ciphertext = Uint8List.fromList(base64.decode(ciphertextB64));
+      if (nonce.length != 12 || ciphertext.length < 16) {
+        throw const FormatException('invalid protected credential lengths');
+      }
+      final transcript = _pairingTranscript();
+      final transcriptHash = SasCrypto.sha256(transcript);
+      final prk = SasCrypto.hkdfExtract(ikm: _sharedSecret!);
+      final credentialKey = SasCrypto.hkdfExpand(
+        prk,
+        info: Uint8List.fromList('playbridgeCredentialKey-v1'.codeUnits),
+        length: 32,
+      );
+      final plaintext = SasCrypto.aesGcmDecrypt(
+        key: credentialKey,
+        nonce: nonce,
+        ciphertext: ciphertext,
+        aad: transcriptHash,
+      );
+      final credentials = jsonDecode(utf8.decode(plaintext));
+      if (credentials is! Map) {
+        throw const FormatException('invalid credential payload');
+      }
+      final token = credentials['token'] as String?;
+      final certFp = (credentials['certFingerprint'] as String?)?.trim();
+      if (token == null || token.isEmpty) {
+        throw const FormatException('missing pairing token');
+      }
+      _acceptPairingCredentials(token, certFp);
+    } catch (_) {
+      debugPrint('[tv-sender] pairing credential verification failed');
+      _clearPairingSecrets();
+      _setState(SenderConnectionState.error);
+      _close();
+    }
+  }
+
+  Uint8List _pairingTranscript() {
+    if (_commitStr == null ||
+        _tvEphPub == null ||
+        _nonceT == null ||
+        _senderPubKey == null ||
+        _nonceS == null ||
+        _sharedSecret == null) {
+      throw StateError('incomplete pairing state');
+    }
+    return Uint8List.fromList(base64.decode(_commitStr!) +
+        _tvEphPub! +
+        _nonceT! +
+        _senderPubKey! +
+        _nonceS!);
+  }
+
+  void _acceptPairingCredentials(String token, String? certFp) {
     // Bind the delivered fingerprint to the cert actually served this handshake.
     if (certFp != null &&
         certFp.isNotEmpty &&
@@ -331,10 +389,22 @@ class TvSenderClient {
       return;
     }
     final pin = (certFp != null && certFp.isNotEmpty) ? certFp : _capturedPin;
-    if (token != null && token.isNotEmpty && !_credentials.isClosed) {
+    if (!_credentials.isClosed) {
       _credentials.add(TvCredentials(token, pin));
     }
+    _clearPairingSecrets();
     _setState(SenderConnectionState.connected);
+  }
+
+  void _clearPairingSecrets() {
+    _senderPrivKey = null;
+    _senderPubKey = null;
+    _nonceS = null;
+    _commitStr = null;
+    _tvEphPub = null;
+    _nonceT = null;
+    _sharedSecret = null;
+    _calculatedSas = null;
   }
 
   void _handleAuthResponse(Map<dynamic, dynamic> obj) {

@@ -243,7 +243,7 @@ class WebSocketClient {
                         } else {
                             // Reconnect with saved token.
                             val authJson = createAuthJson(conn!!.token)
-                            Log.d(TAG, "Sending auth: $authJson")
+                            Log.d(TAG, "Sending auth credentials")
                             webSocket.send(authJson)
                             delay(500)
                             sendPing()
@@ -314,9 +314,35 @@ class WebSocketClient {
                     try {
                         val json = kotlinx.serialization.json.Json.parseToJsonElement(text)
                         if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_approved") {
-                            val token = json["token"]?.toString()?.replace("\"", "")
-                            val certFp = json["certFingerprint"]?.toString()?.replace("\"", "")
-                                ?.takeIf { it.isNotEmpty() && it != "null" }
+                            val shared = sharedSecret ?: error("Missing pairing shared secret")
+                            val commit = commitStr ?: error("Missing pairing commitment")
+                            val tvPub = tvEphPub ?: error("Missing receiver public key")
+                            val receiverNonce = nonceT ?: error("Missing receiver nonce")
+                            val keypair = senderKeyPair ?: error("Missing sender keypair")
+                            val senderNonce = nonceS ?: error("Missing sender nonce")
+                            val transcript = Base64.getDecoder().decode(commit) + tvPub + receiverNonce +
+                                keypair.publicKey + senderNonce
+                            val transcriptHash = SasCrypto.sha256(transcript)
+                            val prk = SasCrypto.hkdfExtract(salt = null, ikm = shared)
+                            val credentialKey = SasCrypto.hkdfExpand(
+                                prk,
+                                info = "playbridgeCredentialKey-v1".toByteArray(),
+                                length = 32,
+                            )
+                            val nonce = Base64.getDecoder().decode(
+                                json["nonce"]?.jsonPrimitive?.contentOrNull ?: error("Missing credential nonce")
+                            )
+                            val ciphertext = Base64.getDecoder().decode(
+                                json["ciphertext"]?.jsonPrimitive?.contentOrNull ?: error("Missing credentials")
+                            )
+                            val credentialsJson = Json.parseToJsonElement(
+                                SasCrypto.aesGcmDecrypt(
+                                    credentialKey, nonce, ciphertext, transcriptHash
+                                ).decodeToString()
+                            ) as? JsonObject ?: error("Invalid credential payload")
+                            val token = credentialsJson["token"]?.jsonPrimitive?.contentOrNull
+                            val certFp = credentialsJson["certFingerprint"]?.jsonPrimitive?.contentOrNull
+                                ?.takeIf { it.isNotEmpty() }
                             Log.i(TAG, "Pairing approved by $serverName")
                             // Bind the delivered pin to the cert actually served this handshake.
                             val served = capturedServerPin
@@ -335,7 +361,7 @@ class WebSocketClient {
                                 targetConnection = targetConnection?.copy(token = token, pin = pin)
                                 scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
                             }
-                            emitCapabilities(json)
+                            emitCapabilities(credentialsJson)
                             clearPairingSecrets() // handshake done — drop key material
                             _connectionState.value = ConnectionState.Connected(serverName, isSecure)
                             // Resync: the TV only broadcasts context on its own activity
@@ -345,7 +371,11 @@ class WebSocketClient {
                             return
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error parsing pairing_approved", e)
+                        Log.e(TAG, "Invalid or unauthenticated pairing credentials", e)
+                        isUserDisconnect = true
+                        _connectionState.value = ConnectionState.Error("Pairing security verification failed")
+                        webSocket.close(1008, "Invalid pairing credentials")
+                        return
                     }
                 }
 

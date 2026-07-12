@@ -77,4 +77,16 @@ enum SasCrypto {
         _ = SecRandomCopyBytes(kSecRandomDefault, size, &bytes)
         return Data(bytes)
     }
+
+    static func aesGcmDecrypt(key: Data, nonce: Data, ciphertext: Data, aad: Data) throws -> Data {
+        guard key.count == 32, nonce.count == 12, ciphertext.count >= 16 else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        let box = try AES.GCM.SealedBox(
+            nonce: AES.GCM.Nonce(data: nonce),
+            ciphertext: ciphertext.dropLast(16),
+            tag: ciphertext.suffix(16)
+        )
+        return try AES.GCM.open(box, using: SymmetricKey(data: key), authenticating: aad)
+    }
 }

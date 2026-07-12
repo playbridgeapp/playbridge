@@ -6,6 +6,38 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 enum LogLevel { verbose, debug, info, warn, error, unknown }
 
+@visibleForTesting
+String redactSensitiveLogData(String input) {
+  var value = input;
+  value = value.replaceAllMapped(
+    RegExp(
+      r'("?(?:authorization|proxy-authorization)"?\s*[:=]\s*)("[^"]*"|[^,}\]\r\n]+)',
+      caseSensitive: false,
+    ),
+    (m) {
+      final secret = m.group(2)!;
+      final replacement =
+          secret.startsWith('"') ? '"<redacted>"' : '<redacted>';
+      return '${m.group(1)}$replacement';
+    },
+  );
+  value = value.replaceAllMapped(
+    RegExp(
+      r'("?(?:token|cookie|set-cookie)"?\s*[:=]\s*"?)([^",\s}]+)',
+      caseSensitive: false,
+    ),
+    (m) => '${m.group(1)}<redacted>',
+  );
+  value = value.replaceAllMapped(
+    RegExp(
+      r'([?&](?:token|api_key|apikey|auth|signature|sig)=)[^&#\s]+',
+      caseSensitive: false,
+    ),
+    (m) => '${m.group(1)}<redacted>',
+  );
+  return value;
+}
+
 extension LogLevelCode on LogLevel {
   String get code => switch (this) {
         LogLevel.verbose => 'V',
@@ -41,8 +73,8 @@ class LogEntry {
 /// Persistent, opt-in logger for the desktop receiver.
 ///
 /// Logging is OFF by default: persisted logs can contain stream URLs and request
-/// headers (incl. Debrid tokens) and are served over the LAN via `GET /logs`, so
-/// retention is opt-in. Mirrors the TV player's `FileLogger`.
+/// headers (incl. Debrid tokens), so retention is opt-in. Logs are available only
+/// through the local UI and are never served by the LAN receiver.
 class LogStore {
   LogStore._();
   static final LogStore instance = LogStore._();
@@ -148,12 +180,20 @@ class LogStore {
       f.uri.pathSegments.last.startsWith(_logBaseName.split('.').first);
 
   void _record(LogEntry e) {
-    final next = List<LogEntry>.of(entries.value)..add(e);
+    // Redact at the persistence boundary so structured, raw, and crash entries
+    // cannot accidentally bypass secret filtering.
+    final safeEntry = LogEntry(
+      time: e.time,
+      level: e.level,
+      tag: e.tag,
+      message: redactSensitiveLogData(e.message),
+    );
+    final next = List<LogEntry>.of(entries.value)..add(safeEntry);
     if (next.length > _ringCapacity) {
       next.removeRange(0, next.length - _ringCapacity);
     }
     entries.value = next;
-    _writeLine(_format(e));
+    _writeLine(_format(safeEntry));
   }
 
   void _writeLine(String line) {

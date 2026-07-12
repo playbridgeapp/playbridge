@@ -2,6 +2,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as crypto;
+import 'package:pointycastle/export.dart';
 import 'package:x25519/x25519.dart' as x;
 
 /// Dart port of the shared Kotlin `SasCrypto` object.
@@ -95,6 +96,35 @@ class SasCrypto {
 
   /// Cryptographically secure random bytes.
   static Uint8List generateNonce([int size = 16]) => _platformSeed(size);
+
+  /// AES-256-GCM. The returned bytes are ciphertext followed by the 16-byte tag.
+  static Uint8List aesGcmEncrypt({
+    required Uint8List key,
+    required Uint8List nonce,
+    required Uint8List plaintext,
+    required Uint8List aad,
+  }) {
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(
+        true,
+        AEADParameters(KeyParameter(key), 128, nonce, aad),
+      );
+    return cipher.process(plaintext);
+  }
+
+  static Uint8List aesGcmDecrypt({
+    required Uint8List key,
+    required Uint8List nonce,
+    required Uint8List ciphertext,
+    required Uint8List aad,
+  }) {
+    final cipher = GCMBlockCipher(AESEngine())
+      ..init(
+        false,
+        AEADParameters(KeyParameter(key), 128, nonce, aad),
+      );
+    return cipher.process(ciphertext);
+  }
 
   // ───────────────────────── Internal ───────────────────────────────────────
 

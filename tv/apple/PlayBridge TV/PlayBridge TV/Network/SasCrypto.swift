@@ -85,4 +85,20 @@ enum SasCrypto {
         _ = SecRandomCopyBytes(kSecRandomDefault, size, &bytes)
         return Data(bytes)
     }
+
+    /// AES-256-GCM ciphertext followed by the 16-byte authentication tag.
+    static func aesGcmEncrypt(key: Data, nonce: Data, plaintext: Data, aad: Data) throws -> Data {
+        guard key.count == 32, nonce.count == 12 else {
+            throw CocoaError(.coderInvalidValue)
+        }
+        let sealed = try AES.GCM.seal(
+            plaintext,
+            using: SymmetricKey(data: key),
+            nonce: AES.GCM.Nonce(data: nonce),
+            authenticating: aad
+        )
+        var result = sealed.ciphertext
+        result.append(sealed.tag)
+        return result
+    }
 }

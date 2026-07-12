@@ -337,8 +337,36 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     private func handlePairingApproved(_ json: [String: Any]) {
         let serverName = target?.serverName ?? ""
-        let token = (json["token"] as? String) ?? ""
-        let certFp = (json["certFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        guard let keyPair = senderKeyPair, let senderNonce = nonceS,
+              let commit = commitStr, let commitBytes = Data(base64Encoded: commit),
+              let tvPub = tvEphPub, let receiverNonce = nonceT, let shared = sharedSecret,
+              let nonceB64 = json["nonce"] as? String, let nonce = Data(base64Encoded: nonceB64),
+              let ciphertextB64 = json["ciphertext"] as? String,
+              let ciphertext = Data(base64Encoded: ciphertextB64) else {
+            failPairingSecurity(serverName)
+            return
+        }
+        let transcript = pairingTranscript(
+            commitBytes: commitBytes, tvEphPub: tvPub, nonceT: receiverNonce,
+            senderEphPub: keyPair.publicKeyBytes, nonceS: senderNonce
+        )
+        let transcriptHash = SasCrypto.sha256(transcript)
+        let prk = SasCrypto.hkdfExtract(salt: nil, ikm: shared)
+        let credentialKey = SasCrypto.hkdfExpand(
+            prk: prk, info: "playbridgeCredentialKey-v1".data(using: .utf8), length: 32
+        )
+        guard let plaintext = try? SasCrypto.aesGcmDecrypt(
+                  key: credentialKey, nonce: nonce, ciphertext: ciphertext, aad: transcriptHash),
+              let object = try? JSONSerialization.jsonObject(with: plaintext),
+              let credentials = object as? [String: Any] else {
+            failPairingSecurity(serverName)
+            return
+        }
+        guard let token = credentials["token"] as? String, !token.isEmpty else {
+            failPairingSecurity(serverName)
+            return
+        }
+        let certFp = (credentials["certFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 }
 
         // Bind the delivered pin to the cert actually served this handshake.
         if let certFp, let served = capturedServerPin, certFp != served {
@@ -348,15 +376,31 @@ final class WebSocketClient: NSObject, ObservableObject {
             task?.cancel(with: .normalClosure, reason: nil)
             return
         }
-        if !token.isEmpty {
-            let pin = certFp ?? capturedServerPin
-            target?.token = token
-            target?.pin = pin
-            onCredentials?(IssuedCredentials(token: token, certFingerprint: pin))
-        }
-        emitCapabilities(json)
+        let pin = certFp ?? capturedServerPin
+        target?.token = token
+        target?.pin = pin
+        onCredentials?(IssuedCredentials(token: token, certFingerprint: pin))
+        emitCapabilities(credentials)
+        clearPairingSecrets()
         setState(.connected(serverName: serverName, secure: isSecure))
         startPing()
+    }
+
+    private func failPairingSecurity(_ serverName: String) {
+        isUserDisconnect = true
+        clearPairingSecrets()
+        setState(.error(message: "Pairing security verification failed"))
+        task?.cancel(with: .policyViolation, reason: nil)
+    }
+
+    private func clearPairingSecrets() {
+        senderKeyPair = nil
+        nonceS = nil
+        commitStr = nil
+        tvEphPub = nil
+        nonceT = nil
+        sharedSecret = nil
+        calculatedSas = nil
     }
 
     private func handleAuthResponse(_ json: [String: Any]) {

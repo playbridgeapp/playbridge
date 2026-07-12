@@ -235,7 +235,7 @@ object VideoDetector {
                     val existing = videos[existingIndex]
                     // If we have new headers, update them
                     if (headers != null && headers.isNotEmpty()) {
-                        Log.i(TAG, "Updating headers for video in tab $kotlinTabId: $url")
+                        Log.i(TAG, "Updating ${headers.size} header(s) for video in tab $kotlinTabId")
                         videos[existingIndex] = existing.copy(
                             headers = headers,
                             originUrl = message["originUrl"]?.jsonPrimitive?.content ?: existing.originUrl,
@@ -257,7 +257,7 @@ object VideoDetector {
                     originalMessage = message.toString()
                 )
 
-                Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId: ${video.url}")
+                Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId")
                 Log.i(TAG, "  Type: ${video.contentType ?: "N/A"}")
                 Log.i(TAG, "  Header Count: ${video.headers?.size ?: 0}")
 
