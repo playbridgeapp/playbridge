@@ -41,9 +41,12 @@ type OverlayState =
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const HOST_ID = "playbridge-cast-overlay-host";
-const MIN_VIDEO_WIDTH = 200;
-const MIN_VIDEO_HEIGHT = 112;
+const MIN_VIDEO_WIDTH = 320;
+const MIN_VIDEO_HEIGHT = 180;
 const MIN_VIDEO_AREA = MIN_VIDEO_WIDTH * MIN_VIDEO_HEIGHT;
+const MIN_SUBFRAME_WIDTH = 400;
+const MIN_SUBFRAME_HEIGHT = 225;
+const MIN_MAIN_VIDEO_SCORE = 5;
 const OVERLAY_INSET = 14;
 const BUTTON_SIZE = 40;
 const Z_INDEX = 2147483646;
@@ -202,12 +205,52 @@ function visibleArea(el: Element): number {
 
 function isEligibleVideo(video: HTMLVideoElement): boolean {
   if (!video.isConnected) return false;
+  // A video can be the largest element in a tiny advertisement/preview iframe.
+  // Suppress overlays in frames too small to plausibly host the main player.
+  if (
+    window.top !== window &&
+    (window.innerWidth < MIN_SUBFRAME_WIDTH ||
+      window.innerHeight < MIN_SUBFRAME_HEIGHT)
+  ) {
+    return false;
+  }
   const rect = video.getBoundingClientRect();
   if (rect.width < MIN_VIDEO_WIDTH || rect.height < MIN_VIDEO_HEIGHT) return false;
   if (rect.width * rect.height < MIN_VIDEO_AREA) return false;
   const area = visibleArea(video);
   // Reject players represented by only a tiny off-screen sliver.
-  return area >= Math.min(MIN_VIDEO_AREA, rect.width * rect.height * 0.15);
+  if (area < Math.min(MIN_VIDEO_AREA, rect.width * rect.height * 0.15)) {
+    return false;
+  }
+
+  const viewportArea = Math.max(
+    1,
+    (window.innerWidth || document.documentElement.clientWidth) *
+      (window.innerHeight || document.documentElement.clientHeight),
+  );
+  const viewportShare = area / viewportArea;
+  let score = 0;
+
+  // Size and prominence are the strongest signals and keep paused custom
+  // players eligible even before metadata or playback state is available.
+  score += rect.width >= 480 && rect.height >= 270 ? 3 : 1;
+  if (viewportShare >= 0.12) score += 3;
+  else if (viewportShare >= 0.06) score += 2;
+  else if (viewportShare >= 0.035) score += 1;
+
+  if (!video.paused && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    score += 2;
+  }
+  if (video.controls) score += 1;
+  if (!Number.isFinite(video.duration) || video.duration >= 60) score += 1;
+
+  // Muted looping media and linked/card videos are common preview patterns.
+  // These are penalties rather than hard exclusions so a genuinely large main
+  // player can still qualify when a site uses those attributes.
+  if (video.muted && video.loop && !video.controls) score -= 4;
+  if (video.closest("a, button, [role='link']")) score -= 2;
+
+  return score >= MIN_MAIN_VIDEO_SCORE;
 }
 
 /**
