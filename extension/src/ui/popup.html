@@ -37,6 +37,12 @@
     </div>
 
     <div class="contentArea">
+        <section id="data-consent-banner" class="consent-banner hidden" aria-labelledby="data-consent-banner-title">
+            <h2 id="data-consent-banner-title">Media detection is off</h2>
+            <p>Review how PlayBridge uses media URLs and request headers before enabling detection.</p>
+            <button type="button" id="review-data-consent-btn" class="primary-btn">Review media access</button>
+        </section>
+
         <!-- Videos Tab -->
         <div id="videos-tab" class="tab-content active">
             <div id="no-videos-msg" class="empty-state">
@@ -107,6 +113,16 @@
 
         <!-- Settings Tab -->
         <div id="settings-tab" class="tab-content">
+            <div class="settings-card hidden" id="data-consent-card">
+                <h2>Media data access</h2>
+                <p class="subtitle">Controls Chrome media detection and casting access.</p>
+                <div class="privacy-setting-row">
+                    <span id="data-consent-setting-status" class="setting-label">Checking…</span>
+                    <button type="button" id="manage-data-consent-btn" class="site-reset-btn">Manage</button>
+                </div>
+                <p class="setting-desc">Turning access off clears detected media and removes on-video cast controls. Firefox manages this permission during installation.</p>
+            </div>
+
             <div class="settings-card">
                 <h2>Cast overlay</h2>
                 <p class="subtitle">Choose whether PlayBridge adds a cast control to videos.</p>

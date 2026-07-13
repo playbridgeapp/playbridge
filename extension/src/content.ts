@@ -12,6 +12,7 @@
 import browser from "./browser";
 import {
   isBlobOrDataUrl,
+  isDomSourceDetection,
   isExcludedMediaCandidate,
   rankMediaCandidate,
   type MediaCandidate,
@@ -31,6 +32,7 @@ interface DetectedVideo extends MediaCandidate {
   originUrl: string;
   subtitles?: string[];
   subtitlePreview?: string;
+  hasHeaders?: boolean;
 }
 
 type OverlayState =
@@ -290,8 +292,9 @@ function frameResourceUrls(): string[] {
 
 /**
  * Resolve a candidate without allowing unrelated, later requests in the same
- * frame to steal an established player binding. Exact DOM matches remain
- * authoritative and may replace a fallback binding. A source lifecycle event
+ * frame to steal an established player binding. Network-detected exact DOM
+ * matches remain authoritative; pure `dom_source` matches are only signals so
+ * protected CDN URLs (with captured headers) can win. A source lifecycle event
  * explicitly clears the binding before this function runs for a new stream.
  */
 function resolveCandidate(
@@ -314,7 +317,14 @@ function resolveCandidate(
     const exact = playable.find(
       (record) => normalizeUrl(record.url) === normalized,
     );
-    if (exact) {
+    // Authoritative only for webRequest detections that still carry headers.
+    // DOM-only get_file/src URLs (or headerless detections) often fail on cast
+    // while a CDN URL in the same frame has Cookie/Referer.
+    if (
+      exact &&
+      !isDomSourceDetection(exact.detectedBy) &&
+      exact.hasHeaders === true
+    ) {
       candidateBindings.set(video, exact.url);
       return exact;
     }
@@ -334,6 +344,17 @@ function resolveCandidate(
     const bound = playable.find((record) => record.url === boundUrl);
     if (bound) {
       if (initial && initial.url !== bound.url) {
+        // Upgrade an early pure-DOM / headerless binding once a header-bearing
+        // network stream appears for this player.
+        const boundIsWeak =
+          isDomSourceDetection(bound.detectedBy) || bound.hasHeaders !== true;
+        const initialIsStronger =
+          !isDomSourceDetection(initial.detectedBy) &&
+          initial.hasHeaders === true;
+        if (boundIsWeak && initialIsStronger) {
+          candidateBindings.set(video, initial.url);
+          return initial;
+        }
         const observed = new Set(resources);
         const isCurrent = (record: DetectedVideo) =>
           observed.has(normalizeUrl(record.url) ?? record.url) ||
@@ -357,18 +378,50 @@ function resolveCandidate(
 
 // ── Overlay UI ───────────────────────────────────────────────────────────────
 
-/**
- * Original generic cast glyph: a display outline plus two local signal arcs.
- * It uses currentColor and no third-party assets or branding.
- */
-const CAST_SVG = `
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="23" height="23" fill="none" aria-hidden="true" focusable="false">
-  <path d="M4 5.75A1.75 1.75 0 0 1 5.75 4h12.5A1.75 1.75 0 0 1 20 5.75v9.5A1.75 1.75 0 0 1 18.25 17H16"
-        stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M4 15.5a4.5 4.5 0 0 1 4.5 4.5M4 11.5A8.5 8.5 0 0 1 12.5 20"
-        stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
-  <circle cx="4" cy="20" r="1.15" fill="currentColor"/>
-</svg>`.trim();
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+
+/** Original generic cast glyph built without HTML parsing. */
+function createCastIcon(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NAMESPACE, "svg");
+  for (const [name, value] of Object.entries({
+    viewBox: "0 0 24 24",
+    width: "23",
+    height: "23",
+    fill: "none",
+    "aria-hidden": "true",
+    focusable: "false",
+  })) {
+    svg.setAttribute(name, value);
+  }
+
+  const screen = document.createElementNS(SVG_NAMESPACE, "path");
+  screen.setAttribute(
+    "d",
+    "M4 5.75A1.75 1.75 0 0 1 5.75 4h12.5A1.75 1.75 0 0 1 20 5.75v9.5A1.75 1.75 0 0 1 18.25 17H16",
+  );
+  screen.setAttribute("stroke", "currentColor");
+  screen.setAttribute("stroke-width", "1.8");
+  screen.setAttribute("stroke-linecap", "round");
+  screen.setAttribute("stroke-linejoin", "round");
+
+  const signals = document.createElementNS(SVG_NAMESPACE, "path");
+  signals.setAttribute(
+    "d",
+    "M4 15.5a4.5 4.5 0 0 1 4.5 4.5M4 11.5A8.5 8.5 0 0 1 12.5 20",
+  );
+  signals.setAttribute("stroke", "currentColor");
+  signals.setAttribute("stroke-width", "1.8");
+  signals.setAttribute("stroke-linecap", "round");
+
+  const dot = document.createElementNS(SVG_NAMESPACE, "circle");
+  dot.setAttribute("cx", "4");
+  dot.setAttribute("cy", "20");
+  dot.setAttribute("r", "1.15");
+  dot.setAttribute("fill", "currentColor");
+
+  svg.append(screen, signals, dot);
+  return svg;
+}
 
 function injectOverlayStyles(root: ShadowRoot): void {
   const style = document.createElement("style");
@@ -560,11 +613,7 @@ function ensureOverlay(): void {
   btn.className = "cast";
   btn.setAttribute("aria-label", "Cast this video with PlayBridge");
   btn.title = "Cast this video with PlayBridge";
-  // Inline SVG via DOM parse for a single trusted constant string.
-  const tpl = document.createElement("template");
-  tpl.innerHTML = CAST_SVG;
-  const svg = tpl.content.firstElementChild;
-  if (svg) btn.appendChild(svg.cloneNode(true));
+  btn.appendChild(createCastIcon());
 
   const status = document.createElement("div");
   status.className = "status";
@@ -1231,7 +1280,10 @@ function onStorageChanged(
 
 function onRuntimeMessage(message: unknown): void {
   const msg = message as { type?: string };
-  if (msg?.type === "overlay_navigation") {
+  if (
+    msg?.type === "overlay_navigation" ||
+    msg?.type === "data_consent_changed"
+  ) {
     void refreshOverlayPreferences();
     return;
   }

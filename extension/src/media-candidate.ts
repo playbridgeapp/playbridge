@@ -5,6 +5,11 @@ export interface MediaCandidate {
   timestamp: number;
   frameId?: number;
   qualities?: unknown[];
+  /**
+   * True when the background holds non-empty replay headers for this URL.
+   * Content scripts never receive the header values themselves.
+   */
+  hasHeaders?: boolean;
 }
 
 export interface CandidateRankingContext {
@@ -89,9 +94,18 @@ function networkPriority(candidate: MediaCandidate): number {
   return 0;
 }
 
+/** DOM-only registrations never carry replay headers captured from webRequest. */
+export function isDomSourceDetection(detectedBy?: string): boolean {
+  return detectedBy === "dom_source";
+}
+
 /**
  * Rank a frame's detected media without allowing a same-origin fallback from a
  * different frame to outrank stronger local evidence.
+ *
+ * Exact DOM URL matches are authoritative only when the detection came from the
+ * network (webRequest). Pure `dom_source` records are matching signals so the
+ * player can associate a CDN/auth URL that actually carries cookies/Referer.
  */
 export function rankMediaCandidate<T extends MediaCandidate>(
   records: T[],
@@ -113,7 +127,16 @@ export function rankMediaCandidate<T extends MediaCandidate>(
   for (const domUrl of context.domUrls) {
     if (!domUrl || isBlobOrDataUrl(domUrl)) continue;
     const exact = byUrl.get(comparableUrl(domUrl));
-    if (exact) return exact;
+    // Only a network detection that still has replay headers is safe to treat
+    // as authoritative. Progressive players often mirror a page-origin get_file
+    // URL on <video src> while the real request hits a CDN with Cookie/Referer.
+    if (
+      exact &&
+      !isDomSourceDetection(exact.detectedBy) &&
+      exact.hasHeaders === true
+    ) {
+      return exact;
+    }
   }
 
   const observed = new Set(
@@ -138,9 +161,34 @@ export function rankMediaCandidate<T extends MediaCandidate>(
     return 1;
   };
 
+  const headerPriority = (candidate: T): number => {
+    if (candidate.hasHeaders === true) return 2;
+    if (
+      candidate.hasHeaders === false ||
+      isDomSourceDetection(candidate.detectedBy)
+    ) {
+      return 0;
+    }
+    // Unknown (records without the flag) rank between known-good and weak.
+    return 1;
+  };
+
   return [...playable].sort((left, right) => {
+    const leftHeaders = headerPriority(left);
+    const rightHeaders = headerPriority(right);
+
+    // Header-bearing streams must beat pure DOM / headerless hits even when the
+    // latter has a better frame match. Progressive <video src> is same-frame and
+    // headerless; the CDN request that actually needs Cookie/Referer is often
+    // attributed to another frame or lacks Performance evidence.
+    if (leftHeaders === 0 || rightHeaders === 0) {
+      if (rightHeaders !== leftHeaders) return rightHeaders - leftHeaders;
+    }
+
     const scope = scopePriority(right) - scopePriority(left);
     if (scope !== 0) return scope;
+
+    if (rightHeaders !== leftHeaders) return rightHeaders - leftHeaders;
 
     let bothCurrent = false;
     if (typeof preferredSince === "number") {

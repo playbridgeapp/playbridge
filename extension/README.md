@@ -12,20 +12,35 @@ A **Firefox and Chromium** extension that detects media in desktop browser tabs 
 
 ```bash
 cd extension
-npm install
-npm run build      # bundles to dist/firefox and dist/chrome
-npm test           # focused source-association tests
-npm run watch      # live rebuilds both browser targets
+corepack enable
+pnpm install --frozen-lockfile
+pnpm build      # bundles to dist/firefox and dist/chrome
+pnpm test       # focused source-association and preference tests
+pnpm watch      # live rebuilds both browser targets
 ```
+
+`package.json` pins the pnpm version used for reproducible builds.
+
+## Store validation and packaging
+
+```bash
+pnpm store:check
+```
+
+This runs type-checking, tests, both browser builds, manifest validation,
+Firefox `web-ext lint`, and deterministic packaging. Uploadable Firefox/Chrome
+ZIPs, the separate AMO source ZIP, and SHA-256 checksums are written to
+`artifacts/`. See [`AMO_SOURCE_BUILD.md`](AMO_SOURCE_BUILD.md) and
+[`STORE_PUBLISHING_READINESS.md`](STORE_PUBLISHING_READINESS.md).
 
 ## Load in Firefox
 
-1. `npm run build`
+1. `pnpm build`
 2. Open `about:debugging` → **This Firefox** → **Load Temporary Add-on…**
 3. Select `extension/dist/firefox/manifest.json`
 
 ## Load in Chrome, Edge, or Brave
 
-1. `npm run build`
+1. `pnpm build`
 2. Open the browser's extensions page and enable **Developer mode**.
 3. Choose **Load unpacked** and select `extension/dist/chrome`.

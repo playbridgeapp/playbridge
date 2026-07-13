@@ -12,6 +12,11 @@ import {
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
+const dataConsentBanner = document.getElementById('data-consent-banner');
+const reviewDataConsentBtn = document.getElementById('review-data-consent-btn');
+const dataConsentCard = document.getElementById('data-consent-card');
+const dataConsentSettingStatus = document.getElementById('data-consent-setting-status');
+const manageDataConsentBtn = document.getElementById('manage-data-consent-btn');
 const showVideoCastOverlayToggle = document.getElementById('show-video-cast-overlay');
 const showVideoCastOverlaySiteToggle = document.getElementById('show-video-cast-overlay-site');
 const siteOverlayHost = document.getElementById('site-overlay-host');
@@ -24,6 +29,8 @@ const siteOverlayPositionInputs = document.querySelectorAll('input[name="video-c
 
 const videosList = document.getElementById('videos-list');
 const noVideosMsg = document.getElementById('no-videos-msg');
+const noVideosTitle = noVideosMsg?.querySelector('p');
+const noVideosHint = noVideosMsg?.querySelector('span');
 
 const subtitlesList = document.getElementById('subtitles-list');
 const noSubtitlesMsg = document.getElementById('no-subtitles-msg');
@@ -53,6 +60,7 @@ let bridgeDevices = [];
 let lastStatusKey = '';
 let lastDevicesKey = '';
 let overlayPreferences = null;
+let dataConsent = { required: false, granted: true, version: 1 };
 
 // Navigation
 tabBtns.forEach(btn => {
@@ -95,8 +103,30 @@ function copyToClipboard(text) {
     document.body.removeChild(textarea);
 }
 
+function createCopyIcon() {
+    const namespace = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(namespace, 'svg');
+    svg.setAttribute('height', '14');
+    svg.setAttribute('width', '14');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'currentColor');
+    svg.setAttribute('aria-hidden', 'true');
+
+    const outline = document.createElementNS(namespace, 'path');
+    outline.setAttribute('d', 'M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z');
+    svg.appendChild(outline);
+    return svg;
+}
+
 // Background Communication
 function loadVideos() {
+    if (dataConsent.required && !dataConsent.granted) {
+        currentVideos = [];
+        selectedVideoUrl = null;
+        selectedSubtitleUrl = null;
+        renderVideos();
+        return;
+    }
     if (browser.tabs && browser.tabs.query) {
         browser.tabs.query({ active: true, currentWindow: true }).then(tabs => {
             const currentTab = tabs[0];
@@ -127,6 +157,57 @@ function loadVideos() {
         }).catch(err => console.error("Error loading videos:", err));
     }
 }
+
+function renderDataConsent(status) {
+    dataConsent = status;
+    const blocked = status.required && !status.granted;
+    dataConsentBanner.classList.toggle('hidden', !blocked);
+    dataConsentCard.classList.toggle('hidden', !status.required);
+    dataConsentSettingStatus.textContent = status.granted ? 'Allowed' : 'Off';
+    manageDataConsentBtn.textContent = status.granted ? 'Review or disable' : 'Review';
+
+    tabBtns.forEach(btn => {
+        btn.disabled = blocked && ['videos', 'subtitles', 'urls'].includes(btn.dataset.tab);
+    });
+
+    if (noVideosTitle) {
+        noVideosTitle.textContent = blocked ? 'Media detection is off' : 'No videos detected yet';
+    }
+    if (noVideosHint) {
+        noVideosHint.textContent = blocked
+            ? 'Review media access to detect streams for casting'
+            : 'Play a video on this page to detect streams';
+    }
+
+    if (blocked) {
+        currentVideos = [];
+        selectedVideoUrl = null;
+        selectedSubtitleUrl = null;
+        renderVideos();
+    } else {
+        loadVideos();
+    }
+}
+
+async function loadDataConsent() {
+    try {
+        const status = await browser.runtime.sendMessage({ action: 'getDataConsent' });
+        if (status && typeof status.granted === 'boolean') {
+            renderDataConsent(status);
+        }
+    } catch (e) {
+        console.error('Failed to load media data consent', e);
+    }
+}
+
+function openDataConsent() {
+    browser.runtime.sendMessage({ action: 'openDataConsent' }).catch(() => {
+        showToast('Could not open media access settings');
+    });
+}
+
+reviewDataConsentBtn?.addEventListener('click', openDataConsent);
+manageDataConsentBtn?.addEventListener('click', openDataConsent);
 
 function applyStatus(s) {
     // The desktop pushes a status frame ~1×/sec; only touch the DOM when something
@@ -162,7 +243,7 @@ function loadStatus() {
 // UI Renderers
 function renderDevices() {
     if (!devicesList) return;
-    devicesList.innerHTML = '';
+    devicesList.replaceChildren();
     if (!bridgeDevices || bridgeDevices.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'subtitle';
@@ -235,7 +316,7 @@ function renderVideos() {
         noVideosMsg.classList.add('hidden');
         videosList.classList.remove('hidden');
         actionBar.classList.remove('hidden');
-        videosList.innerHTML = '';
+        videosList.replaceChildren();
 
         videoItems.forEach((video) => {
             const item = document.createElement('div');
@@ -255,7 +336,7 @@ function renderVideos() {
             copyBtn.className = 'copy-url-btn';
             copyBtn.title = 'Copy URL';
             copyBtn.setAttribute('aria-label', 'Copy URL');
-            copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="14" viewBox="0 0 24 24" width="14" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
+            copyBtn.appendChild(createCopyIcon());
             copyBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 copyToClipboard(video.url);
@@ -346,7 +427,7 @@ function renderVideos() {
     } else {
         noSubtitlesMsg.classList.add('hidden');
         subtitlesList.classList.remove('hidden');
-        subtitlesList.innerHTML = '';
+        subtitlesList.replaceChildren();
 
         subtitleItems.forEach((sub) => {
             const item = document.createElement('div');
@@ -363,7 +444,7 @@ function renderVideos() {
             copyBtn.className = 'copy-url-btn';
             copyBtn.title = 'Copy URL';
             copyBtn.setAttribute('aria-label', 'Copy URL');
-            copyBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" height="14" viewBox="0 0 24 24" width="14" fill="currentColor"><path d="M0 0h24v24H0z" fill="none"/><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>';
+            copyBtn.appendChild(createCopyIcon());
             copyBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 copyToClipboard(sub.url);
@@ -630,6 +711,9 @@ browser.runtime.onMessage.addListener((message) => {
     } else if (message.type === 'video_detected') {
         // Reload videos if a new one is detected while popup is open
         loadVideos();
+    } else if (message.type === 'data_consent_changed' && message.status) {
+        renderDataConsent(message.status);
+        loadOverlaySetting();
     }
 });
 
@@ -762,8 +846,8 @@ browser.storage.onChanged.addListener((changes, area) => {
 });
 
 // Init
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+    await loadDataConsent();
     loadStatus();
-    loadVideos();
     loadOverlaySetting();
 });

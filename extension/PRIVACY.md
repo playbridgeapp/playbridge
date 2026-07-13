@@ -75,6 +75,13 @@ to an account or sent anywhere.
 
 ## Your choices
 
+- Firefox 140+ displays the declared browsing activity and website content data
+  permissions during installation. Chrome displays a full-page disclosure and
+  requires an affirmative choice before media detection begins.
+- In Chrome, open the popup's Settings tab to review or revoke media-data access.
+  Revoking access stops media observation, removes on-video controls, and clears
+  detected session media. The extension remains inactive until access is allowed
+  again.
 - Open the toolbar popup to view or clear detected media at any time.
 - Use the popup's Settings tab to disable the cast overlay globally, disable it
   for the current hostname, choose its per-site position, or reset that site.

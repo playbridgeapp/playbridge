@@ -99,6 +99,12 @@ h1 {
     color: var(--text-main);
 }
 
+.tab-btn:disabled {
+    color: #77727f;
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
 .tab-btn .tab-text {
     display: none;
 }
@@ -125,6 +131,25 @@ h1 {
 
 .tab-content.active {
     display: block;
+}
+
+.consent-banner {
+    margin: 16px 16px 0;
+    padding: 14px;
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    background: rgba(208, 188, 255, 0.09);
+}
+
+.consent-banner h2 {
+    color: var(--accent-hover);
+}
+
+.consent-banner p {
+    margin: 6px 0 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.4;
 }
 
 @keyframes fadeIn {
@@ -616,6 +641,13 @@ input:checked+.slider:before {
     justify-content: space-between;
     gap: 12px;
     margin-bottom: 16px;
+}
+
+.privacy-setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
 }
 
 .site-settings-heading h3 {

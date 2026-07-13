@@ -20,11 +20,15 @@ function candidate(
 }
 
 test("an exact DOM URL is authoritative", () => {
-  const exact = candidate("https://media.example/main.mp4", { frameId: 2 });
+  const exact = candidate("https://media.example/main.mp4", {
+    frameId: 2,
+    hasHeaders: true,
+  });
   const newerHls = candidate("https://media.example/preview.m3u8", {
     contentType: "application/vnd.apple.mpegurl",
     frameId: 2,
     timestamp: 50,
+    hasHeaders: true,
   });
 
   assert.equal(
@@ -33,6 +37,107 @@ test("an exact DOM URL is authoritative", () => {
       senderFrameId: 2,
     }),
     exact,
+  );
+});
+
+test("a pure DOM source does not outrank a header-bearing network stream", () => {
+  // Sites often put a page-origin get_file URL on <video src> while the real
+  // media request hits a CDN with Cookie/Referer — the cast icon must pick the
+  // network record the popup would use.
+  const domSrc = candidate("https://site.example/get_file/clip.mp4", {
+    detectedBy: "dom_source",
+    frameId: 0,
+    timestamp: 200,
+    hasHeaders: false,
+  });
+  const cdnStream = candidate(
+    "https://cdn.example/remote_control.php?file=clip.mp4",
+    {
+      detectedBy: "content_type",
+      frameId: 0,
+      timestamp: 100,
+      hasHeaders: true,
+    },
+  );
+
+  assert.equal(
+    rankMediaCandidate([domSrc, cdnStream], {
+      domUrls: [domSrc.url],
+      senderFrameId: 0,
+      frameResourceUrls: [cdnStream.url],
+    }),
+    cdnStream,
+  );
+});
+
+test("headerless network detections yield to a stream with replay headers", () => {
+  const headerless = candidate("https://site.example/get_file/clip.mp4", {
+    detectedBy: "url_extension",
+    frameId: 0,
+    timestamp: 150,
+    hasHeaders: false,
+  });
+  const withHeaders = candidate("https://cdn.example/stream.mp4", {
+    detectedBy: "content_type",
+    frameId: 0,
+    timestamp: 100,
+    hasHeaders: true,
+  });
+
+  assert.equal(
+    rankMediaCandidate([headerless, withHeaders], {
+      domUrls: [headerless.url],
+      senderFrameId: 0,
+    }),
+    withHeaders,
+  );
+});
+
+test("header-bearing CDN stream beats same-frame headerless even with better scope", () => {
+  // Progressive players: <video src> is same-frame + headerless; the real media
+  // request is often attributed to another frameId under Fission.
+  const domSrc = candidate("https://site.example/get_file/clip.mp4", {
+    detectedBy: "dom_source",
+    frameId: 0,
+    timestamp: 200,
+    hasHeaders: false,
+  });
+  const cdnStream = candidate(
+    "https://nvs.cdn.example/remote_control.php?file=clip.mp4",
+    {
+      detectedBy: "content_type",
+      frameId: 3,
+      timestamp: 100,
+      hasHeaders: true,
+    },
+  );
+
+  assert.equal(
+    rankMediaCandidate([domSrc, cdnStream], {
+      domUrls: [domSrc.url],
+      senderFrameId: 0,
+    }),
+    cdnStream,
+  );
+});
+
+test("exact DOM match without hasHeaders true is not authoritative", () => {
+  const exact = candidate("https://media.example/main.mp4", {
+    frameId: 2,
+    hasHeaders: false,
+  });
+  const newer = candidate("https://media.example/real.mp4", {
+    frameId: 2,
+    timestamp: 50,
+    hasHeaders: true,
+  });
+
+  assert.equal(
+    rankMediaCandidate([exact, newer], {
+      domUrls: [exact.url],
+      senderFrameId: 2,
+    }),
+    newer,
   );
 });
 
