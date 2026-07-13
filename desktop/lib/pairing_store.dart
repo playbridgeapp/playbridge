@@ -52,6 +52,7 @@ class PairingStore {
   static const _kAutoFullScreen = 'pb.auto_fullscreen';
   static const _kPauseOnWindowHide = 'pb.pause_on_window_hide';
   static const _kEnableHistory = 'pb.enable_history';
+  static const _kPreselectHlsQuality = 'pb.preselect_hls_quality';
   static const _kStillWatchingEnabled = 'pb.still_watching_enabled';
   static const _kStillWatchingThresholdMin = 'pb.still_watching_threshold_min';
   static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
@@ -115,6 +116,15 @@ class PairingStore {
 
   Future<void> setEnableHistory(bool value) =>
       _prefs.setBool(_kEnableHistory, value);
+
+  /// Resolve HLS master playlists to the best compatible rendition before
+  /// handing them to mpv. Disabled by default so mpv receives the original
+  /// master playlist unless the user opts into preselection.
+  bool get preselectHlsQuality =>
+      _prefs.getBool(_kPreselectHlsQuality) ?? false;
+
+  Future<void> setPreselectHlsQuality(bool value) =>
+      _prefs.setBool(_kPreselectHlsQuality, value);
 
   bool get stillWatchingEnabled =>
       _prefs.getBool(_kStillWatchingEnabled) ?? false;

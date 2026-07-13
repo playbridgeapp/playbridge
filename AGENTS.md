@@ -14,6 +14,10 @@ Project skills live in `.agents/skills/`:
 
 Load the matching `SKILL.md` only when its description matches the request. A normal commit, push, or PR request must not change versions unless the user also requests an uprev or release.
 
+## Local agent instructions
+
+If `SUBAGENTS.local.md` exists at the repository root, read and follow it for optional machine-local subagent tools and workflows. The file is intentionally gitignored; shared repository instructions in this file take precedence if they conflict.
+
 ## Project layout
 
 | Project | Path | Notes |

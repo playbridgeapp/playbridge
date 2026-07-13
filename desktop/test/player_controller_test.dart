@@ -73,6 +73,14 @@ class _FakeEngine extends PlayerEngine {
 void main() {
   QueueItem item(int n) => QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n');
 
+  test('HLS preselection preference defaults off and can be changed', () {
+    final c = PlayerController(engineForTest: _FakeEngine());
+
+    expect(c.preselectHlsQuality, isFalse);
+    c.setPreselectHlsQuality(true);
+    expect(c.preselectHlsQuality, isTrue);
+  });
+
   test('completion with next item advances the queue', () async {
     final engine = _FakeEngine()..positionMsValue = 5000;
     final c = PlayerController(engineForTest: engine);

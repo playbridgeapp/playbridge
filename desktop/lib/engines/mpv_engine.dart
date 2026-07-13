@@ -41,7 +41,7 @@ Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
 }
 
 class MpvEngine extends PlayerEngine {
-  MpvEngine() {
+  MpvEngine({this.preselectHlsQuality = false}) {
     _subs.addAll([
       player.stream.playing.listen((playing) {
         if (playing) _maybeArmAudioRoute();
@@ -74,6 +74,7 @@ class MpvEngine extends PlayerEngine {
   final Player player = Player();
   final List<StreamSubscription> _subs = [];
   VoidCallback? onCompleted;
+  bool preselectHlsQuality;
 
   /// Ignore device flaps until playback has been stable for a bit — arming on
   /// the first `playing` tick races mpv's open path (auto→concrete device) and
@@ -310,7 +311,9 @@ class MpvEngine extends PlayerEngine {
     // hls_master_resolver.dart for why mpv chokes on multi-rendition masters.
     final medias = await Future.wait(items.map((i) async {
       final headers = sanitizePlayerHeaders(i.headers);
-      final resolvedUrl = await resolveHlsMaster(i.url, headers: headers);
+      final resolvedUrl = preselectHlsQuality
+          ? await resolveHlsMaster(i.url, headers: headers)
+          : i.url;
       return Media(resolvedUrl, httpHeaders: headers);
     }));
     final playlist = Playlist(medias, index: startIndex);

@@ -9,7 +9,8 @@ class PlayerController extends ChangeNotifier {
   PlayerController({
     EngineType initialEngine = EngineType.mpvInternal,
     PlayerEngine? engineForTest,
-  }) {
+    bool preselectHlsQuality = false,
+  }) : _preselectHlsQuality = preselectHlsQuality {
     if (engineForTest != null) {
       _currentType = initialEngine;
       _engine = engineForTest;
@@ -37,7 +38,7 @@ class PlayerController extends ChangeNotifier {
     _currentType = type;
     switch (type) {
       case EngineType.mpvInternal:
-        _engine = MpvEngine();
+        _engine = MpvEngine(preselectHlsQuality: _preselectHlsQuality);
         (_engine as MpvEngine).onCompleted = _onCompleted;
     }
 
@@ -51,8 +52,20 @@ class PlayerController extends ChangeNotifier {
   void notifyCompletedForTest() => _onCompleted();
 
   bool _hasInited = false;
+  bool _preselectHlsQuality;
   EngineType get engineType => _currentType;
   PlayerEngine get engine => _engine;
+
+  bool get preselectHlsQuality => _preselectHlsQuality;
+
+  /// Applies to the next item opened; current playback is left untouched.
+  void setPreselectHlsQuality(bool value) {
+    if (_preselectHlsQuality == value) return;
+    _preselectHlsQuality = value;
+    final engine = _engine;
+    if (engine is MpvEngine) engine.preselectHlsQuality = value;
+    notifyListeners();
+  }
 
   Future<void> switchEngine(EngineType type) async {
     if (type == _currentType) return;
