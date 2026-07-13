@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'bridge_paths.dart';
+import 'extension_request_debug_log.dart';
 import 'player_controller.dart';
 import 'tv_sender_controller.dart';
 
@@ -63,6 +64,23 @@ class ExtensionBridge {
   }
 
   void _onClient(Socket socket) {
+    void dropClient() => _authed.remove(socket);
+
+    // Socket.listen handles errors from the inbound stream, but Socket is also
+    // an IOSink: a browser/native-host disconnect can complete `done` with an
+    // asynchronous ECONNRESET after `write` has already returned. Observe that
+    // future so a normal client shutdown never becomes an unhandled Flutter
+    // exception. Non-socket failures are still surfaced for diagnosis.
+    unawaited(socket.done.then<void>(
+      (_) => dropClient(),
+      onError: (Object error, StackTrace _) {
+        dropClient();
+        if (error is! SocketException) {
+          debugPrint('[ext-bridge] client sink failed: $error');
+        }
+      },
+    ));
+
     var authed = false;
     final buf = <int>[];
     socket.listen(
@@ -86,8 +104,8 @@ class ExtensionBridge {
           }
         }
       },
-      onDone: () => _authed.remove(socket),
-      onError: (_) => _authed.remove(socket),
+      onDone: dropClient,
+      onError: (_) => dropClient(),
       cancelOnError: true,
     );
   }
@@ -129,6 +147,7 @@ class ExtensionBridge {
         final headers =
             (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
         final title = obj['title'] as String?;
+        debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
           final ok = _sender.castUrl(url, headers: headers, title: title);
           _send(socket, {
@@ -140,9 +159,9 @@ class ExtensionBridge {
         } else {
           onNewMedia?.call();
           // No cast target — play on this machine (extension → desktop).
-          final headerCount = headers?.length ?? 0;
-          debugPrint(
-              '[ext-bridge] cast → local player: $url (headers=$headerCount)');
+          if (kDebugMode) {
+            debugPrint('[ext-bridge] cast → local player');
+          }
           unawaited(_player.playUrl(
             url,
             headers: headers,

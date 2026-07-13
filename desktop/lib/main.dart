@@ -233,7 +233,10 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     super.initState();
     _showStats = ValueNotifier<bool>(widget.store.showStats);
     _showStats.addListener(() => widget.store.setShowStats(_showStats.value));
-    _player = PlayerController(initialEngine: widget.store.engineType);
+    _player = PlayerController(
+      initialEngine: widget.store.engineType,
+      preselectHlsQuality: widget.store.preselectHlsQuality,
+    );
     _stillWatching = StillWatchingController(
       player: _player,
       enabled: widget.store.stillWatchingEnabled,

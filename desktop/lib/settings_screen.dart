@@ -127,6 +127,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _Tile(
+              icon: Icons.high_quality_outlined,
+              title: 'Preselect HLS quality',
+              subtitle:
+                  'Choose the highest compatible H.264 rendition before playback '
+                  'for faster startup. Off: let MPV handle the master playlist.',
+              trailing: Switch(
+                value: widget.player.preselectHlsQuality,
+                onChanged: (v) async {
+                  widget.player.setPreselectHlsQuality(v);
+                  await widget.store.setPreselectHlsQuality(v);
+                },
+              ),
+            ),
+            _Tile(
               icon: Icons.bedtime_outlined,
               title: 'Still watching reminder',
               subtitle:
