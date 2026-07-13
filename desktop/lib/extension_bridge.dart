@@ -9,7 +9,7 @@ import 'bridge_paths.dart';
 import 'extension_cast_title.dart';
 import 'extension_request_debug_log.dart';
 import 'player_controller.dart';
-import 'player_headers.dart';
+import 'player_headers.dart' show mediaHeadersForPlayer;
 import 'tv_sender_controller.dart';
 
 /// Local IPC endpoint the browser extension reaches **via the native-messaging
@@ -148,10 +148,9 @@ class ExtensionBridge {
         }
         final rawHeaders =
             (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
-        // Strip Sec-Fetch-* / Range / etc. — same filter the phone applies via
-        // VideoDetector.mediaHeaders. Forwarding them makes CDNs reject the TV
-        // player's segment fetches (Sec-Fetch-Site is the usual failure mode).
-        final headers = sanitizePlayerHeaders(rawHeaders);
+        // Same treatment as the phone's VideoDetector.mediaHeaders: drop
+        // Sec-Fetch-*/Range, simplify Accept-Language, canonicalise UA casing.
+        final headers = mediaHeadersForPlayer(rawHeaders);
         // Match Android browser casts: surface that this stream came from a
         // browser tab (Now Casting / TV title), not a library or phone file.
         final title = titleForExtensionCast(obj['title'] as String?);

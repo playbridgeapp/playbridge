@@ -6,7 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import 'local_file_server.dart';
 import 'pairing_store.dart';
-import 'player_headers.dart';
+import 'player_headers.dart' show mediaHeadersForPlayer;
 import 'protocol.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
@@ -178,11 +178,12 @@ class TvSenderController extends ChangeNotifier {
     String? title,
     String? detectedBy,
     String? contentType,
+    String? defaultVideoQuality,
   }) {
     final payload = PlayPayload()..url = url;
-    // Always sanitize here so every desktop→TV cast path (extension, tray,
-    // future callers) drops browser-only headers CDNs reject.
-    final safeHeaders = sanitizePlayerHeaders(headers);
+    // Phone-aligned header map (strip Sec-Fetch-*, simplify Accept-Language, …)
+    // so the TV payload matches what Android `VideoDetector.mediaHeaders` sends.
+    final safeHeaders = mediaHeadersForPlayer(headers);
     if (safeHeaders != null && safeHeaders.isNotEmpty) {
       payload.headers.addAll(safeHeaders);
     }
@@ -203,6 +204,16 @@ class TvSenderController extends ChangeNotifier {
       payload.detectedBy = 'content_type';
     } else if (!payload.hasDetectedBy() && _looksLikeHls(url)) {
       payload.detectedBy = 'url_pattern_m3u8';
+    }
+    // Phone browser casts typically include a quality cap (often 1080p). Without
+    // it Exo may pick an ultra/HEVC variant the TV cannot decode.
+    final quality = defaultVideoQuality?.trim();
+    if (quality != null &&
+        quality.isNotEmpty &&
+        quality.toLowerCase() != 'auto') {
+      payload.defaultVideoQuality = quality;
+    } else if (_looksLikeHls(url) && !payload.hasDefaultVideoQuality()) {
+      payload.defaultVideoQuality = '1080p';
     }
     return castVideo(payload);
   }
