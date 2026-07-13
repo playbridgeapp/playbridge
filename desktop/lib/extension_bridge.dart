@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 
 import 'bridge_paths.dart';
+import 'extension_cast_title.dart';
 import 'extension_request_debug_log.dart';
 import 'player_controller.dart';
 import 'tv_sender_controller.dart';
@@ -146,10 +147,17 @@ class ExtensionBridge {
         }
         final headers =
             (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
-        final title = obj['title'] as String?;
+        // Match Android browser casts: surface that this stream came from a
+        // browser tab (Now Casting / TV title), not a library or phone file.
+        final title = titleForExtensionCast(obj['title'] as String?);
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
-          final ok = _sender.castUrl(url, headers: headers, title: title);
+          final ok = _sender.castUrl(
+            url,
+            headers: headers,
+            title: title,
+            detectedBy: 'browser',
+          );
           _send(socket, {
             'type': 'result',
             'ok': ok,

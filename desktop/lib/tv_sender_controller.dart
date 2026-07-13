@@ -169,11 +169,20 @@ class TvSenderController extends ChangeNotifier {
       _client.send(senderPlaylistCommandJson(playlist));
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
-  /// optional request [headers] (Referer / cookies / auth) and a [title].
-  bool castUrl(String url, {Map<String, String>? headers, String? title}) {
+  /// optional request [headers] (Referer / cookies / auth), a [title], and an
+  /// optional [detectedBy] origin tag (e.g. `"browser"` for extension casts).
+  bool castUrl(
+    String url, {
+    Map<String, String>? headers,
+    String? title,
+    String? detectedBy,
+  }) {
     final payload = PlayPayload()..url = url;
     if (headers != null && headers.isNotEmpty) payload.headers.addAll(headers);
     if (title != null && title.isNotEmpty) payload.title = title;
+    if (detectedBy != null && detectedBy.isNotEmpty) {
+      payload.detectedBy = detectedBy;
+    }
     return castVideo(payload);
   }
 
