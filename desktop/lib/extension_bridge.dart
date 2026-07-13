@@ -161,21 +161,26 @@ class ExtensionBridge {
         final contentType = (obj['contentType'] as String?)?.trim();
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
-          final ok = _sender.castUrl(
-            url,
-            headers: headers,
-            title: title,
-            detectedBy:
-                (detectedBy != null && detectedBy.isNotEmpty) ? detectedBy : null,
-            contentType:
-                (contentType != null && contentType.isNotEmpty) ? contentType : null,
-          );
-          _send(socket, {
-            'type': 'result',
-            'ok': ok,
-            'target': 'tv',
-            if (!ok) 'error': 'send failed',
-          });
+          // Async: may publish through LAN stream proxy (CDN 403 avoidance).
+          unawaited(() async {
+            final ok = await _sender.castUrl(
+              url,
+              headers: headers,
+              title: title,
+              detectedBy: (detectedBy != null && detectedBy.isNotEmpty)
+                  ? detectedBy
+                  : null,
+              contentType: (contentType != null && contentType.isNotEmpty)
+                  ? contentType
+                  : null,
+            );
+            _send(socket, {
+              'type': 'result',
+              'ok': ok,
+              'target': 'tv',
+              if (!ok) 'error': 'send failed',
+            });
+          }());
         } else {
           onNewMedia?.call();
           // No cast target — play on this machine (extension → desktop).

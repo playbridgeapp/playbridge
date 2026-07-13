@@ -8,6 +8,7 @@ import 'local_file_server.dart';
 import 'pairing_store.dart';
 import 'player_headers.dart' show mediaHeadersForPlayer;
 import 'protocol.dart';
+import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
@@ -31,6 +32,7 @@ class TvSenderController extends ChangeNotifier {
   final TvDiscoveryBrowser _discovery = TvDiscoveryBrowser();
   final TvSenderClient _client = TvSenderClient();
   final LocalFileServer _fileServer = LocalFileServer();
+  final StreamProxyServer _streamProxy = StreamProxyServer();
 
   StreamSubscription<List<DiscoveredTv>>? _devSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
@@ -172,38 +174,75 @@ class TvSenderController extends ChangeNotifier {
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth), a [title], and
   /// optional [detectedBy] / [contentType] matching the phone play payload.
-  bool castUrl(
+  ///
+  /// When a TV is linked, the stream is published through a LAN reverse proxy
+  /// (headers injected here, HLS rewritten) so CDNs that 403 direct TV fetches
+  /// still work — same idea as the phone's LocalProxyServer.
+  Future<bool> castUrl(
     String url, {
     Map<String, String>? headers,
     String? title,
     String? detectedBy,
     String? contentType,
     String? defaultVideoQuality,
-  }) {
-    final payload = PlayPayload()..url = url;
-    // Phone-aligned header map (strip Sec-Fetch-*, simplify Accept-Language, …)
-    // so the TV payload matches what Android `VideoDetector.mediaHeaders` sends.
+    bool proxyForTv = true,
+  }) async {
     final safeHeaders = mediaHeadersForPlayer(headers);
-    if (safeHeaders != null && safeHeaders.isNotEmpty) {
-      payload.headers.addAll(safeHeaders);
+    var castUrl = url;
+    Map<String, String>? castHeaders = safeHeaders;
+    var castContentType = contentType;
+    var castDetectedBy = detectedBy;
+
+    if (proxyForTv && isConnected && _activeTv != null) {
+      final proxied = await _publishThroughProxy(
+        url: url,
+        headers: safeHeaders ?? const {},
+        mime: contentType,
+      );
+      if (proxied != null) {
+        castUrl = proxied;
+        // TV only talks to us; upstream headers stay on the proxy.
+        castHeaders = null;
+        castDetectedBy = null;
+        if (castContentType == null || castContentType.isEmpty) {
+          if (_looksLikeHls(url)) {
+            castContentType = 'application/vnd.apple.mpegurl';
+          }
+        }
+        if (kDebugMode) {
+          debugPrint('[tv-sender] proxied extension stream → $proxied');
+        }
+      } else if (kDebugMode) {
+        debugPrint(
+          '[tv-sender] stream proxy unavailable — casting CDN URL directly',
+        );
+      }
+    }
+
+    final payload = PlayPayload()..url = castUrl;
+    if (castHeaders != null && castHeaders.isNotEmpty) {
+      payload.headers.addAll(castHeaders);
     }
     if (title != null && title.isNotEmpty) payload.title = title;
-    if (detectedBy != null && detectedBy.isNotEmpty) {
-      payload.detectedBy = detectedBy;
+    if (castDetectedBy != null && castDetectedBy.isNotEmpty) {
+      payload.detectedBy = castDetectedBy;
     }
-    if (contentType != null && contentType.isNotEmpty) {
-      payload.contentType = contentType;
+    if (castContentType != null && castContentType.isNotEmpty) {
+      payload.contentType = castContentType;
     }
     // Help the TV pick an HLS path when the extension didn't set content_type.
-    if (!payload.hasContentType() && _looksLikeHls(url)) {
+    if (!payload.hasContentType() && _looksLikeHls(castUrl)) {
       payload.contentType = 'application/vnd.apple.mpegurl';
     }
-    // If we still have no detection tag, mirror the phone's common HLS case so
-    // Exo uses the browser-compatible HTTP stack.
-    if (!payload.hasDetectedBy() && payload.hasContentType()) {
-      payload.detectedBy = 'content_type';
-    } else if (!payload.hasDetectedBy() && _looksLikeHls(url)) {
-      payload.detectedBy = 'url_pattern_m3u8';
+    // Direct (non-proxied) browser streams need the legacy HTTP stack tag.
+    if (!payload.hasDetectedBy() &&
+        castHeaders != null &&
+        castHeaders.isNotEmpty) {
+      if (payload.hasContentType()) {
+        payload.detectedBy = 'content_type';
+      } else if (_looksLikeHls(castUrl)) {
+        payload.detectedBy = 'url_pattern_m3u8';
+      }
     }
     // Phone browser casts typically include a quality cap (often 1080p). Without
     // it Exo may pick an ultra/HEVC variant the TV cannot decode.
@@ -216,6 +255,29 @@ class TvSenderController extends ChangeNotifier {
       payload.defaultVideoQuality = '1080p';
     }
     return castVideo(payload);
+  }
+
+  Future<String?> _publishThroughProxy({
+    required String url,
+    required Map<String, String> headers,
+    String? mime,
+  }) async {
+    final active = _activeTv;
+    if (active == null) return null;
+    try {
+      await _streamProxy.start();
+      final host = await _localLanIp(active.host);
+      if (host == null) return null;
+      return _streamProxy.publish(
+        url: url,
+        headers: headers,
+        host: host,
+        mime: mime,
+      );
+    } catch (e) {
+      debugPrint('[tv-sender] stream proxy failed: $e');
+      return null;
+    }
   }
 
   static bool _looksLikeHls(String url) {

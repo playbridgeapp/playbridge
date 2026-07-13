@@ -1031,6 +1031,13 @@ async function onCastClick(e: Event): Promise<void> {
     })) as { success?: boolean; reason?: string | null } | null;
 
     if (res?.success) {
+      // Mirror the phone browser: pause the in-page player so the CDN token
+      // is not dual-used while the TV (via desktop proxy) streams.
+      try {
+        video.pause();
+      } catch {
+        /* ignore */
+      }
       setOverlayVisualState("success", "Casting to TV");
     } else {
       const reason = res?.reason || "Cast failed";

@@ -667,7 +667,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         }));
       }
       for (final u in urls) {
-        _sender.castUrl(u);
+        unawaited(_sender.castUrl(u));
       }
       if (files.isNotEmpty || urls.isNotEmpty) {
         _showOsd('Casting…');
