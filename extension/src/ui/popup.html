@@ -108,19 +108,75 @@
         <!-- Settings Tab -->
         <div id="settings-tab" class="tab-content">
             <div class="settings-card">
-                <h2>Settings</h2>
-                <p class="subtitle">Preferences for this browser extension</p>
+                <h2>Cast overlay</h2>
+                <p class="subtitle">Choose whether PlayBridge adds a cast control to videos.</p>
 
                 <div class="setting-row">
                     <div class="setting-text">
-                        <label class="setting-label" for="show-video-cast-overlay">Show cast button on videos</label>
-                        <p class="setting-desc">Display a PlayBridge cast control on the primary video on each page.</p>
+                        <label class="setting-label" for="show-video-cast-overlay">Enable on all sites</label>
+                        <p class="setting-desc">Master switch for the cast button on videos.</p>
                     </div>
-                    <label class="switch" title="Show cast button on videos">
+                    <label class="switch" title="Enable the cast overlay on all sites">
                         <input type="checkbox" id="show-video-cast-overlay" checked>
                         <span class="slider"></span>
                     </label>
                 </div>
+            </div>
+
+            <div class="settings-card" id="site-overlay-card">
+                <div class="site-settings-heading">
+                    <div>
+                        <h3>Current site</h3>
+                        <p class="site-host" id="site-overlay-host">Loading…</p>
+                    </div>
+                    <button type="button" class="site-reset-btn" id="reset-site-overlay" disabled>Reset</button>
+                </div>
+
+                <div id="site-overlay-supported" class="hidden">
+                    <div class="setting-row">
+                        <div class="setting-text">
+                            <label class="setting-label" for="show-video-cast-overlay-site">Show on this site</label>
+                            <p class="setting-desc">Override the cast overlay for this hostname.</p>
+                        </div>
+                        <label class="switch" title="Show the cast overlay on this site">
+                            <input type="checkbox" id="show-video-cast-overlay-site" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="settings-divider"></div>
+
+                    <fieldset class="position-fieldset" id="site-overlay-position-fieldset">
+                        <legend>Cast button position</legend>
+                        <p class="setting-desc">Saved separately for this site.</p>
+                        <div class="position-picker">
+                            <label class="position-option" title="Top left">
+                                <input type="radio" name="video-cast-overlay-position" value="top-left" aria-label="Top left">
+                                <span class="position-preview" data-position="top-left"></span>
+                            </label>
+                            <label class="position-option" title="Top center">
+                                <input type="radio" name="video-cast-overlay-position" value="top-center" aria-label="Top center">
+                                <span class="position-preview" data-position="top-center"></span>
+                            </label>
+                            <label class="position-option" title="Top right">
+                                <input type="radio" name="video-cast-overlay-position" value="top-right" aria-label="Top right" checked>
+                                <span class="position-preview" data-position="top-right"></span>
+                            </label>
+                            <label class="position-option" title="Middle left">
+                                <input type="radio" name="video-cast-overlay-position" value="middle-left" aria-label="Middle left">
+                                <span class="position-preview" data-position="middle-left"></span>
+                            </label>
+                            <label class="position-option" title="Middle right">
+                                <input type="radio" name="video-cast-overlay-position" value="middle-right" aria-label="Middle right">
+                                <span class="position-preview" data-position="middle-right"></span>
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <p class="setting-desc site-global-off hidden" id="site-overlay-global-off">The global switch is off. This site preference will be used when it is turned back on.</p>
+                </div>
+
+                <p class="setting-desc hidden" id="site-overlay-unavailable">Site-specific settings are available on regular web pages.</p>
             </div>
         </div>
 

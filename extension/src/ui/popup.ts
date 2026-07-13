@@ -1,14 +1,26 @@
 // @ts-nocheck
 import browser from "../browser";
 import {
-    getShowVideoCastOverlay,
+    VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
+    VIDEO_CAST_OVERLAY_STORAGE_KEYS,
+    getVideoCastOverlayPreferences,
+    resetVideoCastOverlaySiteOverride,
     setShowVideoCastOverlay,
+    setVideoCastOverlaySiteOverride,
 } from "../settings";
 
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
 const tabContents = document.querySelectorAll('.tab-content');
 const showVideoCastOverlayToggle = document.getElementById('show-video-cast-overlay');
+const showVideoCastOverlaySiteToggle = document.getElementById('show-video-cast-overlay-site');
+const siteOverlayHost = document.getElementById('site-overlay-host');
+const siteOverlaySupported = document.getElementById('site-overlay-supported');
+const siteOverlayUnavailable = document.getElementById('site-overlay-unavailable');
+const siteOverlayGlobalOff = document.getElementById('site-overlay-global-off');
+const siteOverlayPositionFieldset = document.getElementById('site-overlay-position-fieldset');
+const resetSiteOverlayBtn = document.getElementById('reset-site-overlay');
+const siteOverlayPositionInputs = document.querySelectorAll('input[name="video-cast-overlay-position"]');
 
 const videosList = document.getElementById('videos-list');
 const noVideosMsg = document.getElementById('no-videos-msg');
@@ -40,6 +52,7 @@ let selectedSubtitleUrl = null;
 let bridgeDevices = [];
 let lastStatusKey = '';
 let lastDevicesKey = '';
+let overlayPreferences = null;
 
 // Navigation
 tabBtns.forEach(btn => {
@@ -632,11 +645,45 @@ window.addEventListener('message', (event) => {
     }
 });
 
-// Settings: on-video cast overlay toggle (persisted; content scripts sync via storage.onChanged)
+// Settings: global and hostname-specific overlay controls.
+function renderOverlaySettings(preferences) {
+    overlayPreferences = preferences;
+    const supported = !!preferences.siteKey;
+
+    showVideoCastOverlayToggle.checked = !!preferences.globalEnabled;
+    siteOverlayHost.textContent = supported ? preferences.siteKey : 'Not available';
+    siteOverlaySupported.classList.toggle('hidden', !supported);
+    siteOverlayUnavailable.classList.toggle('hidden', supported);
+    siteOverlayGlobalOff.classList.toggle('hidden', !supported || preferences.globalEnabled);
+
+    showVideoCastOverlaySiteToggle.checked = !!preferences.siteEnabled;
+    showVideoCastOverlaySiteToggle.disabled = !supported || !preferences.globalEnabled;
+    siteOverlayPositionFieldset.disabled = !supported || !preferences.globalEnabled || !preferences.siteEnabled;
+    resetSiteOverlayBtn.disabled = !supported || !preferences.hasSiteOverride;
+
+    const position = preferences.position || VIDEO_CAST_OVERLAY_DEFAULT_POSITION;
+    siteOverlayPositionInputs.forEach(input => {
+        input.checked = input.value === position;
+    });
+}
+
 async function loadOverlaySetting() {
     if (!showVideoCastOverlayToggle) return;
-    const enabled = await getShowVideoCastOverlay(browser.storage.local);
-    showVideoCastOverlayToggle.checked = enabled;
+    try {
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+        const tabId = tabs[0]?.id;
+        const preferences = await browser.runtime.sendMessage({
+            action: 'getOverlayPreferences',
+            ...(typeof tabId === 'number' ? { tabId } : {}),
+        });
+        if (preferences && typeof preferences.globalEnabled === 'boolean') {
+            renderOverlaySettings(preferences);
+            return;
+        }
+    } catch (e) {
+        console.error('Failed to load site overlay setting', e);
+    }
+    renderOverlaySettings(await getVideoCastOverlayPreferences(browser.storage.local, null));
 }
 
 if (showVideoCastOverlayToggle) {
@@ -644,14 +691,75 @@ if (showVideoCastOverlayToggle) {
         const enabled = !!showVideoCastOverlayToggle.checked;
         try {
             await setShowVideoCastOverlay(browser.storage.local, enabled);
-            showToast(enabled ? 'Cast button on videos enabled' : 'Cast button on videos disabled');
+            await loadOverlaySetting();
+            showToast(enabled ? 'Cast overlay enabled globally' : 'Cast overlay disabled globally');
         } catch (e) {
             console.error('Failed to save overlay setting', e);
-            showVideoCastOverlayToggle.checked = !enabled;
+            await loadOverlaySetting();
             showToast('Could not save setting');
         }
     });
 }
+
+if (showVideoCastOverlaySiteToggle) {
+    showVideoCastOverlaySiteToggle.addEventListener('change', async () => {
+        const preferences = overlayPreferences;
+        if (!preferences?.siteKey) return;
+        try {
+            await setVideoCastOverlaySiteOverride(browser.storage.local, preferences.siteKey, {
+                enabled: !!showVideoCastOverlaySiteToggle.checked,
+                position: preferences.position || VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
+            });
+            await loadOverlaySetting();
+            showToast(showVideoCastOverlaySiteToggle.checked ? 'Cast overlay enabled for this site' : 'Cast overlay disabled for this site');
+        } catch (e) {
+            console.error('Failed to save site overlay setting', e);
+            await loadOverlaySetting();
+            showToast('Could not save site setting');
+        }
+    });
+}
+
+siteOverlayPositionInputs.forEach(input => {
+    input.addEventListener('change', async () => {
+        if (!input.checked || !overlayPreferences?.siteKey) return;
+        const preferences = overlayPreferences;
+        try {
+            await setVideoCastOverlaySiteOverride(browser.storage.local, preferences.siteKey, {
+                enabled: preferences.siteEnabled,
+                position: input.value,
+            });
+            await loadOverlaySetting();
+            showToast('Cast button position saved for this site');
+        } catch (e) {
+            console.error('Failed to save overlay position', e);
+            await loadOverlaySetting();
+            showToast('Could not save position');
+        }
+    });
+});
+
+if (resetSiteOverlayBtn) {
+    resetSiteOverlayBtn.addEventListener('click', async () => {
+        const siteKey = overlayPreferences?.siteKey;
+        if (!siteKey) return;
+        try {
+            await resetVideoCastOverlaySiteOverride(browser.storage.local, siteKey);
+            await loadOverlaySetting();
+            showToast('Site setting reset');
+        } catch (e) {
+            console.error('Failed to reset site overlay setting', e);
+            showToast('Could not reset site setting');
+        }
+    });
+}
+
+browser.storage.onChanged.addListener((changes, area) => {
+    if (area !== 'local') return;
+    if (VIDEO_CAST_OVERLAY_STORAGE_KEYS.some(key => key in changes)) {
+        loadOverlaySetting();
+    }
+});
 
 // Init
 window.addEventListener('DOMContentLoaded', () => {

@@ -1,6 +1,6 @@
 # PlayBridge Video Detector — Privacy Policy
 
-_Last updated: 2026-06-16_
+_Last updated: 2026-07-12_
 
 PlayBridge Video Detector ("the extension") helps you cast video and audio you
 encounter while browsing to a TV or computer running the PlayBridge app. This
@@ -21,10 +21,14 @@ reads, on pages you visit:
   headers are needed so the receiving player can fetch the same stream the page
   was playing; many servers reject a request that lacks them.
 - **The detected media URL(s)** for the current tab.
-- **The active tab's URL**, to associate detections with the correct tab.
+- **The active tab's URL and hostname**, to associate detections with the
+  correct tab and apply your per-site cast-overlay preference.
+- **Video element metadata needed for the optional cast overlay**, such as the
+  video source, size, visibility, and playback state. This is used locally to
+  place the button over the primary video and match it to a detected stream.
 
-It does **not** read page content, form inputs, keystrokes, your browsing
-history, or files on your computer.
+It does **not** read form inputs, keystrokes, your browsing history, or files on
+your computer.
 
 ## Where the data goes
 
@@ -46,8 +50,12 @@ no backend of its own.
 
 Detected media for a tab is held in the browser's in-memory session storage so
 the toolbar popup can show it. It is **cleared when you close the browser**, when
-you navigate the tab, or when you press "clear" in the popup. Nothing is written
-to disk by the extension, and nothing is synced to any account.
+you navigate the tab, or when you press "clear" in the popup.
+
+Your global cast-overlay switch and any hostname-specific on/off or position
+preferences are stored in the browser's local extension storage. They remain
+until you reset them or remove the extension. These preferences are not synced
+to an account or sent anywhere.
 
 ## Permissions and why they're requested
 
@@ -61,13 +69,15 @@ to disk by the extension, and nothing is synced to any account.
   correct tab and reset them on navigation.
 - **`nativeMessaging`** — to hand the detected stream to the local PlayBridge app.
 - **`storage`** — to keep per-tab detections across the service worker's idle
-  suspension (in session storage only).
+  suspension and save your local cast-overlay preferences.
 - **`notifications`, `contextMenus` / `menus`** — to show a "Play on TV" entry and
   status notifications.
 
 ## Your choices
 
 - Open the toolbar popup to view or clear detected media at any time.
+- Use the popup's Settings tab to disable the cast overlay globally, disable it
+  for the current hostname, choose its per-site position, or reset that site.
 - Remove the extension to stop all access immediately; session data is discarded.
 
 ## Changes

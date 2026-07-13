@@ -2,6 +2,10 @@ import browser from "./browser";
 
 import { HlsParser } from "./hls-parser";
 import * as bridge from "./native-bridge";
+import {
+  getVideoCastOverlayPreferences,
+  siteKeyFromUrl,
+} from "./settings";
 
 // Firefox-only: response-body filtering (used to sniff HLS playlist bodies).
 // Absent in Chrome MV3, where detection degrades to header/URL signals only.
@@ -186,24 +190,35 @@ function updateBadge(tabId: number) {
 
 browser.tabs.onRemoved.addListener((tabId) => cleanupTab(tabId));
 
-function handleNavigation(details: { frameId: number; tabId: number; url: string }) {
+function handleCommittedNavigation(details: { frameId: number; tabId: number; url: string }) {
   if (details.frameId !== 0) return;
   cleanupTab(details.tabId);
+}
+
+function handleHistoryStateUpdated(details: { frameId: number; tabId: number; url: string }) {
+  if (details.frameId !== 0) return;
+  // A same-document SPA navigation may keep the existing player alive without
+  // issuing its media request again. Retain detections and let the content
+  // script re-evaluate the current DOM instead of requiring a page refresh.
   browser.tabs.sendMessage(details.tabId, { type: "overlay_navigation" }).catch(() => {});
 }
 
 if (browser.webNavigation) {
-  browser.webNavigation.onCommitted.addListener(handleNavigation);
-  browser.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
+  browser.webNavigation.onCommitted.addListener(handleCommittedNavigation);
+  browser.webNavigation.onHistoryStateUpdated.addListener(handleHistoryStateUpdated);
 }
 
 function notifyContentScript(video: VideoData, tabId: number, headers: Record<string, string> | null) {
   const hasHeaders = headers && Object.keys(headers).length > 0;
   const seenUrls = getTabSeenUrls(tabId);
   const headersCaptured = getTabHeadersCaptured(tabId);
+  const videos = getTabVideos(tabId);
+  const existing = videos.find((candidate) => candidate.url === video.url);
+  const upgradesDomDetection =
+    existing?.detectedBy === "dom_source" && video.detectedBy !== "dom_source";
 
   if (seenUrls.has(video.url)) {
-    if (headersCaptured.has(video.url) || !hasHeaders) return;
+    if (!upgradesDomDetection && (headersCaptured.has(video.url) || !hasHeaders)) return;
   }
 
   seenUrls.add(video.url);
@@ -215,7 +230,6 @@ function notifyContentScript(video: VideoData, tabId: number, headers: Record<st
     if (headersCaptured.size > 500) headersCaptured.delete(headersCaptured.keys().next().value!);
   }
 
-  const videos = getTabVideos(tabId);
   const idx = videos.findIndex((v) => v.url === video.url);
   if (idx !== -1) videos[idx] = { ...videos[idx], ...video };
   else {
@@ -229,11 +243,11 @@ function notifyContentScript(video: VideoData, tabId: number, headers: Record<st
   // Notify an open popup (if any) so it can refresh its list live.
   browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
   // runtime.sendMessage is not a reliable way to target content scripts.
-  // Notify the owning frame directly without exposing captured request headers.
+  // Wake every frame in the tab: Firefox/Fission can attribute MSE requests to
+  // a different webRequest frame than the frame containing the <video>. The
+  // notification carries no media data; getVideos performs the scoped lookup.
   if (tabId >= 0) {
-    const message = { type: "video_detected", video: publicVideoView(video) };
-    const options = typeof video.frameId === "number" ? { frameId: video.frameId } : undefined;
-    browser.tabs.sendMessage(tabId, message, options).catch(() => {});
+    browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
   }
 }
 
@@ -253,9 +267,7 @@ function updateStoredVideo(video: VideoData, tabId: number) {
   persistVideos(tabId);
   browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
   if (tabId >= 0) {
-    const message = { type: "video_detected", video: publicVideoView(video) };
-    const options = typeof video.frameId === "number" ? { frameId: video.frameId } : undefined;
-    browser.tabs.sendMessage(tabId, message, options).catch(() => {});
+    browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
   }
 }
 
@@ -382,7 +394,12 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  (typeof (globalThis as any).chrome !== "undefined" ? ["requestHeaders", "extraHeaders"] : ["requestHeaders"]) as any,
+  // Firefox also exposes a `chrome` compatibility namespace, so checking for
+  // globalThis.chrome misidentifies it as Chromium. filterResponseData is the
+  // reliable capability distinction used by this extension's MV2 build.
+  (FILTER_AVAILABLE
+    ? ["requestHeaders"]
+    : ["requestHeaders", "extraHeaders"]) as any,
 );
 
 // Visibility probe: log every request the extension can see whose URL looks
@@ -538,6 +555,55 @@ function publicVideoView(v: VideoData): Omit<VideoData, "headers"> {
   return rest;
 }
 
+function domSourceContentType(url: string): string {
+  const path = url.toLowerCase().split(/[?#]/)[0] ?? "";
+  if (path.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+  if (path.endsWith(".mpd")) return "application/dash+xml";
+  if (path.endsWith(".webm")) return "video/webm";
+  if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "video/mp4";
+  return "video/unknown";
+}
+
+function validatedDomSourceUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const result = new Set<string>();
+  for (const item of value.slice(0, 16)) {
+    if (typeof item !== "string" || item.length === 0 || item.length > 8192) continue;
+    try {
+      const parsed = new URL(item);
+      if (!/^https?:$/.test(parsed.protocol)) continue;
+      const path = parsed.pathname.toLowerCase();
+      if (/\.(?:vtt|srt|ts|m4s)$/.test(path)) continue;
+      result.add(parsed.href);
+    } catch {
+      /* ignore malformed page URLs */
+    }
+  }
+  return [...result];
+}
+
+function hasSameWebOrigin(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    if (!/^https?:$/.test(a.protocol) || !/^https?:$/.test(b.protocol)) return false;
+    return a.origin === b.origin;
+  } catch {
+    return false;
+  }
+}
+
+function videoMatchesSender(v: VideoData, sender: browser.Runtime.MessageSender): boolean {
+  const frameId = sender.frameId;
+  if (typeof frameId !== "number" || frameId < 0) return true;
+  if (typeof v.frameId !== "number" || v.frameId === frameId) return true;
+  // Firefox may attribute worker/MSE requests to the top frame despite the
+  // player living in a same-origin child frame. Origin is a bounded fallback;
+  // cross-origin records remain excluded.
+  return hasSameWebOrigin(v.originUrl, sender.url);
+}
+
 function videosForSender(
   sender: browser.Runtime.MessageSender,
   options: { preferFrame?: boolean } = {},
@@ -548,15 +614,52 @@ function videosForSender(
   if (!options.preferFrame) return all;
   const frameId = sender.frameId;
   if (typeof frameId !== "number" || frameId < 0) return all;
-  const sameFrame = all.filter((v) => v.frameId === frameId);
-  // Legacy/session records without frame metadata are safe fallback candidates.
-  // Never expose a record explicitly owned by a different frame.
-  const unframed = all.filter((v) => typeof v.frameId !== "number");
-  return [...sameFrame, ...unframed];
+  // Exact-frame and legacy unframed records pass directly. Same-origin records
+  // cover Firefox's MSE/Fission frame-attribution mismatch.
+  return all.filter((v) => videoMatchesSender(v, sender));
 }
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const msg = message as Record<string, unknown>;
+
+  if (msg.action === "getOverlayPreferences") {
+    const requestedTabId =
+      typeof msg.tabId === "number" && msg.tabId >= 0 ? msg.tabId : undefined;
+    const resolveTabUrl = async (): Promise<string | undefined> => {
+      if (sender.tab?.url) return sender.tab.url;
+      if (requestedTabId != null) {
+        try {
+          return (await browser.tabs.get(requestedTabId)).url;
+        } catch {
+          return undefined;
+        }
+      }
+      try {
+        const tabs = await browser.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        return tabs[0]?.url;
+      } catch {
+        return undefined;
+      }
+    };
+
+    resolveTabUrl()
+      .then((url) =>
+        getVideoCastOverlayPreferences(
+          browser.storage.local,
+          siteKeyFromUrl(url),
+        ),
+      )
+      .then(sendResponse)
+      .catch(() =>
+        getVideoCastOverlayPreferences(browser.storage.local, null).then(
+          sendResponse,
+        ),
+      );
+    return true;
+  }
 
   if (msg.action === "getVideos") {
     // Content scripts must not choose arbitrary tab/frame IDs. Popup/extension
@@ -586,6 +689,36 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
     });
     return true; // async response
+  }
+
+  if (msg.action === "observeDomVideoSources") {
+    const tabId = sender.tab?.id;
+    if (tabId == null || tabId < 0) {
+      sendResponse({ registered: 0 });
+      return true;
+    }
+    const frameId =
+      typeof sender.frameId === "number" && sender.frameId >= 0
+        ? sender.frameId
+        : undefined;
+    const urls = validatedDomSourceUrls(msg.urls);
+    for (const url of urls) {
+      notifyContentScript(
+        {
+          url,
+          tabId,
+          contentType: domSourceContentType(url),
+          detectedBy: "dom_source",
+          originUrl: sender.url ?? "",
+          timestamp: Date.now(),
+          frameId,
+        },
+        tabId,
+        null,
+      );
+    }
+    sendResponse({ registered: urls.length });
+    return true;
   }
 
   if (msg.action === "clearVideos") {
@@ -715,13 +848,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     const videos = getTabVideos(tabId);
-    const frameId = sender.frameId;
     const stored = videos.find(
-      (v) =>
-        v.url === url &&
-        (typeof frameId !== "number" ||
-          typeof v.frameId !== "number" ||
-          v.frameId === frameId),
+      (v) => v.url === url && videoMatchesSender(v, sender),
     );
     if (!stored) {
       sendResponse({ success: false, reason: "Video not found" });

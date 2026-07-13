@@ -11,24 +11,26 @@
 
 import browser from "./browser";
 import {
-  SHOW_VIDEO_CAST_OVERLAY_DEFAULT,
-  SHOW_VIDEO_CAST_OVERLAY_KEY,
-  getShowVideoCastOverlay,
+  isBlobOrDataUrl,
+  isExcludedMediaCandidate,
+  rankMediaCandidate,
+  type MediaCandidate,
+} from "./media-candidate";
+import {
+  VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
+  VIDEO_CAST_OVERLAY_STORAGE_KEYS,
+  isVideoCastOverlayPosition,
+  type VideoCastOverlayPosition,
+  type VideoCastOverlayPreferences,
 } from "./settings";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-interface DetectedVideo {
-  url: string;
+interface DetectedVideo extends MediaCandidate {
   tabId: number;
-  contentType: string;
-  detectedBy: string;
   originUrl: string;
-  timestamp: number;
-  frameId?: number;
   subtitles?: string[];
   subtitlePreview?: string;
-  qualities?: unknown[];
 }
 
 type OverlayState =
@@ -57,13 +59,13 @@ const RESOLVE_DEBOUNCE_MS = 120;
 /** Fade the cast chrome after this idle period (player-control style). */
 const AUTO_HIDE_MS = 3500;
 
-const SEGMENT_OR_SUB_RE =
-  /\.(?:vtt|srt|ts|m4s)(?:$|\?)|\/segment|frag(?:ment)?|\/chunks?\//i;
-
 // ── State ────────────────────────────────────────────────────────────────────
 
 let enabled = false;
 let settingLoaded = false;
+let overlayPosition: VideoCastOverlayPosition =
+  VIDEO_CAST_OVERLAY_DEFAULT_POSITION;
+let preferenceRequestId = 0;
 let primaryVideo: HTMLVideoElement | null = null;
 let overlayHost: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
@@ -85,6 +87,9 @@ let lastCandidateUrl: string | null = null;
  * replace the stream already selected for the primary player.
  */
 let candidateBindings = new WeakMap<HTMLVideoElement, string>();
+let candidatePreferredSince = new WeakMap<HTMLVideoElement, number>();
+let playbackRefreshes = new WeakSet<HTMLVideoElement>();
+let reportedDomUrls = new Set<string>();
 let listenersAttached = false;
 /** Cast chrome currently shown (not auto-hidden). */
 let chromeVisible = true;
@@ -102,50 +107,6 @@ function normalizeUrl(raw: string | null | undefined): string | null {
   } catch {
     return trimmed;
   }
-}
-
-function isBlobOrData(url: string): boolean {
-  return url.startsWith("blob:") || url.startsWith("data:");
-}
-
-function isExcludedMedia(url: string, detectedBy?: string): boolean {
-  if (detectedBy === "subtitle_extension") return true;
-  if (SEGMENT_OR_SUB_RE.test(url)) return true;
-  const lower = url.toLowerCase();
-  if (lower.endsWith(".vtt") || lower.endsWith(".srt")) return true;
-  return false;
-}
-
-function isHls(url: string, contentType = ""): boolean {
-  const u = url.toLowerCase();
-  const ct = contentType.toLowerCase();
-  return (
-    u.includes("m3u8") ||
-    ct.includes("mpegurl") ||
-    ct.includes("vnd.apple.mpegurl")
-  );
-}
-
-function isDash(url: string, contentType = ""): boolean {
-  const u = url.toLowerCase();
-  const ct = contentType.toLowerCase();
-  return u.includes(".mpd") || ct.includes("dash");
-}
-
-function isDirectFile(url: string): boolean {
-  const path = url.toLowerCase().split("?")[0] ?? "";
-  return [".mp4", ".mkv", ".webm", ".avi", ".mov", ".flv", ".m4v", ".wmv", ".3gp"].some(
-    (ext) => path.endsWith(ext),
-  );
-}
-
-function networkPriority(v: DetectedVideo): number {
-  // Parsed qualities are only populated for an HLS master playlist.
-  if (isHls(v.url, v.contentType) && Array.isArray(v.qualities) && v.qualities.length > 0) return 4;
-  if (isHls(v.url, v.contentType)) return 3;
-  if (isDash(v.url, v.contentType)) return 2;
-  if (isDirectFile(v.url)) return 1;
-  return 0;
 }
 
 // ── Video discovery (open shadow roots) ──────────────────────────────────────
@@ -292,62 +253,39 @@ function domSourceUrls(video: HTMLVideoElement): string[] {
   return urls;
 }
 
-/**
- * Deterministic ranking of detected network records for a video element.
- * Never returns blob:/data: URLs. Prefers exact DOM matches, then same-frame
- * HLS/DASH/direct, then newest plausible tab candidate.
- */
-function rankCandidate(
-  video: HTMLVideoElement,
-  records: DetectedVideo[],
-): DetectedVideo | null {
-  const playable = records.filter(
-    (r) =>
-      r.url &&
-      !isBlobOrData(r.url) &&
-      !isExcludedMedia(r.url, r.detectedBy),
-  );
-  if (playable.length === 0) return null;
-
-  const domUrls = domSourceUrls(video);
-  const nonBlobDom = domUrls.filter((u) => !isBlobOrData(u));
-
-  const byExact = (target: string | null | undefined): DetectedVideo | null => {
-    if (!target || isBlobOrData(target)) return null;
-    const n = normalizeUrl(target);
-    if (!n) return null;
-    return playable.find((r) => normalizeUrl(r.url) === n) ?? null;
-  };
-
-  // 1. Exact match currentSrc
-  const current = byExact(video.currentSrc);
-  if (current) return current;
-
-  // 2. Exact match src or <source>
-  for (const u of nonBlobDom) {
-    const hit = byExact(u);
-    if (hit) return hit;
-  }
-
-  // 3–4. Same-frame network records when frame metadata exists.
-  // Background already prefers the sender frame when records have frameId;
-  // if any returned records are frame-tagged, rank within that set first.
-  const withFrame = playable.filter((r) => typeof r.frameId === "number");
-  const pool = withFrame.length > 0 ? withFrame : playable;
-
-  // Prefer HLS master > DASH > direct, then newest
-  const sorted = [...pool].sort((a, b) => {
-    const pr = networkPriority(b) - networkPriority(a);
-    if (pr !== 0) return pr;
-    return b.timestamp - a.timestamp;
+async function reportDomSources(video: HTMLVideoElement): Promise<void> {
+  const urls = domSourceUrls(video).filter((url) => {
+    if (isBlobOrDataUrl(url) || isExcludedMediaCandidate(url)) return false;
+    try {
+      return /^https?:$/.test(new URL(url).protocol);
+    } catch {
+      return false;
+    }
   });
+  const pending = [...new Set(urls)].filter((url) => !reportedDomUrls.has(url));
+  if (pending.length === 0) return;
 
-  if (sorted.length === 0) return null;
+  for (const url of pending) reportedDomUrls.add(url);
+  try {
+    await browser.runtime.sendMessage({
+      action: "observeDomVideoSources",
+      urls: pending,
+    });
+  } catch {
+    // A sleeping/restarting background should be retried on the next resolve.
+    for (const url of pending) reportedDomUrls.delete(url);
+  }
+}
 
-  // 5. If only tab-level records and many competing streams of different kinds
-  // with no DOM signal, still pick the best-ranked (newest high-priority).
-  // Ambiguous multi-player pages are a known limitation.
-  return sorted[0] ?? null;
+function frameResourceUrls(): string[] {
+  try {
+    return performance
+      .getEntriesByType("resource")
+      .map((entry) => normalizeUrl(entry.name))
+      .filter((url): url is string => !!url);
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -359,15 +297,18 @@ function rankCandidate(
 function resolveCandidate(
   video: HTMLVideoElement,
   records: DetectedVideo[],
+  senderFrameId?: number,
 ): DetectedVideo | null {
   const playable = records.filter(
     (record) =>
       record.url &&
-      !isBlobOrData(record.url) &&
-      !isExcludedMedia(record.url, record.detectedBy),
+      !isBlobOrDataUrl(record.url) &&
+      !isExcludedMediaCandidate(record.url, record.detectedBy),
   );
 
-  const exactUrls = domSourceUrls(video).filter((url) => !isBlobOrData(url));
+  const exactUrls = domSourceUrls(video).filter(
+    (url) => !isBlobOrDataUrl(url),
+  );
   for (const url of exactUrls) {
     const normalized = normalizeUrl(url);
     const exact = playable.find(
@@ -379,14 +320,37 @@ function resolveCandidate(
     }
   }
 
+  const resources = frameResourceUrls();
+  const preferredSince = candidatePreferredSince.get(video);
+  const initial = rankMediaCandidate(playable, {
+    domUrls: exactUrls,
+    senderFrameId,
+    frameResourceUrls: resources,
+    preferredSince,
+  });
+
   const boundUrl = candidateBindings.get(video);
   if (boundUrl) {
     const bound = playable.find((record) => record.url === boundUrl);
-    if (bound) return bound;
+    if (bound) {
+      if (initial && initial.url !== bound.url) {
+        const observed = new Set(resources);
+        const isCurrent = (record: DetectedVideo) =>
+          observed.has(normalizeUrl(record.url) ?? record.url) ||
+          (typeof preferredSince === "number" &&
+            record.timestamp >= preferredSince);
+        // Keep a stable association against later previews, but allow strong
+        // evidence from the current media lifecycle to repair an early guess.
+        if (isCurrent(initial) && !isCurrent(bound)) {
+          candidateBindings.set(video, initial.url);
+          return initial;
+        }
+      }
+      return bound;
+    }
     candidateBindings.delete(video);
   }
 
-  const initial = rankCandidate(video, playable);
   if (initial) candidateBindings.set(video, initial.url);
   return initial;
 }
@@ -442,6 +406,25 @@ function injectOverlayStyles(root: ShadowRoot): void {
       right: ${OVERLAY_INSET - 2}px;
       width: ${BUTTON_SIZE + 8}px;
       height: ${BUTTON_SIZE + 8}px;
+    }
+    .chrome[data-position="top-left"] .controls {
+      left: ${OVERLAY_INSET - 2}px;
+      right: auto;
+    }
+    .chrome[data-position="top-center"] .controls {
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+    }
+    .chrome[data-position="middle-left"] .controls {
+      top: 50%;
+      left: ${OVERLAY_INSET - 2}px;
+      right: auto;
+      transform: translateY(-50%);
+    }
+    .chrome[data-position="middle-right"] .controls {
+      top: 50%;
+      transform: translateY(-50%);
     }
     button.cast {
       pointer-events: auto;
@@ -514,6 +497,29 @@ function injectOverlayStyles(root: ShadowRoot): void {
       transform: translateY(0);
       visibility: visible;
     }
+    .chrome[data-position="top-left"] .status {
+      left: ${OVERLAY_INSET + 4}px;
+      right: auto;
+      text-align: left;
+    }
+    .chrome[data-position="top-center"] .status {
+      left: 50%;
+      right: auto;
+      text-align: center;
+      transform: translate(-50%, -4px);
+    }
+    .chrome[data-position="top-center"] .status.show {
+      transform: translate(-50%, 0);
+    }
+    .chrome[data-position="middle-left"] .status,
+    .chrome[data-position="middle-right"] .status {
+      top: calc(50% + ${BUTTON_SIZE / 2 + 8}px);
+    }
+    .chrome[data-position="middle-left"] .status {
+      left: ${OVERLAY_INSET + 4}px;
+      right: auto;
+      text-align: left;
+    }
     @media (prefers-reduced-motion: reduce) {
       .chrome,
       button.cast,
@@ -536,7 +542,7 @@ function ensureOverlay(): void {
   host.id = HOST_ID;
   host.setAttribute("data-playbridge", "cast-overlay");
 
-  const shadow = host.attachShadow({ mode: "open" });
+  const shadow = host.attachShadow({ mode: "closed" });
   injectOverlayStyles(shadow);
 
   const wrap = document.createElement("div");
@@ -544,6 +550,7 @@ function ensureOverlay(): void {
 
   const chrome = document.createElement("div");
   chrome.className = "chrome";
+  chrome.dataset.position = overlayPosition;
 
   const controls = document.createElement("div");
   controls.className = "controls";
@@ -631,7 +638,6 @@ function hideChrome(): void {
   chromeVisible = false;
   clearAutoHideTimer();
   chromeEl?.classList.add("is-hidden");
-  if (castBtn) castBtn.tabIndex = -1;
 }
 
 function onChromeFocusIn(): void {
@@ -850,25 +856,34 @@ function positionOverlay(): void {
 
 // ── Detection fetch + resolve ────────────────────────────────────────────────
 
-async function fetchDetectedVideos(): Promise<DetectedVideo[]> {
+interface DetectedVideosResponse {
+  videos: DetectedVideo[];
+  senderFrameId?: number;
+}
+
+async function fetchDetectedVideos(): Promise<DetectedVideosResponse> {
   try {
     const res = (await browser.runtime.sendMessage({
       action: "getVideos",
       scope: "frame",
-    })) as { videos?: DetectedVideo[] } | undefined;
-    return Array.isArray(res?.videos) ? res!.videos! : [];
+    })) as { videos?: DetectedVideo[]; frameId?: number } | undefined;
+    return {
+      videos: Array.isArray(res?.videos) ? res.videos : [],
+      senderFrameId:
+        typeof res?.frameId === "number" ? res.frameId : undefined,
+    };
   } catch {
-    return [];
+    return { videos: [] };
   }
 }
 
 async function resolveAndRender(): Promise<void> {
   if (!enabled || !settingLoaded) return;
 
-  const video = selectPrimaryVideo();
-  if (video !== primaryVideo) {
+  const selectedVideo = selectPrimaryVideo();
+  if (selectedVideo !== primaryVideo) {
     unbindVideoListeners(primaryVideo);
-    primaryVideo = video;
+    primaryVideo = selectedVideo;
     bindVideoListeners(primaryVideo);
     observeVideoSize(primaryVideo);
     if (primaryVideo) {
@@ -882,10 +897,16 @@ async function resolveAndRender(): Promise<void> {
   }
 
   ensureOverlay();
-  const records = await fetchDetectedVideos();
-  if (!enabled) return;
+  const activeVideo = primaryVideo;
+  await reportDomSources(activeVideo);
+  const response = await fetchDetectedVideos();
+  if (!enabled || primaryVideo !== activeVideo || !activeVideo.isConnected) return;
 
-  const candidate = resolveCandidate(primaryVideo, records);
+  const candidate = resolveCandidate(
+    activeVideo,
+    response.videos,
+    response.senderFrameId,
+  );
   lastCandidateUrl = candidate?.url ?? null;
 
   if (!candidate) {
@@ -908,6 +929,9 @@ function scheduleResolve(): void {
 // ── Cast interaction ─────────────────────────────────────────────────────────
 
 async function onCastClick(e: Event): Promise<void> {
+  // The host lives in the page's shared DOM. Never allow synthetic page events
+  // to invoke the privileged background casting path.
+  if (!e.isTrusted) return;
   e.preventDefault();
   e.stopPropagation();
   if (!enabled || castInFlight || !primaryVideo || !chromeVisible) return;
@@ -917,8 +941,17 @@ async function onCastClick(e: Event): Promise<void> {
   setOverlayVisualState("casting", "Casting…");
 
   try {
-    const records = await fetchDetectedVideos();
-    const candidate = resolveCandidate(primaryVideo, records);
+    const video = primaryVideo;
+    const response = await fetchDetectedVideos();
+    if (!enabled || primaryVideo !== video || !video.isConnected) {
+      setOverlayVisualState("error", "Video changed; try again.");
+      return;
+    }
+    const candidate = resolveCandidate(
+      video,
+      response.videos,
+      response.senderFrameId,
+    );
     lastCandidateUrl = candidate?.url ?? null;
 
     if (!candidate) {
@@ -1005,20 +1038,32 @@ function onFullscreenChange(): void {
 
 function onMediaSourceChange(event: Event): void {
   const video = event.currentTarget;
-  if (
-    video instanceof HTMLVideoElement &&
-    (event.type === "loadstart" || event.type === "emptied")
-  ) {
-    // These events indicate that this player is starting a new resource. Allow
-    // it to establish a fresh fallback binding; ordinary detections and play or
-    // metadata events intentionally keep the existing association sticky.
-    candidateBindings.delete(video);
+  if (video instanceof HTMLVideoElement) {
+    const now = Date.now();
+    if (event.type === "loadstart" || event.type === "emptied") {
+      candidateBindings.delete(video);
+      candidatePreferredSince.set(video, now - 5_000);
+      playbackRefreshes.delete(video);
+    } else if (event.type === "loadedmetadata") {
+      // The network request belonging to this source should now be present.
+      candidateBindings.delete(video);
+      candidatePreferredSince.set(video, now - 30_000);
+    } else if (event.type === "play" && !playbackRefreshes.has(video)) {
+      // Content scripts can attach after loadstart/metadata. Refresh once at the
+      // first play so an early ad/preload binding cannot remain authoritative.
+      candidateBindings.delete(video);
+      candidatePreferredSince.set(video, now - 30_000);
+      playbackRefreshes.add(video);
+    }
   }
   scheduleResolve();
 }
 
 function bindVideoListeners(video: HTMLVideoElement | null): void {
   if (!video) return;
+  if (!candidatePreferredSince.has(video)) {
+    candidatePreferredSince.set(video, Date.now() - 60_000);
+  }
   video.addEventListener("loadedmetadata", onMediaSourceChange);
   video.addEventListener("emptied", onMediaSourceChange);
   video.addEventListener("loadstart", onMediaSourceChange);
@@ -1126,6 +1171,9 @@ function stopOverlayFeature(): void {
   destroyOverlay();
   lastCandidateUrl = null;
   candidateBindings = new WeakMap<HTMLVideoElement, string>();
+  candidatePreferredSince = new WeakMap<HTMLVideoElement, number>();
+  playbackRefreshes = new WeakSet<HTMLVideoElement>();
+  reportedDomUrls = new Set<string>();
 }
 
 function applyEnabled(next: boolean): void {
@@ -1136,6 +1184,40 @@ function applyEnabled(next: boolean): void {
   else if (!enabled && was) stopOverlayFeature();
 }
 
+function applyOverlayPosition(next: VideoCastOverlayPosition): void {
+  overlayPosition = next;
+  if (chromeEl) chromeEl.dataset.position = next;
+  schedulePosition();
+}
+
+async function refreshOverlayPreferences(): Promise<void> {
+  const requestId = ++preferenceRequestId;
+  let preferences: VideoCastOverlayPreferences | undefined;
+  try {
+    preferences = (await browser.runtime.sendMessage({
+      action: "getOverlayPreferences",
+    })) as VideoCastOverlayPreferences | undefined;
+  } catch {
+    /* handled as disabled below */
+  }
+  if (requestId !== preferenceRequestId) return;
+
+  if (
+    typeof preferences?.enabled !== "boolean" ||
+    !isVideoCastOverlayPosition(preferences.position)
+  ) {
+    // A failed or malformed background response must not bypass a saved global
+    // or site disable preference by falling back to an enabled overlay.
+    settingLoaded = true;
+    applyEnabled(false);
+    return;
+  }
+
+  applyOverlayPosition(preferences.position);
+  settingLoaded = true;
+  applyEnabled(preferences.enabled);
+}
+
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 function onStorageChanged(
@@ -1143,26 +1225,21 @@ function onStorageChanged(
   area: string,
 ): void {
   if (area !== "local") return;
-  if (!(SHOW_VIDEO_CAST_OVERLAY_KEY in changes)) return;
-  const change = changes[SHOW_VIDEO_CAST_OVERLAY_KEY];
-  const value =
-    typeof change.newValue === "boolean"
-      ? change.newValue
-      : SHOW_VIDEO_CAST_OVERLAY_DEFAULT;
-  applyEnabled(value);
+  if (!VIDEO_CAST_OVERLAY_STORAGE_KEYS.some((key) => key in changes)) return;
+  void refreshOverlayPreferences();
 }
 
 function onRuntimeMessage(message: unknown): void {
-  if (!enabled || !settingLoaded) return;
   const msg = message as { type?: string };
-  // New detection or bridge status — re-rank without high-frequency polling.
   if (msg?.type === "overlay_navigation") {
-    candidateBindings = new WeakMap<HTMLVideoElement, string>();
+    void refreshOverlayPreferences();
+    return;
   }
+  if (!enabled || !settingLoaded) return;
+  // New detection or bridge status — re-rank without high-frequency polling.
   if (
     msg?.type === "video_detected" ||
-    msg?.type === "ws_status_update" ||
-    msg?.type === "overlay_navigation"
+    msg?.type === "ws_status_update"
   ) {
     scheduleResolve();
   }
@@ -1170,17 +1247,9 @@ function onRuntimeMessage(message: unknown): void {
 
 async function init(): Promise<void> {
   // Avoid FOUC: do not create UI until the setting is known.
-  try {
-    enabled = await getShowVideoCastOverlay(browser.storage.local);
-  } catch {
-    enabled = SHOW_VIDEO_CAST_OVERLAY_DEFAULT;
-  }
-  settingLoaded = true;
-
   browser.storage.onChanged.addListener(onStorageChanged);
   browser.runtime.onMessage.addListener(onRuntimeMessage);
-
-  if (enabled) startOverlayFeature();
+  await refreshOverlayPreferences();
 }
 
 void init();

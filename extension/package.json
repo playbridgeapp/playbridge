@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "test": "node test/run-tests.mjs",
     "watch": "node build.mjs --watch"
   },
   "dependencies": {
