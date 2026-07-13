@@ -155,13 +155,21 @@ class ExtensionBridge {
         // Match Android browser casts: surface that this stream came from a
         // browser tab (Now Casting / TV title), not a library or phone file.
         final title = titleForExtensionCast(obj['title'] as String?);
+        // Prefer the extension's real detection method (content_type,
+        // url_pattern_m3u8, …) — same field the phone sends. Do not invent a
+        // synthetic "browser" tag; origin is already in the title.
+        final detectedBy = (obj['detectedBy'] as String?)?.trim();
+        final contentType = (obj['contentType'] as String?)?.trim();
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
           final ok = _sender.castUrl(
             url,
             headers: headers,
             title: title,
-            detectedBy: 'browser',
+            detectedBy:
+                (detectedBy != null && detectedBy.isNotEmpty) ? detectedBy : null,
+            contentType:
+                (contentType != null && contentType.isNotEmpty) ? contentType : null,
           );
           _send(socket, {
             'type': 'result',

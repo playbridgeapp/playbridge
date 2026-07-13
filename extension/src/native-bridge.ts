@@ -99,8 +99,18 @@ export function cast(
   url: string,
   headers?: Record<string, string>,
   title?: string,
+  options?: { detectedBy?: string; contentType?: string },
 ): Promise<{ ok: boolean; error?: string }> {
-  return request({ cmd: "cast", url, headers: headers ?? {}, title: title ?? "" });
+  return request({
+    cmd: "cast",
+    url,
+    headers: headers ?? {},
+    title: title ?? "",
+    // Match phone payloads: real detection method + content type, not a
+    // synthetic "browser" tag (title already carries "via browser").
+    detectedBy: options?.detectedBy ?? "",
+    contentType: options?.contentType ?? "",
+  });
 }
 
 export function control(action: string): Promise<{ ok: boolean; error?: string }> {

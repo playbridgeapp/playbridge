@@ -170,13 +170,14 @@ class TvSenderController extends ChangeNotifier {
       _client.send(senderPlaylistCommandJson(playlist));
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
-  /// optional request [headers] (Referer / cookies / auth), a [title], and an
-  /// optional [detectedBy] origin tag (e.g. `"browser"` for extension casts).
+  /// optional request [headers] (Referer / cookies / auth), a [title], and
+  /// optional [detectedBy] / [contentType] matching the phone play payload.
   bool castUrl(
     String url, {
     Map<String, String>? headers,
     String? title,
     String? detectedBy,
+    String? contentType,
   }) {
     final payload = PlayPayload()..url = url;
     // Always sanitize here so every desktop→TV cast path (extension, tray,
@@ -189,9 +190,19 @@ class TvSenderController extends ChangeNotifier {
     if (detectedBy != null && detectedBy.isNotEmpty) {
       payload.detectedBy = detectedBy;
     }
+    if (contentType != null && contentType.isNotEmpty) {
+      payload.contentType = contentType;
+    }
     // Help the TV pick an HLS path when the extension didn't set content_type.
     if (!payload.hasContentType() && _looksLikeHls(url)) {
       payload.contentType = 'application/vnd.apple.mpegurl';
+    }
+    // If we still have no detection tag, mirror the phone's common HLS case so
+    // Exo uses the browser-compatible HTTP stack.
+    if (!payload.hasDetectedBy() && payload.hasContentType()) {
+      payload.detectedBy = 'content_type';
+    } else if (!payload.hasDetectedBy() && _looksLikeHls(url)) {
+      payload.detectedBy = 'url_pattern_m3u8';
     }
     return castVideo(payload);
   }
