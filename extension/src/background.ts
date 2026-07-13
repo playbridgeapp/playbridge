@@ -1,7 +1,40 @@
 import browser from "./browser";
 
+import {
+  DATA_CONSENT_KEY,
+  DATA_CONSENT_VERSION,
+  dataConsentStatus,
+  getDataConsentGranted,
+  requiresLocalDataConsent,
+  setDataConsentGranted,
+} from "./data-consent";
 import { HlsParser } from "./hls-parser";
+import {
+  isBlobOrDataUrl,
+  isDomSourceDetection,
+  isExcludedMediaCandidate,
+  rankMediaCandidate,
+} from "./media-candidate";
 import * as bridge from "./native-bridge";
+import {
+  getVideoCastOverlayPreferences,
+  siteKeyFromUrl,
+} from "./settings";
+
+const DATA_CONSENT_REQUIRED = requiresLocalDataConsent(
+  browser.runtime.getManifest().manifest_version,
+);
+let dataConsentGranted = !DATA_CONSENT_REQUIRED;
+const dataConsentReady = getDataConsentGranted(
+  browser.storage.local,
+  DATA_CONSENT_REQUIRED,
+).then((granted) => {
+  dataConsentGranted = granted;
+});
+
+function canHandleMediaData(): boolean {
+  return !DATA_CONSENT_REQUIRED || dataConsentGranted;
+}
 
 // Firefox-only: response-body filtering (used to sniff HLS playlist bodies).
 // Absent in Chrome MV3, where detection degrades to header/URL signals only.
@@ -135,6 +168,30 @@ function cleanupTab(tabId: number) {
 const sessionStore: any = (browser.storage as any)?.session;
 const vkey = (tabId: number) => `pb_videos_${tabId}`;
 
+async function clearPersistedDetections(): Promise<void> {
+  if (!sessionStore) return;
+  try {
+    const all = await sessionStore.get(null);
+    const keys = Object.keys(all ?? {}).filter((key) =>
+      key.startsWith("pb_videos_"),
+    );
+    if (keys.length > 0) await sessionStore.remove(keys);
+  } catch {
+    /* session storage is best-effort */
+  }
+}
+
+async function clearAllDetectionState(): Promise<void> {
+  const tabIds = [...tabVideos.keys()];
+  tabVideos.clear();
+  tabSeenUrls.clear();
+  tabHeadersCaptured.clear();
+  requestHeadersMap.clear();
+  urlToTab.clear();
+  for (const tabId of tabIds) updateBadge(tabId);
+  await clearPersistedDetections();
+}
+
 function persistVideos(tabId: number) {
   if (!sessionStore || tabId < 0) return;
   const v = tabVideos.get(tabId);
@@ -147,6 +204,11 @@ function persistVideos(tabId: number) {
 // Resolves once the in-memory Maps have been re-merged from storage.session.
 // getVideos awaits this so a just-woken SW doesn't report an empty list.
 const hydrated: Promise<void> = (async () => {
+  await dataConsentReady;
+  if (!canHandleMediaData()) {
+    await clearPersistedDetections();
+    return;
+  }
   if (!sessionStore) return;
   try {
     const all = await sessionStore.get(null);
@@ -186,24 +248,35 @@ function updateBadge(tabId: number) {
 
 browser.tabs.onRemoved.addListener((tabId) => cleanupTab(tabId));
 
-function handleNavigation(details: { frameId: number; tabId: number; url: string }) {
+function handleCommittedNavigation(details: { frameId: number; tabId: number; url: string }) {
   if (details.frameId !== 0) return;
   cleanupTab(details.tabId);
+}
+
+function handleHistoryStateUpdated(details: { frameId: number; tabId: number; url: string }) {
+  if (details.frameId !== 0) return;
+  // A same-document SPA navigation may keep the existing player alive without
+  // issuing its media request again. Retain detections and let the content
+  // script re-evaluate the current DOM instead of requiring a page refresh.
   browser.tabs.sendMessage(details.tabId, { type: "overlay_navigation" }).catch(() => {});
 }
 
 if (browser.webNavigation) {
-  browser.webNavigation.onCommitted.addListener(handleNavigation);
-  browser.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
+  browser.webNavigation.onCommitted.addListener(handleCommittedNavigation);
+  browser.webNavigation.onHistoryStateUpdated.addListener(handleHistoryStateUpdated);
 }
 
 function notifyContentScript(video: VideoData, tabId: number, headers: Record<string, string> | null) {
   const hasHeaders = headers && Object.keys(headers).length > 0;
   const seenUrls = getTabSeenUrls(tabId);
   const headersCaptured = getTabHeadersCaptured(tabId);
+  const videos = getTabVideos(tabId);
+  const existing = videos.find((candidate) => candidate.url === video.url);
+  const upgradesDomDetection =
+    existing?.detectedBy === "dom_source" && video.detectedBy !== "dom_source";
 
   if (seenUrls.has(video.url)) {
-    if (headersCaptured.has(video.url) || !hasHeaders) return;
+    if (!upgradesDomDetection && (headersCaptured.has(video.url) || !hasHeaders)) return;
   }
 
   seenUrls.add(video.url);
@@ -215,7 +288,6 @@ function notifyContentScript(video: VideoData, tabId: number, headers: Record<st
     if (headersCaptured.size > 500) headersCaptured.delete(headersCaptured.keys().next().value!);
   }
 
-  const videos = getTabVideos(tabId);
   const idx = videos.findIndex((v) => v.url === video.url);
   if (idx !== -1) videos[idx] = { ...videos[idx], ...video };
   else {
@@ -229,11 +301,11 @@ function notifyContentScript(video: VideoData, tabId: number, headers: Record<st
   // Notify an open popup (if any) so it can refresh its list live.
   browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
   // runtime.sendMessage is not a reliable way to target content scripts.
-  // Notify the owning frame directly without exposing captured request headers.
+  // Wake every frame in the tab: Firefox/Fission can attribute MSE requests to
+  // a different webRequest frame than the frame containing the <video>. The
+  // notification carries no media data; getVideos performs the scoped lookup.
   if (tabId >= 0) {
-    const message = { type: "video_detected", video: publicVideoView(video) };
-    const options = typeof video.frameId === "number" ? { frameId: video.frameId } : undefined;
-    browser.tabs.sendMessage(tabId, message, options).catch(() => {});
+    browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
   }
 }
 
@@ -253,9 +325,7 @@ function updateStoredVideo(video: VideoData, tabId: number) {
   persistVideos(tabId);
   browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
   if (tabId >= 0) {
-    const message = { type: "video_detected", video: publicVideoView(video) };
-    const options = typeof video.frameId === "number" ? { frameId: video.frameId } : undefined;
-    browser.tabs.sendMessage(tabId, message, options).catch(() => {});
+    browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
   }
 }
 
@@ -332,6 +402,72 @@ function broadcastStatus() {
 
 bridge.onState(() => broadcastStatus());
 
+function broadcastDataConsent(): void {
+  const status = dataConsentStatus(
+    DATA_CONSENT_REQUIRED,
+    dataConsentGranted,
+  );
+  const message = { type: "data_consent_changed", status };
+  browser.runtime.sendMessage(message).catch(() => {});
+  browser.tabs.query({}).then((tabs) => {
+    for (const tab of tabs) {
+      if (tab.id != null) {
+        browser.tabs.sendMessage(tab.id, message).catch(() => {});
+      }
+    }
+  });
+}
+
+async function applyDataConsentState(granted: boolean): Promise<void> {
+  const next = !DATA_CONSENT_REQUIRED || granted;
+  if (next === dataConsentGranted) {
+    if (!next) await clearAllDetectionState();
+    return;
+  }
+  dataConsentGranted = next;
+  if (!next) await clearAllDetectionState();
+  broadcastDataConsent();
+}
+
+async function openDataConsentPage(): Promise<void> {
+  if (!DATA_CONSENT_REQUIRED) return;
+  const url = browser.runtime.getURL("ui/consent.html");
+  try {
+    const tabs = await browser.tabs.query({});
+    const existing = tabs.find((tab) => tab.url === url);
+    if (existing?.id != null) {
+      await browser.tabs.update(existing.id, { active: true });
+      if (existing.windowId != null) {
+        await browser.windows.update(existing.windowId, { focused: true });
+      }
+      return;
+    }
+  } catch {
+    /* create the tab below */
+  }
+  await browser.tabs.create({ url });
+}
+
+function isTrustedExtensionPage(
+  sender: browser.Runtime.MessageSender,
+): boolean {
+  const extensionRoot = browser.runtime.getURL("");
+  return (
+    typeof sender.url === "string" &&
+    sender.url.startsWith(extensionRoot)
+  );
+}
+
+browser.storage.onChanged.addListener((changes, area) => {
+  if (!DATA_CONSENT_REQUIRED || area !== "local") return;
+  if (!(DATA_CONSENT_KEY in changes)) return;
+  const granted =
+    changes[DATA_CONSENT_KEY].newValue === DATA_CONSENT_VERSION;
+  void applyDataConsentState(granted);
+});
+
+void dataConsentReady.then(() => broadcastDataConsent());
+
 /**
  * Stream title for the TV: prefer the website/tab title, never the raw URL
  * basename unless the tab title is unavailable.
@@ -367,10 +503,84 @@ function castVideo(
   );
 }
 
+function videoHasReplayHeaders(video: VideoData): boolean {
+  return !!(video.headers && Object.keys(video.headers).length > 0);
+}
+
+function isPlayableCastRecord(video: VideoData): boolean {
+  return (
+    !!video.url &&
+    !isBlobOrDataUrl(video.url) &&
+    !isExcludedMediaCandidate(video.url, video.detectedBy)
+  );
+}
+
+/**
+ * Overlay cast may resolve a page-origin DOM/get_file URL that has no replay
+ * headers, while the popup list includes a CDN request (Cookie/Referer) for the
+ * same player. Prefer a header-bearing network record from the tab when the
+ * content-script hint is weak.
+ */
+function resolveOverlayCastVideo(
+  preferred: VideoData,
+  tabRecords: VideoData[],
+  sender: browser.Runtime.MessageSender,
+): VideoData {
+  if (
+    videoHasReplayHeaders(preferred) &&
+    !isDomSourceDetection(preferred.detectedBy)
+  ) {
+    return preferred;
+  }
+
+  const toCandidate = (video: VideoData) => ({
+    url: video.url,
+    contentType: video.contentType,
+    detectedBy: video.detectedBy,
+    timestamp: video.timestamp,
+    frameId: video.frameId,
+    qualities: video.qualities,
+    hasHeaders: videoHasReplayHeaders(video),
+  });
+
+  const playable = tabRecords.filter(isPlayableCastRecord);
+  const frameMatched = playable.filter((video) =>
+    videoMatchesSender(video, sender),
+  );
+  // Prefer the sender's frame, but if every frame-local hit is headerless fall
+  // back to the full tab (CDN requests are often attributed elsewhere).
+  const frameHasHeaders = frameMatched.some(videoHasReplayHeaders);
+  const pool = frameHasHeaders || frameMatched.length === 0 ? frameMatched : playable;
+  const searchPool = pool.length > 0 ? pool : playable;
+
+  const ranked = rankMediaCandidate(searchPool.map(toCandidate), {
+    domUrls: [preferred.url],
+    senderFrameId:
+      typeof sender.frameId === "number" && sender.frameId >= 0
+        ? sender.frameId
+        : undefined,
+    preferredSince: preferred.timestamp,
+  });
+  if (ranked) {
+    const match = searchPool.find((video) => video.url === ranked.url);
+    if (match && videoHasReplayHeaders(match)) return match;
+  }
+
+  const headerBearing = searchPool
+    .filter(
+      (video) =>
+        videoHasReplayHeaders(video) &&
+        !isDomSourceDetection(video.detectedBy),
+    )
+    .sort((left, right) => right.timestamp - left.timestamp);
+  return headerBearing[0] ?? preferred;
+}
+
 // ==================== Request header capture ====================
 
 browser.webRequest.onBeforeSendHeaders.addListener(
   (details) => {
+    if (!canHandleMediaData()) return;
     if (details.method === "OPTIONS") return;
     const headers: Record<string, string> = {};
     const skip = ["host", "connection", "accept-encoding", "content-length", "upgrade-insecure-requests"];
@@ -382,7 +592,12 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     }
   },
   { urls: ["<all_urls>"] },
-  (typeof (globalThis as any).chrome !== "undefined" ? ["requestHeaders", "extraHeaders"] : ["requestHeaders"]) as any,
+  // Firefox also exposes a `chrome` compatibility namespace, so checking for
+  // globalThis.chrome misidentifies it as Chromium. filterResponseData is the
+  // reliable capability distinction used by this extension's MV2 build.
+  (FILTER_AVAILABLE
+    ? ["requestHeaders"]
+    : ["requestHeaders", "extraHeaders"]) as any,
 );
 
 // Visibility probe: log every request the extension can see whose URL looks
@@ -390,6 +605,7 @@ browser.webRequest.onBeforeSendHeaders.addListener(
 // isn't reaching the extension at all (e.g. a sandboxed/cross-origin iframe).
 browser.webRequest.onBeforeRequest.addListener(
   (details) => {
+    if (!canHandleMediaData()) return;
     // Record the real tab for this URL so a later tabId:-1 sighting can be mapped back.
     rememberUrlTab(details.url, details.tabId);
     const u = details.url.toLowerCase();
@@ -403,6 +619,7 @@ browser.webRequest.onBeforeRequest.addListener(
 
 browser.webRequest.onHeadersReceived.addListener(
   (details) => {
+    if (!canHandleMediaData()) return;
     // Resolve a real tab for tabId:-1 sightings (iframe/worker-initiated requests)
     // so detections aren't filed under -1 where the popup can't see them.
     const tabId = resolveTabId(details.tabId, details.url);
@@ -533,9 +750,64 @@ browser.webRequest.onHeadersReceived.addListener(
 // ==================== Runtime message handler ====================
 
 /** Strip sensitive fields before sending detection records to content scripts. */
-function publicVideoView(v: VideoData): Omit<VideoData, "headers"> {
+function publicVideoView(
+  v: VideoData,
+): Omit<VideoData, "headers"> & { hasHeaders: boolean } {
   const { headers: _headers, ...rest } = v;
-  return rest;
+  return {
+    ...rest,
+    // Boolean only — never expose Cookie/Referer/Authorization values.
+    hasHeaders: !!(_headers && Object.keys(_headers).length > 0),
+  };
+}
+
+function domSourceContentType(url: string): string {
+  const path = url.toLowerCase().split(/[?#]/)[0] ?? "";
+  if (path.endsWith(".m3u8")) return "application/vnd.apple.mpegurl";
+  if (path.endsWith(".mpd")) return "application/dash+xml";
+  if (path.endsWith(".webm")) return "video/webm";
+  if (path.endsWith(".mp4") || path.endsWith(".m4v")) return "video/mp4";
+  return "video/unknown";
+}
+
+function validatedDomSourceUrls(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const result = new Set<string>();
+  for (const item of value.slice(0, 16)) {
+    if (typeof item !== "string" || item.length === 0 || item.length > 8192) continue;
+    try {
+      const parsed = new URL(item);
+      if (!/^https?:$/.test(parsed.protocol)) continue;
+      const path = parsed.pathname.toLowerCase();
+      if (/\.(?:vtt|srt|ts|m4s)$/.test(path)) continue;
+      result.add(parsed.href);
+    } catch {
+      /* ignore malformed page URLs */
+    }
+  }
+  return [...result];
+}
+
+function hasSameWebOrigin(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    if (!/^https?:$/.test(a.protocol) || !/^https?:$/.test(b.protocol)) return false;
+    return a.origin === b.origin;
+  } catch {
+    return false;
+  }
+}
+
+function videoMatchesSender(v: VideoData, sender: browser.Runtime.MessageSender): boolean {
+  const frameId = sender.frameId;
+  if (typeof frameId !== "number" || frameId < 0) return true;
+  if (typeof v.frameId !== "number" || v.frameId === frameId) return true;
+  // Firefox may attribute worker/MSE requests to the top frame despite the
+  // player living in a same-origin child frame. Origin is a bounded fallback;
+  // cross-origin records remain excluded.
+  return hasSameWebOrigin(v.originUrl, sender.url);
 }
 
 function videosForSender(
@@ -548,15 +820,128 @@ function videosForSender(
   if (!options.preferFrame) return all;
   const frameId = sender.frameId;
   if (typeof frameId !== "number" || frameId < 0) return all;
-  const sameFrame = all.filter((v) => v.frameId === frameId);
-  // Legacy/session records without frame metadata are safe fallback candidates.
-  // Never expose a record explicitly owned by a different frame.
-  const unframed = all.filter((v) => typeof v.frameId !== "number");
-  return [...sameFrame, ...unframed];
+  // Exact-frame and legacy unframed records pass directly. Same-origin records
+  // cover Firefox's MSE/Fission frame-attribution mismatch.
+  return all.filter((v) => videoMatchesSender(v, sender));
 }
+
+const CONSENT_GATED_ACTIONS = new Set([
+  "getCurrentTabUrl",
+  "wsPlayOnTv",
+  "castDetectedVideo",
+  "wsSendToTv",
+]);
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const msg = message as Record<string, unknown>;
+
+  if (msg.action === "getDataConsent") {
+    dataConsentReady.then(() =>
+      sendResponse(
+        dataConsentStatus(DATA_CONSENT_REQUIRED, dataConsentGranted),
+      ),
+    );
+    return true;
+  }
+
+  if (msg.action === "setDataConsent") {
+    if (!isTrustedExtensionPage(sender) || typeof msg.granted !== "boolean") {
+      sendResponse({ success: false, reason: "Invalid consent request" });
+      return true;
+    }
+    setDataConsentGranted(browser.storage.local, msg.granted)
+      .then(() => applyDataConsentState(msg.granted as boolean))
+      .then(() =>
+        sendResponse({
+          success: true,
+          status: dataConsentStatus(
+            DATA_CONSENT_REQUIRED,
+            dataConsentGranted,
+          ),
+        }),
+      )
+      .catch(() =>
+        sendResponse({ success: false, reason: "Could not save consent" }),
+      );
+    return true;
+  }
+
+  if (msg.action === "openDataConsent") {
+    if (!isTrustedExtensionPage(sender)) {
+      sendResponse({ opened: false });
+      return true;
+    }
+    openDataConsentPage()
+      .then(() => sendResponse({ opened: true }))
+      .catch(() => sendResponse({ opened: false }));
+    return true;
+  }
+
+  if (msg.action === "getOverlayPreferences") {
+    const requestedTabId =
+      typeof msg.tabId === "number" && msg.tabId >= 0 ? msg.tabId : undefined;
+    const resolveTabUrl = async (): Promise<string | undefined> => {
+      if (sender.tab?.url) return sender.tab.url;
+      if (requestedTabId != null) {
+        try {
+          return (await browser.tabs.get(requestedTabId)).url;
+        } catch {
+          return undefined;
+        }
+      }
+      try {
+        const tabs = await browser.tabs.query({
+          active: true,
+          currentWindow: true,
+        });
+        return tabs[0]?.url;
+      } catch {
+        return undefined;
+      }
+    };
+
+    dataConsentReady
+      .then(async () => {
+        if (!canHandleMediaData()) {
+          const preferences = await getVideoCastOverlayPreferences(
+            browser.storage.local,
+            null,
+          );
+          return {
+            ...preferences,
+            enabled: false,
+            siteKey: null,
+            consentRequired: true,
+          };
+        }
+        const url = await resolveTabUrl();
+        return getVideoCastOverlayPreferences(
+          browser.storage.local,
+          siteKeyFromUrl(url),
+        );
+      })
+      .then(sendResponse)
+      .catch(() =>
+        getVideoCastOverlayPreferences(browser.storage.local, null).then(
+          (preferences) =>
+            sendResponse({ ...preferences, enabled: false, siteKey: null }),
+        ),
+      );
+    return true;
+  }
+
+  if (
+    DATA_CONSENT_REQUIRED &&
+    !canHandleMediaData() &&
+    CONSENT_GATED_ACTIONS.has(String(msg.action))
+  ) {
+    sendResponse({
+      success: false,
+      reason: "Media access consent required",
+      consentRequired: true,
+    });
+    return true;
+  }
 
   if (msg.action === "getVideos") {
     // Content scripts must not choose arbitrary tab/frame IDs. Popup/extension
@@ -568,6 +953,10 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Await rehydration so a freshly-woken MV3 service worker doesn't reply with
     // an empty list before storage.session has been merged back in.
     hydrated.then(() => {
+      if (!canHandleMediaData()) {
+        sendResponse({ videos: [], count: 0, consentRequired: true });
+        return;
+      }
       let videos: VideoData[];
       if (fromContent) {
         videos = videosForSender(sender, { preferFrame: true });
@@ -588,14 +977,48 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async response
   }
 
+  if (msg.action === "observeDomVideoSources") {
+    if (!canHandleMediaData()) {
+      sendResponse({ registered: 0, consentRequired: true });
+      return true;
+    }
+    const tabId = sender.tab?.id;
+    if (tabId == null || tabId < 0) {
+      sendResponse({ registered: 0 });
+      return true;
+    }
+    const frameId =
+      typeof sender.frameId === "number" && sender.frameId >= 0
+        ? sender.frameId
+        : undefined;
+    const urls = validatedDomSourceUrls(msg.urls);
+    for (const url of urls) {
+      notifyContentScript(
+        {
+          url,
+          tabId,
+          contentType: domSourceContentType(url),
+          detectedBy: "dom_source",
+          originUrl: sender.url ?? "",
+          timestamp: Date.now(),
+          frameId,
+        },
+        tabId,
+        null,
+      );
+    }
+    sendResponse({ registered: urls.length });
+    return true;
+  }
+
   if (msg.action === "clearVideos") {
     const tabId = (msg.tabId ?? sender.tab?.id) as number | undefined;
-    if (tabId) cleanupTab(tabId);
-    else {
-      tabVideos.clear(); tabSeenUrls.clear(); tabHeadersCaptured.clear(); requestHeadersMap.clear();
-      sessionStore?.clear?.();
+    if (tabId != null) {
+      cleanupTab(tabId);
+      sendResponse({ cleared: true });
+    } else {
+      clearAllDetectionState().then(() => sendResponse({ cleared: true }));
     }
-    sendResponse({ cleared: true });
     return true;
   }
 
@@ -715,19 +1138,17 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     const videos = getTabVideos(tabId);
-    const frameId = sender.frameId;
-    const stored = videos.find(
-      (v) =>
-        v.url === url &&
-        (typeof frameId !== "number" ||
-          typeof v.frameId !== "number" ||
-          v.frameId === frameId),
-    );
+    const stored =
+      videos.find((v) => v.url === url && videoMatchesSender(v, sender)) ??
+      videos.find((v) => v.url === url);
     if (!stored) {
       sendResponse({ success: false, reason: "Video not found" });
       return true;
     }
-    castVideo({ ...stored, tabId }, sender.tab?.title).then((r) =>
+    // Content may point at a headerless DOM/get_file URL; upgrade to the
+    // header-bearing network record the popup would cast for this player.
+    const toCast = resolveOverlayCastVideo(stored, videos, sender);
+    castVideo({ ...toCast, tabId }, sender.tab?.title).then((r) =>
       sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
     );
     return true;
@@ -779,9 +1200,27 @@ function createContextMenus() {
 // MV3 service worker re-evaluates this file on wake.
 browser.runtime.onInstalled.addListener(() => {
   menusApi.removeAll().then(createContextMenus).catch(() => {});
+  void dataConsentReady.then(() => {
+    if (DATA_CONSENT_REQUIRED && !dataConsentGranted) {
+      return openDataConsentPage();
+    }
+  });
 });
 
-menusApi.onClicked.addListener((info, tab) => {
+function handleContextMenuClick(
+  info: browser.Menus.OnClickData,
+  tab: browser.Tabs.Tab | undefined,
+): void {
+  if (!canHandleMediaData()) {
+    browser.notifications.create("pb-consent-required", {
+      type: "basic",
+      iconUrl: "icon.png",
+      title: "PlayBridge media access is off",
+      message: "Review the media-data disclosure before casting.",
+    });
+    void openDataConsentPage();
+    return;
+  }
   const s = bridge.getState();
   if (!s.desktopConnected || !s.activeTv) {
     browser.notifications.create("pb-not-connected", {
@@ -804,6 +1243,10 @@ menusApi.onClicked.addListener((info, tab) => {
       bridge.cast(url, {}, title),
     );
   }
+}
+
+menusApi.onClicked.addListener((info, tab) => {
+  void dataConsentReady.then(() => handleContextMenuClick(info, tab));
 });
 
 // ==================== Startup ====================

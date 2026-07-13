@@ -8,12 +8,7 @@
     "allowSyntheticDefaultImports": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "types": ["firefox-webext-browser"],
-    "baseUrl": ".",
-    "paths": {
-      "@bufbuild/protobuf": ["node_modules/@bufbuild/protobuf"],
-      "@bufbuild/protobuf/*": ["node_modules/@bufbuild/protobuf/dist/cjs/*"]
-    }
+    "types": ["firefox-webext-browser"]
   },
-  "include": ["src/**/*.ts", "../protocol/generated/typescript/*.ts"]
+  "include": ["src/**/*.ts"]
 }

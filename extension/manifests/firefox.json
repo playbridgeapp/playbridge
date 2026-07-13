@@ -2,9 +2,8 @@
     "manifest_version": 2,
     "name": "PlayBridge Video Detector",
     "version": "0.4.2",
-    "description": "Detects video URLs for PlayBridge casting",
+    "description": "Detect and cast browser videos through the PlayBridge desktop app.",
     "icons": {
-        "48": "icon.png",
         "128": "icon.png"
     },
     "background": {
@@ -30,7 +29,6 @@
         "webNavigation",
         "storage",
         "tabs",
-        "activeTab",
         "menus",
         "notifications",
         "nativeMessaging",
@@ -39,7 +37,13 @@
     "browser_specific_settings": {
         "gecko": {
             "id": "video-detector@playbridge",
-            "strict_min_version": "102.0"
+            "strict_min_version": "140.0",
+            "data_collection_permissions": {
+                "required": ["browsingActivity", "websiteContent"]
+            }
+        },
+        "gecko_android": {
+            "strict_min_version": "142.0"
         }
     }
 }

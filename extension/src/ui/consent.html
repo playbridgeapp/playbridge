@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PlayBridge media access</title>
+    <link rel="stylesheet" href="consent.css">
+    <link rel="stylesheet" href="fonts/outfit.css">
+</head>
+<body>
+    <main class="consent-shell">
+        <section class="consent-card" aria-labelledby="consent-title">
+            <img class="app-icon" src="../icon.png" alt="">
+            <p class="eyebrow">PlayBridge Video Detector</p>
+            <h1 id="consent-title">Allow media detection for casting?</h1>
+            <p class="lead">
+                PlayBridge needs to observe media requests on pages you visit so
+                it can find a stream that your TV can play.
+            </p>
+
+            <div class="disclosure" aria-label="Data use disclosure">
+                <h2>What PlayBridge handles</h2>
+                <ul>
+                    <li>Media URLs, the current site, and video metadata.</li>
+                    <li>Request and response headers needed to replay a selected stream. These can include Referer, Cookie, or Authorization values.</li>
+                    <li>Detected media is kept in browser session storage and cleared when the browser closes, the tab navigates, or you clear it.</li>
+                    <li>When you choose Cast, the selected URL and required headers are sent only through native messaging to the PlayBridge desktop app and your chosen TV.</li>
+                </ul>
+            </div>
+
+            <p class="privacy-summary">
+                PlayBridge does not send this data to its developers, use it for
+                advertising or analytics, sell it, or build a browsing profile.
+            </p>
+
+            <div id="consent-off-actions" class="actions">
+                <button type="button" id="allow-btn" class="primary-btn">Allow media detection</button>
+                <button type="button" id="decline-btn" class="secondary-btn">Not now</button>
+            </div>
+
+            <div id="consent-on-actions" class="actions hidden">
+                <p class="status success" role="status">Media detection is allowed.</p>
+                <button type="button" id="close-btn" class="primary-btn">Done</button>
+                <button type="button" id="disable-btn" class="danger-btn">Disable and clear detected media</button>
+            </div>
+
+            <p id="consent-status" class="status" role="status" aria-live="polite"></p>
+            <p class="fine-print">
+                You can change this later from the extension Settings tab.
+                <a href="https://github.com/playbridgeapp/playbridge/blob/main/extension/PRIVACY.md" target="_blank" rel="noopener noreferrer">Read the privacy policy</a>.
+            </p>
+        </section>
+    </main>
+    <script src="consent.js"></script>
+</body>
+</html>

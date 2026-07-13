@@ -2,18 +2,29 @@
   "name": "playbridge-extension",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@9.15.2",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "build": "node build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node test/run-tests.mjs",
+    "store:validate": "node store/validate.mjs",
+    "store:lint:firefox": "node store/lint-firefox.mjs",
+    "store:package": "node store/package.mjs",
+    "store:check": "pnpm typecheck && pnpm test && pnpm build && pnpm store:validate && pnpm store:lint:firefox && pnpm store:package",
     "watch": "node build.mjs --watch"
   },
   "dependencies": {
     "webextension-polyfill": "^0.12.0"
   },
   "devDependencies": {
-    "@bufbuild/protobuf": "^2.12.0",
     "@types/firefox-webext-browser": "^143.0.0",
     "@types/webextension-polyfill": "^0.12.1",
+    "archiver": "^8.0.0",
     "esbuild": "^0.25.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "web-ext": "^10.5.0"
   }
 }
