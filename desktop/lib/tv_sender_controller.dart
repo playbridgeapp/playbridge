@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import 'local_file_server.dart';
 import 'pairing_store.dart';
+import 'player_headers.dart';
 import 'protocol.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
@@ -178,12 +179,26 @@ class TvSenderController extends ChangeNotifier {
     String? detectedBy,
   }) {
     final payload = PlayPayload()..url = url;
-    if (headers != null && headers.isNotEmpty) payload.headers.addAll(headers);
+    // Always sanitize here so every desktop→TV cast path (extension, tray,
+    // future callers) drops browser-only headers CDNs reject.
+    final safeHeaders = sanitizePlayerHeaders(headers);
+    if (safeHeaders != null && safeHeaders.isNotEmpty) {
+      payload.headers.addAll(safeHeaders);
+    }
     if (title != null && title.isNotEmpty) payload.title = title;
     if (detectedBy != null && detectedBy.isNotEmpty) {
       payload.detectedBy = detectedBy;
     }
+    // Help the TV pick an HLS path when the extension didn't set content_type.
+    if (!payload.hasContentType() && _looksLikeHls(url)) {
+      payload.contentType = 'application/vnd.apple.mpegurl';
+    }
     return castVideo(payload);
+  }
+
+  static bool _looksLikeHls(String url) {
+    final lower = url.toLowerCase();
+    return lower.contains('.m3u8') || lower.contains('mpegurl');
   }
 
   bool queueAdd(PlayPayload item) => _client.send(senderQueueAddJson(item));

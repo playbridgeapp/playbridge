@@ -2,43 +2,10 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
+import '../player_headers.dart';
 import 'hls_master_resolver.dart';
 
-/// Headers that must NOT be forwarded to the player. They're browser-request
-/// artifacts captured by the extension; passing them to mpv breaks playback —
-/// most importantly a fixed `Range: bytes=0-` makes every request (including
-/// seeks) ask for the whole file, so seeking jumps to the end. Mirrors the
-/// phone's `VideoDetector.PLAYER_SKIP_HEADERS`.
-const _playerSkipHeaders = <String>{
-  'range',
-  'accept-encoding',
-  'host',
-  'connection',
-  'content-length',
-  'sec-fetch-dest',
-  'sec-fetch-mode',
-  'sec-fetch-site',
-  'sec-fetch-storage-access',
-  'sec-gpc',
-  'sec-ch-ua',
-  'sec-ch-ua-mobile',
-  'sec-ch-ua-platform',
-  'priority',
-  'upgrade-insecure-requests',
-  'te',
-  'pragma',
-};
-
-/// Strips the browser-only headers above, keeping the ones a player needs
-/// (User-Agent, Referer, Cookie, Authorization, …). Returns null if empty.
-Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
-  if (headers == null || headers.isEmpty) return headers;
-  final out = <String, String>{};
-  headers.forEach((k, v) {
-    if (!_playerSkipHeaders.contains(k.toLowerCase())) out[k] = v;
-  });
-  return out.isEmpty ? null : out;
-}
+export '../player_headers.dart' show sanitizePlayerHeaders;
 
 class MpvEngine extends PlayerEngine {
   MpvEngine({this.preselectHlsQuality = false}) {
