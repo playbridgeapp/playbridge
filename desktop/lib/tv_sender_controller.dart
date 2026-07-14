@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'local_file_server.dart';
 import 'pairing_store.dart';
 import 'protocol.dart';
+import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
@@ -66,6 +67,13 @@ class TvSenderController extends ChangeNotifier {
   TvRecord? get activeTv => _activeTv;
   bool get isConnected => _state == SenderConnectionState.connected;
   String? get currentSas => _currentSas;
+
+  bool get castRouteThroughProxy => _identity.castRouteThroughProxy;
+
+  Future<void> setCastRouteThroughProxy(bool value) async {
+    await _identity.setCastRouteThroughProxy(value);
+    notifyListeners();
+  }
 
   String? get castingTitle => _castingTitle;
   String get remoteState => _remoteState;
@@ -170,10 +178,30 @@ class TvSenderController extends ChangeNotifier {
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth) and a [title].
-  bool castUrl(String url, {Map<String, String>? headers, String? title}) {
-    final payload = PlayPayload()..url = url;
-    if (headers != null && headers.isNotEmpty) payload.headers.addAll(headers);
-    if (title != null && title.isNotEmpty) payload.title = title;
+  Future<bool> castUrl(String url, {Map<String, String>? headers, String? title}) async {
+    var targetUrl = url;
+    var targetHeaders = headers;
+
+    if (castRouteThroughProxy && isConnected && _activeTv != null) {
+      final active = _activeTv!;
+      final lanIp = await _localLanIp(active.host);
+      if (lanIp != null) {
+        // Register session in local proxy server
+        final loopbackUrl = StreamProxyServer.instance.registerSession(url, headers ?? {});
+        // Replace loopback host 127.0.0.1 with the local LAN IP that the TV can reach
+        targetUrl = loopbackUrl.replaceFirst('127.0.0.1', lanIp);
+        // The headers are managed by the proxy server, so we send null/empty headers to the TV
+        targetHeaders = null;
+      }
+    }
+
+    final payload = PlayPayload()..url = targetUrl;
+    if (targetHeaders != null && targetHeaders.isNotEmpty) {
+      payload.headers.addAll(targetHeaders);
+    }
+    if (title != null && title.isNotEmpty) {
+      payload.title = title;
+    }
     return castVideo(payload);
   }
 

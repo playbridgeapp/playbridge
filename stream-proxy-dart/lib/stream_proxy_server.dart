@@ -250,6 +250,8 @@ class StreamProxyServer {
       final queryUri = request.url.queryParameters['uri'];
       if (queryUri != null && queryUri.isNotEmpty) {
         targetUrl = queryUri;
+      } else if (pathSegments.length == 3 && pathSegments[2] == 'manifest.m3u8') {
+        targetUrl = session.originalUrl;
       } else {
         // Resolve relative path segments from index 2 onwards against the original session URL
         targetUrl = _resolveTargetUrl(
@@ -275,6 +277,7 @@ class StreamProxyServer {
         targetUrl,
         forwardHeaders,
         statelessHeadersB64,
+        request.requestedUri,
       );
     } else {
       return await _handleSegment(targetUrl, forwardHeaders);
@@ -286,6 +289,7 @@ class StreamProxyServer {
     String targetUrl,
     Map<String, String> headers,
     String? headersB64,
+    Uri requestedUri,
   ) async {
     try {
       final bytes = await _fetchUrlBytes(targetUrl, headers);
@@ -318,7 +322,9 @@ class StreamProxyServer {
         final queryStr = queryParams.isNotEmpty
             ? '?${Uri(queryParameters: queryParams).query}'
             : '';
-        return 'http://127.0.0.1:$port$path$queryStr';
+        final scheme = requestedUri.scheme;
+        final authority = requestedUri.authority;
+        return '$scheme://$authority$path$queryStr';
       });
 
       return Response.ok(
@@ -535,20 +541,6 @@ class StreamProxyServer {
       'content-length',
       'accept-encoding',
       'range',
-      'sec-fetch-dest',
-      'sec-fetch-mode',
-      'sec-fetch-site',
-      'sec-fetch-user',
-      'sec-fetch-storage-access',
-      'sec-gpc',
-      'sec-ch-ua',
-      'sec-ch-ua-mobile',
-      'sec-ch-ua-platform',
-      'priority',
-      'upgrade-insecure-requests',
-      'te',
-      'pragma',
-      'cache-control',
     };
     return skip.contains(lowerKey) || lowerKey.startsWith(':');
   }
@@ -670,7 +662,7 @@ String _resolveTargetUrl(
   });
 
   if (mergedQuery.isEmpty) {
-    return resolvedUri.replace(query: '').toString();
+    return resolvedUri.replace(query: null).toString();
   }
 
   return resolvedUri.replace(queryParameters: mergedQuery).toString();
