@@ -589,7 +589,7 @@ packages:
       path: "../stream-proxy-dart"
       relative: true
     source: path
-    version: "1.0.0"
+    version: "0.1.0"
   plugin_platform_interface:
     dependency: transitive
     description:
