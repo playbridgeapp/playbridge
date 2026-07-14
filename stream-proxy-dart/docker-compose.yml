@@ -1,0 +1,24 @@
+services:
+  pb-proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pb-proxy
+    ports:
+      - "8888:8888"
+    environment:
+      - PORT=8888
+      - ADDRESS=0.0.0.0
+      - PASSWORD=my_secure_proxy_token # Set to enable token auth
+      # - FFMPEG_PATH=/usr/lib/x86_64-linux-gnu # Auto-detected usually
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
