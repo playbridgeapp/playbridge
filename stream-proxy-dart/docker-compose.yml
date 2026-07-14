@@ -1,8 +1,7 @@
 services:
   pb-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/playbridgeapp/playbridge-stream-proxy:latest
+    platform: linux/amd64
     container_name: pb-proxy
     ports:
       - "8888:8888"
