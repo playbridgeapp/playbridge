@@ -129,7 +129,8 @@ class AvioClient {
 
   DynamicLibrary _loadLibrary(String name) {
     // 1. Try override or environment variable DYLD_FRAMEWORK_PATH
-    final frameworksPath = dyldFrameworkPathOverride ?? Platform.environment['DYLD_FRAMEWORK_PATH'];
+    final frameworksPath = dyldFrameworkPathOverride ??
+        Platform.environment['DYLD_FRAMEWORK_PATH'];
     if (frameworksPath != null && frameworksPath.isNotEmpty) {
       final path = '$frameworksPath/$name.framework/$name';
       if (File(path).existsSync()) {
@@ -169,7 +170,8 @@ class AvioClient {
       if (dir.existsSync()) {
         for (final file in dir.listSync()) {
           final nameLower = file.path.toLowerCase();
-          if (nameLower.contains(name.toLowerCase()) && nameLower.endsWith('.dll')) {
+          if (nameLower.contains(name.toLowerCase()) &&
+              nameLower.endsWith('.dll')) {
             return DynamicLibrary.open(file.path);
           }
         }
@@ -254,7 +256,8 @@ class AvioIsolateStream {
         headers: headers,
         timeoutSeconds: timeoutSeconds,
         sendPort: receivePort.sendPort,
-        dyldFrameworkPath: AvioClient.dyldFrameworkPathOverride ?? Platform.environment['DYLD_FRAMEWORK_PATH'],
+        dyldFrameworkPath: AvioClient.dyldFrameworkPathOverride ??
+            Platform.environment['DYLD_FRAMEWORK_PATH'],
         resolvedExecutable: Platform.resolvedExecutable,
       ),
     ).then((spawnedIsolate) {
@@ -328,7 +331,8 @@ class AvioIsolateStream {
     client._avDictSet(optionsPtr, headersKey, headersVal, 0);
 
     final Pointer<Utf8> timeoutKey = 'timeout'.toNativeUtf8();
-    final Pointer<Utf8> timeoutVal = '${config.timeoutSeconds * 1000000}'.toNativeUtf8();
+    final Pointer<Utf8> timeoutVal =
+        '${config.timeoutSeconds * 1000000}'.toNativeUtf8();
     client._avDictSet(optionsPtr, timeoutKey, timeoutVal, 0);
 
     final Pointer<Pointer<Void>> avioCtxPtr = calloc<Pointer<Void>>();
@@ -375,7 +379,8 @@ class AvioIsolateStream {
               final errStr = client.getAvErrorString(bytesRead);
               config.sendPort.send({
                 'type': 'error',
-                'message': 'avio_read failed: error_code=$bytesRead message="$errStr"',
+                'message':
+                    'avio_read failed: error_code=$bytesRead message="$errStr"',
               });
             } else {
               config.sendPort.send({'type': 'eof'});

@@ -13,7 +13,8 @@ class HlsPlaylistRewriter {
     final rewrittenLines = <String>[];
 
     // Regex to match URI="..." attributes in tags like EXT-X-KEY, EXT-X-MAP, EXT-X-MEDIA, etc.
-    final uriAttrRegex = RegExp(r'(URI\s*=\s*")([^"]*)(")', caseSensitive: false);
+    final uriAttrRegex =
+        RegExp(r'(URI\s*=\s*")([^"]*)(")', caseSensitive: false);
 
     for (var line in lines) {
       final trimmed = line.trim();

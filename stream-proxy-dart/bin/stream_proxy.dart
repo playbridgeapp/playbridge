@@ -7,10 +7,14 @@ import 'package:playbridge_stream_proxy/stream_proxy_server.dart';
 void main(List<String> args) async {
   final parser = ArgParser()
     ..addOption('port', abbr: 'p', defaultsTo: '8888', help: 'Port to bind to')
-    ..addOption('address', abbr: 'a', defaultsTo: '0.0.0.0', help: 'Address to bind to')
+    ..addOption('address',
+        abbr: 'a', defaultsTo: '0.0.0.0', help: 'Address to bind to')
     ..addOption('password', abbr: 'k', help: 'API authorization password')
-    ..addOption('ffmpeg-path', abbr: 'f', help: 'Dynamic library search path override for FFmpeg (libavformat)')
-    ..addFlag('help', abbr: 'h', negatable: false, help: 'Show usage instructions');
+    ..addOption('ffmpeg-path',
+        abbr: 'f',
+        help: 'Dynamic library search path override for FFmpeg (libavformat)')
+    ..addFlag('help',
+        abbr: 'h', negatable: false, help: 'Show usage instructions');
 
   final ArgResults parsed;
   try {
@@ -27,14 +31,20 @@ void main(List<String> args) async {
     exit(0);
   }
 
-  final port = int.tryParse(Platform.environment['PORT'] ?? parsed['port'] as String) ?? 8888;
-  final address = Platform.environment['ADDRESS'] ?? parsed['address'] as String;
-  final ffmpegPath = Platform.environment['FFMPEG_PATH'] ?? parsed['ffmpeg-path'] as String?;
-  final password = Platform.environment['PASSWORD'] ?? parsed['password'] as String?;
+  final port =
+      int.tryParse(Platform.environment['PORT'] ?? parsed['port'] as String) ??
+          8888;
+  final address =
+      Platform.environment['ADDRESS'] ?? parsed['address'] as String;
+  final ffmpegPath =
+      Platform.environment['FFMPEG_PATH'] ?? parsed['ffmpeg-path'] as String?;
+  final password =
+      Platform.environment['PASSWORD'] ?? parsed['password'] as String?;
 
   if (ffmpegPath != null && ffmpegPath.isNotEmpty) {
     AvioClient.dyldFrameworkPathOverride = ffmpegPath;
-    stdout.writeln('[pb-proxy-cli] Custom FFmpeg library path set: $ffmpegPath');
+    stdout
+        .writeln('[pb-proxy-cli] Custom FFmpeg library path set: $ffmpegPath');
   }
 
   final server = StreamProxyServer(password: password);
