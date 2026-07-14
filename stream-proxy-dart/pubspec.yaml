@@ -1,0 +1,12 @@
+name: playbridge_stream_proxy
+description: Standalone high-performance streaming proxy in Dart.
+version: 1.0.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.6.0
+
+dependencies:
+  shelf: ^1.4.1
+  ffi: ^2.1.3
+  args: ^2.5.0

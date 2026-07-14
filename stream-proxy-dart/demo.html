@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PB-Proxy Link Builder</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 16px; color: #58a6ff; }
+  label { display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 4px; }
+  input, textarea { width: 100%; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; border-radius: 6px; padding: 10px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; }
+  textarea { min-height: 160px; resize: vertical; }
+  input:focus, textarea:focus { outline: none; border-color: #58a6ff; }
+  .row { margin-bottom: 12px; }
+  .row-inline { display: flex; gap: 12px; margin-bottom: 12px; }
+  .row-inline > div { flex: 1; }
+  button { background: #238636; color: #fff; border: none; border-radius: 6px; padding: 10px 20px; font-size: 0.9rem; cursor: pointer; }
+  button:hover { background: #2ea043; }
+  button.secondary { background: #30363d; }
+  button.secondary:hover { background: #484f58; }
+  .output-box { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 12px; word-break: break-all; font-size: 0.8rem; line-height: 1.5; min-height: 44px; color: #7ee787; position: relative; }
+  .output-box .copy-btn { position: absolute; top: 8px; right: 8px; background: #30363d; border: none; color: #c9d1d9; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; }
+  .output-box .copy-btn:hover { background: #484f58; }
+  .error { color: #f85149; }
+  video { width: 100%; max-height: 70vh; background: #000; border-radius: 6px; margin-top: 12px; }
+  .section { margin-bottom: 20px; }
+  .section-title { font-size: 0.95rem; color: #c9d1d9; margin-bottom: 8px; font-weight: 600; }
+  .hint { font-size: 0.75rem; color: #484f58; margin-top: 4px; }
+  .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+  #playerSection { display: none; }
+  .tag { display: inline-block; background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb44; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem; margin-right: 4px; }
+  .parsed-headers { margin-top: 8px; }
+  .parsed-headers .hdr { display: inline-block; background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem; margin: 2px; }
+  .parsed-headers .hdr .k { color: #79c0ff; }
+  .parsed-headers .hdr .v { color: #a5d6ff; }
+</style>
+</head>
+<body>
+
+<h1>🔗 PB-Proxy Link Builder</h1>
+
+<div class="section">
+  <div class="section-title">Proxy Server</div>
+  <div class="row-inline">
+    <div>
+      <label for="proxyHost">Host</label>
+      <input id="proxyHost" value="127.0.0.1">
+    </div>
+    <div>
+      <label for="proxyPort">Port</label>
+      <input id="proxyPort" value="8888">
+    </div>
+    <div>
+      <label for="proxyPassword">Password (Token)</label>
+      <input id="proxyPassword" value="" placeholder="Optional token">
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Paste curl Request</div>
+  <label for="curlInput">Copy from browser DevTools → Network → Copy as cURL</label>
+  <textarea id="curlInput" placeholder="curl 'https://example.com/stream.m3u8' \
+  -H 'User-Agent: Mozilla/5.0' \
+  -H 'Referer: https://example.com/' \
+  -H 'Range: bytes=0-'"></textarea>
+  <div class="hint">Supports standard curl format with -H headers. The URL is extracted from the first argument.</div>
+  <div class="btn-row">
+    <button onclick="buildProxyUrl()">Build Proxy URL</button>
+    <button class="secondary" onclick="clearAll()">Clear</button>
+  </div>
+</div>
+
+<div class="section" id="resultSection" style="display:none">
+  <div class="section-title">Generated Proxy URL</div>
+  <div class="output-box" id="proxyUrlOutput">
+    <button class="copy-btn" onclick="copyProxyUrl()">Copy</button>
+    <span id="proxyUrlText"></span>
+  </div>
+  <div class="parsed-headers" id="parsedHeaders"></div>
+  <div class="btn-row" style="margin-top:12px">
+    <button onclick="playInPage()">▶ Play in Page</button>
+    <button class="secondary" onclick="openInExternal()">Open in External Player</button>
+    <button class="secondary" onclick="copyCurlForProxy()">Copy curl for Proxy</button>
+  </div>
+</div>
+
+<div class="section" id="playerSection">
+  <div class="section-title">Player <span id="hlsBadge" style="font-size:0.7rem; font-weight:400;"></span></div>
+  <video id="videoPlayer" controls crossorigin="anonymous"></video>
+  <div class="hint" id="playerHint"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+let currentProxyUrl = '';
+let currentOriginalUrl = '';
+let currentHeaders = {};
+let hlsInstance = null;
+
+function parseCurl(curlStr) {
+  const lines = curlStr.trim().replace(/\\\s*\n/g, ' ').trim();
+
+  // Extract URL - it's the first non-flag argument after 'curl'
+  const urlMatch = lines.match(/curl\s+(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  if (!urlMatch) return null;
+  const url = urlMatch[1] || urlMatch[2] || urlMatch[3];
+
+  // Extract -H headers
+  const headers = {};
+  const headerRegex = /-H\s+(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+  let m;
+  while ((m = headerRegex.exec(lines)) !== null) {
+    const hdr = m[1] || m[2] || m[3];
+    const colonIdx = hdr.indexOf(':');
+    if (colonIdx > 0) {
+      const key = hdr.substring(0, colonIdx).trim();
+      const val = hdr.substring(colonIdx + 1).trim();
+      if (key && val) headers[key] = val;
+    }
+  }
+
+  return { url, headers };
+}
+
+function base64UrlEncode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function buildProxyUrl() {
+  const curlStr = document.getElementById('curlInput').value;
+  if (!curlStr.trim()) {
+    showError('Paste a curl command first.');
+    return;
+  }
+
+  const parsed = parseCurl(curlStr);
+  if (!parsed) {
+    showError('Could not parse curl command. Make sure it starts with "curl".');
+    return;
+  }
+
+  currentOriginalUrl = parsed.url;
+  currentHeaders = parsed.headers;
+
+  const host = document.getElementById('proxyHost').value.trim() || '127.0.0.1';
+  const port = document.getElementById('proxyPort').value.trim() || '8888';
+  const password = document.getElementById('proxyPassword').value.trim();
+
+  const urlB64 = base64UrlEncode(parsed.url);
+  const headersJson = JSON.stringify(parsed.headers);
+  const headersB64 = parsed.headers && Object.keys(parsed.headers).length > 0
+    ? base64UrlEncode(headersJson)
+    : 'empty';
+
+  // Extract filename from URL
+  let filename = 'stream';
+  try {
+    const uri = new URL(parsed.url);
+    const segments = uri.pathname.split('/').filter(Boolean);
+    if (segments.length > 0) filename = segments[segments.length - 1];
+  } catch (_) {}
+
+  const queryStr = password ? `?token=${encodeURIComponent(password)}` : '';
+  currentProxyUrl = `http://${host}:${port}/s/play/${urlB64}/${headersB64}/${filename}${queryStr}`;
+
+  document.getElementById('proxyUrlText').textContent = currentProxyUrl;
+  document.getElementById('resultSection').style.display = 'block';
+
+  // Show parsed headers
+  const hdrDiv = document.getElementById('parsedHeaders');
+  let hdrHtml = `<span class="tag">${Object.keys(parsed.headers).length} headers</span> `;
+  for (const [k, v] of Object.entries(parsed.headers)) {
+    const shortV = v.length > 40 ? v.substring(0, 40) + '…' : v;
+    hdrHtml += `<span class="hdr"><span class="k">${esc(k)}</span>: <span class="v">${esc(shortV)}</span></span> `;
+  }
+  hdrDiv.innerHTML = hdrHtml;
+
+  clearError();
+}
+
+function playInPage() {
+  const video = document.getElementById('videoPlayer');
+  const section = document.getElementById('playerSection');
+  section.style.display = 'block';
+
+  // Destroy previous hls instance
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+
+  const isHls = currentProxyUrl.includes('.m3u8') || currentOriginalUrl.includes('.m3u8');
+
+  if (isHls && Hls.isSupported()) {
+    hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
+    hlsInstance.loadSource(currentProxyUrl);
+    hlsInstance.attachMedia(video);
+    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    hlsInstance.on(Hls.Events.ERROR, (_, data) => {
+      document.getElementById('playerHint').textContent = `HLS error: ${data.type} — ${data.details}`;
+      if (data.fatal) hlsInstance.destroy();
+    });
+    document.getElementById('playerHint').textContent = `Streaming HLS via hls.js: ${currentOriginalUrl}`;
+  } else if (isHls && video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari native HLS
+    video.src = currentProxyUrl;
+    video.play().catch(() => {});
+    document.getElementById('playerHint').textContent = `Streaming HLS (native): ${currentOriginalUrl}`;
+  } else {
+    // Direct MP4/WebM
+    video.src = currentProxyUrl;
+    video.play().catch(() => {});
+    document.getElementById('playerHint').textContent = `Streaming: ${currentOriginalUrl}`;
+  }
+
+  section.scrollIntoView({ behavior: 'smooth' });
+}
+
+function openInExternal() {
+  // Opens in default browser (useful for mpv:// or just new tab)
+  window.open(currentProxyUrl, '_blank');
+}
+
+function copyProxyUrl() {
+  navigator.clipboard.writeText(currentProxyUrl).then(() => {
+    const btn = document.querySelector('#proxyUrlOutput .copy-btn');
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+
+function copyCurlForProxy() {
+  const curlCmd = `curl '${currentProxyUrl}'`;
+  navigator.clipboard.writeText(curlCmd).then(() => {
+    const btn = document.querySelector('#proxyUrlOutput .copy-btn');
+    btn.textContent = 'Copied curl!';
+    setTimeout(() => btn.textContent = 'Copy', 1500);
+  });
+}
+
+function clearAll() {
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  document.getElementById('curlInput').value = '';
+  document.getElementById('resultSection').style.display = 'none';
+  document.getElementById('playerSection').style.display = 'none';
+  document.getElementById('videoPlayer').src = '';
+  currentProxyUrl = '';
+  currentOriginalUrl = '';
+  currentHeaders = {};
+}
+
+function showError(msg) {
+  const el = document.getElementById('proxyUrlText');
+  el.textContent = msg;
+  el.classList.add('error');
+  document.getElementById('resultSection').style.display = 'block';
+}
+
+function clearError() {
+  const el = document.getElementById('proxyUrlText');
+  el.classList.remove('error');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+// Show HLS support badge on load
+(function() {
+  const badge = document.getElementById('hlsBadge');
+  const video = document.createElement('video');
+  const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
+  if (nativeHls) {
+    badge.innerHTML = '<span class="tag">HLS: native (Safari)</span>';
+  } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+    badge.innerHTML = '<span class="tag">HLS: hls.js</span>';
+  } else {
+    badge.innerHTML = '<span class="tag" style="color:#f85149; border-color:#f8514944; background:#f8514922;">HLS: not supported</span>';
+  }
+})();
+</script>
+
+</body>
+</html>
