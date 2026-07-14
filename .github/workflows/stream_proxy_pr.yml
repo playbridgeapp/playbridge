@@ -1,0 +1,63 @@
+name: Stream Proxy PR Checks
+
+on:
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: stream-proxy-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  check:
+    name: stream-proxy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: ./stream-proxy-dart
+    steps:
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            relevant:
+              - 'stream-proxy-dart/**'
+              - '.github/workflows/stream_proxy_pr.yml'
+
+      - uses: actions/checkout@v4
+        if: steps.filter.outputs.relevant == 'true'
+
+      - uses: dart-lang/setup-dart@v1
+        if: steps.filter.outputs.relevant == 'true'
+        with:
+          sdk: stable
+
+      - name: Install dependencies
+        if: steps.filter.outputs.relevant == 'true'
+        run: dart pub get
+
+      - name: Verify formatting
+        if: steps.filter.outputs.relevant == 'true'
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze project source
+        if: steps.filter.outputs.relevant == 'true'
+        run: dart analyze --fatal-infos
+
+      - name: Set up Docker Buildx
+        if: steps.filter.outputs.relevant == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (dry-run)
+        if: steps.filter.outputs.relevant == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./stream-proxy-dart
+          file: ./stream-proxy-dart/Dockerfile
+          push: false
