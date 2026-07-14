@@ -141,6 +141,53 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _Tile(
+              icon: Icons.network_ping,
+              title: 'Stream proxy mode',
+              subtitle:
+                  'Proxy protected CDN streams through local FFmpeg AVIO. '
+                  'Auto: only on failure. Always: for all browser HLS casts.',
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  border: Border.all(color: Colors.white12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<StreamProxyMode>(
+                    value: widget.store.streamProxyMode,
+                    borderRadius: BorderRadius.circular(10),
+                    dropdownColor: const Color(0xFF202126),
+                    icon: const Icon(Icons.expand_more, size: 18),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      await widget.store.setStreamProxyMode(v);
+                      if (mounted) setState(() {});
+                    },
+                    items: const [
+                      DropdownMenuItem(
+                        value: StreamProxyMode.off,
+                        child: Text('Off'),
+                      ),
+                      DropdownMenuItem(
+                        value: StreamProxyMode.auto,
+                        child: Text('Auto'),
+                      ),
+                      DropdownMenuItem(
+                        value: StreamProxyMode.always,
+                        child: Text('Always'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            _Tile(
               icon: Icons.bedtime_outlined,
               title: 'Still watching reminder',
               subtitle:

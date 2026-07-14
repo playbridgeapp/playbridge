@@ -62,6 +62,7 @@ class MpvEngine extends PlayerEngine {
       player.stream.track.listen((_) => notifyListeners()),
       player.stream.error.listen((e) {
         debugPrint('[mpv] error: $e');
+        onError?.call(e);
         notifyListeners();
       }),
       // Headphone unplug / output route change: pause so audio doesn't jump to
@@ -74,6 +75,7 @@ class MpvEngine extends PlayerEngine {
   final Player player = Player();
   final List<StreamSubscription> _subs = [];
   VoidCallback? onCompleted;
+  void Function(String)? onError;
   bool preselectHlsQuality;
 
   /// Ignore device flaps until playback has been stable for a bit — arming on

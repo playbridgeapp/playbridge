@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
+import 'pairing_store.dart';
+import 'engines/playback_request_preparer.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
@@ -10,12 +12,14 @@ class PlayerController extends ChangeNotifier {
     EngineType initialEngine = EngineType.mpvInternal,
     PlayerEngine? engineForTest,
     bool preselectHlsQuality = false,
+    this.store,
   }) : _preselectHlsQuality = preselectHlsQuality {
     if (engineForTest != null) {
       _currentType = initialEngine;
       _engine = engineForTest;
       if (_engine is MpvEngine) {
         (_engine as MpvEngine).onCompleted = _onCompleted;
+        (_engine as MpvEngine).onError = _onError;
       }
       _engine.addListener(notifyListeners);
       _hasInited = true;
@@ -24,6 +28,7 @@ class PlayerController extends ChangeNotifier {
     }
   }
 
+  final PairingStore? store;
   late PlayerEngine _engine;
   EngineType _currentType = EngineType.mpvInternal;
 
@@ -40,6 +45,7 @@ class PlayerController extends ChangeNotifier {
       case EngineType.mpvInternal:
         _engine = MpvEngine(preselectHlsQuality: _preselectHlsQuality);
         (_engine as MpvEngine).onCompleted = _onCompleted;
+        (_engine as MpvEngine).onError = _onError;
     }
 
     _engine.addListener(notifyListeners);
@@ -196,10 +202,15 @@ class PlayerController extends ChangeNotifier {
     _opening = true;
     notifyListeners();
 
+    final prepared = items.map((item) {
+      final mode = store?.streamProxyMode ?? StreamProxyMode.off;
+      return PlaybackRequestPreparer.prepare(item, mode);
+    }).toList();
+
     _queue
       ..clear()
-      ..addAll(items);
-    _setIndex(startIndex.clamp(0, items.length - 1));
+      ..addAll(prepared);
+    _setIndex(startIndex.clamp(0, prepared.length - 1));
     if (isRemote) {
       playRequests.value++;
     }
@@ -227,7 +238,9 @@ class PlayerController extends ChangeNotifier {
       await playPlaylist([item], 0, isRemote: isRemote);
       return;
     }
-    _queue.add(item);
+    final mode = store?.streamProxyMode ?? StreamProxyMode.off;
+    final prepared = PlaybackRequestPreparer.prepare(item, mode);
+    _queue.add(prepared);
     queueChanges.value++;
     notifyListeners();
   }
@@ -318,6 +331,33 @@ class PlayerController extends ChangeNotifier {
     _opening = false;
     queueChanges.value++;
     notifyListeners();
+  }
+
+  void _onError(String errorMsg) {
+    if (store?.streamProxyMode == StreamProxyMode.auto) {
+      final currentItem = _currentIndex >= 0 && _currentIndex < _queue.length
+          ? _queue[_currentIndex]
+          : null;
+      if (currentItem != null) {
+        final url = currentItem.url;
+        final isAlreadyProxied = url.startsWith('http://127.0.0.1') ||
+            url.startsWith('http://localhost');
+        if (!isAlreadyProxied && url.toLowerCase().contains('.m3u8')) {
+          // Direct HLS playback failed. Mark the host to route through local proxy on retry.
+          PlaybackRequestPreparer.markHostFailed(url);
+          debugPrint(
+              '[player-controller] Direct HLS playback failed. Retrying via stream proxy...');
+
+          // Re-prepare the item forcing proxy mode
+          final preparedItem = PlaybackRequestPreparer.prepare(
+              currentItem, StreamProxyMode.always);
+          _queue[_currentIndex] = preparedItem;
+
+          // Re-open the queue/playlist at the current index
+          unawaited(_engine.openPlaylist(_queue, _currentIndex));
+        }
+      }
+    }
   }
 
   @override

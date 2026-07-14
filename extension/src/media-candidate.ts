@@ -24,7 +24,7 @@ export interface CandidateRankingContext {
 }
 
 const SEGMENT_OR_SUB_RE =
-  /\.(?:vtt|srt|ts|m4s)(?:$|\?)|\/segment|frag(?:ment)?|\/chunks?\//i;
+  /\.(?:vtt|srt|ts|m4s)(?:$|\?)|\/segment|frag(?:ment)?|\/chunks?\/|init[-_][^/]*\.mp4|seg[-_][^/]*\.mp4/i;
 
 function comparableUrl(raw: string): string {
   const trimmed = raw.trim();
