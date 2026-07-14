@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.9.3] — 2026-07-14 (versionCode 223)
+
+### Fixed
+- **TLS Keystore Security**: Hardened pairing certificate keystore credentials and protected private key storage from unauthorized local system reads.
+
 ## Player [0.9.2] — 2026-07-11 (versionCode 222)
 
 ### Changed

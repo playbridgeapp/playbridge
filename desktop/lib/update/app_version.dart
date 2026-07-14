@@ -2,7 +2,7 @@
 ///
 /// MUST match `version:` in pubspec.yaml (build-metadata part excluded) —
 /// guarded by `test/update_test.dart` so CI fails if they drift.
-const String kAppVersion = '0.6.8';
+const String kAppVersion = '0.7.0';
 
 /// Dotted numeric version (`0.6.4`, `1.10.2`) with sane comparison semantics.
 ///

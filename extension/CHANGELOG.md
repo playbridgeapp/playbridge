@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — 2026-07-14
+
+### Added
+- **On-Video Cast Overlay**: Adds an intuitive overlay button on top of detected video players to allow casting directly from the page layout.
+- **Improved Casting UX**: Enhances candidate sorting and discovery status feedback on the popup panel.
+
+### Fixed
+- **DASH Segment Candidate Filtering**: Excluded DASH initialization and chunk segments (`init-*.mp4` / `seg-*.mp4`) from ranking to prevent listing duplicate segment file fragments as playable candidates.
+
 ## [0.4.2] — 2026-07-08
 
 ### Fixed
