@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0+27] — 2026-07-14
+
+### Added
+- **In-process Stream Proxy Server**: Integrated the `playbridge_stream_proxy` server directly in-process. Runs seamlessly inside the app, handles CORS, and intercepts HLS and DASH manifests to propagate session tokens and prevent `403` errors.
+- **Proxy Mode Configuration**: Adds a Proxy Mode selector in Settings (Off, Auto, Always) to route traffic through loopback for CDNs that block direct player requests.
+- **"Open in External Player" Dialog**: Adds a dialog to easily copy proxied stream URLs, view command lines for `mpv` and `vlc`, or launch them automatically.
+- **HLS Stream Preselection**: Adds an opt-in setting to pre-select HLS media playlists.
+- **Safer extension bridge logging**: Removes Debrid tokens and auth payloads from the logs.
+
 ## [0.6.8+26] — 2026-07-11
 
 ### Fixed

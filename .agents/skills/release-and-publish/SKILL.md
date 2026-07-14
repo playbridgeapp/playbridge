@@ -15,6 +15,7 @@ description: Prepare a PlayBridge release by explicitly requested version uprevs
 | iOS phone | `mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj/project.pbxproj` | `mobile/apple/CHANGELOG.md` |
 | Apple TV | `tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj/project.pbxproj` | `tv/apple/CHANGELOG.md` |
 | Extension | `extension/manifests/chrome.json` | `extension/CHANGELOG.md` |
+| Stream proxy | `stream-proxy-dart/pubspec.yaml` | `stream-proxy-dart/CHANGELOG.md` |
 
 For Desktop, keep `version: <semver>+<build>` and `kAppVersion = '<semver>'` in lockstep. CI checks this in `desktop/test/update_test.dart`.
 

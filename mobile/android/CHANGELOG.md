@@ -3,6 +3,11 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.2] — 2026-07-14 (versionCode 221)
+
+### Fixed
+- **Pairing Security**: Hardened local pairing certificate generation and securely stored private keys from unauthorized local system reads.
+
 ## [0.11.1] — 2026-07-11 (versionCode 220)
 
 ### Fixed
