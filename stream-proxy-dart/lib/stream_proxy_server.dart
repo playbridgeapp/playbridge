@@ -382,10 +382,13 @@ class StreamProxyServer {
         final outHeaders = <String, String>{};
         resp.headers.forEach((k, values) {
           final lower = k.toLowerCase();
-          if (lower == 'content-range' || lower == 'content-length' || lower == 'accept-ranges') {
+          if (lower == 'content-range' || lower == 'accept-ranges') {
             outHeaders[k] = values.join(', ');
           }
         });
+        if (resp.contentLength != -1) {
+          outHeaders[HttpHeaders.contentLengthHeader] = resp.contentLength.toString();
+        }
 
         final controller = StreamController<List<int>>();
         resp.listen(
