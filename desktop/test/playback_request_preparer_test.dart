@@ -1,0 +1,128 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:playbridge_desktop/engines/playback_request_preparer.dart';
+import 'package:playbridge_desktop/pairing_store.dart';
+import 'package:playbridge_desktop/player_engine.dart';
+import 'package:playbridge_desktop/stream_proxy_server.dart';
+
+void main() {
+  setUp(() async {
+    PlaybackRequestPreparer.clearFailedHosts();
+    // Ensure the proxy server's port is mocked or simulated if needed.
+    // If not running a real server during unit tests, we can just ensure we stop/clear it.
+    await StreamProxyServer.instance.stop();
+  });
+
+  tearDown(() async {
+    await StreamProxyServer.instance.stop();
+  });
+
+  test('Off mode returns original item unchanged', () {
+    final item = QueueItem(
+      url: 'https://example.com/stream.m3u8',
+      title: 'Test stream',
+      headers: {'User-Agent': 'Mozilla'},
+    );
+
+    final prepared = PlaybackRequestPreparer.prepare(item, StreamProxyMode.off);
+
+    expect(prepared.url, equals(item.url));
+    expect(prepared.headers, equals(item.headers));
+  });
+
+  test('Always mode proxies MP4 streams', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+
+    final item = QueueItem(
+      url: 'https://example.com/movie.mp4',
+      title: 'Test movie',
+      headers: {'User-Agent': 'Mozilla'},
+    );
+
+    final prepared =
+        PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.url, contains('/movie.mp4'));
+    expect(prepared.url, contains('?token='));
+    expect(prepared.headers, isNull);
+  });
+
+  test('Always mode proxies HLS stream', () async {
+    // Start proxy to have a bound port
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+
+    final item = QueueItem(
+      url: 'https://example.com/stream.m3u8',
+      title: 'Test stream',
+      headers: {'User-Agent': 'Mozilla'},
+    );
+
+    final prepared =
+        PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.url, contains('/stream.m3u8'));
+    expect(prepared.url, contains('?token='));
+    expect(prepared.headers,
+        isNull); // Player headers must be null so they aren't re-forwarded
+  });
+
+  test('Auto mode does not proxy if host has not failed', () {
+    final item = QueueItem(
+      url: 'https://example.com/stream.m3u8',
+      title: 'Test stream',
+      headers: {'User-Agent': 'Mozilla'},
+    );
+
+    final prepared =
+        PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+
+    expect(prepared.url, equals(item.url));
+  });
+
+  test('Auto mode proxies if host has failed', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+
+    final url = 'https://example.com/stream.m3u8';
+    final item = QueueItem(
+      url: url,
+      title: 'Test stream',
+      headers: {'User-Agent': 'Mozilla'},
+    );
+
+    // Mark host as failed
+    PlaybackRequestPreparer.markHostFailed(url);
+
+    final prepared =
+        PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.url, contains('?token='));
+    expect(prepared.headers, isNull);
+  });
+
+  test('Auto mode proxies MP4 if host has failed', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+
+    final url = 'https://example.com/movie.mp4';
+    PlaybackRequestPreparer.markHostFailed(url);
+
+    final item = QueueItem(
+      url: url,
+      title: 'Test movie',
+      headers: {'User-Agent': 'Mozilla'},
+    );
+
+    final prepared =
+        PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.url, contains('/movie.mp4'));
+    expect(prepared.url, contains('?token='));
+    expect(prepared.headers, isNull);
+  });
+}

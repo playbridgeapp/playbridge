@@ -31,6 +31,7 @@ import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
 import 'server.dart';
 import 'settings_screen.dart';
+import 'stream_proxy_server.dart';
 import 'shader_background.dart';
 import 'stats_overlay.dart';
 import 'still_watching_controller.dart';
@@ -236,6 +237,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _player = PlayerController(
       initialEngine: widget.store.engineType,
       preselectHlsQuality: widget.store.preselectHlsQuality,
+      store: widget.store,
     );
     _stillWatching = StillWatchingController(
       player: _player,
@@ -562,6 +564,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   Future<void> _bootServer() async {
     try {
       await _server.start();
+      await StreamProxyServer.instance.start();
     } catch (e) {
       setState(() => _serverError = '$e');
     }
@@ -718,6 +721,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _sender.dispose();
     _discovery.stop();
     _server.stop();
+    unawaited(StreamProxyServer.instance.stop());
     _stillWatching.removeListener(_handleStillWatchingChange);
     _stillWatching.dispose();
     _player.dispose();
@@ -1008,6 +1012,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   child: StatsOverlay(
                                                     engine: _player.engine
                                                         as MpvEngine,
+                                                    player: _player,
                                                   ),
                                                 ),
                                               if (_showingVideo && hasMedia)
@@ -1613,6 +1618,9 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
 
   Widget _buildBar(BuildContext context) {
     final p = widget.player;
+    final hasMedia = p.queue.isNotEmpty &&
+        p.currentIndex >= 0 &&
+        p.currentIndex < p.queue.length;
     final dur = p.durationMs.toDouble();
     final pos =
         (_dragValue ?? p.positionMs.toDouble()).clamp(0.0, dur > 0 ? dur : 1.0);
@@ -1746,6 +1754,20 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           onPressed: widget.onTogglePlaylist,
                         ),
                       IconButton(
+                        tooltip: 'Play in external player (mpv/VLC)',
+                        icon: const Icon(Icons.open_in_new),
+                        onPressed: hasMedia
+                            ? () async {
+                                if (p.state == 'playing') {
+                                  p.pause();
+                                }
+                                final currentItem = p.queue[p.currentIndex];
+                                await _openInExternalPlayer(
+                                    context, currentItem.url);
+                              }
+                            : null,
+                      ),
+                      IconButton(
                         tooltip: widget.isFullScreen
                             ? 'Exit fullscreen'
                             : 'Fullscreen',
@@ -1773,6 +1795,238 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return h > 0 ? '$h:$m:$s' : '$m:$s';
+  }
+
+  Future<void> _openInExternalPlayer(BuildContext context, String url) async {
+    String proxiedUrl = url;
+
+    // Check if the URL is already a loopback address.
+    // If not, force register a proxy session for it so headers are included.
+    if (!url.contains('127.0.0.1') && !url.contains('localhost')) {
+      final p = widget.player;
+      final currentItem = p.currentIndex >= 0 && p.currentIndex < p.queue.length
+          ? p.queue[p.currentIndex]
+          : null;
+
+      final Map<String, String> headers = currentItem?.headers ?? {};
+      try {
+        proxiedUrl = StreamProxyServer.instance.registerSession(url, headers);
+      } catch (e) {
+        stdout
+            .writeln('[external-player] Failed to register proxy session: $e');
+      }
+    }
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF161B22),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+            side: const BorderSide(color: Colors.white10),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.open_in_new, color: Colors.tealAccent),
+              SizedBox(width: 10),
+              Text(
+                'Open in External Player',
+                style: TextStyle(color: Colors.white, fontSize: 16),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Copy the proxied stream URL to play it in your local player:',
+                style: TextStyle(color: Colors.white70, fontSize: 13),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.black38,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        proxiedUrl,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      tooltip: 'Copy URL',
+                      iconSize: 16,
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                      icon: const Icon(Icons.copy, color: Colors.white54),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: proxiedUrl));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('URL copied to clipboard!'),
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                'Terminal Commands:',
+                style: TextStyle(
+                  color: Colors.tealAccent,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildCommandRow(context, 'MPV', 'mpv "$proxiedUrl"'),
+              const SizedBox(height: 6),
+              _buildCommandRow(context, 'VLC', 'vlc "$proxiedUrl"'),
+              const SizedBox(height: 14),
+              const Text(
+                'How to play:\n1. Open your terminal / command prompt.\n2. Copy and paste one of the command lines above, then press Enter.',
+                style:
+                    TextStyle(color: Colors.white54, fontSize: 11, height: 1.4),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogCtx).pop(),
+              child:
+                  const Text('Close', style: TextStyle(color: Colors.white70)),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.teal,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () async {
+                Navigator.of(dialogCtx).pop();
+                await _launchDirectly(proxiedUrl);
+              },
+              child: const Text('Launch Automatically'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCommandRow(BuildContext context, String app, String command) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black12,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 40,
+            child: Text(
+              app,
+              style: const TextStyle(
+                color: Colors.white38,
+                fontWeight: FontWeight.bold,
+                fontSize: 11,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              command,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontFamily: 'monospace',
+                fontSize: 11,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          IconButton(
+            tooltip: 'Copy command',
+            iconSize: 14,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            icon: const Icon(Icons.copy, color: Colors.white30),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: command));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('$app command copied to clipboard!'),
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _launchDirectly(String url) async {
+    if (Platform.isMacOS) {
+      try {
+        await Process.start('open', ['-a', 'mpv', url]);
+        return true;
+      } catch (_) {}
+      try {
+        await Process.start('open', ['-a', 'VLC', url]);
+        return true;
+      } catch (_) {}
+      try {
+        await Process.start('open', [url]);
+        return true;
+      } catch (_) {}
+    } else if (Platform.isWindows) {
+      try {
+        await Process.start('mpv.exe', [url]);
+        return true;
+      } catch (_) {}
+      try {
+        await Process.start('vlc.exe', [url]);
+        return true;
+      } catch (_) {}
+      try {
+        await Process.start('cmd.exe', ['/c', 'start', '', url]);
+        return true;
+      } catch (_) {}
+    } else if (Platform.isLinux) {
+      try {
+        await Process.start('mpv', [url]);
+        return true;
+      } catch (_) {}
+      try {
+        await Process.start('vlc', [url]);
+        return true;
+      } catch (_) {}
+      try {
+        await Process.start('xdg-open', [url]);
+        return true;
+      } catch (_) {}
+    }
+    return false;
   }
 }
 

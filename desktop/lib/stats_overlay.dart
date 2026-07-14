@@ -1,15 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'engines/mpv_engine.dart';
+import 'player_controller.dart';
 import 'player_engine.dart';
+import 'stream_proxy_server.dart';
 
 /// Translucent overlay showing live MPV playback stats (dropped frames, fps,
 /// bitrate, etc.). While mounted it turns on stats collection in the engine and
 /// turns it back off on dispose, so there's no sampling cost when hidden.
 class StatsOverlay extends StatefulWidget {
-  const StatsOverlay({super.key, required this.engine});
+  const StatsOverlay({
+    super.key,
+    required this.engine,
+    required this.player,
+  });
 
   final MpvEngine engine;
+  final PlayerController player;
 
   @override
   State<StatsOverlay> createState() => _StatsOverlayState();
@@ -43,7 +51,21 @@ class _StatsOverlayState extends State<StatsOverlay> {
       valueListenable: widget.engine.stats,
       builder: (context, s, _) {
         if (s == null) return const SizedBox.shrink();
+
+        final p = widget.player;
+        final currentItem =
+            p.currentIndex >= 0 && p.currentIndex < p.queue.length
+                ? p.queue[p.currentIndex]
+                : null;
+
+        final playingUrl = currentItem?.url ?? '—';
+        final isProxied =
+            playingUrl.contains('127.0.0.1') && playingUrl.contains('/s/play/');
+        final proxyRunning = StreamProxyServer.instance.isRunning;
+        final proxyPort = StreamProxyServer.instance.port;
+
         return Container(
+          constraints: const BoxConstraints(maxWidth: 520),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             color: Colors.black.withValues(alpha: 0.62),
@@ -80,6 +102,23 @@ class _StatsOverlayState extends State<StatsOverlay> {
                   s.cacheDuration == null
                       ? '—'
                       : '${s.cacheDuration!.toStringAsFixed(1)} s'),
+              const SizedBox(height: 10),
+              const _Heading('Stream proxy'),
+              const SizedBox(height: 6),
+              _Row(
+                'Status',
+                proxyRunning ? 'Running on :$proxyPort' : 'Not running',
+                warn: !proxyRunning,
+              ),
+              _Row(
+                'Proxied',
+                isProxied ? 'Yes' : 'No (direct)',
+              ),
+              const SizedBox(height: 4),
+              _CopyableUrl(
+                label: 'URL',
+                url: playingUrl,
+              ),
             ],
           ),
         );
@@ -147,6 +186,71 @@ class _Row extends StatelessWidget {
               color: warn ? Colors.amberAccent : Colors.white,
               fontSize: 11.5,
               fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A row that shows a truncated URL with a copy-to-clipboard icon button.
+class _CopyableUrl extends StatefulWidget {
+  const _CopyableUrl({required this.label, required this.url});
+  final String label;
+  final String url;
+
+  @override
+  State<_CopyableUrl> createState() => _CopyableUrlState();
+}
+
+class _CopyableUrlState extends State<_CopyableUrl> {
+  bool _copied = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.5),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 64,
+            child: Text(
+              widget.label,
+              style: const TextStyle(color: Colors.white54, fontSize: 11.5),
+            ),
+          ),
+          Flexible(
+            child: Text(
+              widget.url,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11.5,
+                fontFeatures: [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          SizedBox(
+            width: 22,
+            height: 22,
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              iconSize: 14,
+              tooltip: 'Copy URL',
+              icon: Icon(
+                _copied ? Icons.check : Icons.copy,
+                color: _copied ? Colors.greenAccent : Colors.white54,
+              ),
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: widget.url));
+                setState(() => _copied = true);
+                await Future.delayed(const Duration(seconds: 2));
+                if (mounted) setState(() => _copied = false);
+              },
             ),
           ),
         ],

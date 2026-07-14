@@ -129,3 +129,6 @@ mobile/android/store/icon_variants/*.svg
 *_guide.md
 *.local.md
 
+# Local desktop development tool probes
+desktop/tool/
+

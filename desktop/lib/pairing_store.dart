@@ -37,6 +37,12 @@ class PairedDeviceRecord {
       );
 }
 
+enum StreamProxyMode {
+  off,
+  auto,
+  always,
+}
+
 /// Persistent pairing identity for the desktop receiver.
 class PairingStore {
   PairingStore._(this._prefs);
@@ -53,6 +59,7 @@ class PairingStore {
   static const _kPauseOnWindowHide = 'pb.pause_on_window_hide';
   static const _kEnableHistory = 'pb.enable_history';
   static const _kPreselectHlsQuality = 'pb.preselect_hls_quality';
+  static const _kStreamProxyMode = 'pb.stream_proxy_mode';
   static const _kStillWatchingEnabled = 'pb.still_watching_enabled';
   static const _kStillWatchingThresholdMin = 'pb.still_watching_threshold_min';
   static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
@@ -125,6 +132,17 @@ class PairingStore {
 
   Future<void> setPreselectHlsQuality(bool value) =>
       _prefs.setBool(_kPreselectHlsQuality, value);
+
+  StreamProxyMode get streamProxyMode {
+    final index = _prefs.getInt(_kStreamProxyMode) ?? StreamProxyMode.off.index;
+    if (index >= 0 && index < StreamProxyMode.values.length) {
+      return StreamProxyMode.values[index];
+    }
+    return StreamProxyMode.off;
+  }
+
+  Future<void> setStreamProxyMode(StreamProxyMode value) =>
+      _prefs.setInt(_kStreamProxyMode, value.index);
 
   bool get stillWatchingEnabled =>
       _prefs.getBool(_kStillWatchingEnabled) ?? false;
