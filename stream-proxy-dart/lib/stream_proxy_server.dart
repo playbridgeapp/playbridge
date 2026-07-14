@@ -325,6 +325,28 @@ class StreamProxyServer {
     try {
       final upstream = await _connectUpstream(targetUrl, headers);
 
+      final contentType = upstream.headers[HttpHeaders.contentTypeHeader]?.toLowerCase() ?? '';
+      final isDash = contentType.contains('dash+xml') ||
+          targetUrl.toLowerCase().contains('.mpd') ||
+          targetUrl.toLowerCase().contains('manifest/dash');
+
+      if (isDash) {
+        // Read manifest bytes from the upstream stream and rewrite them
+        final bytesBuilder = BytesBuilder();
+        await for (final chunk in upstream.stream) {
+          bytesBuilder.add(chunk);
+        }
+        final rawContent = utf8.decode(bytesBuilder.takeBytes());
+        final rewritten = _rewriteDashManifest(rawContent);
+        return Response.ok(
+          rewritten,
+          headers: {
+            HttpHeaders.contentTypeHeader: 'application/dash+xml',
+            HttpHeaders.cacheControlHeader: 'no-cache, no-store, must-revalidate',
+          },
+        );
+      }
+
       final outHeaders = <String, String>{
         HttpHeaders.contentTypeHeader: _mimeFor(targetUrl),
         HttpHeaders.cacheControlHeader: 'public, max-age=3600',
@@ -382,11 +404,14 @@ class StreamProxyServer {
         final outHeaders = <String, String>{};
         resp.headers.forEach((k, values) {
           final lower = k.toLowerCase();
-          if (lower == 'content-range' || lower == 'accept-ranges') {
+          if (lower == 'content-range' || lower == 'accept-ranges' || lower == 'content-type') {
             outHeaders[k] = values.join(', ');
           }
         });
-        if (resp.contentLength != -1) {
+        final contentEncoding = resp.headers.value(HttpHeaders.contentEncodingHeader);
+        final isCompressed = contentEncoding != null && contentEncoding != 'identity';
+
+        if (resp.contentLength != -1 && !isCompressed) {
           outHeaders[HttpHeaders.contentLengthHeader] = resp.contentLength.toString();
         }
 
@@ -586,9 +611,17 @@ String _resolveTargetUrl(String baseSpec, List<String> relativeSegments, Uri req
     return baseSpec;
   }
 
-  // Reconstruct the relative path
-  final relativePath = relativeSegments.join('/');
-  final resolvedUri = baseUri.resolve(relativePath);
+  final Uri resolvedUri;
+  if (relativeSegments.first == '_root_') {
+    // Resolve relative to the origin root of baseSpec
+    final originRoot = Uri(scheme: baseUri.scheme, userInfo: baseUri.userInfo, host: baseUri.host, port: baseUri.port);
+    final relativePath = relativeSegments.sublist(1).join('/');
+    resolvedUri = originRoot.resolve(relativePath);
+  } else {
+    // Reconstruct the relative path
+    final relativePath = relativeSegments.join('/');
+    resolvedUri = baseUri.resolve(relativePath);
+  }
 
   // Merge query parameters:
   // 1. Keep base URL query parameters (important for CDN authentication signatures/tokens)
@@ -609,4 +642,20 @@ String _resolveTargetUrl(String baseSpec, List<String> relativeSegments, Uri req
   }
 
   return resolvedUri.replace(queryParameters: mergedQuery).toString();
+}
+
+/// Rewrites a DASH (.mpd) XML manifest to prefix root-relative paths with _root_/.
+/// This forces the media player to request root-relative segments under our loopback proxy prefix.
+String _rewriteDashManifest(String content) {
+  // Replace <BaseURL>/ with <BaseURL>_root_/ (asserting no double slash for protocol-relative links)
+  content = content.replaceAllMapped(RegExp(r'(<BaseURL[^>]*>)\s*/(?=[^/])'), (match) => '${match.group(1)}_root_/');
+
+  // Replace <Location>/ with <Location>_root_/
+  content = content.replaceAllMapped(RegExp(r'(<Location[^>]*>)\s*/(?=[^/])'), (match) => '${match.group(1)}_root_/');
+
+  // Replace attributes media="/ with media="_root_/
+  content = content.replaceAllMapped(RegExp(r'\b(media|initialization|location|baseUrl)\s*=\s*"\s*/(?=[^/])'), (match) => '${match.group(1)}="_root_/');
+  content = content.replaceAllMapped(RegExp(r"\b(media|initialization|location|baseUrl)\s*=\s*'\s*/(?=[^/])"), (match) => "${match.group(1)}='_root_/");
+
+  return content;
 }
