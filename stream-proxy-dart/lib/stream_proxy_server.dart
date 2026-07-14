@@ -337,7 +337,7 @@ class StreamProxyServer {
           bytesBuilder.add(chunk);
         }
         final rawContent = utf8.decode(bytesBuilder.takeBytes());
-        final rewritten = _rewriteDashManifest(rawContent);
+        final rewritten = _rewriteDashManifest(rawContent, password);
         return Response.ok(
           rewritten,
           headers: {
@@ -645,17 +645,48 @@ String _resolveTargetUrl(String baseSpec, List<String> relativeSegments, Uri req
 }
 
 /// Rewrites a DASH (.mpd) XML manifest to prefix root-relative paths with _root_/.
-/// This forces the media player to request root-relative segments under our loopback proxy prefix.
-String _rewriteDashManifest(String content) {
-  // Replace <BaseURL>/ with <BaseURL>_root_/ (asserting no double slash for protocol-relative links)
-  content = content.replaceAllMapped(RegExp(r'(<BaseURL[^>]*>)\s*/(?=[^/])'), (match) => '${match.group(1)}_root_/');
+/// Also appends the auth token to rewritten paths so the player remains authorized.
+String _rewriteDashManifest(String content, String? token) {
+  String appendToken(String url) {
+    if (url.startsWith('//') || url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+    final cleanUrl = url.startsWith('/') ? '_root_$url' : url;
+    if (token == null || token.isEmpty || cleanUrl.contains('token=')) {
+      return cleanUrl;
+    }
+    final hasQuery = cleanUrl.contains('?');
+    final separator = hasQuery ? '&amp;' : '?';
+    return '$cleanUrl${separator}token=$token';
+  }
 
-  // Replace <Location>/ with <Location>_root_/
-  content = content.replaceAllMapped(RegExp(r'(<Location[^>]*>)\s*/(?=[^/])'), (match) => '${match.group(1)}_root_/');
+  // 1. Rewrite <BaseURL>...</BaseURL>
+  content = content.replaceAllMapped(RegExp(r'<BaseURL([^>]*)>([^<]+)</BaseURL>'), (match) {
+    final attrs = match.group(1)!;
+    final url = match.group(2)!.trim();
+    return '<BaseURL$attrs>${appendToken(url)}</BaseURL>';
+  });
 
-  // Replace attributes media="/ with media="_root_/
-  content = content.replaceAllMapped(RegExp(r'\b(media|initialization|location|baseUrl)\s*=\s*"\s*/(?=[^/])'), (match) => '${match.group(1)}="_root_/');
-  content = content.replaceAllMapped(RegExp(r"\b(media|initialization|location|baseUrl)\s*=\s*'\s*/(?=[^/])"), (match) => "${match.group(1)}='_root_/");
+  // 2. Rewrite <Location>...</Location>
+  content = content.replaceAllMapped(RegExp(r'<Location([^>]*)>([^<]+)</Location>'), (match) {
+    final attrs = match.group(1)!;
+    final url = match.group(2)!.trim();
+    return '<Location$attrs>${appendToken(url)}</Location>';
+  });
+
+  // 3. Rewrite attributes (media, initialization, location, baseUrl) in double quotes
+  content = content.replaceAllMapped(RegExp(r'\b(media|initialization|location|baseUrl)\s*=\s*"([^"]+)"'), (match) {
+    final attrName = match.group(1)!;
+    final url = match.group(2)!;
+    return '$attrName="${appendToken(url)}"';
+  });
+
+  // 4. Rewrite attributes (media, initialization, location, baseUrl) in single quotes
+  content = content.replaceAllMapped(RegExp(r"\b(media|initialization|location|baseUrl)\s*=\s*'([^']+)'"), (match) {
+    final attrName = match.group(1)!;
+    final url = match.group(2)!;
+    return "$attrName='${appendToken(url)}'";
+  });
 
   return content;
 }
