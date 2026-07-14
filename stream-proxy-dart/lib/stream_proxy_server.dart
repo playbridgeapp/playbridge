@@ -197,8 +197,8 @@ class StreamProxyServer {
     }
 
     final sessionId = pathSegments[1];
-    final Map<String, String> sessionHeaders;
     final String targetUrl;
+    final Map<String, String> sessionHeaders;
     String? statelessHeadersB64;
 
     if (sessionId == 'play') {
@@ -207,11 +207,15 @@ class StreamProxyServer {
         return Response.badRequest(body: 'Invalid stateless path structure. Expected /s/play/<uri_b64>/<headers_b64>/<filename>');
       }
       final uriParam = pathSegments[2];
+      final String baseSpec;
       try {
-        targetUrl = utf8.decode(_b64UrlDecode(uriParam));
+        baseSpec = utf8.decode(_b64UrlDecode(uriParam));
       } catch (e) {
         return Response.badRequest(body: 'Invalid base64 uri segment: $e');
       }
+
+      // Resolve relative path segments from index 4 onwards against the base URL
+      targetUrl = _resolveTargetUrl(baseSpec, pathSegments.sublist(4), request.url);
 
       final hB64 = pathSegments[3];
       statelessHeadersB64 = hB64;
@@ -233,9 +237,12 @@ class StreamProxyServer {
       session.touch();
 
       final queryUri = request.url.queryParameters['uri'];
-      targetUrl = queryUri != null && queryUri.isNotEmpty
-          ? queryUri
-          : session.originalUrl;
+      if (queryUri != null && queryUri.isNotEmpty) {
+        targetUrl = queryUri;
+      } else {
+        // Resolve relative path segments from index 2 onwards against the original session URL
+        targetUrl = _resolveTargetUrl(session.originalUrl, pathSegments.sublist(2), request.url);
+      }
       sessionHeaders = session.headers;
     }
 
@@ -246,11 +253,11 @@ class StreamProxyServer {
 
     final forwardHeaders = _filterUpstreamHeaders(sessionHeaders, request.headers, targetUrl, sessionId);
 
-    final isPlaylist = targetUrl.toLowerCase().contains('.m3u8') ||
+    final isHls = targetUrl.toLowerCase().contains('.m3u8') ||
         request.url.path.toLowerCase().contains('.m3u8');
 
-    if (isPlaylist) {
-      return _handlePlaylist(
+    if (isHls) {
+      return _handleHlsPlaylist(
         sessionId,
         targetUrl,
         forwardHeaders,
@@ -261,7 +268,7 @@ class StreamProxyServer {
     }
   }
 
-  Future<Response> _handlePlaylist(
+  Future<Response> _handleHlsPlaylist(
     String sessionId,
     String targetUrl,
     Map<String, String> headers,
@@ -512,6 +519,8 @@ class StreamProxyServer {
   String _mimeFor(String path) {
     final lower = path.toLowerCase();
     if (lower.contains('.m3u8')) return 'application/vnd.apple.mpegurl';
+    if (lower.contains('.mpd')) return 'application/dash+xml';
+    if (lower.contains('.m4s')) return 'video/iso.segment';
     if (lower.contains('.ts')) return 'video/mp2t';
     if (lower.contains('.mp4')) return 'video/mp4';
     if (lower.contains('.key')) return 'application/octet-stream';
@@ -564,4 +573,37 @@ List<int> _b64UrlDecode(String input) {
 /// Encode to base64url without padding (safe for URL path segments).
 String _b64UrlEncode(List<int> bytes) {
   return base64Url.encode(bytes).replaceAll('=', '');
+}
+
+/// Resolves a list of relative URL path segments against a base URL specification.
+/// Merges query parameters from the base URL and the incoming request.
+String _resolveTargetUrl(String baseSpec, List<String> relativeSegments, Uri requestUri) {
+  final baseUri = Uri.parse(baseSpec);
+  if (relativeSegments.isEmpty) {
+    return baseSpec;
+  }
+
+  // Reconstruct the relative path
+  final relativePath = relativeSegments.join('/');
+  final resolvedUri = baseUri.resolve(relativePath);
+
+  // Merge query parameters:
+  // 1. Keep base URL query parameters (important for CDN authentication signatures/tokens)
+  // 2. Add query parameters from the resolved target URL itself
+  // 3. Add incoming request query parameters (excluding the proxy auth 'token')
+  final mergedQuery = <String, String>{}
+    ..addAll(baseUri.queryParameters)
+    ..addAll(resolvedUri.queryParameters);
+
+  requestUri.queryParameters.forEach((k, v) {
+    if (k != 'token') {
+      mergedQuery[k] = v;
+    }
+  });
+
+  if (mergedQuery.isEmpty) {
+    return resolvedUri.replace(query: '').toString();
+  }
+
+  return resolvedUri.replace(queryParameters: mergedQuery).toString();
 }
