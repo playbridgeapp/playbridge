@@ -8,6 +8,7 @@
 *.iml
 .idea
 .vscode/
+.dart_tool/
 .gradle
 build/
 app/build/

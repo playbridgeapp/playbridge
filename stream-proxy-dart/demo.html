@@ -87,17 +87,19 @@
 </div>
 
 <div class="section" id="playerSection">
-  <div class="section-title">Player <span id="hlsBadge" style="font-size:0.7rem; font-weight:400;"></span></div>
+  <div class="section-title">Player <span id="hlsBadge" style="font-size:0.7rem; font-weight:400;"></span> <span id="dashBadge" style="font-size:0.7rem; font-weight:400;"></span></div>
   <video id="videoPlayer" controls crossorigin="anonymous"></video>
   <div class="hint" id="playerHint"></div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/dashjs@latest/dist/dash.all.min.js"></script>
 <script>
 let currentProxyUrl = '';
 let currentOriginalUrl = '';
 let currentHeaders = {};
 let hlsInstance = null;
+let dashPlayer = null;
 
 function parseCurl(curlStr) {
   const lines = curlStr.trim().replace(/\\\s*\n/g, ' ').trim();
@@ -188,10 +190,12 @@ function playInPage() {
   const section = document.getElementById('playerSection');
   section.style.display = 'block';
 
-  // Destroy previous hls instance
+  // Destroy previous player instances
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  if (dashPlayer) { dashPlayer.destroy(); dashPlayer = null; }
 
   const isHls = currentProxyUrl.includes('.m3u8') || currentOriginalUrl.includes('.m3u8');
+  const isDash = currentProxyUrl.includes('.mpd') || currentOriginalUrl.includes('.mpd') || currentOriginalUrl.includes('manifest/dash');
 
   if (isHls && Hls.isSupported()) {
     hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
@@ -208,6 +212,11 @@ function playInPage() {
     video.src = currentProxyUrl;
     video.play().catch(() => {});
     document.getElementById('playerHint').textContent = `Streaming HLS (native): ${currentOriginalUrl}`;
+  } else if (isDash && typeof dashjs !== 'undefined') {
+    // DASH stream playback via dash.js
+    dashPlayer = dashjs.MediaPlayer().create();
+    dashPlayer.initialize(video, currentProxyUrl, true);
+    document.getElementById('playerHint').textContent = `Streaming DASH via dash.js: ${currentOriginalUrl}`;
   } else {
     // Direct MP4/WebM
     video.src = currentProxyUrl;
@@ -242,6 +251,7 @@ function copyCurlForProxy() {
 
 function clearAll() {
   if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  if (dashPlayer) { dashPlayer.destroy(); dashPlayer = null; }
   document.getElementById('curlInput').value = '';
   document.getElementById('resultSection').style.display = 'none';
   document.getElementById('playerSection').style.display = 'none';
@@ -269,7 +279,7 @@ function esc(s) {
   return d.innerHTML;
 }
 
-// Show HLS support badge on load
+// Show HLS/DASH support badge on load
 (function() {
   const badge = document.getElementById('hlsBadge');
   const video = document.createElement('video');
@@ -280,6 +290,13 @@ function esc(s) {
     badge.innerHTML = '<span class="tag">HLS: hls.js</span>';
   } else {
     badge.innerHTML = '<span class="tag" style="color:#f85149; border-color:#f8514944; background:#f8514922;">HLS: not supported</span>';
+  }
+
+  const dashBadge = document.getElementById('dashBadge');
+  if (typeof dashjs !== 'undefined') {
+    dashBadge.innerHTML = '<span class="tag">DASH: dash.js</span>';
+  } else {
+    dashBadge.innerHTML = '<span class="tag" style="color:#f85149; border-color:#f8514944; background:#f8514922;">DASH: not supported</span>';
   }
 })();
 </script>
