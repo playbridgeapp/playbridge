@@ -150,7 +150,8 @@ class ExtensionBridge {
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
           unawaited(() async {
-            final ok = await _sender.castUrl(url, headers: headers, title: title);
+            final ok =
+                await _sender.castUrl(url, headers: headers, title: title);
             _send(socket, {
               'type': 'result',
               'ok': ok,

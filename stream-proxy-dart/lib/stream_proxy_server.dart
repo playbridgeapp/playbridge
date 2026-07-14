@@ -250,7 +250,8 @@ class StreamProxyServer {
       final queryUri = request.url.queryParameters['uri'];
       if (queryUri != null && queryUri.isNotEmpty) {
         targetUrl = queryUri;
-      } else if (pathSegments.length == 3 && pathSegments[2] == 'manifest.m3u8') {
+      } else if (pathSegments.length == 3 &&
+          pathSegments[2] == 'manifest.m3u8') {
         targetUrl = session.originalUrl;
       } else {
         // Resolve relative path segments from index 2 onwards against the original session URL

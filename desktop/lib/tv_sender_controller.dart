@@ -178,7 +178,8 @@ class TvSenderController extends ChangeNotifier {
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth) and a [title].
-  Future<bool> castUrl(String url, {Map<String, String>? headers, String? title}) async {
+  Future<bool> castUrl(String url,
+      {Map<String, String>? headers, String? title}) async {
     var targetUrl = url;
     var targetHeaders = headers;
 
@@ -187,7 +188,8 @@ class TvSenderController extends ChangeNotifier {
       final lanIp = await _localLanIp(active.host);
       if (lanIp != null) {
         // Register session in local proxy server
-        final loopbackUrl = StreamProxyServer.instance.registerSession(url, headers ?? {});
+        final loopbackUrl =
+            StreamProxyServer.instance.registerSession(url, headers ?? {});
         // Replace loopback host 127.0.0.1 with the local LAN IP that the TV can reach
         targetUrl = loopbackUrl.replaceFirst('127.0.0.1', lanIp);
         // The headers are managed by the proxy server, so we send null/empty headers to the TV
