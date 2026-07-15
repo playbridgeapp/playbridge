@@ -1,0 +1,4 @@
+interface:
+  display_name: "PlayBridge Android"
+  short_description: "Work safely across PlayBridge Android projects"
+  default_prompt: "Use $playbridge-android to implement and verify this Android change."

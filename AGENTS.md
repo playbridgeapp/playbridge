@@ -4,7 +4,9 @@ PlayBridge is a multi-platform casting suite. Treat its Android, Flutter, Apple,
 
 ## Shared skills
 
-Project skills live in `.agents/skills/`:
+Portable project skills live in `.agents/skills/` and are the canonical specialist definitions for Codex, OpenCode, Claude, and other agents.
+
+### Task workflows
 
 | Skill | Use when |
 |---|---|
@@ -12,7 +14,20 @@ Project skills live in `.agents/skills/`:
 | `commit-and-open-pr` | Commit, push, or create/update a pull request without an implicit uprev |
 | `code-review-graph-workflow` | Explore, debug, review, or refactor using the repository graph |
 
-Load the matching `SKILL.md` only when its description matches the request. A normal commit, push, or PR request must not change versions unless the user also requests an uprev or release.
+### Project specialists
+
+| Skill | Owns |
+|---|---|
+| `playbridge-android` | Android phone, Android TV, shared Kotlin, and shared Android dependencies |
+| `playbridge-apple` | Apple phone and Apple TV applications |
+| `playbridge-desktop-proxy` | Flutter Desktop and the Dart stream proxy |
+| `playbridge-extension` | Browser extension and native-messaging integration |
+| `playbridge-web` | Svelte website and static web assets |
+| `playbridge-protocol` | Protocol schema, generated bindings, submodule updates, and consumer compatibility |
+
+Before working in a project, load the matching specialist skill. For cross-project work, load each affected specialist or delegate non-overlapping consumers to subagents using those skills. Keep shared contracts and files with one designated writer, and keep the primary agent responsible for integration and final verification.
+
+Load a task workflow only when its description matches the request. A normal commit, push, or PR request must not change versions unless the user also requests an uprev or release.
 
 ## Local agent instructions
 
@@ -28,9 +43,10 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Apple phone | `mobile/apple/` | Swift/Xcode project |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver for macOS, Windows, and Linux |
+| Stream proxy | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
 | Extension | `extension/` | Browser extension, JavaScript/TypeScript |
 | Web | `web/` | Svelte site |
-| Protocol assets | `protocol/` | Protocol definitions and generated artifacts |
+| Protocol assets | `protocol/` | Git submodule containing protocol definitions and generated artifacts |
 
 ## Build and test
 
@@ -74,7 +90,7 @@ Changes to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.
 
 - `mobile/android/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
 - `tv/android/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
-- `extension/src/background.js`, which manually handles protocol JSON
+- `extension/src/background.ts`, which manually handles protocol JSON
 
 ### Shared dependency versions
 

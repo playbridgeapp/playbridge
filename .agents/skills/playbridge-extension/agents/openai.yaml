@@ -1,0 +1,4 @@
+interface:
+  display_name: "PlayBridge Extension"
+  short_description: "Build and review the PlayBridge extension"
+  default_prompt: "Use $playbridge-extension to implement and verify this browser extension change."

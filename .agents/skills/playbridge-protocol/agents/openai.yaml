@@ -1,0 +1,4 @@
+interface:
+  display_name: "PlayBridge Protocol"
+  short_description: "Coordinate protocol and consumer compatibility"
+  default_prompt: "Use $playbridge-protocol to change or review the PlayBridge protocol safely."
