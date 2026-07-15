@@ -68,10 +68,7 @@ class ConnectionStore(private val context: Context) {
     }
 
     /**
-     * Add to history
-     */
-    /**
-     * Add to history
+     * Add to history, replacing any stale endpoint for the same receiver UUID.
      */
     suspend fun addToHistory(device: TvDevice) {
         context.dataStore.edit { prefs ->
@@ -86,11 +83,7 @@ class ConnectionStore(private val context: Context) {
                 emptyList()
             }
 
-            // Remove existing entry for same IP/Port if exists
-            val filtered = currentHistory.filterNot { it.ip == device.ip && it.port == device.port }
-
-            // Add to front
-            val newHistory = (listOf(device) + filtered).take(10)
+            val newHistory = ConnectionMerge.upsertHistory(currentHistory, device)
 
             prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
@@ -139,7 +132,7 @@ class ConnectionStore(private val context: Context) {
                 emptyList()
             }
 
-            val newHistory = currentHistory.filterNot { it.ip == device.ip && it.port == device.port }
+            val newHistory = ConnectionMerge.removeHistoryDevice(currentHistory, device)
 
             prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
@@ -165,7 +158,9 @@ class ConnectionStore(private val context: Context) {
     }
 
     private fun decodeHistory(json: String): List<TvDevice> =
-        protocolJson.decodeFromString<List<TvDevice>>(json).map(::unprotect)
+        ConnectionMerge.normalizeHistory(
+            protocolJson.decodeFromString<List<TvDevice>>(json).map(::unprotect)
+        )
 
     private fun protect(device: TvDevice): TvDevice =
         if (device.token.isEmpty() || device.token.startsWith(ENCRYPTED_PREFIX)) device

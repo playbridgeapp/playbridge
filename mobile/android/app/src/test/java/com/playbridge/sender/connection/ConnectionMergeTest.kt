@@ -54,6 +54,57 @@ class ConnectionMergeTest {
         assertNull(ConnectionMerge.withDiscoveredEndpoint(device, emptyList()).wssPort)
     }
 
+    // ── connection history identity ────────────────────────────────────────
+
+    @Test
+    fun newPortReplacesHistoryEntryWithSameUuid() {
+        val oldEndpoint = dev("1.1.1.1", 8765, uuid = "u1", token = "old")
+        val newEndpoint = dev("1.1.1.1", 8766, uuid = "u1", token = "current")
+
+        val history = ConnectionMerge.upsertHistory(listOf(oldEndpoint), newEndpoint)
+
+        assertEquals(listOf(newEndpoint), history)
+    }
+
+    @Test
+    fun normalizesDuplicatesAlreadyStoredAtDifferentPorts() {
+        val current = dev("1.1.1.1", 8766, uuid = "u1", token = "current")
+        val stale = dev("1.1.1.1", 8765, uuid = "u1", token = "old")
+        val other = dev("2.2.2.2", 8765, uuid = "u2", token = "other")
+
+        val history = ConnectionMerge.normalizeHistory(listOf(current, stale, other))
+
+        assertEquals(listOf(current, other), history)
+    }
+
+    @Test
+    fun legacyEntriesWithoutUuidStillUseIpAndPortIdentity() {
+        val first = dev("1.1.1.1", 8765)
+        val sameEndpoint = dev("1.1.1.1", 8765, token = "new")
+        val otherPort = dev("1.1.1.1", 8766)
+
+        val history = ConnectionMerge.upsertHistory(
+            listOf(first, otherPort),
+            sameEndpoint,
+        )
+
+        assertEquals(listOf(sameEndpoint, otherPort), history)
+    }
+
+    @Test
+    fun removingByUuidClearsEveryStaleEndpoint() {
+        val current = dev("1.1.1.1", 8766, uuid = "u1")
+        val stale = dev("1.1.1.1", 8765, uuid = "u1")
+        val other = dev("2.2.2.2", 8765, uuid = "u2")
+
+        val history = ConnectionMerge.removeHistoryDevice(
+            listOf(current, stale, other),
+            current,
+        )
+
+        assertEquals(listOf(other), history)
+    }
+
     // ── resolveAuthFailure ──────────────────────────────────────────────────
     // The regression this guards: pairing with TV B being denied must NOT wipe
     // the token of a different, already-paired TV A (the stored device) — that
