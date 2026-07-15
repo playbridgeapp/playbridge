@@ -31,6 +31,7 @@ import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
 import 'server.dart';
 import 'settings_screen.dart';
+import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
 import 'shader_background.dart';
 import 'stats_overlay.dart';
@@ -43,6 +44,21 @@ import 'update/update_checker.dart';
 import 'update/update_gate.dart';
 
 Future<void> main(List<String> args) async {
+  final launchRequest = InstanceLaunchRequest.fromArgs(args);
+  final instanceResult = await SingleInstanceCoordinator.coordinate(
+    request: launchRequest,
+  );
+  if (!instanceResult.isPrimary) {
+    if (!instanceResult.forwarded) {
+      stderr.writeln(
+        '[single-instance] running instance could not be activated: '
+        '${instanceResult.forwardingError}',
+      );
+    }
+    return;
+  }
+  final instanceCoordinator = instanceResult.coordinator!;
+
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
   await windowManager.ensureInitialized();
@@ -82,17 +98,12 @@ Future<void> main(List<String> args) async {
     store: results[0] as PairingStore,
     history: results[1] as HistoryStore,
     tvStore: results[2] as TvConnectionStore,
+    instanceCoordinator: instanceCoordinator,
     // "Play on TV" cold-start: the cast helper launches the app with these when
     // it isn't already running. The app casts the file once a TV connects.
-    initialCastFile: _argValue(args, '--cast-file'),
-    initialCastTitle: _argValue(args, '--cast-title'),
+    initialCastFile: launchRequest.castFile,
+    initialCastTitle: launchRequest.castTitle,
   ));
-}
-
-/// Reads `--flag value` from argv (null if absent).
-String? _argValue(List<String> args, String flag) {
-  final i = args.indexOf(flag);
-  return (i >= 0 && i + 1 < args.length) ? args[i + 1] : null;
 }
 
 // Keyboard shortcuts
@@ -129,6 +140,7 @@ class ReceiverApp extends StatefulWidget {
     required this.store,
     required this.history,
     required this.tvStore,
+    required this.instanceCoordinator,
     this.initialCastFile,
     this.initialCastTitle,
   });
@@ -136,6 +148,7 @@ class ReceiverApp extends StatefulWidget {
   final PairingStore store;
   final HistoryStore history;
   final TvConnectionStore tvStore;
+  final SingleInstanceCoordinator instanceCoordinator;
   final String? initialCastFile;
   final String? initialCastTitle;
 
@@ -318,14 +331,19 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     // Cold-start file open (`playbridge_cast` launched the app): cast to a TV
     // if already linked, otherwise play on this desktop (same as extension
     // bridge when disconnected).
-    if (widget.initialCastFile != null) {
-      _pendingCastFile = widget.initialCastFile;
-      _sender.addListener(_maybeCastPendingFile);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _resolvePendingCastFile();
-      });
+    final initialCastFile = widget.initialCastFile;
+    if (initialCastFile != null) {
+      _queuePendingCast(
+        initialCastFile,
+        widget.initialCastTitle,
+        afterFirstFrame: true,
+      );
     }
+
+    // A secondary process can arrive while Flutter and the player are still
+    // starting. The coordinator queues those requests until this handler is
+    // installed, then routes them through the same cold-start cast path.
+    widget.instanceCoordinator.setLaunchHandler(_handleInstanceLaunch);
   }
 
   bool _senderWasCasting = false;
@@ -365,6 +383,31 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   String? _pendingCastFile;
+  String? _pendingCastTitle;
+
+  Future<void> _handleInstanceLaunch(InstanceLaunchRequest request) async {
+    await _revealWindow();
+    if (!mounted || request.castFile == null) return;
+    _queuePendingCast(request.castFile!, request.castTitle);
+  }
+
+  void _queuePendingCast(
+    String path,
+    String? title, {
+    bool afterFirstFrame = false,
+  }) {
+    _pendingCastFile = path;
+    _pendingCastTitle = title;
+    _sender.removeListener(_maybeCastPendingFile);
+    _sender.addListener(_maybeCastPendingFile);
+    if (afterFirstFrame) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _resolvePendingCastFile();
+      });
+    } else {
+      _resolvePendingCastFile();
+    }
+  }
 
   /// Rising edge: TV connected while a cold-start file is still pending → TV.
   void _maybeCastPendingFile() {
@@ -376,14 +419,15 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   void _resolvePendingCastFile() {
     final path = _pendingCastFile;
     if (path == null) return;
+    final title = _pendingCastTitle;
     _pendingCastFile = null;
+    _pendingCastTitle = null;
     _sender.removeListener(_maybeCastPendingFile);
     final file = File(path);
     if (!file.existsSync()) {
       debugPrint('[main] pending cast file missing: $path');
       return;
     }
-    final title = widget.initialCastTitle;
     if (_sender.isConnected) {
       unawaited(_sender.castLocalFile(file, title: title));
       return;

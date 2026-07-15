@@ -9,6 +9,19 @@ class AppDelegate: FlutterAppDelegate {
     return false
   }
 
+  override func applicationShouldHandleReopen(
+    _ sender: NSApplication,
+    hasVisibleWindows flag: Bool
+  ) -> Bool {
+    // Clicking the Dock/Finder app while PlayBridge is hidden should activate
+    // the existing process and reveal its window, never create another window.
+    if !flag {
+      mainFlutterWindow?.makeKeyAndOrderFront(self)
+    }
+    sender.activate(ignoringOtherApps: true)
+    return true
+  }
+
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
     return true
   }
