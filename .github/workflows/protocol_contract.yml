@@ -55,8 +55,6 @@ jobs:
 
       - name: Run generate.sh --check
         working-directory: protocol
-        env:
-          PATH: ${{ env.PATH }}:${{ env.HOME }}/go/bin:${{ env.HOME }}/.pub-cache/bin
         run: |
           chmod +x ./generate.sh
           ./generate.sh --check
