@@ -57,9 +57,7 @@ The retained generation layout is:
 
 ```text
 proto/messages.proto
-generated/go/
 generated/kotlin/
-generated/typescript/
 generated/swift/
 generated/dart/
 generate.sh
@@ -72,7 +70,7 @@ Run:
 ./generate.sh --check
 ```
 
-Prerequisites are documented in `generate.sh`. Generated types are local implementation helpers;
+Prerequisites are documented in `generate.sh`. Generated Kotlin, Swift, and Dart types are local implementation helpers;
 their protobuf binary encoding is not used on the WSS wire.
 
 ## Security invariants

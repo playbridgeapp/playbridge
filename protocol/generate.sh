@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# Regenerate all language bindings from proto/messages.proto.
+# Regenerate the maintained language bindings from proto/messages.proto.
 # Run this whenever the proto changes, then commit the generated/ output.
 #
 # Modes:
@@ -10,8 +10,6 @@
 #
 # Prerequisites:
 #   brew install protobuf swift-protobuf
-#   go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-#   npm install -g ts-proto
 #   dart pub global activate protoc_plugin
 #   # Wire (Kotlin): generate.sh auto-fetches wire-compiler-5.1.0.jar to ~/.cache
 #   # Requires a JDK on PATH (`java`)
@@ -28,28 +26,6 @@ if [[ "$1" == "--check" ]]; then
 else
   OUT="$SCRIPT_DIR/generated"
 fi
-
-# Ensure protoc-gen-go and protoc-gen-dart are on PATH
-export PATH="$(go env GOPATH)/bin:$HOME/.pub-cache/bin:$PATH"
-
-echo "==> Generating Go"
-mkdir -p "$OUT/go"
-protoc \
-  --proto_path="$PROTO_DIR" \
-  --go_out="$OUT/go" \
-  --go_opt=paths=source_relative \
-  messages.proto
-
-echo "==> Generating TypeScript"
-mkdir -p "$OUT/typescript"
-protoc \
-  --proto_path="$PROTO_DIR" \
-  --plugin="$( npm root -g )/ts-proto/protoc-gen-ts_proto" \
-  --ts_proto_out="$OUT/typescript" \
-  --ts_proto_opt=outputJsonMethods=true \
-  --ts_proto_opt=useOptionals=messages \
-  --ts_proto_opt=snakeToCamel=true \
-  messages.proto
 
 echo "==> Generating Swift"
 mkdir -p "$OUT/swift"

@@ -31,18 +31,6 @@ jobs:
       - name: Install protoc and swift-protobuf
         run: brew install protobuf swift-protobuf
 
-      - uses: actions/setup-go@v5
-        with: { go-version: '1.22' }
-
-      - name: Install protoc-gen-go
-        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-
-      - uses: actions/setup-node@v4
-        with: { node-version: '20' }
-
-      - name: Install ts-proto
-        run: npm install -g ts-proto
-
       - uses: dart-lang/setup-dart@v1
 
       - name: Install protoc-gen-dart
