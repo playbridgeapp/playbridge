@@ -149,13 +149,16 @@ class ExtensionBridge {
         final title = obj['title'] as String?;
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
-          final ok = _sender.castUrl(url, headers: headers, title: title);
-          _send(socket, {
-            'type': 'result',
-            'ok': ok,
-            'target': 'tv',
-            if (!ok) 'error': 'send failed',
-          });
+          unawaited(() async {
+            final ok =
+                await _sender.castUrl(url, headers: headers, title: title);
+            _send(socket, {
+              'type': 'result',
+              'ok': ok,
+              'target': 'tv',
+              if (!ok) 'error': 'send failed',
+            });
+          }());
         } else {
           onNewMedia?.call();
           // No cast target — play on this machine (extension → desktop).

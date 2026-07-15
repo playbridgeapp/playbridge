@@ -36,8 +36,8 @@ class StreamProxyServer {
         .writeln('[stream-proxy] Starting in-process proxy on port $_port...');
     _server = proxy.StreamProxyServer(password: _sessionToken);
 
-    // Using 127.0.0.1 for local loopback proxying
-    await _server!.start(host: '127.0.0.1', port: _port!);
+    // Bind to 0.0.0.0 to allow connection from external TV receivers in the same network
+    await _server!.start(host: '0.0.0.0', port: _port!);
   }
 
   Future<void> stop() async {

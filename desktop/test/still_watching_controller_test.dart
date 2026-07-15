@@ -26,8 +26,15 @@ class _FakeEngine extends PlayerEngine {
   @override
   Future<void> open(QueueItem item) async => _play();
   @override
-  Future<void> openPlaylist(List<QueueItem> items, int startIndex) async =>
-      _play();
+  Future<void> openPlaylist(
+    List<QueueItem> items,
+    int startIndex, {
+    bool play = true,
+  }) async {
+    _play();
+    if (!play) await pause();
+  }
+
   void _play() {
     _state = 'playing';
     notifyListeners();

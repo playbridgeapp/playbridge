@@ -118,6 +118,38 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
           const SizedBox(height: 12),
           Row(
             children: [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: Checkbox(
+                  value: controller.castRouteThroughProxy,
+                  onChanged: (val) {
+                    if (val != null) {
+                      controller.setCastRouteThroughProxy(val);
+                    }
+                  },
+                  activeColor: Colors.tealAccent,
+                  checkColor: Colors.black,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    controller.setCastRouteThroughProxy(
+                        !controller.castRouteThroughProxy);
+                  },
+                  child: const Text(
+                    'Route remote stream requests through local proxy',
+                    style: TextStyle(fontSize: 13, color: Colors.white70),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
               FilledButton.icon(
                 onPressed: _pickAndCast,
                 icon: const Icon(Icons.video_file, size: 18),

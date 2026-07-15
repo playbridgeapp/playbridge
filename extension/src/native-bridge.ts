@@ -23,8 +23,8 @@ export interface BridgeState {
 type StateListener = (s: BridgeState) => void;
 
 const HOST_NAME = "com.playbridge.host";
-const RECONNECT_MS = 5_000;
-const MAX_RECONNECT_ATTEMPTS = 3;
+const BASE_RECONNECT_MS = 2_000;
+const MAX_RECONNECT_MS = 30_000;
 
 let port: ReturnType<typeof browser.runtime.connectNative> | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,6 +32,7 @@ let reconnectAttempts = 0;
 const listeners = new Set<StateListener>();
 // Bridge results arrive in order; correlate them to in-flight requests by FIFO.
 const pendingResults: Array<(ok: boolean, error?: string) => void> = [];
+let connectionResolvers: Array<(connected: boolean) => void> = [];
 
 let state: BridgeState = {
   desktopConnected: false,
@@ -54,6 +55,14 @@ export function onState(listener: StateListener): () => void {
   return () => listeners.delete(listener);
 }
 
+function resolveConnectionWaiters(success: boolean): void {
+  const list = connectionResolvers;
+  connectionResolvers = [];
+  for (const resolve of list) {
+    resolve(success);
+  }
+}
+
 export function connect(): void {
   if (port) return;
   try {
@@ -61,6 +70,7 @@ export function connect(): void {
   } catch {
     setDisconnected();
     scheduleReconnect();
+    resolveConnectionWaiters(false);
     return;
   }
   port.onMessage.addListener(onMessage);
@@ -71,19 +81,42 @@ export function connect(): void {
     }
     port = null;
     failPending("disconnected");
-    const wasConnected = state.desktopConnected;
     setDisconnected();
-    if (wasConnected) {
-      reconnectAttempts = 0;
-      scheduleReconnect();
-    } else if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-      reconnectAttempts++;
-      scheduleReconnect();
-    } else {
-      console.warn(`[PB Bridge] Reached max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}). Stopping retries.`);
-    }
+    resolveConnectionWaiters(false);
+    scheduleReconnect();
   });
   send({ cmd: "list_devices" });
+}
+
+function ensureConnected(): Promise<boolean> {
+  if (port && state.desktopConnected) {
+    return Promise.resolve(true);
+  }
+
+  // Reset retry counter to try an immediate connection
+  reconnectAttempts = 0;
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  connect();
+
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      const idx = connectionResolvers.indexOf(onConnectResult);
+      if (idx !== -1) {
+        connectionResolvers.splice(idx, 1);
+      }
+      resolve(false);
+    }, 3000);
+
+    function onConnectResult(success: boolean): void {
+      clearTimeout(timer);
+      resolve(success);
+    }
+
+    connectionResolvers.push(onConnectResult);
+  });
 }
 
 export function refresh(): void {
@@ -107,16 +140,14 @@ export function control(action: string): Promise<{ ok: boolean; error?: string }
   return request({ cmd: "control", action });
 }
 
-function request(
+async function request(
   payload: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string }> {
+  const connected = await ensureConnected();
+  if (!connected) {
+    return { ok: false, error: "PlayBridge desktop is not running" };
+  }
   return new Promise((resolve) => {
-    if (!port) {
-      reconnectAttempts = 0;
-      connect();
-      resolve({ ok: false, error: "PlayBridge desktop is not running" });
-      return;
-    }
     pendingResults.push((ok, error) => resolve({ ok, error }));
     if (!send(payload)) {
       pendingResults.pop();
@@ -133,6 +164,7 @@ function onMessage(raw: unknown): void {
       state = { ...state, desktopConnected: true };
       reconnectAttempts = 0;
       emit();
+      resolveConnectionWaiters(true);
       break;
     case "state":
       state = {
@@ -143,6 +175,7 @@ function onMessage(raw: unknown): void {
       };
       reconnectAttempts = 0;
       emit();
+      resolveConnectionWaiters(true);
       break;
     case "result": {
       const cb = pendingResults.shift();
@@ -184,8 +217,10 @@ function failPending(error: string): void {
 
 function scheduleReconnect(): void {
   if (reconnectTimer) return;
+  const delay = Math.min(MAX_RECONNECT_MS, BASE_RECONNECT_MS * Math.pow(2, reconnectAttempts));
+  reconnectAttempts++;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
-  }, RECONNECT_MS);
+  }, delay);
 }

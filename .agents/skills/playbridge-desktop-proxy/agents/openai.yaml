@@ -1,0 +1,4 @@
+interface:
+  display_name: "PlayBridge Desktop and Proxy"
+  short_description: "Coordinate Desktop and stream proxy changes"
+  default_prompt: "Use $playbridge-desktop-proxy to implement and verify this Desktop or proxy change."

@@ -23,12 +23,19 @@ class QueueItem {
     this.rating,
     this.runtime,
     this.episodeTitle,
+    this.originalUrl,
+    this.originalHeaders,
   });
 
   final String url;
   final String title;
   final Map<String, String>? headers;
   final List<String>? subtitles;
+
+  /// The pre-proxy URL and headers, set by [PlaybackRequestPreparer] when
+  /// routing through the loopback proxy so the toggle can reverse the rewrite.
+  final String? originalUrl;
+  final Map<String, String>? originalHeaders;
 
   /// Resume point (ms) seeded from the phone's resume store. Mutable because
   /// it is consumed (nulled) after the first seek, so re-playing this item
@@ -129,8 +136,15 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> selectSubtitleTrackById(String id) async {}
 
   Future<void> open(QueueItem item);
-  Future<void> openPlaylist(List<QueueItem> items, int startIndex) =>
-      open(items[startIndex]);
+  Future<void> openPlaylist(
+    List<QueueItem> items,
+    int startIndex, {
+    bool play = true,
+  }) async {
+    await open(items[startIndex]);
+    if (!play) await pause();
+  }
+
   Future<void> resume();
   Future<void> pause();
   Future<void> seek(Duration position);

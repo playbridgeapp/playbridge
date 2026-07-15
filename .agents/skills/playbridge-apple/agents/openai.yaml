@@ -1,0 +1,4 @@
+interface:
+  display_name: "PlayBridge Apple"
+  short_description: "Work safely across PlayBridge Apple projects"
+  default_prompt: "Use $playbridge-apple to implement and verify this Apple platform change."

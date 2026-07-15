@@ -4,6 +4,7 @@ import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
 import 'engines/playback_request_preparer.dart';
+import 'stream_proxy_server.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
@@ -75,6 +76,7 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> switchEngine(EngineType type) async {
     if (type == _currentType) return;
+    await _waitForProxyToggle();
 
     // 1. Capture current state
     final wasPlaying = state == 'playing';
@@ -131,6 +133,10 @@ class PlayerController extends ChangeNotifier {
   /// the window was unfocused). Lifted only after the engine has real media.
   bool _opening = false;
   bool get isOpening => _opening;
+  bool _proxyToggleInProgress = false;
+  bool get proxyToggleInProgress => _proxyToggleInProgress;
+  Future<void>? _proxyToggleFuture;
+  int _proxyToggleGeneration = 0;
 
   String? get currentTitle =>
       _currentIndex >= 0 && _currentIndex < _queue.length
@@ -196,6 +202,7 @@ class PlayerController extends ChangeNotifier {
     int startIndex, {
     bool isRemote = false,
   }) async {
+    await _waitForProxyToggle();
     if (items.isEmpty) return;
     // Mask before queue/reveal so stop→unfocus→play B never flashes video A.
     // Do not disable the mpv video track — that left a permanent black picture.
@@ -234,6 +241,7 @@ class PlayerController extends ChangeNotifier {
   /// starts the item directly (preserves the previous desktop behavior;
   /// Android instead buffers idle queue_adds until the next session).
   Future<void> queueAdd(QueueItem item, {bool isRemote = false}) async {
+    await _waitForProxyToggle();
     if (_currentIndex < 0 || _queue.isEmpty) {
       await playPlaylist([item], 0, isRemote: isRemote);
       return;
@@ -246,6 +254,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> jumpTo(int index) async {
+    await _waitForProxyToggle();
     if (index < 0 || index >= _queue.length) return;
     _setIndex(index);
     await _engine.openPlaylist(_queue, _currentIndex);
@@ -325,6 +334,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> seek(Duration position) => _engine.seek(position);
   Future<void> setVolume(double volume) => _engine.setVolume(volume);
   Future<void> stop() async {
+    await _waitForProxyToggle();
     await _engine.stop();
     _queue.clear();
     _setIndex(-1);
@@ -334,6 +344,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   void _onError(String errorMsg) {
+    if (_proxyToggleInProgress) return;
     if (store?.streamProxyMode == StreamProxyMode.auto) {
       final currentItem = _currentIndex >= 0 && _currentIndex < _queue.length
           ? _queue[_currentIndex]
@@ -358,6 +369,169 @@ class PlayerController extends ChangeNotifier {
         }
       }
     }
+  }
+
+  /// True when the current item's URL is being routed through the loopback
+  /// stream proxy rather than played directly.
+  bool get isCurrentItemProxied {
+    if (_currentIndex < 0 || _currentIndex >= _queue.length) return false;
+    final url = _queue[_currentIndex].url;
+    return url.contains('127.0.0.1') && url.contains('/s/play/');
+  }
+
+  /// Seamlessly switches the current item between direct ↔ proxied playback.
+  /// Saves the current position and re-opens the stream so the transition is
+  /// invisible to the user.
+  Future<bool> toggleProxy() {
+    if (_proxyToggleInProgress ||
+        _currentIndex < 0 ||
+        _currentIndex >= _queue.length) {
+      return Future.value(false);
+    }
+
+    final generation = ++_proxyToggleGeneration;
+    final operation = _runProxyToggle();
+    _proxyToggleFuture = operation.then<void>(
+      (_) {
+        if (_proxyToggleGeneration == generation) _proxyToggleFuture = null;
+      },
+      onError: (Object error, StackTrace stack) {
+        if (_proxyToggleGeneration == generation) _proxyToggleFuture = null;
+      },
+    );
+    return operation;
+  }
+
+  Future<void> _waitForProxyToggle() async {
+    final pending = _proxyToggleFuture;
+    if (pending != null) await pending;
+  }
+
+  Future<bool> _runProxyToggle() async {
+    _proxyToggleInProgress = true;
+    notifyListeners();
+
+    try {
+      return await _toggleProxyInternal();
+    } finally {
+      _proxyToggleInProgress = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _toggleProxyInternal() async {
+    final item = _queue[_currentIndex];
+    final itemIndex = _currentIndex;
+    final currentPos = _engine.positionMs;
+    final wasPlaying = state == 'playing' || state == 'buffering';
+
+    QueueItem replacement;
+
+    if (isCurrentItemProxied) {
+      // ── Proxied → Direct ──
+      final directUrl = item.originalUrl;
+      if (directUrl == null) {
+        debugPrint('[player] cannot toggle to direct: originalUrl is null');
+        return false;
+      }
+      replacement = QueueItem(
+        url: directUrl,
+        title: item.title,
+        headers: item.originalHeaders,
+        subtitles: item.subtitles,
+        startPositionMs: currentPos > 0 ? currentPos : null,
+        bingeGroup: item.bingeGroup,
+        season: item.season,
+        episode: item.episode,
+        imdbId: item.imdbId,
+        backdropUrl: item.backdropUrl,
+        posterUrl: item.posterUrl,
+        logoUrl: item.logoUrl,
+        overview: item.overview,
+        year: item.year,
+        rating: item.rating,
+        runtime: item.runtime,
+        episodeTitle: item.episodeTitle,
+      );
+      debugPrint('[player] toggling to direct playback at ${currentPos}ms');
+    } else {
+      // ── Direct → Proxied ──
+      final headers = item.headers ?? {};
+      late final String loopbackUrl;
+      try {
+        loopbackUrl =
+            StreamProxyServer.instance.registerSession(item.url, headers);
+      } catch (error) {
+        debugPrint(
+            '[player] proxy toggle unavailable (${error.runtimeType}); keeping direct playback');
+        return false;
+      }
+      replacement = QueueItem(
+        url: loopbackUrl,
+        title: item.title,
+        headers: null,
+        subtitles: item.subtitles,
+        startPositionMs: currentPos > 0 ? currentPos : null,
+        originalUrl: item.url,
+        originalHeaders: headers,
+        bingeGroup: item.bingeGroup,
+        season: item.season,
+        episode: item.episode,
+        imdbId: item.imdbId,
+        backdropUrl: item.backdropUrl,
+        posterUrl: item.posterUrl,
+        logoUrl: item.logoUrl,
+        overview: item.overview,
+        year: item.year,
+        rating: item.rating,
+        runtime: item.runtime,
+        episodeTitle: item.episodeTitle,
+      );
+      debugPrint('[player] toggling to proxied playback at ${currentPos}ms');
+    }
+
+    _queue[_currentIndex] = replacement;
+    notifyListeners();
+
+    try {
+      await _engine.openPlaylist(
+        _queue,
+        itemIndex,
+        play: wasPlaying,
+      );
+    } catch (error) {
+      if (_currentIndex == itemIndex &&
+          identical(_queue[itemIndex], replacement)) {
+        _queue[itemIndex] = item;
+        notifyListeners();
+        try {
+          await _engine.openPlaylist(
+            _queue,
+            itemIndex,
+            play: wasPlaying,
+          );
+          if (currentPos > 0) {
+            await _engine.seek(Duration(milliseconds: currentPos));
+          }
+        } catch (restoreError) {
+          debugPrint(
+              '[player] proxy toggle rollback failed (${restoreError.runtimeType})');
+        }
+      }
+      debugPrint(
+          '[player] proxy toggle failed (${error.runtimeType}); restored previous route where possible');
+      return false;
+    }
+    unawaited(_applyStartPosition());
+
+    // Wait for the engine to initialise before completing the route switch.
+    var retries = 0;
+    while (_engine.durationMs <= 0 && retries < 40) {
+      await Future.delayed(const Duration(milliseconds: 50));
+      retries++;
+    }
+
+    return true;
   }
 
   @override

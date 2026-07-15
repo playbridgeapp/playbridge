@@ -305,7 +305,11 @@ class MpvEngine extends PlayerEngine {
   Future<void> open(QueueItem item) => openPlaylist([item], 0);
 
   @override
-  Future<void> openPlaylist(List<QueueItem> items, int startIndex) async {
+  Future<void> openPlaylist(
+    List<QueueItem> items,
+    int startIndex, {
+    bool play = true,
+  }) async {
     // Ensure demuxer/network tuning is live before the first open (race fix).
     await _configured;
 
@@ -319,7 +323,7 @@ class MpvEngine extends PlayerEngine {
       return Media(resolvedUrl, httpHeaders: headers);
     }));
     final playlist = Playlist(medias, index: startIndex);
-    await player.open(playlist, play: true);
+    await player.open(playlist, play: play);
 
     // External subtitles for the current item
     final item = items[startIndex.clamp(0, items.length - 1)];
@@ -349,7 +353,7 @@ class MpvEngine extends PlayerEngine {
     // Disarm route-watch for the new item so open-time device flaps don't pause.
     _audioRouteArmed = false;
     _playingSince = null;
-    await player.play();
+    if (play) await player.play();
     unawaited(_reapplyTrackPrefs());
   }
 

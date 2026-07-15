@@ -60,6 +60,7 @@ class PairingStore {
   static const _kEnableHistory = 'pb.enable_history';
   static const _kPreselectHlsQuality = 'pb.preselect_hls_quality';
   static const _kStreamProxyMode = 'pb.stream_proxy_mode';
+  static const _kCastRouteThroughProxy = 'pb.cast_route_through_proxy';
   static const _kStillWatchingEnabled = 'pb.still_watching_enabled';
   static const _kStillWatchingThresholdMin = 'pb.still_watching_threshold_min';
   static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
@@ -143,6 +144,12 @@ class PairingStore {
 
   Future<void> setStreamProxyMode(StreamProxyMode value) =>
       _prefs.setInt(_kStreamProxyMode, value.index);
+
+  bool get castRouteThroughProxy =>
+      _prefs.getBool(_kCastRouteThroughProxy) ?? false;
+
+  Future<void> setCastRouteThroughProxy(bool value) =>
+      _prefs.setBool(_kCastRouteThroughProxy, value);
 
   bool get stillWatchingEnabled =>
       _prefs.getBool(_kStillWatchingEnabled) ?? false;
