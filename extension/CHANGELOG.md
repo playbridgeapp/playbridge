@@ -2,6 +2,14 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] — 2026-07-15
+
+### Added
+- **Native Bridge Connection Delay**: Wait up to 3 seconds for the native messaging connection to establish when casting from the extension before giving up.
+
+### Changed
+- **Native Bridge Reconnection**: Implement exponential backoff reconnection for the extension native messaging host bridge.
+
 ## [0.5.0] — 2026-07-14
 
 ### Added
