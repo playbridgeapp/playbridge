@@ -10,7 +10,7 @@
 #
 # Prerequisites:
 #   brew install protobuf swift-protobuf
-#   dart pub global activate protoc_plugin
+#   dart pub global activate protoc_plugin 22.4.0
 #   # Wire (Kotlin): generate.sh auto-fetches wire-compiler-5.1.0.jar to ~/.cache
 #   # Requires a JDK on PATH (`java`)
 source ~/.zshrc 2>/dev/null
