@@ -20,6 +20,8 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 
 - [Screenshots](#screenshots)
 - [Features](#features)
+- [Sender feature matrix](#sender-feature-matrix)
+- [Receiver feature matrix](#receiver-feature-matrix)
 - [Installation](#installation)
   - [Closed Testing (Google Play)](#closed-testing-google-play)
 - [How to connect & cast](#how-to-connect--cast)
@@ -94,6 +96,48 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 - **Dual player engines**: ExoPlayer and MPV on the TV, with automatic fallback when a stream misbehaves.
 - **Secure pairing**: connections are verified with a short 6-digit code and encrypted over `wss://` with certificate pinning.
 - **Private by design**: everything stays on your local network — no account, no cloud, GPLv3.
+
+## Sender feature matrix
+
+| Feature | Android phone | iPhone / iPad | Desktop app | Browser extension |
+|---|---|---|---|---|
+| Supported platforms | Android | iOS, iPadOS | macOS, Windows, Linux | Firefox and Chromium browsers |
+| Receiver targets | PlayBridge receivers and DLNA / UPnP renderers | PlayBridge receivers | PlayBridge receivers | Receiver selected in Desktop, or Desktop itself |
+| Secure receiver pairing | ✓ | ✓ | ✓ | Handled by Desktop |
+| Built-in browser and stream detection | GeckoView; direct files, HLS, DASH, and MSE / blob players | WKWebView; direct files, HLS, and DASH | Via the browser extension | Detects direct files, HLS, DASH, and MSE-backed players in browser tabs |
+| Stream quality selection | ✓ | ✓ | Via the browser extension | HLS quality selection |
+| Subtitle detection and attachment | ✓ | ✓ | — | Detection only; attachment is not relayed to Desktop yet |
+| Local file casting | ✓ | ✓ | ✓, including drag-and-drop and multi-file playlists | — |
+| Library, discovery, and add-ons | ✓ | — | — | — |
+| Debrid integrations | ✓ in supported builds | — | — | — |
+| IPTV and custom collections | ✓ | ✓ | — | — |
+| Downloads | ✓ | — | — | — |
+| Ad blocking | uBlock Origin | WebKit content blocker with EasyList and custom rules | — | — |
+| Queue support | ✓, including episode auto-advance | ✓ | Multi-file playlists | Single detected item |
+| Remote controls | Full remote: transport, seek, volume, D-pad, touchpad, keyboard, and track selection | Transport, seek, D-pad, touchpad, and track selection | Transport, seek, and playlist navigation | Use Desktop or a phone remote |
+| Play on the sender device | ✓ | Browser preview only | ✓ | Plays through Desktop when no receiver is selected |
+| Companion app required | No | No | No | PlayBridge Desktop |
+
+Browser detection depends on what each browser exposes. Protected streams may require captured request headers, and some MSE / blob players cannot be replayed outside their original page.
+
+## Receiver feature matrix
+
+| Feature | Android TV / Fire TV | Apple TV | Desktop | DLNA / UPnP TV |
+|---|---|---|---|---|
+| Supported platforms | Android TV, Fire TV | tvOS | macOS, Windows, Linux | Compatible smart TVs and renderers |
+| Receiver installation | PlayBridge TV app | PlayBridge TV app (build from source) | PlayBridge Desktop app | None |
+| Playback engines | Media3 / ExoPlayer + MPV | AVPlayer + VLC + MPV | MPV | TV's built-in player |
+| Direct streams, HLS, DASH, and local files | ✓ | ✓ | ✓ | Renderer-dependent; the phone proxies local files and header-protected HLS |
+| Verified, encrypted pairing | ✓ | ✓ | ✓ | N/A — standard local-network DLNA |
+| Phone playback controls | Full controls, including seek, volume, and track selection | Transport, seek, and track selection | Full controls, including seek, system volume, and track selection | Play, pause, stop, and seek; no volume or track selection |
+| Episode queue and auto-advance | ✓ | ✓ | ✓ | Phone-managed; the phone must remain active |
+| Resume and watch-progress tracking | ✓ | ✓ | ✓ | ✓, when the renderer reports usable playback status |
+| External subtitles and audio/subtitle selection | ✓ | ✓ | ✓ | Not exposed through PlayBridge |
+| Receiver history and favorites | ✓ | ✓ | ✓ | No receiver UI; progress remains on the phone |
+| Web playback on the receiver | Optional GeckoView plugin or system WebView | — | Browser-extension bridge | — |
+| In-app updates | ✓ | — | ✓ | N/A |
+
+Media and codec support ultimately depends on the selected playback engine, operating system, and device hardware. DLNA behavior varies the most between TV manufacturers and models.
 
 ## Installation
 
