@@ -9,7 +9,7 @@ description: Change or review PlayBridge's cross-platform wire protocol and comp
 
 - Treat `protocol/` as a directly owned part of the PlayBridge monorepo. Keep contract, documentation, retained protobuf models, generated artifacts, and consumer updates together when they form one compatibility change.
 - Treat `protocol/asyncapi.yaml` plus `protocol/docs/WSS_FLOW.md` as the source of truth for the JSON/WSS wire contract and sequencing.
-- Keep `protocol/proto/messages.proto` and committed generated bindings as a legacy consumer model until their consumers are migrated. When a generated payload changes, update the AsyncAPI contract first, mirror the compatible change in protobuf, then regenerate with `protocol/generate.sh`.
+- Keep `protocol/proto/messages.proto` and committed Kotlin, Dart, and Swift bindings as shared implementation models for current consumers. When a generated payload changes, update the AsyncAPI contract first, mirror the compatible change in protobuf, then regenerate with `protocol/generate.sh`.
 - Do not assume generated bindings cover every consumer. PlayBridge still has hand-written JSON and compatibility code.
 - Give contract/schema and generated artifacts one writer. Let consumer owners implement or review their non-overlapping projects.
 

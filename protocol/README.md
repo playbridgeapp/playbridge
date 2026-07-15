@@ -9,14 +9,14 @@ pointer frame.
   message schemas, field names, JSON types, and binary-frame layout.
 - [`docs/WSS_FLOW.md`](docs/WSS_FLOW.md) defines discovery, TLS pinning, first-time SAS pairing,
   protected credential delivery, reconnection authentication, sequencing, and compatibility rules.
-- [`docs/JSON_PROTOCOL_MIGRATION_PLAN.md`](docs/JSON_PROTOCOL_MIGRATION_PLAN.md) describes the
-  staged migration from protobuf-generated models to native JSON models.
+- [`docs/PROTOCOL_MODEL_STRATEGY.md`](docs/PROTOCOL_MODEL_STRATEGY.md) defines how AsyncAPI,
+  protobuf-generated models, hand-written JSON, and compatibility fixtures work together.
 - [`constants/constants.go`](constants/constants.go) records shared discovery/transport constants.
 
-The protobuf schema and generated bindings remain in the repository for existing consumers. They
-are a legacy model during the AsyncAPI transition: WSS frames are not protobuf-encoded, and
-`proto/messages.proto` does not cover every live JSON message. New protocol behavior must be
-specified in AsyncAPI first and kept compatible with the implementations listed below.
+The protobuf schema and generated bindings provide shared implementation models for current
+consumers. WSS frames are not protobuf-encoded, and `proto/messages.proto` does not cover every
+live JSON message. New protocol behavior must be specified in AsyncAPI first and kept compatible
+with the implementations listed below.
 
 ## Current consumers
 
@@ -51,7 +51,7 @@ Breaking changes include renamed fields, changed JSON types or units, removed va
 change to SAS transcript bytes or cryptographic derivation labels. Those require a major protocol
 version and an explicit sender/receiver rollout plan.
 
-## Legacy protobuf bindings
+## Generated protobuf models
 
 The retained generation layout is:
 
@@ -70,8 +70,8 @@ Run:
 ./generate.sh --check
 ```
 
-Prerequisites are documented in `generate.sh`. Generated Kotlin, Swift, and Dart types are local implementation helpers;
-their protobuf binary encoding is not used on the WSS wire.
+Prerequisites are documented in `generate.sh`. Generated Kotlin, Swift, and Dart types are local
+implementation helpers; their protobuf binary encoding is not used on the WSS wire.
 
 ## Security invariants
 
