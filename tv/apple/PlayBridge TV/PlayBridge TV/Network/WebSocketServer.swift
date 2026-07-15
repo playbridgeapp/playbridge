@@ -113,23 +113,15 @@ class WebSocketServer: ObservableObject {
             .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.broadcastPlaylistStatus() }
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleForeground),
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
-        )
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    @objc private func handleForeground() {
-        if serverState != "Ready to Connect" { restart() }
     }
 
     func start(port: UInt16? = nil) {
+        // ContentView owns app lifecycle. Its onAppear and scenePhase callbacks can
+        // occur close together, so starting must be idempotent: cancelling and
+        // immediately rebinding our own fresh listener looks like EADDRINUSE and
+        // would incorrectly advance the persisted receiver port on every foreground.
+        guard tlsListener == nil else { return }
+
         let preferredPort = port ?? storedReceiverPort
         serverState = "Starting..."
         wssPort = nil
