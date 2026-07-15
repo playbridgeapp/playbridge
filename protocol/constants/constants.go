@@ -15,4 +15,6 @@ const (
 	// NsdKeyWssPort is the TXT key advertising the receiver's wss:// port.
 	// Absent when the receiver has no TLS listener.
 	NsdKeyWssPort     = "wss_port"
+	// NsdKeyLogsPort is the optional TXT key advertising an HTTP diagnostics endpoint.
+	NsdKeyLogsPort    = "logs_port"
 )

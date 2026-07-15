@@ -142,7 +142,9 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                server.restart()
+                // start() is idempotent, which avoids rebinding a listener already
+                // created by onAppear during the same foreground transition.
+                server.start()
                 stillWatching.foregroundChanged(true)
             case .background:
                 server.stop()

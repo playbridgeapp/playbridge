@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
+import java.net.BindException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -32,6 +33,29 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.put
 
 private const val TAG = "WebSocketServer"
+private const val WSS_START_TIMEOUT_MS = 10_000L
+
+internal fun receiverPortCandidates(
+    requestedPort: Int,
+    defaultPort: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
+    maxAttempts: Int = 32,
+): List<Int> {
+    if (maxAttempts <= 0) return emptyList()
+    val firstPort = requestedPort.takeIf { it in 1..65535 }
+        ?: defaultPort.takeIf { it in 1..65535 }
+        ?: return emptyList()
+    val attemptCount = minOf(maxAttempts, 65535 - firstPort + 1)
+    return List(attemptCount) { offset -> firstPort + offset }
+}
+
+internal fun Throwable.isAddressAlreadyInUse(): Boolean =
+    generateSequence(this) { it.cause }
+        .any { cause ->
+            cause is BindException && (
+                cause.message?.contains("address already in use", ignoreCase = true) == true ||
+                    cause.message?.contains("EADDRINUSE", ignoreCase = true) == true
+                )
+        }
 
 /**
  * WebSocket server for receiving commands from the phone app
@@ -43,9 +67,9 @@ class WebSocketServer(
     // App-private directory for the persisted TLS identity (PKCS12). wss:// is
     // disabled if null.
     private val tlsDir: File? = null,
-    // Invoked after the wss bind attempt with the bound port (null if it failed),
-    // so the caller advertises wss_port over NSD only when it's actually up.
-    private val onWssReady: ((Int?) -> Unit)? = null,
+    // Invoked from Java-WebSocket's onStart path with the actual bound port. It is
+    // never invoked for a failed bind, so callers cannot advertise a dead endpoint.
+    private val onWssReady: ((wssPort: Int, logsPort: Int?) -> Unit)? = null,
     // Players/browsers this receiver supports, re-evaluated per auth so a plugin installed
     // after start-up is picked up on the next (re)connect. Reported to the phone at auth.
     private val capabilities: () -> TvCapabilities = { TvCapabilities(emptyList(), emptyList()) },
@@ -74,8 +98,9 @@ class WebSocketServer(
     private val failedAttemptsMap = ConcurrentHashMap<String, Int>()
     private val lockoutMap = ConcurrentHashMap<String, Long>()
 
-    private var server: EmbeddedServer<*, *>? = null
+    private var diagnosticsServer: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var startJob: Job? = null
 
     // wss:// (Java-WebSocket) transport + its authenticated connections.
     private var wssServer: WssTransport? = null
@@ -127,82 +152,26 @@ class WebSocketServer(
     }
 
     fun start() {
-        if (server != null) {
+        if (startJob?.isActive == true || wssServer != null) {
             FileLogger.w(TAG, "Server already running")
             return
         }
 
         _connectionState.value = ConnectionState.Starting
 
-        scope.launch {
+        startJob = scope.launch {
             try {
-                // Ensure previous instance is stopped if it was somehow left valid but not running
-                server?.stop(1000, 2000)
-                server = null
-
-                val bindHost = "0.0.0.0"
-                server = embeddedServer(CIO, host = bindHost, port = port + 1) {
-                    routing {
-                        // HTTP endpoint: download log files
-                        get("/logs") {
-                            if (!FileLogger.isEnabled()) {
-                                call.respondText(
-                                    "Logging is disabled on the TV.",
-                                    ContentType.Text.Plain,
-                                    HttpStatusCode.Forbidden
-                                )
-                                return@get
-                            }
-                            val logFiles = FileLogger.getLogFiles()
-                            if (logFiles.isEmpty()) {
-                                call.respondText("No log files found.", ContentType.Text.Plain)
-                                return@get
-                            }
-                            val combined = logFiles.reversed().joinToString("\n") { it.readText() }
-                            call.response.header(
-                                HttpHeaders.ContentDisposition,
-                                ContentDisposition.Attachment.withParameter(
-                                    ContentDisposition.Parameters.FileName, "playbridge_tv_logs.txt"
-                                ).toString()
-                            )
-                            call.respondText(combined, ContentType.Text.Plain)
-                        }
-
-                        // HTTP endpoint: clear log files. Gated like GET: this listener is
-                        // reachable by anyone on the LAN, so honour the on-TV logging
-                        // opt-in rather than letting arbitrary peers wipe diagnostics.
-                        delete("/logs") {
-                            if (!FileLogger.isEnabled()) {
-                                call.respondText(
-                                    "Logging is disabled on the TV.",
-                                    ContentType.Text.Plain,
-                                    HttpStatusCode.Forbidden
-                                )
-                                return@delete
-                            }
-                            FileLogger.clearLogs()
-                            call.respondText("Logs cleared.", ContentType.Text.Plain)
-                        }
-                    }
-                }.start(wait = false)
-
-                _connectionState.value = ConnectionState.Running(port)
-                FileLogger.i(TAG, "http log server on $bindHost:${port + 1}")
-                startWssTransport()
-                onWssReady?.invoke(boundWssPort)
-
-            } catch (e: java.net.BindException) {
-                FileLogger.w(TAG, "Port $port already in use. Assuming server from previous instance is still active.")
-                // If the port is in use, it's likely our own service from a previous run that hasn't fully released yet,
-                // or a separate instance. We'll mark as running for the UI.
-                _connectionState.value = ConnectionState.Running(port)
-                // The prior instance holds the ports and is serving wss on port; keep the
-                // service advertised (registerNsdService no-ops if already registered). We
-                // don't re-attempt the wss bind here — that'd just log a spurious failure.
-                onWssReady?.invoke(port)
+                val selectedPort = startWssTransport()
+                val logsPort = startDiagnosticsServer(selectedPort)
+                _connectionState.value = ConnectionState.Running(selectedPort)
+                onWssReady?.invoke(selectedPort, logsPort)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to start server", e)
                 _connectionState.value = ConnectionState.Error(e.message ?: "Unknown error")
+            } finally {
+                startJob = null
             }
         }
     }
@@ -213,9 +182,11 @@ class WebSocketServer(
         // teardown off the caller's thread. This is invoked from ServerService.onDestroy
         // on the main thread — the previous runBlocking teardown could stall it for
         // 1.5s+ (ANR territory).
-        val ktor = server
+        val ktor = diagnosticsServer
         val wss = wssServer
-        server = null
+        startJob?.cancel()
+        startJob = null
+        diagnosticsServer = null
         wssServer = null
         wssClients.clear()
         boundWssPort = null
@@ -245,37 +216,125 @@ class WebSocketServer(
         }
     }
 
-    fun getPort(): Int = port
+    fun getPort(): Int = boundWssPort ?: port
 
-    private fun startWssTransport() {
+    private suspend fun startWssTransport(): Int {
         val dir = tlsDir
         if (dir == null) {
-            FileLogger.w(TAG, "No tlsDir provided — wss:// disabled")
-            signalUnreachableIfSecureOnly()
-            return
+            throw IllegalStateException("No TLS identity directory configured")
         }
-        try {
-            val tls = TlsIdentity.loadOrCreate(dir)
-            certFingerprint = tls.fingerprint
-            val wssPort = port
-            WssTransport(wssPort, tls.sslContext).also {
-                it.start()
-                wssServer = it
-                boundWssPort = wssPort
-            }
-            FileLogger.i(TAG, "wss server started on $wssPort (pin ${tls.fingerprint})")
-        } catch (e: Exception) {
-            FileLogger.e(TAG, "Failed to start wss transport", e)
-            signalUnreachableIfSecureOnly()
-        }
-    }
 
-    // wss failed and ws:// is loopback-only ⇒ unreachable by external senders.
-    private fun signalUnreachableIfSecureOnly() {
-        _connectionState.value = ConnectionState.Error(
-            "Secure server failed to start"
+        val tls = TlsIdentity.loadOrCreate(dir)
+        val candidates = receiverPortCandidates(port)
+        var lastBindFailure: Throwable? = null
+        for (candidate in candidates) {
+            val transport = WssTransport(candidate, tls.sslContext)
+            wssServer = transport
+            val startupFailure = try {
+                transport.start()
+                transport.awaitStartup()
+            } catch (e: Exception) {
+                e
+            }
+
+            if (startupFailure == null) {
+                certFingerprint = tls.fingerprint
+                boundWssPort = candidate
+                FileLogger.i(TAG, "wss server started on $candidate (pin ${tls.fingerprint})")
+                return candidate
+            }
+
+            if (wssServer === transport) wssServer = null
+            try {
+                transport.stop(500)
+            } catch (_: Exception) {
+                // A transport that failed before binding may already be fully stopped.
+            }
+
+            if (!startupFailure.isAddressAlreadyInUse()) throw startupFailure
+            lastBindFailure = startupFailure
+            FileLogger.w(TAG, "Port $candidate is in use; trying the next receiver port")
+        }
+
+        throw IllegalStateException(
+            "No available receiver port in ${candidates.firstOrNull()}..${candidates.lastOrNull()}",
+            lastBindFailure,
         )
     }
+
+    private suspend fun startDiagnosticsServer(selectedPort: Int): Int? {
+        val preferredPort = if (selectedPort < 65535) selectedPort + 1 else 0
+        val started = try {
+            startDiagnosticsServerOn(preferredPort)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (preferredFailure: Exception) {
+            FileLogger.w(TAG, "Diagnostics server failed on port $preferredPort; trying an OS-assigned port")
+            if (preferredPort == 0) {
+                FileLogger.e(TAG, "Diagnostics server unavailable", preferredFailure)
+                return null
+            }
+            try {
+                startDiagnosticsServerOn(0)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (fallbackFailure: Exception) {
+                FileLogger.e(TAG, "Diagnostics server unavailable", fallbackFailure)
+                return null
+            }
+        }
+        diagnosticsServer = started
+        val actualPort = try {
+            started.engine.resolvedConnectors().firstOrNull()?.port
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "Could not resolve diagnostics server port", e)
+            null
+        }?.takeIf { it in 1..65535 }
+        FileLogger.i(TAG, "http log server on 0.0.0.0:${actualPort ?: "OS-assigned"}")
+        return actualPort
+    }
+
+    private fun startDiagnosticsServerOn(diagnosticsPort: Int): EmbeddedServer<*, *> =
+        embeddedServer(CIO, host = "0.0.0.0", port = diagnosticsPort) {
+            routing {
+                get("/logs") {
+                    if (!FileLogger.isEnabled()) {
+                        call.respondText(
+                            "Logging is disabled on the TV.",
+                            ContentType.Text.Plain,
+                            HttpStatusCode.Forbidden
+                        )
+                        return@get
+                    }
+                    val logFiles = FileLogger.getLogFiles()
+                    if (logFiles.isEmpty()) {
+                        call.respondText("No log files found.", ContentType.Text.Plain)
+                        return@get
+                    }
+                    val combined = logFiles.reversed().joinToString("\n") { it.readText() }
+                    call.response.header(
+                        HttpHeaders.ContentDisposition,
+                        ContentDisposition.Attachment.withParameter(
+                            ContentDisposition.Parameters.FileName, "playbridge_tv_logs.txt"
+                        ).toString()
+                    )
+                    call.respondText(combined, ContentType.Text.Plain)
+                }
+
+                delete("/logs") {
+                    if (!FileLogger.isEnabled()) {
+                        call.respondText(
+                            "Logging is disabled on the TV.",
+                            ContentType.Text.Plain,
+                            HttpStatusCode.Forbidden
+                        )
+                        return@delete
+                    }
+                    FileLogger.clearLogs()
+                    call.respondText("Logs cleared.", ContentType.Text.Plain)
+                }
+            }
+        }.start(wait = false)
 
     // Shared pairing approval: displays the SAS code and awaits the phone's confirmation MAC
     // (auto-deny after 60s). The window matches the desktop receiver and gives the user room
@@ -301,6 +360,7 @@ class WebSocketServer(
     ) : org.java_websocket.server.WebSocketServer(java.net.InetSocketAddress(wssPort)) {
 
         private val authed = ConcurrentHashMap.newKeySet<org.java_websocket.WebSocket>()
+        private val startup = CompletableDeferred<Throwable?>()
 
         init {
             setWebSocketFactory(org.java_websocket.server.DefaultSSLWebSocketServerFactory(sslContext))
@@ -310,6 +370,7 @@ class WebSocketServer(
 
         override fun onStart() {
             FileLogger.i(TAG, "wss transport listening on $wssPort")
+            startup.complete(null)
         }
 
         override fun onOpen(conn: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {
@@ -343,6 +404,13 @@ class WebSocketServer(
 
         override fun onError(conn: org.java_websocket.WebSocket?, ex: Exception) {
             FileLogger.e(TAG, "wss error", ex)
+            if (conn == null) startup.complete(ex)
+        }
+
+        suspend fun awaitStartup(): Throwable? = try {
+            withTimeout(WSS_START_TIMEOUT_MS) { startup.await() }
+        } catch (e: TimeoutCancellationException) {
+            IllegalStateException("Timed out waiting for port $wssPort to bind", e)
         }
 
         override fun onMessage(conn: org.java_websocket.WebSocket, message: String) {
@@ -573,7 +641,7 @@ class WebSocketServer(
             val clients = wssClients.toList()
             _connectedClientCount.value = clients.size
             if (clients.isEmpty()) {
-                _connectionState.value = ConnectionState.Running(port)
+                _connectionState.value = ConnectionState.Running(getPort())
             } else {
                 if (_connectionState.value !is ConnectionState.Connected) {
                     _connectionState.value = ConnectionState.Connected(clients.first().remoteSocketAddress?.toString() ?: "wss")

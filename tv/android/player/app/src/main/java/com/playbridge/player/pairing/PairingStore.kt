@@ -93,13 +93,14 @@ class PairingStore(private val context: Context) {
      * Server port flow
      */
     val serverPort: Flow<Int> = context.dataStore.data.map { prefs ->
-        prefs[SERVER_PORT] ?: DEFAULT_PORT
+        prefs[SERVER_PORT]?.takeIf { it in 1..65535 } ?: DEFAULT_PORT
     }
     
     /**
      * Set server port
      */
     suspend fun setServerPort(port: Int) {
+        require(port in 1..65535) { "Server port must be between 1 and 65535" }
         context.dataStore.edit { prefs ->
             prefs[SERVER_PORT] = port
         }

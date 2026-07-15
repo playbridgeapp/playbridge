@@ -234,9 +234,15 @@ fun MainContent(
         val appCtx = currentContext.applicationContext ?: currentContext
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             deviceId = pairingStore.getOrCreateDeviceId()
-            serverPort = pairingStore.serverPort.first()
             serverIp = getLocalIpAddress(appCtx)
         }
+    }
+    LaunchedEffect(Unit) {
+        pairingStore.serverPort.collect { port ->
+            serverPort = port
+        }
+    }
+    LaunchedEffect(Unit) {
         pairingStore.deviceName.collect { name ->
             deviceName = name
         }
