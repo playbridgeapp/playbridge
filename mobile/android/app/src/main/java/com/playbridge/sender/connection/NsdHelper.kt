@@ -27,7 +27,9 @@ class NsdHelper(context: Context) {
         val uuid: String = "",
         // Port of the receiver's wss:// listener, advertised via the wss_port TXT
         // attribute. Null when the receiver only serves plaintext ws://.
-        val wssPort: Int? = null
+        val wssPort: Int? = null,
+        // Optional HTTP diagnostics port advertised via the logs_port TXT attribute.
+        val logsPort: Int? = null,
     )
 
     // Discovery is refcounted by owner so independent clients (the UI scan window and the
@@ -68,8 +70,12 @@ class NsdHelper(context: Context) {
 
                             // Update list
                             val currentList = _discoveredDevices.value.toMutableList()
-                            // Remove existing entry for same IP if exists
-                            currentList.removeAll { it.ip == device.ip }
+                            // A receiver may move to a new IP or select a different port.
+                            // Replace its previous endpoint by stable UUID when available.
+                            currentList.removeAll {
+                                (device.uuid.isNotEmpty() && it.uuid == device.uuid) ||
+                                    (device.uuid.isEmpty() && it.ip == device.ip)
+                            }
                             currentList.add(device)
                             _discoveredDevices.value = currentList
                         }
@@ -152,7 +158,9 @@ class NsdHelper(context: Context) {
             val customIp = attributes["custom_ip"]?.let { String(it) }
             val ip = if (!customIp.isNullOrEmpty() && customIp != "auto") customIp else resolvedIp
             val wssPort = attributes[NsdConstants.KEY_WSS_PORT]?.let { String(it).toIntOrNull() }
-            return DiscoveredDevice(ip, port, name, uuid, wssPort)
+            val logsPort = attributes[NsdConstants.KEY_LOGS_PORT]?.let { String(it).toIntOrNull() }
+                ?.takeIf { it in 1..65535 }
+            return DiscoveredDevice(ip, port, name, uuid, wssPort, logsPort)
         }
     }
 }

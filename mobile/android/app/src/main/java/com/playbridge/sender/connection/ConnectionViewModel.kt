@@ -64,7 +64,15 @@ class ConnectionViewModel(
         dlnaDiscovery.renderers,
     ) { native, renderers ->
         val nativeTv = native.map {
-            TvDevice(ip = it.ip, port = it.port, name = it.name, token = "", uuid = it.uuid, wssPort = it.wssPort)
+            TvDevice(
+                ip = it.ip,
+                port = it.port,
+                name = it.name,
+                token = "",
+                uuid = it.uuid,
+                wssPort = it.wssPort,
+                logsPort = it.logsPort,
+            )
         }
         ConnectionMerge.mergeDiscovered(nativeTv, renderers.map { it.toDlnaTvDevice() })
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
@@ -207,15 +215,9 @@ class ConnectionViewModel(
             discoveredDevices.combine(tvDevice) { devices, savedDevice ->
                 Pair(devices, savedDevice)
             }.collect { (devices, savedDevice) ->
-                if (_autoConnectEnabled.value && savedDevice != null && savedDevice.uuid.isNotEmpty()) {
-                    val matchedDevice = devices.find { it.uuid == savedDevice.uuid }
-                    if (matchedDevice != null && (matchedDevice.ip != savedDevice.ip || matchedDevice.port != savedDevice.port || matchedDevice.wssPort != savedDevice.wssPort)) {
-                        val updatedDevice = savedDevice.copy(
-                            ip = matchedDevice.ip,
-                            port = matchedDevice.port,
-                            name = matchedDevice.name,
-                            wssPort = matchedDevice.wssPort
-                        )
+                if (savedDevice != null && savedDevice.uuid.isNotEmpty()) {
+                    val updatedDevice = ConnectionMerge.withDiscoveredEndpoint(savedDevice, devices)
+                    if (updatedDevice != savedDevice) {
                         // Keep the saved address fresh for the next connect. Additionally
                         // (change 4): if the startup auto-connect already fired and lost the
                         // race against discovery — it tried the stale IP and failed while the
@@ -231,7 +233,7 @@ class ConnectionViewModel(
                             (st is WebSocketClient.ConnectionState.Disconnected ||
                                 st is WebSocketClient.ConnectionState.Error)
                         ) {
-                            Log.i(TAG, "Saved TV moved (${savedDevice.ip} → ${matchedDevice.ip}); re-arming auto-connect")
+                            Log.i(TAG, "Saved TV endpoint changed (${savedDevice.ip}:${savedDevice.port} → ${updatedDevice.ip}:${updatedDevice.port}); re-arming auto-connect")
                             hasAttemptedInitialConnect = false
                         }
                         connectionStore.saveTvDevice(updatedDevice)
@@ -338,9 +340,9 @@ class ConnectionViewModel(
         _autoConnectEnabled.value = true
         prefs.edit { putBoolean("auto_connect_tv", true) }
         viewModelScope.launch {
-            // wss_port is a live property of the receiver; a saved/history entry may
-            // predate TLS, so prefer the port from current discovery.
-            val merged = ConnectionMerge.withDiscoveredWssPort(device, discoveredDevices.value)
+            // The complete endpoint is live receiver state; a saved/history entry may
+            // contain a stale address or predate TLS, so prefer current discovery by UUID.
+            val merged = ConnectionMerge.withDiscoveredEndpoint(device, discoveredDevices.value)
             Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
             activeConnectingDevice = merged

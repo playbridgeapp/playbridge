@@ -10,8 +10,12 @@ schema disagree, the schema defines JSON shape and this document defines sequenc
 - A **sender** (Android phone, Apple phone, or Desktop sender mode) discovers the receiver or is
   given its IP address manually.
 - The receiver is the WebSocket server. The sender is the WebSocket client.
-- The default port is `8765`. The mDNS TXT key `wss_port` overrides it. `device_name` is only a
-  display hint and is not trusted identity.
+- The preferred port is `8765`. A receiver may select another available port when that port is
+  occupied. The mDNS SRV port is the active receiver endpoint, and the `wss_port` TXT key mirrors
+  the active secure port for compatibility. `device_name` is only a display hint and is not
+  trusted identity.
+- Receivers with a separate HTTP diagnostics listener may advertise its active port in the
+  optional `logs_port` TXT key. It is not part of the authenticated WSS transport.
 - The WebSocket URL is `wss://<host>:<wss_port>/`. IPv6 literals must be bracketed. All protocol
   messages after the HTTP upgrade are either UTF-8 JSON text frames or the 9-byte pointer frame.
 - Receivers use a locally generated TLS identity. Paired senders validate its SPKI pin on every

@@ -21,6 +21,9 @@ servers:
         default: 192.0.2.1
       port:
         default: '8765'
+        description: >-
+          Preferred receiver port. Receivers may select another available port;
+          mDNS discovery supplies the active endpoint.
 channels:
   receiverSocket:
     address: /

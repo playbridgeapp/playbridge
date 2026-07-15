@@ -17,7 +17,52 @@ import 'protocol.dart';
 import 'sas_crypto.dart';
 import 'system_volume.dart';
 
-const int kDefaultPort = 8765;
+const int kDefaultPort = PairingStore.defaultReceiverPort;
+const int kReceiverPortFallbackAttempts = 32;
+
+typedef ReceiverCertificateLoader = Future<CertManager> Function(
+    String commonName);
+typedef SecureServerBinder = Future<HttpServer> Function(
+  Handler handler,
+  InternetAddress address,
+  int port,
+  SecurityContext securityContext,
+);
+
+/// Consecutive valid ports to try, beginning with [preferredPort].
+///
+/// Invalid preferences are normalized to [kDefaultPort], and the range ends at
+/// 65535 rather than wrapping around.
+List<int> receiverPortCandidates(
+  int preferredPort, {
+  int maxAttempts = kReceiverPortFallbackAttempts,
+}) {
+  if (maxAttempts <= 0) return const [];
+  final first = preferredPort >= 1 && preferredPort <= 65535
+      ? preferredPort
+      : kDefaultPort;
+  final candidates = <int>[];
+  for (var port = first;
+      port <= 65535 && candidates.length < maxAttempts;
+      port++) {
+    candidates.add(port);
+  }
+  return candidates;
+}
+
+/// Whether [error] represents a TCP bind collision on a supported desktop OS.
+@visibleForTesting
+bool isAddressInUseError(Object error) {
+  if (error is! SocketException) return false;
+  final code = error.osError?.errorCode;
+  if (code == 48 || code == 98 || code == 10048) return true;
+
+  final message =
+      '${error.message} ${error.osError?.message ?? ''}'.toLowerCase();
+  return message.contains('address already in use') ||
+      message.contains('only one usage of each socket address') ||
+      message.contains('shared flag to bind() needs to be');
+}
 
 /// Surfaced to the UI so it can show an approval prompt or the player view.
 enum PairingPhase {
@@ -82,7 +127,10 @@ class ReceiverServer extends ChangeNotifier {
     this.onPromptStop,
     this.onPlaybackActivity,
     this.onNewMedia,
-  });
+    ReceiverCertificateLoader? certificateLoader,
+    SecureServerBinder? secureServerBinder,
+  })  : _certificateLoader = certificateLoader ?? _loadCertificate,
+        _secureServerBinder = secureServerBinder ?? _serveSecure;
 
   final PlayerController player;
   final PairingStore store;
@@ -91,6 +139,8 @@ class ReceiverServer extends ChangeNotifier {
   final VoidCallback? onPromptStop;
   final VoidCallback? onPlaybackActivity;
   final VoidCallback? onNewMedia;
+  final ReceiverCertificateLoader _certificateLoader;
+  final SecureServerBinder _secureServerBinder;
 
   void broadcastIdleContext() {
     for (final c in _authed) {
@@ -120,8 +170,6 @@ class ReceiverServer extends ChangeNotifier {
   /// Advertised over mDNS so senders know where to connect.
   int? _wssPort;
   int? get wssPort => _wssPort;
-
-  int _port = kDefaultPort;
 
   // All connected channels — only authed ones receive status broadcasts
   // and can issue commands.
@@ -166,9 +214,9 @@ class ReceiverServer extends ChangeNotifier {
 
   PendingPairingRequest? get pendingPairingRequest => _pendingPairingRequest;
 
-  Future<void> start({int port = kDefaultPort}) async {
-    _port = port;
-    await _bindListeners();
+  /// Starts the secure listener and returns the actual bound port.
+  Future<int> start({int? port}) async {
+    final boundPort = await _bindListeners(port ?? store.receiverPort);
 
     player.addListener(_broadcastStatus);
     player.indexChanges.addListener(_broadcastPlaylistStatus);
@@ -177,40 +225,87 @@ class ReceiverServer extends ChangeNotifier {
       const Duration(milliseconds: 500),
       (_) => _broadcastStatus(),
     );
+    return boundPort;
   }
 
-  /// (Re)binds the wss:// (always) and ws:// (opt-in) listeners. Re-runnable
-  /// after [reloadListeners] closes the previous sockets.
-  Future<void> _bindListeners() async {
+  /// Binds wss://, advancing only when the requested port is already occupied.
+  Future<int> _bindListeners(int preferredPort) async {
     final handler = _requestHandler();
-
-    // Encrypted wss:// on port — the default, preferred transport.
-    var wssUp = false;
+    late final CertManager cert;
     try {
-      final cert = await CertManager.loadOrCreate(commonName: store.deviceName);
-      _certFingerprint = cert.fingerprint;
-      final https = await shelf_io.serve(
-        handler,
-        InternetAddress.anyIPv4,
-        _port,
-        securityContext: cert.securityContext,
-      );
+      cert = await _certificateLoader(store.deviceName);
+    } catch (error, stackTrace) {
+      _recordStartupFailure(error);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+    _certFingerprint = cert.fingerprint;
+
+    final candidates = receiverPortCandidates(preferredPort);
+    for (var index = 0; index < candidates.length; index++) {
+      final candidate = candidates[index];
+      late final HttpServer https;
+      try {
+        https = await _secureServerBinder(
+          handler,
+          InternetAddress.anyIPv4,
+          candidate,
+          cert.securityContext,
+        );
+      } catch (error, stackTrace) {
+        final canRetry =
+            isAddressInUseError(error) && index + 1 < candidates.length;
+        if (canRetry) {
+          debugPrint('[server] port $candidate is in use; trying next port');
+          continue;
+        }
+        _recordStartupFailure(error);
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+
       _servers.add(https);
       _wssPort = https.port;
-      wssUp = true;
+      try {
+        await store.setReceiverPort(https.port);
+      } catch (error, stackTrace) {
+        _servers.remove(https);
+        _wssPort = null;
+        await https.close(force: true);
+        _recordStartupFailure(error);
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      tlsError = null;
       debugPrint(
         '[server] wss listening on ${https.address.address}:${https.port} '
         '(pin ${cert.fingerprint})',
       );
-    } catch (e) {
-      debugPrint('[server] TLS listener failed to start: $e');
+      notifyListeners();
+      return https.port;
     }
 
-    tlsError = !wssUp ? 'Secure server failed to start' : null;
+    throw StateError('No valid receiver ports are available');
+  }
 
-    // Notify so UI (e.g. the Cast screen address) reflects the bound wss port.
+  void _recordStartupFailure(Object error) {
+    tlsError = 'Secure server failed to start';
+    debugPrint('[server] TLS listener failed to start: $error');
     notifyListeners();
   }
+
+  static Future<CertManager> _loadCertificate(String commonName) =>
+      CertManager.loadOrCreate(commonName: commonName);
+
+  static Future<HttpServer> _serveSecure(
+    Handler handler,
+    InternetAddress address,
+    int port,
+    SecurityContext securityContext,
+  ) =>
+      shelf_io.serve(
+        handler,
+        address,
+        port,
+        securityContext: securityContext,
+      );
 
   /// Associates the request address directly with its upgraded channel. Logs are
   /// intentionally unavailable over LAN; use the in-app diagnostics screen.

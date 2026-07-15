@@ -115,7 +115,7 @@ class ServerService : Service() {
         return START_STICKY
     }
 
-    private fun registerNsdService(port: Int, wssPort: Int?) {
+    private fun registerNsdService(port: Int, wssPort: Int?, logsPort: Int?) {
         if (registrationListener != null) return // Already registered
 
         val deviceName = android.provider.Settings.Global.getString(
@@ -138,6 +138,12 @@ class ServerService : Service() {
                     setAttribute(
                         com.playbridge.shared.protocol.NsdConstants.KEY_WSS_PORT,
                         wssPort.toString()
+                    )
+                }
+                if (logsPort != null) {
+                    setAttribute(
+                        com.playbridge.shared.protocol.NsdConstants.KEY_LOGS_PORT,
+                        logsPort.toString()
                     )
                 }
                 if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
@@ -226,16 +232,20 @@ class ServerService : Service() {
                     newToken
                 },
                 tlsDir = tlsDir,
-                // Register NSD once the wss bind result is known, advertising
-                // wss_port only if it actually came up.
-                onWssReady = { wssPort -> registerNsdService(port, wssPort) },
+                // Persist and advertise only after Java-WebSocket confirms the listener
+                // is bound. The SRV port and wss_port must describe the same live endpoint.
+                onWssReady = { actualPort, logsPort ->
+                    scope.launch {
+                        pairingStore.setServerPort(actualPort)
+                        _serverInfo.value = ServerInfo(ip = ip, port = actualPort, token = "")
+                        registerNsdService(actualPort, actualPort, logsPort)
+                    }
+                },
                 // Resolved per auth so a GeckoView plugin installed later is picked up
                 // on the next (re)connect without restarting the server.
                 capabilities = { TvCapabilityProvider.current(this@ServerService) },
             ).also { server ->
                 server.start()
-
-                _serverInfo.value = ServerInfo(ip = ip, port = port, token = "")
 
                 // Observe connection state for notification updates and expose to UI
                 launch {
@@ -339,7 +349,7 @@ class ServerService : Service() {
                 }
             }
 
-            FileLogger.i(TAG, "Server started at $ip:$port")
+            FileLogger.i(TAG, "Server startup requested at $ip beginning with port $port")
         }
     }
 

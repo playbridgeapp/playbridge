@@ -13,4 +13,35 @@ void main() {
     final reloaded = await PairingStore.load();
     expect(reloaded.preselectHlsQuality, isTrue);
   });
+
+  test('receiver port defaults to 8765 and persists successful values',
+      () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PairingStore.load();
+
+    expect(store.receiverPort, PairingStore.defaultReceiverPort);
+    await store.setReceiverPort(8768);
+
+    final reloaded = await PairingStore.load();
+    expect(reloaded.receiverPort, 8768);
+  });
+
+  test('invalid persisted receiver ports fall back to 8765', () async {
+    for (final invalidPort in [0, -1, 65536]) {
+      SharedPreferences.setMockInitialValues({
+        'pb.receiver_port': invalidPort,
+      });
+      final store = await PairingStore.load();
+      expect(store.receiverPort, PairingStore.defaultReceiverPort);
+    }
+  });
+
+  test('invalid receiver ports are not persisted', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PairingStore.load();
+
+    expect(() => store.setReceiverPort(0), throwsArgumentError);
+    expect(() => store.setReceiverPort(65536), throwsArgumentError);
+    expect(store.receiverPort, PairingStore.defaultReceiverPort);
+  });
 }

@@ -9,29 +9,35 @@ import 'package:flutter/foundation.dart';
 class DiscoveryPublisher {
   DiscoveryPublisher({
     required this.serviceName,
-    required this.port,
     required this.deviceId,
   });
 
   final String serviceName;
-  final int port;
   final String deviceId;
 
   BonsoirBroadcast? _broadcast;
   StreamSubscription? _eventsSub;
 
-  /// [wssPort] is advertised as the `wss_port` TXT attribute when non-null so
-  /// senders can find the encrypted endpoint. Older senders ignore it.
-  Future<void> start({int? wssPort}) async {
-    final service = BonsoirService(
+  /// Builds the service published by [start]. Both the SRV record and TXT
+  /// attribute identify the actual bound secure listener.
+  @visibleForTesting
+  BonsoirService serviceForPort(int port) {
+    if (port < 1 || port > 65535) {
+      throw ArgumentError.value(port, 'port', 'must be between 1 and 65535');
+    }
+    return BonsoirService(
       name: serviceName,
       type: '_playbridge._tcp',
       port: port,
       attributes: {
         'uuid': deviceId,
-        if (wssPort != null) 'wss_port': '$wssPort',
+        'wss_port': '$port',
       },
     );
+  }
+
+  Future<void> start({required int port}) async {
+    final service = serviceForPort(port);
 
     final broadcast = BonsoirBroadcast(service: service);
     await broadcast.ready;
@@ -41,7 +47,7 @@ class DiscoveryPublisher {
     await broadcast.start();
     _broadcast = broadcast;
     debugPrint('[discovery] published $serviceName on _playbridge._tcp.:$port '
-        '(uuid=$deviceId, wss_port=${wssPort ?? '-'})');
+        '(uuid=$deviceId, wss_port=$port)');
   }
 
   Future<void> stop() async {

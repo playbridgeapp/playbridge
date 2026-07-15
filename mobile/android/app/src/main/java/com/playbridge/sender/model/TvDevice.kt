@@ -15,6 +15,8 @@ data class TvDevice(
     // Port of the receiver's wss:// listener (from the wss_port mDNS TXT attr).
     // Null means the receiver only serves plaintext ws://.
     val wssPort: Int? = null,
+    // Optional HTTP diagnostics port advertised via the logs_port mDNS TXT attr.
+    val logsPort: Int? = null,
     // SPKI pin (sha256/<base64>) captured at pairing; validated on every wss
     // connection. Null until paired with a TLS-capable receiver.
     val certFingerprint: String? = null,
