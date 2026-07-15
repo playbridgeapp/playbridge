@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/player_controller.dart';
 import 'package:playbridge_desktop/player_engine.dart';
+import 'package:playbridge_desktop/stream_proxy_server.dart';
 
 /// Minimal engine for [PlayerController] unit tests (no media_kit / mpv).
 class _FakeEngine extends PlayerEngine {
@@ -9,7 +10,13 @@ class _FakeEngine extends PlayerEngine {
   int stopCount = 0;
   int lastOpenIndex = -1;
   int positionMsValue = 0;
+  int? lastSeekMs;
   int durationMsValue = 1000;
+  bool lastOpenPlay = true;
+  int failuresRemaining = 0;
+  Duration openDelay = Duration.zero;
+
+  void setStateForTest(String value) => _state = value;
 
   @override
   String get state => _state;
@@ -35,10 +42,20 @@ class _FakeEngine extends PlayerEngine {
   }
 
   @override
-  Future<void> openPlaylist(List<QueueItem> items, int startIndex) async {
+  Future<void> openPlaylist(
+    List<QueueItem> items,
+    int startIndex, {
+    bool play = true,
+  }) async {
+    if (openDelay > Duration.zero) await Future<void>.delayed(openDelay);
     openCount++;
     lastOpenIndex = startIndex;
-    _state = 'playing';
+    lastOpenPlay = play;
+    if (failuresRemaining > 0) {
+      failuresRemaining--;
+      throw StateError('open failed');
+    }
+    _state = play ? 'playing' : 'paused';
     notifyListeners();
   }
 
@@ -55,7 +72,9 @@ class _FakeEngine extends PlayerEngine {
   }
 
   @override
-  Future<void> seek(Duration position) async {}
+  Future<void> seek(Duration position) async {
+    lastSeekMs = position.inMilliseconds;
+  }
 
   @override
   Future<void> stop() async {
@@ -71,6 +90,14 @@ class _FakeEngine extends PlayerEngine {
 }
 
 void main() {
+  setUp(() async {
+    await StreamProxyServer.instance.stop();
+  });
+
+  tearDown(() async {
+    await StreamProxyServer.instance.stop();
+  });
+
   QueueItem item(int n) => QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n');
 
   test('HLS preselection preference defaults off and can be changed', () {
@@ -160,5 +187,95 @@ void main() {
     expect(c.currentIndex, 0);
     expect(engine.openCount, opensBefore);
     expect(engine.stopCount, 0);
+  });
+
+  test('toggles direct and proxied playback at the current position', () async {
+    await StreamProxyServer.instance.start();
+    final engine = _FakeEngine()..positionMsValue = 250;
+    final c = PlayerController(engineForTest: engine);
+    final directUrl = 'https://example.com/stream.m3u8';
+    final headers = {'User-Agent': 'Test browser'};
+
+    await c.playItem(
+      QueueItem(url: directUrl, title: 'Stream', headers: headers),
+    );
+    expect(c.isCurrentItemProxied, isFalse);
+
+    expect(await c.toggleProxy(), isTrue);
+    expect(c.isCurrentItemProxied, isTrue);
+    expect(c.queue.single.originalUrl, directUrl);
+    expect(c.queue.single.originalHeaders, headers);
+    expect(c.queue.single.startPositionMs, isNull);
+    expect(engine.lastSeekMs, 250);
+
+    expect(await c.toggleProxy(), isTrue);
+    expect(c.isCurrentItemProxied, isFalse);
+    expect(c.queue.single.url, directUrl);
+    expect(c.queue.single.headers, headers);
+    expect(engine.lastSeekMs, 250);
+    expect(engine.openCount, 3);
+  });
+
+  test('leaves direct playback unchanged when the proxy is unavailable',
+      () async {
+    final engine = _FakeEngine();
+    final c = PlayerController(engineForTest: engine);
+    final directUrl = 'https://example.com/stream.m3u8';
+    await c.playItem(QueueItem(url: directUrl, title: 'Stream'));
+
+    expect(await c.toggleProxy(), isFalse);
+    expect(c.isCurrentItemProxied, isFalse);
+    expect(c.queue.single.url, directUrl);
+  });
+
+  test('preserves paused and buffering playback intent during toggles',
+      () async {
+    await StreamProxyServer.instance.start();
+    final engine = _FakeEngine();
+    final c = PlayerController(engineForTest: engine);
+    await c.playItem(
+      QueueItem(url: 'https://example.com/stream.m3u8', title: 'Stream'),
+    );
+
+    engine.setStateForTest('paused');
+    expect(await c.toggleProxy(), isTrue);
+    expect(engine.lastOpenPlay, isFalse);
+    expect(engine.state, 'paused');
+
+    engine.setStateForTest('buffering');
+    expect(await c.toggleProxy(), isTrue);
+    expect(engine.lastOpenPlay, isTrue);
+    expect(engine.state, 'playing');
+  });
+
+  test('reopens the original route when the replacement open fails', () async {
+    await StreamProxyServer.instance.start();
+    final engine = _FakeEngine();
+    final c = PlayerController(engineForTest: engine);
+    final directUrl = 'https://example.com/stream.m3u8';
+    await c.playItem(QueueItem(url: directUrl, title: 'Stream'));
+    engine.failuresRemaining = 1;
+
+    expect(await c.toggleProxy(), isFalse);
+    expect(c.queue.single.url, directUrl);
+    expect(engine.openCount, 3);
+    expect(engine.state, 'playing');
+  });
+
+  test('serializes stop behind an in-flight toggle', () async {
+    await StreamProxyServer.instance.start();
+    final engine = _FakeEngine()..openDelay = const Duration(milliseconds: 20);
+    final c = PlayerController(engineForTest: engine);
+    await c.playItem(
+      QueueItem(url: 'https://example.com/stream.m3u8', title: 'Stream'),
+    );
+
+    final toggle = c.toggleProxy();
+    final stop = c.stop();
+    await toggle;
+    await stop;
+
+    expect(c.currentIndex, -1);
+    expect(c.queue, isEmpty);
   });
 }

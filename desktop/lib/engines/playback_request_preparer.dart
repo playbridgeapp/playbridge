@@ -66,6 +66,20 @@ class PlaybackRequestPreparer {
         headers: null, // Managed internally by the proxy server session
         subtitles: item.subtitles,
         startPositionMs: item.startPositionMs,
+        originalUrl: item.originalUrl ?? url,
+        originalHeaders: item.originalHeaders ?? headers,
+        bingeGroup: item.bingeGroup,
+        season: item.season,
+        episode: item.episode,
+        imdbId: item.imdbId,
+        backdropUrl: item.backdropUrl,
+        posterUrl: item.posterUrl,
+        logoUrl: item.logoUrl,
+        overview: item.overview,
+        year: item.year,
+        rating: item.rating,
+        runtime: item.runtime,
+        episodeTitle: item.episodeTitle,
       );
     }
 

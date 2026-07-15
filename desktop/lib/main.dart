@@ -1046,6 +1046,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     isFullScreen: _isFullScreen,
                                                     onToggleFullScreen:
                                                         _toggleFullScreen,
+                                                    onToggleProxy: () async {
+                                                      final wasProxied = _player
+                                                          .isCurrentItemProxied;
+                                                      final switched =
+                                                          await _player
+                                                              .toggleProxy();
+                                                      if (switched && mounted) {
+                                                        _showOsd(wasProxied
+                                                            ? 'Direct playback'
+                                                            : 'Proxied playback');
+                                                      }
+                                                    },
                                                   ),
                                                 ),
                                               if (_showingVideo &&
@@ -1585,6 +1597,7 @@ class _PlayerControlsBar extends StatefulWidget {
     required this.onMenuClosed,
     required this.isFullScreen,
     required this.onToggleFullScreen,
+    required this.onToggleProxy,
   });
 
   final PlayerController player;
@@ -1597,6 +1610,7 @@ class _PlayerControlsBar extends StatefulWidget {
   final VoidCallback onMenuClosed;
   final bool isFullScreen;
   final VoidCallback onToggleFullScreen;
+  final Future<void> Function() onToggleProxy;
 
   @override
   State<_PlayerControlsBar> createState() => _PlayerControlsBarState();
@@ -1741,6 +1755,21 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                           onClosed: widget.onMenuClosed,
                         ),
                       ],
+                      IconButton(
+                        tooltip: p.isCurrentItemProxied
+                            ? 'Switch to direct playback'
+                            : 'Route through proxy',
+                        icon: Icon(
+                          p.isCurrentItemProxied
+                              ? Icons.shield
+                              : Icons.shield_outlined,
+                          color:
+                              p.isCurrentItemProxied ? Colors.tealAccent : null,
+                        ),
+                        onPressed: hasMedia && !p.proxyToggleInProgress
+                            ? widget.onToggleProxy
+                            : null,
+                      ),
                       if (widget.showQueueControls)
                         IconButton(
                           tooltip: widget.playlistOpen

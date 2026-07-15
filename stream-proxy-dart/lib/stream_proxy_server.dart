@@ -62,7 +62,7 @@ class StreamProxyServer {
 
     _server = await shelf_io.serve(handler, host, port);
     stdout.writeln('[stream-proxy] Listening on $host:${_server!.port}');
-    stdout.writeln('[stream-proxy] Authentication active token: "$password"');
+    stdout.writeln('[stream-proxy] Authentication active token: "<Redacted>"');
 
     _startSessionCleanupTimer();
   }
