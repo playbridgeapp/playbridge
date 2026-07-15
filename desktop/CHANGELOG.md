@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0+28] — 2026-07-15
+
+### Added
+- **Cast Proxy Routing Control**: Adds a checkbox to Send to TV and a playback proxy route toggle to force routing remote casts through the local proxy.
+- **Protocol Vendoring**: Integrates the protocol definitions and generated Kotlin/Dart/Swift bindings directly in the monorepo, removing the submodule dependency.
+
+### Changed
+- **Dynamic HLS Playlist Rewriting**: Rewrite HLS playlists using the requested host IP instead of hardcoding `127.0.0.1` so that TV receivers can access the proxy.
+
 ## [0.7.0+27] — 2026-07-14
 
 ### Added
