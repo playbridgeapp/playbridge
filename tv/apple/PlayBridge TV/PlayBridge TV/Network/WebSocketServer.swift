@@ -56,6 +56,9 @@ class WebSocketServer: ObservableObject {
     private let authorizedTokensKey = "pb_authorized_tokens"
     private let deviceUUIDKey = "pb_device_uuid"
     private let pairedDevicesKey = "pb_paired_devices"
+    private let receiverPortKey = "pb_receiver_port"
+    private static let defaultReceiverPort: UInt16 = 8765
+    private static let maxReceiverPortAttempts = 32
 
     private var autoTimeoutWork: DispatchWorkItem?
     private var keepaliveTimer: Timer?
@@ -110,48 +113,42 @@ class WebSocketServer: ObservableObject {
             .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.broadcastPlaylistStatus() }
 
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleForeground),
-            name: UIApplication.willEnterForegroundNotification,
-            object: nil
+    }
+
+    func start(port: UInt16? = nil) {
+        // ContentView owns app lifecycle. Its onAppear and scenePhase callbacks can
+        // occur close together, so starting must be idempotent: cancelling and
+        // immediately rebinding our own fresh listener looks like EADDRINUSE and
+        // would incorrectly advance the persisted receiver port on every foreground.
+        guard tlsListener == nil else { return }
+
+        let preferredPort = port ?? storedReceiverPort
+        serverState = "Starting..."
+        wssPort = nil
+
+        // wss is the default and only transport. Bonjour is attached only after
+        // NWListener confirms that the selected port is ready to accept connections.
+        startTLSListener(
+            port: preferredPort,
+            attemptsRemaining: Self.maxReceiverPortAttempts
         )
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    @objc private func handleForeground() {
-        if serverState != "Ready to Connect" { restart() }
-    }
-
-    func start(port: UInt16 = 8765) {
-        let wssPort = port
-
-        // wss is the default and only transport. It carries the mDNS service.
-        let tlsUp = startTLSListener(
-            port: wssPort,
-            service: makeBonjourService(wssPort: wssPort)
-        )
-
-        if !tlsUp {
-            // Fail closed: no listener is running, so surface why.
-            DispatchQueue.main.async {
-                self.serverState = "Secure server failed to start"
-            }
-        }
         startKeepalive()
     }
 
-    private func makeBonjourService(wssPort: UInt16?) -> NWListener.Service {
-        var txtDict: [String: Data] = [
+    private var storedReceiverPort: UInt16 {
+        let stored = UserDefaults.standard.integer(forKey: receiverPortKey)
+        guard stored >= 1, let port = UInt16(exactly: stored) else {
+            return Self.defaultReceiverPort
+        }
+        return port
+    }
+
+    private func makeBonjourService(wssPort: UInt16) -> NWListener.Service {
+        let txtDict: [String: Data] = [
             "uuid": deviceUUID.data(using: .utf8)!,
             "device_name": deviceName.data(using: .utf8)!,
+            "wss_port": String(wssPort).data(using: .utf8)!,
         ]
-        if let wssPort {
-            txtDict["wss_port"] = String(wssPort).data(using: .utf8)!
-        }
         return NWListener.Service(
             name: deviceName, type: "_playbridge._tcp", domain: nil,
             txtRecord: NetService.data(fromTXTRecord: txtDict))
@@ -166,50 +163,17 @@ class WebSocketServer: ObservableObject {
         return tcp
     }
 
-    /// The listener carrying the bonjour service is "primary" and drives the UI
-    /// serverState + restart; a secondary listener just logs.
-    private func makeStateHandler(label: String, primary: Bool) -> (NWListener.State) -> Void {
-        return { [weak self] state in
-            if primary {
-                DispatchQueue.main.async {
-                    guard let self = self else { return }
-                    switch state {
-                    case .ready:
-                        self.serverState = "Ready to Connect"
-                        self.restartAttempts = 0
-                    case .failed(let error):
-                        self.serverState = "Error: \(error.localizedDescription)"
-                        self.scheduleRestart()
-                    case .waiting(let error):
-                        self.serverState = "Waiting: \(error.localizedDescription)"
-                    case .setup: self.serverState = "Starting..."
-                    case .cancelled: self.serverState = "Stopped"
-                    default: break
-                    }
-                }
-            } else {
-                switch state {
-                case .ready: print("[\(label)] ready")
-                case .failed(let error): print("[\(label)] failed: \(error)")
-                default: break
-                }
-            }
-        }
-    }
-
-
-
-    /// Starts the encrypted wss:// listener on [port], reusing the plaintext
-    /// connection handler. Returns false if the TLS identity is unavailable or
-    /// the listener fails to bind (in which case we serve ws:// only).
-    @discardableResult
-    private func startTLSListener(port: UInt16, service: NWListener.Service?) -> Bool {
+    /// Starts the encrypted wss:// listener on `port`. Address collisions advance
+    /// through a bounded range; every other failure stops startup and is surfaced.
+    private func startTLSListener(port: UInt16, attemptsRemaining: Int) {
         let identity: TLSIdentity.Result
         do {
             identity = try TLSIdentity.loadOrCreate(commonName: deviceName)
         } catch {
-            print("[wss] TLS identity unavailable — encrypted listener disabled: \(error)")
-            return false
+            print("[wss] TLS identity unavailable: \(error)")
+            certFingerprint = nil
+            serverState = "Secure server failed to start"
+            return
         }
         certFingerprint = identity.fingerprint
 
@@ -226,20 +190,99 @@ class WebSocketServer: ObservableObject {
 
         do {
             let l = try NWListener(using: parameters, on: NWEndpoint.Port(integerLiteral: port))
-            l.service = service
-            l.stateUpdateHandler = makeStateHandler(label: "wss", primary: service != nil)
+            l.stateUpdateHandler = { [weak self, weak l] state in
+                guard let self, let l, self.tlsListener === l else { return }
+                self.handleTLSListenerState(
+                    state,
+                    listener: l,
+                    port: port,
+                    attemptsRemaining: attemptsRemaining
+                )
+            }
             l.newConnectionHandler = { [weak self] connection in
                 self?.handleNewConnection(connection)
             }
-            l.start(queue: .main)
             tlsListener = l
-            DispatchQueue.main.async { self.wssPort = port }
-            print("[wss] listening on \(port) (pin \(identity.fingerprint))")
-            return true
+            l.start(queue: .main)
         } catch {
             print("[wss] listener error: \(error)")
-            return false
+            if let nwError = error as? NWError, isAddressInUse(nwError) {
+                retryAfterAddressInUse(port: port, attemptsRemaining: attemptsRemaining)
+            } else {
+                certFingerprint = nil
+                serverState = "Error: \(error.localizedDescription)"
+            }
         }
+    }
+
+    private func handleTLSListenerState(
+        _ state: NWListener.State,
+        listener: NWListener,
+        port: UInt16,
+        attemptsRemaining: Int
+    ) {
+        switch state {
+        case .ready:
+            // NWListener.service can be assigned after readiness. Doing so ensures a
+            // collided candidate is never advertised and TXT/SRV use the bound port.
+            listener.service = makeBonjourService(wssPort: port)
+            wssPort = port
+            UserDefaults.standard.set(Int(port), forKey: receiverPortKey)
+            serverState = "Ready to Connect"
+            restartAttempts = 0
+            print("[wss] listening on \(port)")
+        case .failed(let error):
+            let failedAfterReadiness = wssPort == port
+            abandonTLSListener(listener)
+            if isAddressInUse(error) {
+                retryAfterAddressInUse(port: port, attemptsRemaining: attemptsRemaining)
+            } else {
+                certFingerprint = nil
+                serverState = "Error: \(error.localizedDescription)"
+                print("[wss] failed: \(error)")
+                if failedAfterReadiness {
+                    scheduleRestart(port: port)
+                }
+            }
+        case .waiting(let error):
+            if isAddressInUse(error) {
+                abandonTLSListener(listener)
+                retryAfterAddressInUse(port: port, attemptsRemaining: attemptsRemaining)
+            } else {
+                serverState = "Waiting: \(error.localizedDescription)"
+            }
+        case .setup:
+            serverState = "Starting..."
+        case .cancelled:
+            serverState = "Stopped"
+        @unknown default:
+            break
+        }
+    }
+
+    private func abandonTLSListener(_ listener: NWListener) {
+        listener.stateUpdateHandler = nil
+        listener.newConnectionHandler = nil
+        listener.cancel()
+        tlsListener = nil
+        wssPort = nil
+    }
+
+    private func isAddressInUse(_ error: NWError) -> Bool {
+        if case .posix(let code) = error { return code == .EADDRINUSE }
+        return false
+    }
+
+    private func retryAfterAddressInUse(port: UInt16, attemptsRemaining: Int) {
+        guard attemptsRemaining > 1, port < UInt16.max else {
+            certFingerprint = nil
+            serverState = "No available receiver port"
+            print("[wss] no available port after bounded fallback from \(storedReceiverPort)")
+            return
+        }
+        let nextPort = port + 1
+        serverState = "Port \(port) in use; trying \(nextPort)"
+        startTLSListener(port: nextPort, attemptsRemaining: attemptsRemaining - 1)
     }
 
     func stop() {
@@ -263,12 +306,15 @@ class WebSocketServer: ObservableObject {
         }
     }
 
-    func restart(port: UInt16 = 8765) {
+    func restart(port: UInt16? = nil) {
         stop()
         start(port: port)
     }
 
-    private func scheduleRestart(port: UInt16 = 8765) {
+    /// A listener that was previously ready may fail after a network transition.
+    /// Recover that listener on the same selected port without treating the failure
+    /// as a collision or scanning additional ports.
+    private func scheduleRestart(port: UInt16) {
         restartWork?.cancel()
         let delay = min(pow(2.0, Double(restartAttempts)), 30.0)
         restartAttempts += 1

@@ -742,7 +742,12 @@ fun AppNavHost(
                     SettingsScreen(
                         onBack = { onScreenChange(lastMainScreen) },
                         tvIp = if (connectionState is WebSocketClient.ConnectionState.Connected) tvDevice?.ip else null,
-                        tvPort = if (connectionState is WebSocketClient.ConnectionState.Connected) tvDevice?.port else null,
+                        // New receivers advertise the independent diagnostics listener.
+                        // Legacy Android TVs used receiverPort + 1 without a TXT key.
+                        tvPort = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                            tvDevice?.logsPort
+                                ?: tvDevice?.port?.takeIf { it < 65535 }?.plus(1)
+                        } else null,
                         showBack = true,
                     )
                 }
@@ -1819,4 +1824,3 @@ private fun TvUserAgentRow(
         trailing?.invoke()
     }
 }
-

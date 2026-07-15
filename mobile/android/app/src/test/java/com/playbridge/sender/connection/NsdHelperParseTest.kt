@@ -37,6 +37,21 @@ class NsdHelperParseTest {
     }
 
     @Test
+    fun logsPortParsedOnlyWhenValid() {
+        val valid = NsdHelper.parseDevice(
+            "TV", "192.168.1.5", 8765,
+            mapOf(NsdConstants.KEY_LOGS_PORT to b("9010")),
+        )
+        val invalid = NsdHelper.parseDevice(
+            "TV", "192.168.1.5", 8765,
+            mapOf(NsdConstants.KEY_LOGS_PORT to b("70000")),
+        )
+
+        assertEquals(9010, valid.logsPort)
+        assertNull(invalid.logsPort)
+    }
+
+    @Test
     fun customIpOverridesResolvedIp() {
         val d = NsdHelper.parseDevice(
             "TV", "192.168.1.5", 8765,

@@ -5,14 +5,21 @@ import Network
 /// Uses `NetService` because it resolves the IP, port, and TXT record in one shot (NWBrowser
 /// needs a separate connection to resolve an address).
 final class BonjourBrowser: NSObject, ObservableObject {
+    enum ScanOwner: Hashable {
+        case userInterface
+        case savedReconnect
+    }
+
     @Published private(set) var devices: [DiscoveredDevice] = []
     @Published private(set) var isScanning = false
 
     private var browser: NetServiceBrowser?
+    private var scanOwnerCounts: [ScanOwner: Int] = [:]
     /// Services currently resolving — held strongly so they aren't deallocated mid-resolve.
     private var resolving: Set<NetService> = []
 
-    func start() {
+    func start(owner: ScanOwner = .userInterface) {
+        scanOwnerCounts[owner, default: 0] += 1
         guard browser == nil else { return }
         devices = []
         resolving = []
@@ -23,7 +30,15 @@ final class BonjourBrowser: NSObject, ObservableObject {
         isScanning = true
     }
 
-    func stop() {
+    func stop(owner: ScanOwner = .userInterface) {
+        if let count = scanOwnerCounts[owner] {
+            if count > 1 {
+                scanOwnerCounts[owner] = count - 1
+            } else {
+                scanOwnerCounts[owner] = nil
+            }
+        }
+        guard scanOwnerCounts.isEmpty else { return }
         browser?.stop()
         browser = nil
         resolving.forEach { $0.stop() }
@@ -32,7 +47,10 @@ final class BonjourBrowser: NSObject, ObservableObject {
     }
 
     private func upsert(_ device: DiscoveredDevice) {
-        devices.removeAll { $0.ip == device.ip }
+        devices.removeAll {
+            if !device.uuid.isEmpty, !$0.uuid.isEmpty { return $0.uuid == device.uuid }
+            return $0.ip == device.ip
+        }
         devices.append(device)
         devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

@@ -64,6 +64,9 @@ class PairingStore {
   static const _kStillWatchingEnabled = 'pb.still_watching_enabled';
   static const _kStillWatchingThresholdMin = 'pb.still_watching_threshold_min';
   static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
+  static const _kReceiverPort = 'pb.receiver_port';
+
+  static const int defaultReceiverPort = 8765;
 
   static const stillWatchingPresets = <int>[30, 60, 90, 120, 180, 240];
   static const stillWatchingResponsePresets = <int>[30, 60, 120, 300, 600];
@@ -176,6 +179,25 @@ class PairingStore {
         _kStillWatchingResponseSec,
         stillWatchingResponsePresets.contains(value) ? value : 300,
       );
+
+  /// Last port on which the secure receiver successfully started.
+  ///
+  /// Invalid values from older or manually edited preferences are ignored so
+  /// startup always begins with a valid TCP port.
+  int get receiverPort {
+    final saved = _prefs.getInt(_kReceiverPort);
+    if (saved == null || saved < 1 || saved > 65535) {
+      return defaultReceiverPort;
+    }
+    return saved;
+  }
+
+  Future<void> setReceiverPort(int port) {
+    if (port < 1 || port > 65535) {
+      throw ArgumentError.value(port, 'port', 'must be between 1 and 65535');
+    }
+    return _prefs.setInt(_kReceiverPort, port);
+  }
 
   // ─── Paired devices ──────────────────────────────────────────────────────
 

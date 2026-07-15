@@ -258,7 +258,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     );
     _discovery = DiscoveryPublisher(
       serviceName: widget.store.deviceName,
-      port: kDefaultPort,
       deviceId: widget.store.deviceId,
     );
     _tray =
@@ -557,24 +556,33 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   // Discovery starts after the server so it can advertise the actual bound
   // wss port (only known once the TLS listener is up).
   Future<void> _bootServerThenDiscovery() async {
-    await _bootServer();
-    await _bootDiscovery();
+    final port = await _bootServer();
+    if (port == null) return;
+    await _bootDiscovery(port);
   }
 
-  Future<void> _bootServer() async {
+  Future<int?> _bootServer() async {
+    late final int port;
     try {
-      await _server.start();
+      port = await _server.start();
+    } catch (e) {
+      if (mounted) setState(() => _serverError = '$e');
+      return null;
+    }
+
+    try {
       await StreamProxyServer.instance.start();
     } catch (e) {
-      setState(() => _serverError = '$e');
+      if (mounted) setState(() => _serverError = '$e');
     }
+    return port;
   }
 
-  Future<void> _bootDiscovery() async {
+  Future<void> _bootDiscovery(int port) async {
     try {
-      await _discovery.start(wssPort: _server.wssPort);
+      await _discovery.start(port: port);
     } catch (e) {
-      setState(() => _discoveryError = '$e');
+      if (mounted) setState(() => _discoveryError = '$e');
     }
   }
 

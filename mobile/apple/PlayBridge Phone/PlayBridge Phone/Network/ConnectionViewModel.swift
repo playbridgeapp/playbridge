@@ -20,6 +20,9 @@ final class ConnectionViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     /// The device we're currently bringing up, so we can persist a full record once paired.
     private var connectingDevice: DiscoveredDevice?
+    private var savedReconnectDiscovery: AnyCancellable?
+    private var savedReconnectTimeout: DispatchWorkItem?
+    private static let savedReconnectDiscoveryTimeout: TimeInterval = 10
 
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
 
@@ -51,13 +54,14 @@ final class ConnectionViewModel: ObservableObject {
 
     // MARK: - Discovery
 
-    func startDiscovery() { browser.start() }
-    func stopDiscovery() { browser.stop() }
+    func startDiscovery() { browser.start(owner: .userInterface) }
+    func stopDiscovery() { browser.stop(owner: .userInterface) }
 
     // MARK: - Connect
 
     /// Connect to a device found via Bonjour. Reuses a saved token/pin if we've paired with it.
     func connect(to device: DiscoveredDevice) {
+        endSavedReconnectDiscovery()
         connectingDevice = device
         let saved = matchingSaved(for: device)
         ws.connect(
@@ -81,6 +85,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Reconnect to the previously paired device (used on launch).
     func reconnectSaved() {
         guard let saved = pairedDevice else { return }
+        endSavedReconnectDiscovery()
         connectingDevice = DiscoveredDevice(ip: saved.ip, port: saved.port, name: saved.name,
                                             uuid: saved.uuid, wssPort: saved.wssPort)
         ws.connect(
@@ -93,10 +98,12 @@ final class ConnectionViewModel: ObservableObject {
             wssPort: saved.wssPort,
             certFingerprint: saved.certFingerprint
         )
+        beginSavedReconnectDiscovery(for: saved)
     }
 
     /// Connect to a specific saved TV from the history list.
     func connectSaved(_ device: PairedDevice) {
+        endSavedReconnectDiscovery()
         pairedDevice = device
         connectingDevice = DiscoveredDevice(ip: device.ip, port: device.port, name: device.name,
                                             uuid: device.uuid, wssPort: device.wssPort)
@@ -112,8 +119,86 @@ final class ConnectionViewModel: ObservableObject {
         )
     }
 
+    /// Keep launch reconnect discovery independent of the discovery screen. The stored
+    /// endpoint is tried immediately; a live Bonjour endpoint for the same UUID replaces
+    /// it once, without disturbing the receiver's token, pin, or capabilities.
+    private func beginSavedReconnectDiscovery(for saved: PairedDevice) {
+        guard !saved.uuid.isEmpty else { return }
+
+        browser.start(owner: .savedReconnect)
+        savedReconnectDiscovery = browser.$devices
+            .receive(on: RunLoop.main)
+            .sink { [weak self] devices in
+                guard let live = devices.first(where: { $0.uuid == saved.uuid }) else { return }
+                // `$devices` can synchronously emit its current value while the
+                // cancellable is still being assigned. Defer handling so cleanup can
+                // always cancel the installed subscription and prevent duplicate retries.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.savedReconnectDiscovery != nil else { return }
+                    self.handleSavedReconnectEndpoint(live, replacing: saved)
+                }
+            }
+
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.endSavedReconnectDiscovery()
+        }
+        savedReconnectTimeout = timeout
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.savedReconnectDiscoveryTimeout,
+            execute: timeout
+        )
+    }
+
+    private func handleSavedReconnectEndpoint(
+        _ live: DiscoveredDevice,
+        replacing saved: PairedDevice
+    ) {
+        let endpointChanged = live.ip != saved.ip
+            || live.port != saved.port
+            || live.wssPort != saved.wssPort
+        endSavedReconnectDiscovery()
+        guard endpointChanged else { return }
+
+        var refreshed = saved
+        refreshed.ip = live.ip
+        refreshed.port = live.port
+        refreshed.name = live.name
+        refreshed.wssPort = live.wssPort
+        // Copying the saved record preserves its token, SPKI pin, capabilities,
+        // last-connected timestamp, and stable receiver UUID.
+        store.savePairedDevice(refreshed)
+        upsertSaved(refreshed)
+        pairedDevice = refreshed
+        connectingDevice = DiscoveredDevice(
+            ip: refreshed.ip,
+            port: refreshed.port,
+            name: refreshed.name,
+            uuid: refreshed.uuid,
+            wssPort: refreshed.wssPort
+        )
+        ws.connect(
+            ip: refreshed.ip,
+            port: refreshed.port,
+            token: refreshed.token ?? "",
+            serverName: refreshed.name,
+            deviceName: store.localDeviceName,
+            deviceUUID: store.localDeviceUUID,
+            wssPort: refreshed.wssPort,
+            certFingerprint: refreshed.certFingerprint
+        )
+    }
+
+    private func endSavedReconnectDiscovery() {
+        savedReconnectTimeout?.cancel()
+        savedReconnectTimeout = nil
+        savedReconnectDiscovery?.cancel()
+        savedReconnectDiscovery = nil
+        browser.stop(owner: .savedReconnect)
+    }
+
     /// Remove one saved TV from history (and disconnect if it's the active one).
     func forget(_ device: PairedDevice) {
+        endSavedReconnectDiscovery()
         var list = store.loadSavedDevices()
         list.removeAll { deviceKey($0) == deviceKey(device) }
         store.saveSavedDevices(list)
@@ -167,7 +252,10 @@ final class ConnectionViewModel: ObservableObject {
         DispatchQueue.main.async { self.savedDevices = list }
     }
 
-    func disconnect() { ws.disconnect() }
+    func disconnect() {
+        endSavedReconnectDiscovery()
+        ws.disconnect()
+    }
 
     /// Submit the 6-digit SAS code the user read off the TV during pairing.
     func submitPairingCode(_ code: String) { ws.submitPairingCode(code) }

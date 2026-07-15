@@ -12,19 +12,25 @@ class ConnectionMergeTest {
         port: Int,
         uuid: String = "",
         wssPort: Int? = null,
+        logsPort: Int? = null,
         token: String = "",
         cert: String? = null,
     ) = TvDevice(
         ip = ip, port = port, token = token, name = "TV",
-        uuid = uuid, wssPort = wssPort, certFingerprint = cert,
+        uuid = uuid, wssPort = wssPort, logsPort = logsPort, certFingerprint = cert,
     )
 
     @Test
-    fun takesDiscoveredWssPortByUuidAndKeepsCredentials() {
+    fun takesCompleteDiscoveredEndpointByUuidAndKeepsCredentials() {
         val device = dev("1.1.1.1", 8765, uuid = "u1", token = "t", cert = "sha256/x")
-        val discovered = listOf(dev("9.9.9.9", 8765, uuid = "u1", wssPort = 8766))
-        val merged = ConnectionMerge.withDiscoveredWssPort(device, discovered)
-        assertEquals(8766, merged.wssPort)
+        val discovered = listOf(
+            dev("9.9.9.9", 9020, uuid = "u1", wssPort = 9020, logsPort = 9021)
+        )
+        val merged = ConnectionMerge.withDiscoveredEndpoint(device, discovered)
+        assertEquals("9.9.9.9", merged.ip)
+        assertEquals(9020, merged.port)
+        assertEquals(9020, merged.wssPort)
+        assertEquals(9021, merged.logsPort)
         assertEquals("t", merged.token)               // token preserved
         assertEquals("sha256/x", merged.certFingerprint) // pin preserved
     }
@@ -33,19 +39,70 @@ class ConnectionMergeTest {
     fun fallsBackToIpPortMatchWhenNoUuid() {
         val device = dev("1.1.1.1", 8765, uuid = "")
         val discovered = listOf(dev("1.1.1.1", 8765, uuid = "other", wssPort = 8766))
-        assertEquals(8766, ConnectionMerge.withDiscoveredWssPort(device, discovered).wssPort)
+        assertEquals(8766, ConnectionMerge.withDiscoveredEndpoint(device, discovered).wssPort)
     }
 
     @Test
     fun keepsDeviceWssPortWhenNoMatch() {
         val device = dev("1.1.1.1", 8765, uuid = "u1", wssPort = 9000)
-        assertEquals(9000, ConnectionMerge.withDiscoveredWssPort(device, emptyList()).wssPort)
+        assertEquals(9000, ConnectionMerge.withDiscoveredEndpoint(device, emptyList()).wssPort)
     }
 
     @Test
     fun nullWhenNoMatchAndNoDeviceWssPort() {
         val device = dev("1.1.1.1", 8765, uuid = "u1")
-        assertNull(ConnectionMerge.withDiscoveredWssPort(device, emptyList()).wssPort)
+        assertNull(ConnectionMerge.withDiscoveredEndpoint(device, emptyList()).wssPort)
+    }
+
+    // ── connection history identity ────────────────────────────────────────
+
+    @Test
+    fun newPortReplacesHistoryEntryWithSameUuid() {
+        val oldEndpoint = dev("1.1.1.1", 8765, uuid = "u1", token = "old")
+        val newEndpoint = dev("1.1.1.1", 8766, uuid = "u1", token = "current")
+
+        val history = ConnectionMerge.upsertHistory(listOf(oldEndpoint), newEndpoint)
+
+        assertEquals(listOf(newEndpoint), history)
+    }
+
+    @Test
+    fun normalizesDuplicatesAlreadyStoredAtDifferentPorts() {
+        val current = dev("1.1.1.1", 8766, uuid = "u1", token = "current")
+        val stale = dev("1.1.1.1", 8765, uuid = "u1", token = "old")
+        val other = dev("2.2.2.2", 8765, uuid = "u2", token = "other")
+
+        val history = ConnectionMerge.normalizeHistory(listOf(current, stale, other))
+
+        assertEquals(listOf(current, other), history)
+    }
+
+    @Test
+    fun legacyEntriesWithoutUuidStillUseIpAndPortIdentity() {
+        val first = dev("1.1.1.1", 8765)
+        val sameEndpoint = dev("1.1.1.1", 8765, token = "new")
+        val otherPort = dev("1.1.1.1", 8766)
+
+        val history = ConnectionMerge.upsertHistory(
+            listOf(first, otherPort),
+            sameEndpoint,
+        )
+
+        assertEquals(listOf(sameEndpoint, otherPort), history)
+    }
+
+    @Test
+    fun removingByUuidClearsEveryStaleEndpoint() {
+        val current = dev("1.1.1.1", 8766, uuid = "u1")
+        val stale = dev("1.1.1.1", 8765, uuid = "u1")
+        val other = dev("2.2.2.2", 8765, uuid = "u2")
+
+        val history = ConnectionMerge.removeHistoryDevice(
+            listOf(current, stale, other),
+            current,
+        )
+
+        assertEquals(listOf(other), history)
     }
 
     // ── resolveAuthFailure ──────────────────────────────────────────────────

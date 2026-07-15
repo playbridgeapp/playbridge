@@ -7,4 +7,7 @@ object NsdConstants {
     // TXT key advertising the receiver's wss:// port. Absent when the receiver
     // has no TLS listener.
     const val KEY_WSS_PORT = "wss_port"
+
+    // Optional TXT key advertising Android TV's HTTP diagnostics endpoint.
+    const val KEY_LOGS_PORT = "logs_port"
 }
