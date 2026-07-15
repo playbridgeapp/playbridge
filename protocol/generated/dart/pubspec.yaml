@@ -1,0 +1,10 @@
+name: playbridge_protocol
+description: Generated protobuf bindings for the PlayBridge WebSocket protocol.
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  protobuf: ^4.1.0

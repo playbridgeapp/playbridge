@@ -23,7 +23,7 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 | `playbridge-desktop-proxy` | Flutter Desktop and the Dart stream proxy |
 | `playbridge-extension` | Browser extension and native-messaging integration |
 | `playbridge-web` | Svelte website and static web assets |
-| `playbridge-protocol` | Protocol schema, generated bindings, submodule updates, and consumer compatibility |
+| `playbridge-protocol` | Protocol schema, generated bindings, and consumer compatibility |
 
 Before working in a project, load the matching specialist skill. For cross-project work, load each affected specialist or delegate non-overlapping consumers to subagents using those skills. Keep shared contracts and files with one designated writer, and keep the primary agent responsible for integration and final verification.
 
@@ -46,7 +46,7 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Stream proxy | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
 | Extension | `extension/` | Browser extension, JavaScript/TypeScript |
 | Web | `web/` | Svelte site |
-| Protocol assets | `protocol/` | Git submodule containing protocol definitions and generated artifacts |
+| Protocol assets | `protocol/` | In-repository AsyncAPI contract, protocol documentation, and generated artifacts |
 
 ## Build and test
 

@@ -182,7 +182,7 @@ PlayBridge is a monorepo; each component has its own README:
 3.  **[Desktop App](desktop/)** (`desktop/`) — a Flutter desktop receiver that plays casts via libmpv. [Changelog](desktop/CHANGELOG.md)
 4.  **[Browser Extension](extension/)** (`extension/`) — a Firefox extension that casts media from desktop browser tabs.
 5.  **[Shared Module](shared/)** (`shared/`) — Kotlin Multiplatform logic, player engines, and protocol bindings.
-6.  **[Protocol](protocol/)** (`protocol/`) — protobuf wire-format definitions (git submodule).
+6.  **[Protocol](protocol/)** (`protocol/`) — AsyncAPI WSS contract, detailed connection flow, and retained protobuf bindings.
 
 ## Documentation
 
@@ -190,6 +190,7 @@ Comprehensive project documentation is available:
 - **[Design System](DESIGN.md)**: Visual language, color tokens, typography, and component specifications.
 - **[Contributing](CONTRIBUTING.md)**: Setup instructions and contribution guidelines.
 - **[Security Policy](SECURITY.md)**: Security considerations and vulnerability reporting.
+- **[WSS Protocol Flow](protocol/docs/WSS_FLOW.md)**: Discovery, TLS pinning, SAS pairing, authentication, commands, status events, and compatibility rules. See also the machine-readable [AsyncAPI contract](protocol/asyncapi.yaml).
 
 ### Cast demo page
 
@@ -200,10 +201,6 @@ bare array) plus the browser's video detection paths is hosted at
 phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/index.html).
 
 ## Build Instructions
-
-> [!IMPORTANT]
-> `protocol/` is a git submodule — clone with `git clone --recursive`, or run
-> `git submodule update --init` in an existing checkout, or the builds will fail.
 
 ### Prerequisites
 

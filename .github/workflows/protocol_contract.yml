@@ -1,0 +1,62 @@
+name: Check Protocol Contract
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/protocol_contract.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/protocol_contract.yml"
+  workflow_dispatch:
+
+jobs:
+  check-asyncapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check AsyncAPI structure and references
+        working-directory: protocol
+        run: ruby scripts/check-spec.rb
+
+  check-generated:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc and swift-protobuf
+        run: brew install protobuf swift-protobuf
+
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+
+      - name: Install protoc-gen-go
+        run: go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+
+      - name: Install ts-proto
+        run: npm install -g ts-proto
+
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Install protoc-gen-dart
+        run: dart pub global activate protoc_plugin
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Run generate.sh --check
+        working-directory: protocol
+        env:
+          PATH: ${{ env.PATH }}:${{ env.HOME }}/go/bin:${{ env.HOME }}/.pub-cache/bin
+        run: |
+          chmod +x ./generate.sh
+          ./generate.sh --check

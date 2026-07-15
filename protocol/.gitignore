@@ -1,0 +1,7 @@
+# Keep generated output committed so consumers don't need protoc installed.
+# Only ignore local tooling artifacts.
+.DS_Store
+node_modules/
+
+# Dart
+**/.dart_tool/

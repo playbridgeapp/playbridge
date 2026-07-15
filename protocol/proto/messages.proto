@@ -1,0 +1,230 @@
+syntax = "proto3";
+
+package playbridge;
+
+option go_package = "github.com/playbridgeapp/playbridge/protocol/generated/go/playbridge";
+
+// ==================== Envelope ====================
+
+// Top-level WebSocket frame. Consumers switch on `type`, then `action`.
+message MessageEnvelope {
+  string type = 1;
+  optional string action = 2;
+  optional string state = 3;
+  optional int64 position = 4;
+  optional int64 duration = 5;
+  optional string title = 6;
+}
+
+// ==================== Shared Metadata ====================
+
+message SeriesEpisodeRef {
+  int32 season = 1;
+  int32 episode = 2;
+  optional string title = 3;
+}
+
+message VisualMetadata {
+  string title = 1;
+  optional string year = 2;
+  optional string rating = 3;
+  optional string runtime = 4;
+  optional string overview = 5;
+  repeated string genres = 6;
+  repeated string cast = 7;
+  repeated string director = 8;
+  optional string backdrop_url = 9  [json_name = "backdropUrl"];
+  optional string poster_url = 10   [json_name = "posterUrl"];
+  optional string logo_url = 11     [json_name = "logoUrl"];
+  optional int32 season = 12;
+  optional int32 episode = 13;
+  optional string episode_title = 14 [json_name = "episodeTitle"];
+  optional string imdb_id = 15       [json_name = "imdbId"];
+  optional string tmdb_id = 16       [json_name = "tmdbId"];
+}
+
+// ==================== Command Payloads (Phone → TV) ====================
+
+message PlayPayload {
+  string url = 1;
+  optional string title = 2;
+  map<string, string> headers = 3;
+  optional string content_type = 4            [json_name = "contentType"];
+  repeated string subtitles = 5;
+  optional string detected_by = 6             [json_name = "detectedBy"];
+  optional string player_mode = 7             [json_name = "playerMode"];
+  optional string preferred_audio_language = 8   [json_name = "preferredAudioLanguage"];
+  optional string preferred_subtitle_language = 9 [json_name = "preferredSubtitleLanguage"];
+  optional string default_video_quality = 10  [json_name = "defaultVideoQuality"];
+  optional double max_bitrate_cap_mbps = 11   [json_name = "maxBitrateCapMbps"];
+  optional VisualMetadata visual_metadata = 12 [json_name = "visualMetadata"];
+  // Stremio bingeGroup of the chosen stream. Echoed back by the TV in playlist_status so the
+  // phone can (a) keep the same release across episodes and (b) recognise its own lazy-queued
+  // series to resume queueing after an app restart (no phone-side persistence).
+  optional string binge_group = 13            [json_name = "bingeGroup"];
+  // Resume point: start playback at this position (ms). The phone seeds it from its
+  // content-keyed resume store; the receiver maps it onto the player's start position.
+  optional int64 start_position_ms = 14       [json_name = "startPositionMs"];
+}
+
+message PlaylistPayload {
+  repeated PlayPayload items = 1;
+  int32 start_index = 2               [json_name = "startIndex"];
+  optional VisualMetadata visual_metadata = 3 [json_name = "visualMetadata"];
+}
+
+message QueueAddPayload {
+  PlayPayload item = 1;
+}
+
+message PlaylistJumpPayload {
+  int32 index = 1;
+}
+
+message BrowserPayload {
+  string url = 1;
+  optional string browser_mode = 2  [json_name = "browserMode"];
+  optional bool desktop_mode = 3    [json_name = "desktopMode"];
+}
+
+message ControlPayload {
+  // pause | play | seek | stop
+  string command = 1;
+}
+
+message RemotePayload {
+  // dpad_up | dpad_down | dpad_left | dpad_right | dpad_center | back
+  string key = 1;
+}
+
+message MousePayload {
+  // move | click | scroll | down | up
+  string event = 1;
+  float dx = 2;
+  float dy = 3;
+}
+
+message BrowserControlPayload {
+  // refresh | toggle_ublock
+  string action = 1;
+}
+
+// ==================== Status Messages (TV → Phone) ====================
+
+message StatusMessage {
+  string type = 1;
+  string state = 2;
+  int64 position = 3;
+  int64 duration = 4;
+  optional string title = 5;
+}
+
+message ContextMessage {
+  string type = 1;
+  // player | browser | idle
+  string active = 2;
+}
+
+message PlaylistItemInfo {
+  int32 index = 1;
+  string title = 2;
+}
+
+message PlaylistStatusMessage {
+  string type = 1                           [json_name = "type"];
+  repeated PlaylistItemInfo items = 2;
+  int32 current_index = 3                   [json_name = "currentIndex"];
+  int32 total_count = 4                     [json_name = "totalCount"];
+}
+
+// ==================== Auth & Pairing ====================
+
+message AuthMessage {
+  string type = 1;
+  optional string token = 2;
+}
+
+message AuthResponse {
+  string type = 1;
+  bool success = 2;
+  optional string token = 3;
+  // Lets the receiver re-assert (or rotate) its SPKI pin on reconnect. Same
+  // format as PairingApprovedMessage.cert_fingerprint. Optional during rollout.
+  optional string cert_fingerprint = 4 [json_name = "certFingerprint"];
+}
+
+// Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.
+message PairingRequestMessage {
+  string type = 1;
+  string device_name = 2 [json_name = "deviceName"];
+  string device_uuid = 3 [json_name = "deviceUUID"];
+}
+
+// SAS Handshake: Step 1 (Sender -> TV Commit)
+message PairingCommitMessage {
+  string type = 1;
+  string commit = 2;
+  string device_name = 3 [json_name = "deviceName"];
+  string device_uuid = 4 [json_name = "deviceUUID"];
+}
+
+// SAS Handshake: Step 2 (TV -> Sender Challenge)
+message PairingChallengeMessage {
+  string type = 1;
+  string tv_eph_pub = 2 [json_name = "tvEphPub"];
+  string nonce_t = 3 [json_name = "nonceT"];
+}
+
+// SAS Handshake: Step 3 (Sender -> TV Reveal)
+message PairingRevealMessage {
+  string type = 1;
+  string sender_eph_pub = 2 [json_name = "senderEphPub"];
+  string nonce_s = 3 [json_name = "nonceS"];
+}
+
+// SAS Handshake: Step 4 (Sender -> TV Confirmation)
+message PairingConfirmationMessage {
+  string type = 1;
+  string mac = 2;
+}
+
+// TV → Phone: user tapped Allow.
+message PairingApprovedMessage {
+  string type = 1;
+  string token = 2;
+  // SPKI pin of the receiver's self-signed TLS cert, format "sha256/<base64>"
+  // (SHA-256 of the DER-encoded SubjectPublicKeyInfo — same scheme as OkHttp's
+  // CertificatePinner). The sender stores this alongside the token at pairing
+  // and validates it on every wss:// connection (TOFU pinning). Optional during
+  // rollout: absent until receivers terminate TLS.
+  optional string cert_fingerprint = 3 [json_name = "certFingerprint"];
+}
+
+// TV → Phone: user tapped Deny or 30s timeout elapsed.
+message PairingDeniedMessage {
+  string type = 1;
+}
+
+// ==================== Heartbeat ====================
+
+message PingMessage {
+  string type = 1;
+}
+
+message PongMessage {
+  string type = 1;
+}
+
+// ==================== Binary Mouse Packet ====================
+// High-frequency mouse events skip JSON and use a compact 9-byte frame:
+//   [0]   MouseEventType (uint8)
+//   [1-4] dx as float32 big-endian
+//   [5-8] dy as float32 big-endian
+// This message is for documentation/tooling only — not sent via protobuf encoding.
+enum MouseEventType {
+  MOUSE_MOVE   = 0;
+  MOUSE_CLICK  = 1;
+  MOUSE_SCROLL = 2;
+  MOUSE_DOWN   = 3;
+  MOUSE_UP     = 4;
+}
