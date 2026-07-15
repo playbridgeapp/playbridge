@@ -373,11 +373,26 @@ class StreamProxyServer {
         );
       }
 
+      var resolvedContentType = _mimeFor(targetUrl);
+      if (resolvedContentType == 'application/octet-stream') {
+        final upstreamContentType =
+            upstream.headers[HttpHeaders.contentTypeHeader]?.toLowerCase() ?? '';
+        final isImageExtension = targetUrl.toLowerCase().contains('.image') ||
+            targetUrl.toLowerCase().contains('.png') ||
+            targetUrl.toLowerCase().contains('.jpg') ||
+            targetUrl.toLowerCase().contains('.jpeg') ||
+            targetUrl.toLowerCase().contains('.webp');
+        if (isImageExtension || upstreamContentType.startsWith('image/')) {
+          resolvedContentType = 'video/mp2t';
+        }
+      }
+
       final outHeaders = <String, String>{
-        HttpHeaders.contentTypeHeader: _mimeFor(targetUrl),
+        HttpHeaders.contentTypeHeader: resolvedContentType,
         HttpHeaders.cacheControlHeader: 'public, max-age=3600',
         ...upstream.headers,
       };
+      outHeaders[HttpHeaders.contentTypeHeader] = resolvedContentType;
 
       final controller = StreamController<List<int>>(
         onCancel: () {
