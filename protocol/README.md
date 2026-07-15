@@ -9,6 +9,8 @@ pointer frame.
   message schemas, field names, JSON types, and binary-frame layout.
 - [`docs/WSS_FLOW.md`](docs/WSS_FLOW.md) defines discovery, TLS pinning, first-time SAS pairing,
   protected credential delivery, reconnection authentication, sequencing, and compatibility rules.
+- [`docs/JSON_PROTOCOL_MIGRATION_PLAN.md`](docs/JSON_PROTOCOL_MIGRATION_PLAN.md) describes the
+  staged migration from protobuf-generated models to native JSON models.
 - [`constants/constants.go`](constants/constants.go) records shared discovery/transport constants.
 
 The protobuf schema and generated bindings remain in the repository for existing consumers. They
