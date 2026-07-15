@@ -1,0 +1,543 @@
+asyncapi: 3.0.0
+info:
+  title: PlayBridge Receiver WebSocket Protocol
+  version: 1.0.0
+  description: |
+    Canonical contract for communication between a PlayBridge sender and receiver.
+    Text frames are UTF-8 JSON. High-frequency pointer input may use the documented
+    9-byte binary frame. Field names and JSON types in this document are normative.
+  license:
+    name: GPL-3.0
+    url: https://www.gnu.org/licenses/gpl-3.0.html
+defaultContentType: application/json
+servers:
+  discoveredReceiver:
+    host: '{host}:{port}'
+    pathname: /
+    protocol: wss
+    description: Receiver discovered over mDNS or entered manually.
+    variables:
+      host:
+        default: 192.0.2.1
+      port:
+        default: '8765'
+channels:
+  receiverSocket:
+    address: /
+    description: One authenticated sender-to-receiver session.
+    messages:
+      senderText:
+        $ref: '#/components/messages/SenderTextFrame'
+      receiverText:
+        $ref: '#/components/messages/ReceiverTextFrame'
+      pointerBinary:
+        $ref: '#/components/messages/PointerBinaryFrame'
+operations:
+  sendToReceiver:
+    action: send
+    channel:
+      $ref: '#/channels/receiverSocket'
+    summary: Frames sent by a sender to a receiver.
+    messages:
+      - $ref: '#/channels/receiverSocket/messages/senderText'
+      - $ref: '#/channels/receiverSocket/messages/pointerBinary'
+  receiveFromReceiver:
+    action: receive
+    channel:
+      $ref: '#/channels/receiverSocket'
+    summary: Frames sent by a receiver to a sender.
+    messages:
+      - $ref: '#/channels/receiverSocket/messages/receiverText'
+components:
+  messages:
+    SenderTextFrame:
+      name: SenderTextFrame
+      title: Sender to receiver JSON frame
+      payload:
+        $ref: '#/components/schemas/SenderFrame'
+    ReceiverTextFrame:
+      name: ReceiverTextFrame
+      title: Receiver to sender JSON frame
+      payload:
+        $ref: '#/components/schemas/ReceiverFrame'
+    PointerBinaryFrame:
+      name: PointerBinaryFrame
+      title: Compact pointer event
+      contentType: application/octet-stream
+      description: |
+        Exactly 9 bytes: byte 0 is event type (0 move, 1 click, 2 scroll,
+        3 down, 4 up); bytes 1..4 are dx as IEEE-754 float32 big-endian;
+        bytes 5..8 are dy as IEEE-754 float32 big-endian.
+      payload:
+        type: string
+        format: binary
+  schemas:
+    SenderFrame:
+      oneOf:
+        - $ref: '#/components/schemas/Ping'
+        - $ref: '#/components/schemas/Auth'
+        - $ref: '#/components/schemas/PairingRequest'
+        - $ref: '#/components/schemas/PairingCommit'
+        - $ref: '#/components/schemas/PairingReveal'
+        - $ref: '#/components/schemas/PairingConfirmation'
+        - $ref: '#/components/schemas/PlaylistCommand'
+        - $ref: '#/components/schemas/QueueAddCommand'
+        - $ref: '#/components/schemas/PlaylistJumpCommand'
+        - $ref: '#/components/schemas/ControlCommand'
+        - $ref: '#/components/schemas/RemoteCommand'
+        - $ref: '#/components/schemas/MouseCommand'
+        - $ref: '#/components/schemas/BrowserCommand'
+        - $ref: '#/components/schemas/BrowserControlCommand'
+        - $ref: '#/components/schemas/ContextQueryCommand'
+        - $ref: '#/components/schemas/UserScript'
+        - $ref: '#/components/schemas/UserScriptQuery'
+        - $ref: '#/components/schemas/UserAgent'
+        - $ref: '#/components/schemas/UserAgentQuery'
+    ReceiverFrame:
+      oneOf:
+        - $ref: '#/components/schemas/Pong'
+        - $ref: '#/components/schemas/PairingChallenge'
+        - $ref: '#/components/schemas/PairingApproved'
+        - $ref: '#/components/schemas/PairingDenied'
+        - $ref: '#/components/schemas/AuthResponse'
+        - $ref: '#/components/schemas/Status'
+        - $ref: '#/components/schemas/Context'
+        - $ref: '#/components/schemas/PlaylistStatus'
+        - $ref: '#/components/schemas/Tracks'
+        - $ref: '#/components/schemas/PlayerSettings'
+        - $ref: '#/components/schemas/UserScripts'
+        - $ref: '#/components/schemas/UserAgents'
+    Ping:
+      type: object
+      required: [type]
+      properties:
+        type: { const: ping }
+      additionalProperties: false
+    Pong:
+      type: object
+      required: [type]
+      properties:
+        type: { const: pong }
+      additionalProperties: false
+    Auth:
+      type: object
+      required: [type, token]
+      properties:
+        type: { const: auth }
+        token: { type: string, minLength: 1, writeOnly: true }
+      additionalProperties: false
+    AuthResponse:
+      type: object
+      required: [type, success]
+      properties:
+        type: { const: auth_response }
+        success: { type: boolean }
+        token: { type: string, minLength: 1, writeOnly: true }
+        certFingerprint: { $ref: '#/components/schemas/SpkiPin' }
+        players:
+          type: array
+          items: { type: string }
+        browsers:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+    PairingRequest:
+      deprecated: true
+      description: Legacy pre-SAS request. New senders use pairing_commit.
+      type: object
+      required: [type, deviceName, deviceUUID]
+      properties:
+        type: { const: pairing_request }
+        deviceName: { type: string, minLength: 1 }
+        deviceUUID: { type: string, minLength: 1 }
+      additionalProperties: false
+    PairingCommit:
+      type: object
+      required: [type, commit, deviceName, deviceUUID]
+      properties:
+        type: { const: pairing_commit }
+        commit: { $ref: '#/components/schemas/Base64Sha256' }
+        deviceName: { type: string, minLength: 1 }
+        deviceUUID: { type: string, minLength: 1 }
+      additionalProperties: false
+    PairingChallenge:
+      type: object
+      required: [type, tvEphPub, nonceT]
+      properties:
+        type: { const: pairing_challenge }
+        tvEphPub: { $ref: '#/components/schemas/Base64X25519Key' }
+        nonceT: { $ref: '#/components/schemas/Base64Nonce16' }
+      additionalProperties: false
+    PairingReveal:
+      type: object
+      required: [type, senderEphPub, nonceS]
+      properties:
+        type: { const: pairing_reveal }
+        senderEphPub: { $ref: '#/components/schemas/Base64X25519Key' }
+        nonceS: { $ref: '#/components/schemas/Base64Nonce16' }
+      additionalProperties: false
+    PairingConfirmation:
+      type: object
+      required: [type, mac]
+      properties:
+        type: { const: pairing_confirmation }
+        mac: { $ref: '#/components/schemas/Base64Sha256' }
+      additionalProperties: false
+    PairingApproved:
+      description: Protected credentials. Decrypt CredentialBundle as specified in docs/WSS_FLOW.md.
+      type: object
+      required: [type, nonce, ciphertext]
+      properties:
+        type: { const: pairing_approved }
+        nonce:
+          type: string
+          contentEncoding: base64
+          description: 12-byte AES-GCM nonce.
+        ciphertext:
+          type: string
+          contentEncoding: base64
+          description: AES-256-GCM ciphertext followed by its 16-byte tag.
+      additionalProperties: false
+    PairingDenied:
+      type: object
+      required: [type]
+      properties:
+        type: { const: pairing_denied }
+      additionalProperties: false
+    CredentialBundle:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string, minLength: 1, writeOnly: true }
+        certFingerprint: { $ref: '#/components/schemas/SpkiPin' }
+        players:
+          type: array
+          items: { type: string }
+        browsers:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+    CommandEnvelope:
+      type: object
+      required: [type, action]
+      properties:
+        type: { const: command }
+        action: { type: string }
+        payload: { type: object }
+    PlaylistCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: playlist }
+            payload: { $ref: '#/components/schemas/PlaylistPayload' }
+    QueueAddCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: queue_add }
+            payload:
+              type: object
+              required: [item]
+              properties:
+                item: { $ref: '#/components/schemas/PlayPayload' }
+              additionalProperties: false
+    PlaylistJumpCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: playlist_jump }
+            payload:
+              type: object
+              required: [index]
+              properties:
+                index: { type: integer, minimum: 0 }
+              additionalProperties: false
+    ControlCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: control }
+            payload:
+              type: object
+              required: [command]
+              properties:
+                command:
+                  type: string
+                  description: |
+                    Transport: toggle, play, pause, stop, seek_back, seek_forward,
+                    seek_to:<milliseconds>, loop_on, loop_off. Player configuration:
+                    speed:<number>, scaling:<mode>, audio_boost, sub_offset:<milliseconds>,
+                    switch_player:<engine>. Tracks: audio_track:<id>, sub_track:<id>,
+                    add_subtitle:<url>.
+              additionalProperties: false
+    RemoteCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: remote }
+            payload:
+              type: object
+              required: [key]
+              properties:
+                key:
+                  type: string
+                  description: dpad_up/down/left/right/center, back, home, volume_up/down, or mute.
+              additionalProperties: false
+    MouseCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: mouse }
+            payload:
+              type: object
+              required: [event]
+              properties:
+                event: { enum: [move, click, scroll, down, up] }
+                dx: { type: number, default: 0 }
+                dy: { type: number, default: 0 }
+              additionalProperties: false
+    BrowserCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: browser }
+            payload:
+              type: object
+              required: [url]
+              properties:
+                url: { type: string, format: uri }
+                browserMode: { type: [string, 'null'] }
+                desktopMode: { type: [boolean, 'null'] }
+              additionalProperties: false
+    BrowserControlCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: browser_control }
+            payload:
+              type: object
+              required: [action]
+              properties:
+                action: { enum: [refresh, toggle_ublock] }
+              additionalProperties: false
+    ContextQueryCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          properties:
+            action: { const: context_query }
+    PlayPayload:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, minLength: 1 }
+        title: { type: [string, 'null'] }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          default: {}
+          writeOnly: true
+        contentType: { type: [string, 'null'] }
+        subtitles:
+          type: array
+          items: { type: string, format: uri }
+          default: []
+        detectedBy: { type: [string, 'null'] }
+        playerMode: { type: [string, 'null'] }
+        preferredAudioLanguage: { type: [string, 'null'] }
+        preferredSubtitleLanguage: { type: [string, 'null'] }
+        defaultVideoQuality: { type: [string, 'null'] }
+        maxBitrateCapMbps: { type: [number, 'null'], exclusiveMinimum: 0 }
+        visualMetadata:
+          oneOf:
+            - $ref: '#/components/schemas/VisualMetadata'
+            - type: 'null'
+        bingeGroup: { type: [string, 'null'] }
+        startPositionMs: { type: [integer, 'null'], minimum: 0 }
+      additionalProperties: false
+    PlaylistPayload:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/PlayPayload' }
+        startIndex: { type: integer, minimum: 0, default: 0 }
+        visualMetadata:
+          oneOf:
+            - $ref: '#/components/schemas/VisualMetadata'
+            - type: 'null'
+      additionalProperties: false
+    VisualMetadata:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        year: { type: [string, 'null'] }
+        rating: { type: [string, 'null'] }
+        runtime: { type: [string, 'null'] }
+        overview: { type: [string, 'null'] }
+        genres: { type: array, items: { type: string }, default: [] }
+        cast: { type: array, items: { type: string }, default: [] }
+        director: { type: array, items: { type: string }, default: [] }
+        backdropUrl: { type: [string, 'null'] }
+        posterUrl: { type: [string, 'null'] }
+        logoUrl: { type: [string, 'null'] }
+        season: { type: [integer, 'null'], minimum: 0 }
+        episode: { type: [integer, 'null'], minimum: 0 }
+        episodeTitle: { type: [string, 'null'] }
+        imdbId: { type: [string, 'null'] }
+        tmdbId: { type: [string, 'null'] }
+      additionalProperties: false
+    Status:
+      type: object
+      required: [type, state, position, duration]
+      properties:
+        type: { const: status }
+        state: { enum: [idle, buffering, playing, paused, stopped, ended, error] }
+        position: { type: integer, minimum: 0, description: Milliseconds. }
+        duration: { type: integer, minimum: 0, description: Milliseconds; 0 when unknown or live. }
+        title: { type: [string, 'null'] }
+      additionalProperties: false
+    Context:
+      type: object
+      required: [type, active]
+      properties:
+        type: { const: context }
+        active: { enum: [idle, player, browser] }
+      additionalProperties: false
+    PlaylistStatus:
+      type: object
+      required: [type, items, currentIndex, totalCount]
+      properties:
+        type: { const: playlist_status }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/PlaylistStatusItem' }
+        currentIndex: { type: integer, minimum: 0 }
+        totalCount: { type: integer, minimum: 0 }
+      additionalProperties: false
+    PlaylistStatusItem:
+      type: object
+      required: [index, title]
+      properties:
+        index: { type: integer, minimum: 0 }
+        title: { type: string }
+        season: { type: [integer, 'null'], minimum: 0 }
+        episode: { type: [integer, 'null'], minimum: 0 }
+        imdbId: { type: [string, 'null'] }
+        bingeGroup: { type: [string, 'null'] }
+      additionalProperties: false
+    Tracks:
+      type: object
+      required: [type, audio, subtitle]
+      properties:
+        type: { const: tracks }
+        audio: { type: array, items: { $ref: '#/components/schemas/Track' } }
+        subtitle: { type: array, items: { $ref: '#/components/schemas/Track' } }
+      additionalProperties: false
+    Track:
+      type: object
+      required: [id, name, selected]
+      properties:
+        id: { type: [string, integer] }
+        name: { type: string }
+        selected: { type: boolean }
+        type: { type: [string, 'null'] }
+      additionalProperties: false
+    PlayerSettings:
+      type: object
+      required: [type, speed, scaling, audioBoost, subtitleOffsetMs, engine]
+      properties:
+        type: { const: player_settings }
+        speed: { type: number, exclusiveMinimum: 0 }
+        scaling: { type: string }
+        audioBoost: { type: boolean }
+        subtitleOffsetMs: { type: integer }
+        engine: { type: string }
+      additionalProperties: false
+    UserScript:
+      type: object
+      required: [type, name, content]
+      properties:
+        type: { const: user_script }
+        name: { type: string }
+        content: { type: string, description: Empty content removes the named script. }
+      additionalProperties: false
+    UserScriptQuery:
+      type: object
+      required: [type]
+      properties:
+        type: { const: user_script_query }
+      additionalProperties: false
+    UserScripts:
+      type: object
+      required: [type, names]
+      properties:
+        type: { const: user_scripts }
+        names: { type: array, items: { type: string } }
+      additionalProperties: false
+    UserAgent:
+      type: object
+      required: [type, name, value, save]
+      properties:
+        type: { const: user_agent }
+        name: { type: string }
+        value: { type: string }
+        save: { type: boolean }
+      additionalProperties: false
+    UserAgentQuery:
+      type: object
+      required: [type]
+      properties:
+        type: { const: user_agent_query }
+      additionalProperties: false
+    UserAgents:
+      type: object
+      required: [type, active, entries]
+      properties:
+        type: { const: user_agents }
+        active: { type: string }
+        entries:
+          type: array
+          items:
+            type: object
+            required: [name, value]
+            properties:
+              name: { type: string }
+              value: { type: string }
+            additionalProperties: false
+      additionalProperties: false
+    SpkiPin:
+      type: string
+      pattern: '^sha256/[A-Za-z0-9+/]{43}=$'
+      description: Base64 SHA-256 of DER SubjectPublicKeyInfo, prefixed with sha256/.
+    Base64X25519Key:
+      type: string
+      contentEncoding: base64
+      description: Exactly 32 bytes after decoding.
+    Base64Nonce16:
+      type: string
+      contentEncoding: base64
+      description: Exactly 16 bytes after decoding.
+    Base64Sha256:
+      type: string
+      contentEncoding: base64
+      description: Exactly 32 bytes after decoding.

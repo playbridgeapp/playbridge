@@ -1,0 +1,3 @@
+# Preserve compiler output byte-for-byte; generated Wire/Dart files contain
+# formatter-owned trailing spaces and blank EOF lines.
+generated/** -whitespace

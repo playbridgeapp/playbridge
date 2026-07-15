@@ -1,0 +1,48 @@
+name: Check Protocol Contract
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/protocol_contract.yml"
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - "protocol/**"
+      - ".github/workflows/protocol_contract.yml"
+  workflow_dispatch:
+
+jobs:
+  check-asyncapi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check AsyncAPI structure and references
+        working-directory: protocol
+        run: ruby scripts/check-spec.rb
+
+  check-generated:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install protoc and swift-protobuf
+        run: brew install protobuf swift-protobuf
+
+      - uses: dart-lang/setup-dart@v1
+
+      - name: Install protoc-gen-dart
+        run: dart pub global activate protoc_plugin 22.4.0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Run generate.sh --check
+        working-directory: protocol
+        run: |
+          chmod +x ./generate.sh
+          ./generate.sh --check
