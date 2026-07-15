@@ -54,8 +54,14 @@ Future<void> main(List<String> args) async {
         '[single-instance] running instance could not be activated: '
         '${instanceResult.forwardingError}',
       );
+      exit(1);
     }
-    return;
+
+    // The native Flutter runner has already created its process and window by
+    // the time Dart starts. Returning from main leaves that secondary runner
+    // alive with a blank window, so terminate it after the primary acknowledges
+    // the forwarded launch request.
+    exit(0);
   }
   final instanceCoordinator = instanceResult.coordinator!;
 
