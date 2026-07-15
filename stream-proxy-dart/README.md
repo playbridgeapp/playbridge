@@ -26,7 +26,7 @@ The easiest way to run the stream proxy on a home server (Raspberry Pi, NAS, VPS
 
 ### 1. Prerequisites
 - Docker and Docker Compose installed.
-- Note: The Docker image automatically installs `ffmpeg` and `libavformat-dev` dependencies, enabling the **AVIO FFI fallback out-of-the-box** inside the container.
+- Note: The Docker image installs the `libavformat` runtime and its dependencies, enabling the **AVIO FFI fallback out-of-the-box** without the FFmpeg CLI or development packages.
 
 ### 2. Startup
 To start the proxy, simply run:

@@ -14,13 +14,15 @@ COPY . .
 RUN mkdir -p build && dart compile exe bin/stream_proxy.dart -o build/pb-proxy
 
 # Stage 2: Final minimal run container
-FROM debian:stable-slim
+# Pin Debian so the FFmpeg library ABI remains aligned with the FFI loader.
+FROM debian:13-slim
 
 WORKDIR /app
 
-# Install system dependencies including FFmpeg (which installs libavformat libraries for FFI fallback)
+# Install only the FFmpeg runtime library used by the AVIO FFI fallback.
+# libavformat61 pulls in libavutil and its other runtime dependencies.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ffmpeg libavformat-dev ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates libavformat61 && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the compiled native binary from Stage 1
