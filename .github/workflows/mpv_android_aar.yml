@@ -55,6 +55,14 @@ jobs:
 
       - name: Install native build dependencies
         run: |
+          # The hosted image includes optional Microsoft package feeds. They
+          # are unrelated to this build and have intermittently returned 403,
+          # which makes apt reject otherwise healthy Ubuntu repositories.
+          for source in /etc/apt/sources.list.d/*; do
+            if sudo grep -q 'packages.microsoft.com' "$source"; then
+              sudo rm -f "$source"
+            fi
+          done
           sudo apt-get update
           sudo apt-get install -y autoconf pkgconf libtool ninja-build python3-pip gperf
           sudo pip3 install --break-system-packages meson==1.11.2
