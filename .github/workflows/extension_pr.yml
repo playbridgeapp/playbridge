@@ -58,18 +58,6 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         run: pnpm install --frozen-lockfile
 
-      # esbuild (build) does NOT type-check, so do it explicitly.
-      - name: Type check
+      - name: Run store check
         if: steps.filter.outputs.relevant == 'true'
-        run: pnpm exec tsc --noEmit
-
-      - name: Build
-        if: steps.filter.outputs.relevant == 'true'
-        run: pnpm run build
-
-      # Validate the built add-on the same way AMO will before the release
-      # signing pipeline runs. The build emits dist/firefox + dist/chrome;
-      # lint the Firefox build.
-      - name: Lint extension (web-ext)
-        if: steps.filter.outputs.relevant == 'true'
-        run: npx --yes web-ext lint --source-dir dist/firefox
+        run: pnpm run store:check
