@@ -38,8 +38,8 @@ void main(List<String> args) async {
       Platform.environment['ADDRESS'] ?? parsed['address'] as String;
   final ffmpegPath =
       Platform.environment['FFMPEG_PATH'] ?? parsed['ffmpeg-path'] as String?;
-  final password =
-      Platform.environment['PASSWORD'] ?? parsed['password'] as String?;
+  final password = Platform.environment['PB_PROXY_PASSWORD'] ??
+      parsed['password'] as String?;
 
   if (ffmpegPath != null && ffmpegPath.isNotEmpty) {
     AvioClient.dyldFrameworkPathOverride = ffmpegPath;
@@ -47,7 +47,13 @@ void main(List<String> args) async {
         .writeln('[pb-proxy-cli] Custom FFmpeg library path set: $ffmpegPath');
   }
 
-  final server = StreamProxyServer(password: password);
+  final StreamProxyServer server;
+  try {
+    server = StreamProxyServer(password: password ?? '');
+  } on ArgumentError catch (e) {
+    stderr.writeln('Cannot start proxy: ${e.message}');
+    exit(64);
+  }
 
   // Handle system signals for graceful shutdown
   ProcessSignal.sigint.watch().listen((_) async {

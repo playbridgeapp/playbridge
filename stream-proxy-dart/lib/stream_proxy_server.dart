@@ -30,6 +30,8 @@ class ProxySession {
 }
 
 class StreamProxyServer {
+  static const defaultDockerComposePassword = 'CHANGEME';
+
   final String password;
   HttpServer? _server;
   final Map<String, ProxySession> _sessions = {};
@@ -37,15 +39,21 @@ class StreamProxyServer {
   Timer? _cleanupTimer;
   final _rng = Random.secure();
 
-  StreamProxyServer({String? password})
-      : password = (password != null && password.isNotEmpty)
-            ? password
-            : _generateSecureToken();
+  StreamProxyServer({required String password})
+      : password = _validatePassword(password);
 
-  static String _generateSecureToken() {
-    final rng = Random.secure();
-    final bytes = List<int>.generate(16, (_) => rng.nextInt(256));
-    return base64Url.encode(bytes).replaceAll('=', '');
+  static String _validatePassword(String password) {
+    if (password.trim().isEmpty) {
+      throw ArgumentError(
+          'A non-empty API password is required. Provide one with '
+          '--password <password> or set PB_PROXY_PASSWORD=<password> in the '
+          'environment.');
+    }
+    if (password.trim() == defaultDockerComposePassword) {
+      throw ArgumentError(
+          'The default Docker Compose password is not allowed; set a unique password');
+    }
+    return password;
   }
 
   int get port => _server?.port ?? 0;

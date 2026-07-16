@@ -7,7 +7,7 @@ services:
     environment:
       - PORT=8888
       - ADDRESS=0.0.0.0
-      - PASSWORD=my_secure_proxy_token # Set to enable token auth
+      - PB_PROXY_PASSWORD=CHANGEME
       # - FFMPEG_PATH=/usr/lib/x86_64-linux-gnu # Auto-detected usually
     restart: unless-stopped
     ulimits:
