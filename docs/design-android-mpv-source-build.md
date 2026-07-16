@@ -205,7 +205,7 @@ into the TV app with SHA-256:
 
 The arm64 artifact has passed build and ELF inspection but still needs runtime
 testing on arm64 hardware. The reviewed library and CI changes are published
-through commit `e52d09b` in
+through commit `c2232d0` in
 [playbridgeapp/mpv-android pull request #1](https://github.com/playbridgeapp/mpv-android/pull/1).
 
 The PlayBridge provenance record lives in
