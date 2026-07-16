@@ -29,12 +29,13 @@ class StreamProxyServer {
     // 2. Generate a secure random token for the proxy session
     final rng = Random.secure();
     final randomBytes = List<int>.generate(16, (_) => rng.nextInt(256));
-    _sessionToken = base64Url.encode(randomBytes).replaceAll('=', '');
+    final sessionToken = base64Url.encode(randomBytes).replaceAll('=', '');
+    _sessionToken = sessionToken;
 
     // 3. Start the Shelf server directly in-process
     stdout
         .writeln('[stream-proxy] Starting in-process proxy on port $_port...');
-    _server = proxy.StreamProxyServer(password: _sessionToken);
+    _server = proxy.StreamProxyServer(password: sessionToken);
 
     // Bind to 0.0.0.0 to allow connection from external TV receivers in the same network
     await _server!.start(host: '0.0.0.0', port: _port!);

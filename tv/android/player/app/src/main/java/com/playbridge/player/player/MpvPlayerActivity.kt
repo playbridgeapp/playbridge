@@ -500,6 +500,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     override fun onDestroy() {
+        MPVLib.removeObserver(this)
         if (receiverRegistered) {
             unregisterReceiver(remoteReceiver)
             receiverRegistered = false
