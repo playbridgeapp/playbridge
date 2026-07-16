@@ -63,11 +63,42 @@ jobs:
         cache: pnpm
         cache-dependency-path: extension/pnpm-lock.yaml
 
-    - name: Run store check
+    - name: Install dependencies and build
       if: steps.check_tag.outputs.skipped == 'false'
       run: |
         pnpm install --frozen-lockfile
-        pnpm run store:check
+        pnpm run build
+
+    - name: Install web-ext
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: npm install -g web-ext
+
+    - name: Sign extension via AMO
+      if: steps.check_tag.outputs.skipped == 'false'
+      env:
+        AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+        AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+      run: |
+        # Build now emits dist/firefox and dist/chrome — sign the Firefox build.
+        web-ext sign \
+          --source-dir dist/firefox \
+          --artifacts-dir dist \
+          --channel unlisted \
+          --api-key "$AMO_JWT_ISSUER" \
+          --api-secret "$AMO_JWT_SECRET"
+
+    - name: Rename Firefox output
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        find dist -maxdepth 1 -name "*.xpi" -type f | while read f; do
+          mv "$f" "dist/playbridge-extension-${{ steps.version.outputs.version }}.xpi"
+        done
+
+    - name: Package Chrome zip (for the Chrome Web Store)
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: |
+        # Zip the CONTENTS of dist/chrome so manifest.json sits at the archive root.
+        (cd dist/chrome && zip -r "../playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip" .)
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -76,18 +107,9 @@ jobs:
         AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
-        aws s3 cp artifacts/ \
+        aws s3 cp dist/ \
           s3://${{ secrets.R2_BUCKET }}/extension-release/ \
-          --recursive
-
-    - name: Upload workflow artifacts
-      if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/upload-artifact@v4
-      with:
-        name: playbridge-extension-artifacts-${{ steps.version.outputs.version }}
-        path: extension/artifacts/
-        if-no-files-found: error
-        retention-days: 90
+          --recursive --exclude "*" --include "*.xpi" --include "*.zip"
 
   release:
     needs: build-extension
@@ -124,12 +146,10 @@ jobs:
             <!-- tag: 9f2d8e -->
             **PlayBridge Extension:** v${{ steps.version.outputs.version }}
 
-            | Browser / Target | File | Action |
-            |------------------|------|--------|
-            | Firefox | `playbridge-extension-firefox-${{ steps.version.outputs.version }}.zip` | Submit to Firefox Add-ons (AMO) Developer Hub (Listed) |
-            | Chrome / Edge / Brave | `playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip` | Upload to Chrome Web Store Developer Dashboard |
-            | Firefox Source Code | `playbridge-extension-source-${{ steps.version.outputs.version }}.zip` | Upload to Firefox AMO as the source package for review |
-            | Checksums | `SHA256SUMS.txt` | Verify integrity of released artifacts |
+            | Browser | File | Install |
+            |---------|------|---------|
+            | Firefox | `playbridge-extension-${{ steps.version.outputs.version }}.xpi` | Drag into Firefox, or `about:addons` → Install Add-on From File |
+            | Chrome / Edge / Brave | `playbridge-extension-chrome-${{ steps.version.outputs.version }}.zip` | Unzip, then `chrome://extensions` → Developer mode → Load unpacked (or upload the zip to the Chrome Web Store) |
           files: output/*
           generate_release_notes: false
 
