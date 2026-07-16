@@ -204,18 +204,17 @@ into the TV app with SHA-256:
 ```
 
 The arm64 artifact has passed build and ELF inspection but still needs runtime
-testing on arm64 hardware. The reviewed fork changes are published as commit
-`b3caa4b` in [playbridgeapp/mpv-android pull request #1](https://github.com/playbridgeapp/mpv-android/pull/1).
+testing on arm64 hardware. The reviewed library and CI changes are published
+through commit `e52d09b` in
+[playbridgeapp/mpv-android pull request #1](https://github.com/playbridgeapp/mpv-android/pull/1).
 
-The PlayBridge reproducibility inputs are recorded in
-`tv/android/player/app/libs/mpv-android-build.env`. The dedicated
-`.github/workflows/mpv_android_aar.yml` job checks out the exact fork and
-moving Git dependency revisions, rebuilds armv7 and arm64, verifies that
-`image_png_pipe` is disabled while PNG decoding remains enabled for both
-architectures, and requires the result to be byte-identical to the committed
-AAR. The job is path-filtered for relevant pull requests and pushes, and also
-runs manually and weekly; ordinary Android builds continue consuming the
-committed AAR without rebuilding the native stack.
+The PlayBridge provenance record lives in
+`tv/android/player/app/libs/mpv-android-build.env`. The mpv-android fork owns
+the exact moving dependency revisions, dual-ABI native build, FFmpeg feature
+checks, and AAR/checksum publication. PlayBridge's lightweight
+`.github/workflows/mpv_android_aar.yml` job validates the committed AAR's
+checksum, ABI set, and required libraries without rebuilding the native stack.
+Ordinary Android builds continue consuming that committed artifact.
 
 ## Migration phases
 

@@ -32,7 +32,8 @@ It retains PNG decoding while disabling FFmpeg's `image_png_pipe` demuxer for
 the disguised-PNG MPEG-TS regression. See the
 [Android libmpv AAR fork plan](../../../../../docs/design-android-mpv-source-build.md).
 
-The fork revision, moving native dependency revisions, and expected AAR
-checksum are pinned in `mpv-android-build.env`. The dedicated
-`Verify Android libmpv AAR` workflow rebuilds both ABIs from those inputs and
-requires the generated AAR to be byte-identical to this committed artifact.
+The fork revision and expected AAR checksum are pinned in
+`mpv-android-build.env`. The fork CI owns native dependency pinning, builds and
+verifies both ABIs, and publishes the AAR with its checksum. PlayBridge's
+`Verify Android libmpv Artifact` workflow only checks this committed AAR's
+checksum, ABI set, and required native library contents.

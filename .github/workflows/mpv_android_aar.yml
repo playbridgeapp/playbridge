@@ -1,11 +1,10 @@
-name: Verify Android libmpv AAR
+name: Verify Android libmpv Artifact
 
 on:
   pull_request:
     branches: [ "main" ]
     paths:
       - '.github/workflows/mpv_android_aar.yml'
-      - 'scripts/ci/build-mpv-android-aar.sh'
       - 'scripts/ci/verify-mpv-android-aar.sh'
       - 'tv/android/player/app/libs/mpv-android-build.env'
       - 'tv/android/player/app/libs/mpv-android.aar'
@@ -14,13 +13,10 @@ on:
     branches: [ "main" ]
     paths:
       - '.github/workflows/mpv_android_aar.yml'
-      - 'scripts/ci/build-mpv-android-aar.sh'
       - 'scripts/ci/verify-mpv-android-aar.sh'
       - 'tv/android/player/app/libs/mpv-android-build.env'
       - 'tv/android/player/app/libs/mpv-android.aar'
       - 'tv/android/player/app/libs/README.md'
-  schedule:
-    - cron: '17 6 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -31,60 +27,13 @@ permissions:
   contents: read
 
 jobs:
-  source-build:
-    name: Source build and verify
-    runs-on: ubuntu-24.04
-    timeout-minutes: 240
+  artifact-integrity:
+    name: AAR checksum and ABIs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          java-version: '17'
-          distribution: 'temurin'
-          cache: gradle
-
-      - name: Reclaim native-build disk space
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo rm -rf "$ANDROID_HOME/ndk" "$ANDROID_HOME/ndk-bundle"
-          df -h /
-
-      - name: Install native build dependencies
-        run: |
-          # The hosted image includes optional Microsoft package feeds. They
-          # are unrelated to this build and have intermittently returned 403,
-          # which makes apt reject otherwise healthy Ubuntu repositories.
-          for source in /etc/apt/sources.list.d/*; do
-            if sudo grep -q 'packages.microsoft.com' "$source"; then
-              sudo rm -f "$source"
-            fi
-          done
-          sudo apt-get update
-          sudo apt-get install -y autoconf pkgconf libtool ninja-build python3-pip gperf
-          sudo pip3 install --break-system-packages meson==1.11.2
-
-      - name: Build pinned armv7 and arm64 AAR
-        id: build
-        env:
-          MPV_ANDROID_WORK_DIR: ${{ runner.temp }}/mpv-android-build
-          MPV_ANDROID_BUILD_CORES: '4'
-        run: scripts/ci/build-mpv-android-aar.sh
-
-      - name: Verify source build and committed AAR
-        run: |
-          scripts/ci/verify-mpv-android-aar.sh \
-            "${{ steps.build.outputs.source_dir }}" \
-            "${{ steps.build.outputs.aar_path }}" \
-            tv/android/player/app/libs/mpv-android.aar
-
-      - name: Upload verified AAR
-        uses: actions/upload-artifact@v4
-        with:
-          name: mpv-android-dual-abi
-          path: ${{ steps.build.outputs.aar_path }}
-          if-no-files-found: error
-          retention-days: 7
+      - name: Verify committed AAR checksum and ABIs
+        run: scripts/ci/verify-mpv-android-aar.sh
