@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Looper
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.player.MpvProcess
 import com.playbridge.player.server.ServerService
 
 private const val TAG = "PlayBridgeApp"
@@ -28,10 +29,17 @@ class PlayBridgeApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        val isMpvProcess = MpvProcess.isCurrent(this)
         com.playbridge.shared.SharedContext.init(this)
-        
-        FileLogger.init(this)
+
+        FileLogger.init(this, if (isMpvProcess) "playbridge-mpv.log" else "playbridge.log")
         registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
+
+        if (isMpvProcess) {
+            installMpvProcessCrashHandler()
+            return
+        }
+
         installCrashHandler()
 
         // Preload AdBlocker in background so filters are ready
@@ -39,6 +47,19 @@ class PlayBridgeApplication : Application() {
 
         // Remove any leftover self-update APK from a previous session (cacheDir/updates).
         com.playbridge.player.update.ApkInstaller.cleanupStaleApks(this)
+    }
+
+    private fun installMpvProcessCrashHandler() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            FileLogger.logCrash(thread, throwable)
+            Log.e(TAG, "Crash in private MPV process on thread ${thread.name}", throwable)
+            if (defaultHandler != null) {
+                defaultHandler.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }
+        }
     }
 
 

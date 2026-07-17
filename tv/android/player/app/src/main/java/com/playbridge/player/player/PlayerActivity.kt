@@ -1,8 +1,10 @@
 package com.playbridge.player.player
 
 import android.app.ActivityManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -32,6 +34,22 @@ import android.content.SharedPreferences
 
 abstract class PlayerActivity : ComponentActivity() {
 
+    protected open val playerProcessEngineId: String = "exo"
+    private var playerOwnershipReceiverRegistered = false
+    private val playerOwnershipReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != ACTION_PLAYER_ACTIVITY_CLAIM) return
+            val claimedEngine = intent.getStringExtra(EXTRA_CLAIMED_PLAYER_ENGINE) ?: return
+            if (claimedEngine == playerProcessEngineId || isFinishing) return
+
+            FileLogger.i(
+                "PlayerActivity",
+                "$claimedEngine player claimed playback; stopping $playerProcessEngineId activity",
+            )
+            requestStop()
+        }
+    }
+
     protected lateinit var stillWatchingController: StillWatchingController
         private set
     private var stillWatchingControls: PlayerControlsViewModel? = null
@@ -50,7 +68,7 @@ abstract class PlayerActivity : ComponentActivity() {
                 controls.setPlaying(true)
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             },
-            stopPlayback = { finish() },
+            stopPlayback = { requestStop() },
             onPromptChanged = { prompting ->
                 if (prompting || controls.controlsState.value.isPlaying) {
                     window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -195,7 +213,7 @@ abstract class PlayerActivity : ComponentActivity() {
                 put("subtitleOffsetMs", s.subtitleDelayMs)
                 put("engine", s.engineType)
             }.toString()
-            ServerService.broadcastStatus(json)
+            ServerService.broadcastStatus(this, json)
         } catch (e: Exception) {
             FileLogger.e("PlayerActivity", "Failed to broadcast player settings: ${e.message}")
         }
@@ -229,7 +247,7 @@ abstract class PlayerActivity : ComponentActivity() {
                 put("duration", duration)
                 if (title != null) put("title", title)
             }.toString()
-            ServerService.broadcastStatus(json)
+            ServerService.broadcastStatus(this, json)
         } catch (e: Exception) {
             FileLogger.e("PlayerActivity", "Failed to broadcast status: ${e.message}")
         }
@@ -252,7 +270,7 @@ abstract class PlayerActivity : ComponentActivity() {
                 put("audio", toArray(audio))
                 put("subtitle", toArray(subtitles))
             }.toString()
-            ServerService.broadcastStatus(json)
+            ServerService.broadcastStatus(this, json)
         } catch (e: Exception) {
             FileLogger.e("PlayerActivity", "Failed to broadcast tracks: ${e.message}")
         }
@@ -284,7 +302,7 @@ abstract class PlayerActivity : ComponentActivity() {
                 put("currentIndex", if (items.isEmpty()) 0 else index)
                 put("totalCount", items.size)
             }.toString()
-            ServerService.broadcastPlaylistStatus(statusJson)
+            ServerService.broadcastPlaylistStatus(this, statusJson)
         } catch (e: Exception) {
             FileLogger.e("PlayerActivity", "Failed to broadcast playlist status: ${e.message}")
         }
@@ -300,7 +318,30 @@ abstract class PlayerActivity : ComponentActivity() {
     abstract fun getVideoSurfaceView(): android.view.SurfaceView?
     /** Stop current playback and clear the video surface (make it black) for a smooth transition. */
     abstract fun stopPlayback()
+    /** End the player session. Engines with asynchronous teardown may defer [finish]. */
+    open fun requestStop() {
+        finish()
+    }
+    /**
+     * Whether a duplicate launch of this exact Activity class should keep the existing
+     * instance alive. Native engines can override this to avoid overlapping teardown and
+     * initialization while the duplicate forwards its intent to the existing owner.
+     */
+    protected open fun retainExistingInstanceOnDuplicateLaunch(): Boolean = false
+    /**
+     * Complete a prepared cross-engine switch. Native engines may override this to stop
+     * playback and release decoder resources before the next Activity is launched.
+     */
+    protected open fun launchPlayerSwitch(intent: Intent) {
+        startActivity(intent)
+        finish()
+    }
     protected open fun getPlayerProgressManager(): ProgressManager? = null
+
+    protected fun isCommandForThisPlayer(intent: Intent): Boolean {
+        val targetEngine = intent.getStringExtra(ServerService.EXTRA_TARGET_PLAYER_ENGINE)
+        return targetEngine == null || targetEngine == playerProcessEngineId
+    }
 
     // Shared playback configuration
     var defaultVideoQuality: String? = null      // e.g. "720p", "1080p", "2160p"
@@ -330,14 +371,27 @@ abstract class PlayerActivity : ComponentActivity() {
         // returns to the home/library screen rather than a previously-used player.
         current?.get()?.let { prev ->
             if (prev !== this && !prev.isFinishing) {
+                if (prev::class.java == this::class.java && retainExistingInstanceOnDuplicateLaunch()) {
+                    FileLogger.w(
+                        "PlayerActivity",
+                        "Rejecting duplicate ${this::class.java.simpleName}; keeping the existing instance"
+                    )
+                    finish()
+                    return
+                }
                 prev.finish()
             }
         }
         current = java.lang.ref.WeakReference(this)
+        registerPlayerOwnershipReceiver()
+        sendBroadcast(Intent(ACTION_PLAYER_ACTIVITY_CLAIM).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_CLAIMED_PLAYER_ENGINE, playerProcessEngineId)
+        })
         // Mark the server context as "player" so the request_pairing guard works regardless
         // of whether this activity was launched by handleCommand() (phone cast) or directly
         // from the TV's history/favourites screen (which bypasses handleCommand entirely).
-        ServerService.notifyContextPlayer()
+        ServerService.notifyContextPlayer(this, playerProcessEngineId)
 
         // Load refresh rate matching setting
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
@@ -382,7 +436,7 @@ abstract class PlayerActivity : ComponentActivity() {
         super.onResume()
         // Reclaim the server context for the player whenever we're foregrounded (e.g.
         // after returning from a browser launched on top), so context_query is correct.
-        ServerService.notifyContextPlayer()
+        ServerService.notifyContextPlayer(this, playerProcessEngineId)
     }
 
     override fun onDestroy() {
@@ -399,9 +453,24 @@ abstract class PlayerActivity : ComponentActivity() {
             // If we reset here while a new player is already in `current`, activeContext would
             // become "idle" during the new session, letting request_pairing open PairingScreen
             // on top of the new video and killing it.
-            ServerService.notifyContextIdle()
+            ServerService.notifyContextIdle(this, playerProcessEngineId)
+        }
+        if (playerOwnershipReceiverRegistered) {
+            runCatching { unregisterReceiver(playerOwnershipReceiver) }
+            playerOwnershipReceiverRegistered = false
         }
         super.onDestroy()
+    }
+
+    private fun registerPlayerOwnershipReceiver() {
+        val filter = IntentFilter(ACTION_PLAYER_ACTIVITY_CLAIM)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(playerOwnershipReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(playerOwnershipReceiver, filter)
+        }
+        playerOwnershipReceiverRegistered = true
     }
 
     override fun onStart() {
@@ -734,6 +803,10 @@ abstract class PlayerActivity : ComponentActivity() {
             PlaylistStore.currentPlaylist = queueItems
             newIntent.putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
             newIntent.putExtra(ServerService.EXTRA_PLAYLIST_INDEX, queueIndex)
+            newIntent.putExtra(
+                ServerService.EXTRA_PLAYLIST,
+                PlayerLauncher.historyPayloadJson(queueItems, queueIndex),
+            )
 
             // Carry the current item's visual metadata across the switch.
             val currentItem = queueItems.getOrNull(queueIndex)
@@ -746,6 +819,7 @@ abstract class PlayerActivity : ComponentActivity() {
         } else {
             newIntent.removeExtra(ServerService.EXTRA_IS_PLAYLIST)
             newIntent.removeExtra(ServerService.EXTRA_PLAYLIST_INDEX)
+            newIntent.removeExtra(ServerService.EXTRA_PLAYLIST)
         }
 
         newIntent.putExtra("extra_start_position", currentPosition)
@@ -757,13 +831,15 @@ abstract class PlayerActivity : ComponentActivity() {
         // Clear the explicit package/component if it was set by the original intent
         newIntent.component = android.content.ComponentName(this, activityClass)
 
-        startActivity(newIntent)
-        finish()
+        launchPlayerSwitch(newIntent)
     }
 
     abstract fun addExternalSubtitle(url: String)
 
     companion object {
+        private const val ACTION_PLAYER_ACTIVITY_CLAIM =
+            "com.playbridge.player.ACTION_PLAYER_ACTIVITY_CLAIM"
+        private const val EXTRA_CLAIMED_PLAYER_ENGINE = "claimed_player_engine"
         @Volatile
         private var current: java.lang.ref.WeakReference<PlayerActivity>? = null
 

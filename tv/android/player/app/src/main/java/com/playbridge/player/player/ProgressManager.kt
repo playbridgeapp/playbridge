@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.LifecycleCoroutineScope
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -178,7 +179,11 @@ class ProgressManager(
                 }
             }
         } else {
-            Log.d(TAG, "Not saving: URL=$url, payload=${payloadJson != null}, Duration=$duration, Pos=$position")
+            Log.d(
+                TAG,
+                "Not saving: URL=${redactUrlForLog(url)}, payload=${payloadJson != null}, " +
+                    "Duration=$duration, Pos=$position",
+            )
         }
     }
 }

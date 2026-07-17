@@ -1,6 +1,7 @@
 package com.playbridge.player.player
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -38,7 +39,7 @@ class SubtitleManager(
     }
 
     fun loadSubtitle(url: String, headers: Map<String, String>? = null) {
-        Log.i(TAG, "Loading subtitle from: $url")
+        Log.i(TAG, "Loading subtitle from: ${redactUrlForLog(url)}")
         subtitleJob?.cancel()
         syncJob?.cancel()
         lastCueText = null

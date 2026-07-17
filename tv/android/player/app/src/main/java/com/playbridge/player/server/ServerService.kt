@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.player.MpvProcess
 import androidx.core.app.NotificationCompat
 import com.playbridge.player.MainActivity
 import com.playbridge.player.R
@@ -31,6 +32,7 @@ private const val CHANNEL_ID = "playbridge_server"
 private const val CHANNEL_ID_LAUNCH = "playbridge_launch"
 private const val NOTIFICATION_ID = 1
 private const val NOTIFICATION_ID_LAUNCH = 2
+private const val MPV_PROCESS_RELEASE_GRACE_MS = 500L
 
 // browser_prefs keys for the TV browser User-Agent override (see IncomingMessage.UserAgent).
 private const val KEY_ACTIVE_UA_NAME = "active_user_agent_name"
@@ -49,6 +51,11 @@ class ServerService : Service() {
     // collector (handleMessage routes Remote/Mouse/BrowserControl on it).
     @Volatile
     private var activeContext: String = "idle" // "player", "browser", or "idle"
+    @Volatile
+    private var activePlayerEngine: String? = null
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var pendingPlayerLaunchAfterMpvExit: Runnable? = null
+    private var mpvProcessReleaseDeadlineMs = 0L
 
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
@@ -74,6 +81,60 @@ class ServerService : Service() {
         }
     }
 
+    private val playerProcessEventReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: android.content.Context, intent: Intent) {
+            if (intent.action != ACTION_PLAYER_PROCESS_EVENT) return
+            when (intent.getStringExtra(EXTRA_PLAYER_PROCESS_EVENT)) {
+                PLAYER_PROCESS_EVENT_STATUS -> intent.getStringExtra(EXTRA_PLAYER_STATUS_JSON)
+                    ?.let(::broadcastPlaylistStatusInternal)
+                PLAYER_PROCESS_EVENT_CONTEXT_PLAYER -> setContextPlayerInternal(
+                    intent.getStringExtra(EXTRA_TARGET_PLAYER_ENGINE),
+                )
+                PLAYER_PROCESS_EVENT_CONTEXT_IDLE -> setContextIdleInternal(
+                    onlyIfOneOf = setOf("player"),
+                    onlyIfEngine = intent.getStringExtra(EXTRA_TARGET_PLAYER_ENGINE),
+                )
+                PLAYER_PROCESS_EVENT_LAUNCH_PLAYER -> playerLaunchIntent(intent)?.let {
+                    launchAfterMpvProcessExit(
+                        it,
+                        "Launching replacement from private MPV process",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun launchAfterMpvProcessExit(intent: Intent, reason: String) {
+        if (MpvProcess.terminateRunningProcess(this)) {
+            mpvProcessReleaseDeadlineMs = android.os.SystemClock.elapsedRealtime() +
+                MPV_PROCESS_RELEASE_GRACE_MS
+        }
+
+        pendingPlayerLaunchAfterMpvExit?.let(mainHandler::removeCallbacks)
+        val launch = Runnable {
+            pendingPlayerLaunchAfterMpvExit = null
+            if (_staticInstance === this) launchActivityFromBackground(intent, reason)
+        }
+        pendingPlayerLaunchAfterMpvExit = launch
+
+        val delayMs = (mpvProcessReleaseDeadlineMs - android.os.SystemClock.elapsedRealtime())
+            .coerceAtLeast(0L)
+        if (delayMs == 0L) {
+            launch.run()
+        } else {
+            FileLogger.i(TAG, "Waiting ${delayMs}ms for private MPV process codec cleanup")
+            mainHandler.postDelayed(launch, delayMs)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun playerLaunchIntent(intent: Intent): Intent? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(EXTRA_PLAYER_LAUNCH_INTENT, Intent::class.java)
+        } else {
+            intent.getParcelableExtra(EXTRA_PLAYER_LAUNCH_INTENT)
+        }
+
     override fun onCreate() {
         super.onCreate()
         _staticInstance = this
@@ -97,6 +158,14 @@ class ServerService : Service() {
             )
         } else {
             registerReceiver(contextIdleReceiver, filter, contextIdlePermission, null)
+        }
+
+        val playerProcessFilter = android.content.IntentFilter(ACTION_PLAYER_PROCESS_EVENT)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(playerProcessEventReceiver, playerProcessFilter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(playerProcessEventReceiver, playerProcessFilter)
         }
     }
 
@@ -429,15 +498,18 @@ class ServerService : Service() {
             }
             is IncomingMessage.Control -> {
                 FileLogger.i(TAG, "Control command: ${msg.payload.command}")
+                val targetPlayerEngine = activePlayerEngine
                 if (msg.payload.command == "stop") {
                     activeContext = "idle"
                     broadcastContext()
                 }
                 val intent = Intent(ACTION_CONTROL).apply {
                     putExtra(EXTRA_COMMAND, msg.payload.command)
+                    putExtra(EXTRA_TARGET_PLAYER_ENGINE, targetPlayerEngine)
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
+                if (msg.payload.command == "stop") activePlayerEngine = null
             }
             is IncomingMessage.Remote -> {
                 FileLogger.i(TAG, "Remote command: ${msg.payload.key}")
@@ -464,6 +536,7 @@ class ServerService : Service() {
                 } else {
                     val intent = Intent(ACTION_REMOTE).apply {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
+                        putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
                         setPackage(packageName)
                     }
                     sendBroadcast(intent)
@@ -482,6 +555,7 @@ class ServerService : Service() {
                         sendBroadcast(intent)
                     }
                     "browser", "player" -> {
+                        intent.putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
                         intent.setPackage(packageName)
                         sendBroadcast(intent)
                     }
@@ -513,7 +587,10 @@ class ServerService : Service() {
                 // Ask the running player to re-broadcast playlist/tracks/status so a
                 // freshly (re)connected phone can repopulate its remote screen — these
                 // are otherwise only sent on change events.
-                sendBroadcast(Intent(ACTION_RESYNC).setPackage(packageName))
+                sendBroadcast(Intent(ACTION_RESYNC).apply {
+                    setPackage(packageName)
+                    putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
+                })
             }
             is IncomingMessage.Playlist -> {
                 val payload = msg.payload
@@ -530,8 +607,23 @@ class ServerService : Service() {
                 // intent from the stored payload — see PlayerLauncher.
                 val playerIntent = com.playbridge.player.player.PlayerLauncher
                     .buildPlayerIntent(this, payload, tvPref)
+                val previousPlayerEngine = activePlayerEngine
+                val targetPlayerEngine = if (
+                    playerIntent.component?.className ==
+                    com.playbridge.player.player.MpvPlayerActivity::class.java.name
+                ) {
+                    "mpv"
+                } else {
+                    "exo"
+                }
+                activePlayerEngine = targetPlayerEngine
                 pendingQueueItems.clear() // discard any stale items from a previous session
-                launchActivityFromBackground(playerIntent, "Playing playlist (${payload.items.size} items)")
+                val launchReason = "Playing playlist (${payload.items.size} items)"
+                if (previousPlayerEngine == "mpv" && targetPlayerEngine == "exo") {
+                    launchAfterMpvProcessExit(playerIntent, launchReason)
+                } else {
+                    launchActivityFromBackground(playerIntent, launchReason)
+                }
             }
             is IncomingMessage.QueueAdd -> {
                 val item = msg.payload.item
@@ -540,13 +632,17 @@ class ServerService : Service() {
                     // Buffer the item so the player can drain it even if its receiver isn't registered yet.
                     // The broadcast acts only as a wake signal — the player always reads from pendingQueueItems.
                     pendingQueueItems.add(item)
-                    sendBroadcast(Intent(ACTION_QUEUE_ADD).setPackage(packageName))
+                    sendBroadcast(Intent(ACTION_QUEUE_ADD).apply {
+                        setPackage(packageName)
+                        putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
+                    })
                 }
             }
             is IncomingMessage.PlaylistJump -> {
                 FileLogger.i(TAG, "=== PLAYLIST_JUMP === index: ${msg.payload.index}")
                 val intent = Intent(ACTION_PLAYLIST_JUMP).apply {
                     putExtra(EXTRA_PLAYLIST_JUMP_INDEX, msg.payload.index)
+                    putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
@@ -707,10 +803,11 @@ class ServerService : Service() {
         }
     }
 
-    internal fun setContextPlayerInternal() {
+    internal fun setContextPlayerInternal(engine: String? = null) {
         activeContext = "player"
+        if (engine != null) activePlayerEngine = engine
         broadcastContext()
-        FileLogger.d(TAG, "activeContext set to player by activity lifecycle")
+        FileLogger.d(TAG, "activeContext set to player by activity lifecycle (engine=${activePlayerEngine ?: "unknown"})")
     }
 
     internal fun setContextBrowserInternal() {
@@ -725,12 +822,23 @@ class ServerService : Service() {
      * place (e.g. browser->player handoff: the browser's onDestroy must not flip the
      * now-playing context back to idle). Pass null to force-reset unconditionally.
      */
-    internal fun setContextIdleInternal(onlyIfOneOf: Set<String>? = null) {
+    internal fun setContextIdleInternal(
+        onlyIfOneOf: Set<String>? = null,
+        onlyIfEngine: String? = null,
+    ) {
         if (onlyIfOneOf != null && activeContext !in onlyIfOneOf) {
             FileLogger.d(TAG, "idle reset skipped; activeContext=$activeContext not owned by caller")
             return
         }
+        if (onlyIfEngine != null && activePlayerEngine != onlyIfEngine) {
+            FileLogger.d(
+                TAG,
+                "idle reset skipped; activePlayerEngine=${activePlayerEngine ?: "none"} not owned by $onlyIfEngine",
+            )
+            return
+        }
         activeContext = "idle"
+        activePlayerEngine = null
         broadcastContext()
         FileLogger.d(TAG, "activeContext reset to idle by activity lifecycle")
     }
@@ -888,6 +996,9 @@ class ServerService : Service() {
         // check: a replacement instance may already have registered itself in onCreate.
         if (_staticInstance === this) _staticInstance = null
         try { unregisterReceiver(contextIdleReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(playerProcessEventReceiver) } catch (_: Exception) {}
+        pendingPlayerLaunchAfterMpvExit?.let(mainHandler::removeCallbacks)
+        pendingPlayerLaunchAfterMpvExit = null
         if (registrationListener != null) {
             try {
                 nsdManager.unregisterService(registrationListener)
@@ -956,6 +1067,15 @@ class ServerService : Service() {
         // Sent (as an explicit broadcast to this package) by the tv/browser app when its
         // BrowserActivity is destroyed, so ServerService can reset activeContext to "idle".
         const val ACTION_CONTEXT_IDLE = "com.playbridge.player.ACTION_CONTEXT_IDLE"
+        const val ACTION_PLAYER_PROCESS_EVENT = "com.playbridge.player.ACTION_PLAYER_PROCESS_EVENT"
+        const val EXTRA_PLAYER_PROCESS_EVENT = "player_process_event"
+        const val EXTRA_PLAYER_STATUS_JSON = "player_status_json"
+        const val EXTRA_PLAYER_LAUNCH_INTENT = "player_launch_intent"
+        const val EXTRA_TARGET_PLAYER_ENGINE = "target_player_engine"
+        private const val PLAYER_PROCESS_EVENT_STATUS = "status"
+        private const val PLAYER_PROCESS_EVENT_CONTEXT_PLAYER = "context_player"
+        private const val PLAYER_PROCESS_EVENT_CONTEXT_IDLE = "context_idle"
+        private const val PLAYER_PROCESS_EVENT_LAUNCH_PLAYER = "launch_player"
         const val EXTRA_QUEUE_ITEM_URL = "queue_item_url"
         const val EXTRA_QUEUE_ITEM_TITLE = "queue_item_title"
         const val EXTRA_QUEUE_ITEM_CONTENT_TYPE = "queue_item_content_type"
@@ -999,12 +1119,30 @@ class ServerService : Service() {
             _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
         }
 
+        fun broadcastPlaylistStatus(context: Context, statusJson: String) {
+            val instance = _staticInstance
+            if (instance != null) {
+                instance.broadcastPlaylistStatusInternal(statusJson)
+            } else {
+                sendPlayerProcessEvent(context, PLAYER_PROCESS_EVENT_STATUS, statusJson = statusJson)
+            }
+        }
+
         /**
          * Broadcast playback status (state/position/duration/title) to the phone
          * from a player activity. Reuses the generic JSON forwarder.
          */
         fun broadcastStatus(statusJson: String) {
             _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
+        }
+
+        fun broadcastStatus(context: Context, statusJson: String) {
+            val instance = _staticInstance
+            if (instance != null) {
+                instance.broadcastPlaylistStatusInternal(statusJson)
+            } else {
+                sendPlayerProcessEvent(context, PLAYER_PROCESS_EVENT_STATUS, statusJson = statusJson)
+            }
         }
 
         /**
@@ -1015,6 +1153,19 @@ class ServerService : Service() {
          */
         fun notifyContextPlayer() {
             _staticInstance?.setContextPlayerInternal()
+        }
+
+        fun notifyContextPlayer(context: Context, engine: String) {
+            val instance = _staticInstance
+            if (instance != null) {
+                instance.setContextPlayerInternal(engine)
+            } else {
+                sendPlayerProcessEvent(
+                    context,
+                    PLAYER_PROCESS_EVENT_CONTEXT_PLAYER,
+                    engine = engine,
+                )
+            }
         }
 
         /** Mark activeContext as "browser" — called from the internal WebView's onResume. */
@@ -1034,6 +1185,50 @@ class ServerService : Service() {
             _staticInstance?.setContextIdleInternal(setOf("player"))
         }
 
+        fun notifyContextIdle(context: Context, engine: String) {
+            val instance = _staticInstance
+            if (instance != null) {
+                instance.setContextIdleInternal(setOf("player"), onlyIfEngine = engine)
+            } else {
+                sendPlayerProcessEvent(
+                    context,
+                    PLAYER_PROCESS_EVENT_CONTEXT_IDLE,
+                    engine = engine,
+                )
+            }
+        }
+
+        fun launchPlayerFromPrivateProcess(context: Context, intent: Intent) {
+            val instance = _staticInstance
+            if (instance != null) {
+                instance.launchActivityFromBackground(intent, "Launching replacement player")
+            } else {
+                sendPlayerProcessEvent(
+                    context,
+                    PLAYER_PROCESS_EVENT_LAUNCH_PLAYER,
+                    playerLaunchIntent = intent,
+                )
+            }
+        }
+
+        private fun sendPlayerProcessEvent(
+            context: Context,
+            event: String,
+            statusJson: String? = null,
+            engine: String? = null,
+            playerLaunchIntent: Intent? = null,
+        ) {
+            context.applicationContext.sendBroadcast(
+                Intent(ACTION_PLAYER_PROCESS_EVENT).apply {
+                    setPackage(context.packageName)
+                    putExtra(EXTRA_PLAYER_PROCESS_EVENT, event)
+                    statusJson?.let { putExtra(EXTRA_PLAYER_STATUS_JSON, it) }
+                    engine?.let { putExtra(EXTRA_TARGET_PLAYER_ENGINE, it) }
+                    playerLaunchIntent?.let { putExtra(EXTRA_PLAYER_LAUNCH_INTENT, it) }
+                },
+            )
+        }
+
         @Volatile
         private var _staticInstance: ServerService? = null
 
@@ -1050,6 +1245,11 @@ class ServerService : Service() {
             val items = mutableListOf<playbridge.PlayPayload>()
             while (true) items.add(pendingQueueItems.poll() ?: break)
             return items
+        }
+
+        fun drainPendingQueueItems(context: Context): List<playbridge.PlayPayload> {
+            if (_staticInstance != null) return drainPendingQueueItems()
+            return PlayerProcessBridgeProvider.drainPendingQueue(context)
         }
     }
 }

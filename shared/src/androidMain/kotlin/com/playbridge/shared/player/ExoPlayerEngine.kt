@@ -22,6 +22,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import java.util.concurrent.TimeUnit
 import com.playbridge.shared.logging.logger
+import com.playbridge.shared.logging.redactUrlForLog
 import playbridge.PlayPayload
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -79,7 +80,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     override suspend fun load(payload: PlayPayload) {
-        logger.i(TAG, "load() called with url: ${payload.url}")
+        logger.i(TAG, "load() called with url: ${redactUrlForLog(payload.url)}")
         currentPayload = payload
         val livePlayer = player
         if (livePlayer != null) {

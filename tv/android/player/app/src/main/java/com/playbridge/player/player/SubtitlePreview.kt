@@ -1,6 +1,7 @@
 package com.playbridge.player.player
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.Request
@@ -136,7 +137,7 @@ object SubtitleCueLoader {
                 cues
             }
         } catch (e: Exception) {
-            Log.w(TAG, "preview load failed for $url: ${e.message}")
+            Log.w(TAG, "preview load failed for ${redactUrlForLog(url)}: ${e.message}")
             null
         } finally {
             inFlight.remove(url)

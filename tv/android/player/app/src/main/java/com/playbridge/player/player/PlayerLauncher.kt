@@ -3,9 +3,11 @@ package com.playbridge.player.player
 import android.content.Context
 import android.content.Intent
 import com.playbridge.player.server.ServerService
+import com.playbridge.shared.protocol.decodePlaylistPayloadJson
 import com.playbridge.shared.protocol.encodePlaylistPayloadJson
 import playbridge.PlayPayload
 import playbridge.PlaylistPayload
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Single source of truth for turning a [PlaylistPayload] into a player [Intent].
@@ -17,6 +19,14 @@ import playbridge.PlaylistPayload
  * free because they are derived from the same payload by the same code.
  */
 object PlayerLauncher {
+
+    const val EXTRA_PLAYBACK_REQUEST_ID = "extra_playback_request_id"
+    private const val REQUEST_ID_SEQUENCE_BITS = 16
+    // Seed from wall time so an Activity restored after process recreation does not reject
+    // new requests merely because the process-local counter restarted from zero.
+    private val playbackRequestIds = AtomicLong(
+        System.currentTimeMillis() shl REQUEST_ID_SEQUENCE_BITS
+    )
 
     /**
      * Build the player launch intent for [payload].
@@ -51,6 +61,8 @@ object PlayerLauncher {
         }
 
         return Intent(context, activityClass).apply {
+            putExtra(EXTRA_PLAYBACK_REQUEST_ID, playbackRequestIds.incrementAndGet())
+            putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(payload))
             firstItem?.let { item ->
                 putExtra(ServerService.EXTRA_URL, item.url)
                 putExtra(ServerService.EXTRA_TITLE, item.title)
@@ -90,9 +102,18 @@ object PlayerLauncher {
                 ?: firstItem?.start_position_ms?.takeIf { it > 0 })
                 ?.let { putExtra(ServerService.EXTRA_START_POSITION, it) }
 
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
         }
     }
+
+    /** Resolve a playlist across the main/MPV process boundary. */
+    fun playlistFromIntent(intent: Intent?): PlaylistPayload? =
+        intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
+            ?.let(::decodePlaylistPayloadJson)
 
     /**
      * Encode the live queue into the canonical history blob. [items] are the original,

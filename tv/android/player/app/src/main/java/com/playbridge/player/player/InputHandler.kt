@@ -32,7 +32,7 @@ class InputHandler(
 
         if (isStillWatchingVisible()) {
             if (command == "stop") {
-                activity.finish()
+                activity.requestStop()
             } else if (command != null) {
                 onContinueWatching()
             }
@@ -91,7 +91,7 @@ class InputHandler(
                 controls.hideControls()
             }
             "stop" -> {
-                activity.finish()
+                activity.requestStop()
             }
             "toggle" -> controls.togglePlayPause()
             "seek_back" -> {

@@ -195,6 +195,8 @@ class PrePlayActivity : ComponentActivity() {
             if (isPlaylist) {
                 putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
                 putExtra(ServerService.EXTRA_PLAYLIST_INDEX, this@PrePlayActivity.intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0))
+                this@PrePlayActivity.intent.getStringExtra(ServerService.EXTRA_PLAYLIST)
+                    ?.let { putExtra(ServerService.EXTRA_PLAYLIST, it) }
             }
 
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)

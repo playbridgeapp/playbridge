@@ -206,6 +206,7 @@
             android:name=".player.MpvPlayerActivity"
             android:exported="false"
             android:launchMode="singleTop"
+            android:process=":mpv"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 
@@ -220,6 +221,11 @@
             android:name=".server.ServerService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|mediaPlayback" />
+
+        <provider
+            android:name=".server.PlayerProcessBridgeProvider"
+            android:authorities="${applicationId}.player-process-bridge"
+            android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"

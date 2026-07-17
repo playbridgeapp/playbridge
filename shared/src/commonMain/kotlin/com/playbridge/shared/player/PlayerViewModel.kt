@@ -1,6 +1,7 @@
 package com.playbridge.shared.player
 
 import com.playbridge.shared.logging.logger
+import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.shared.resume.ResumeStore
 import playbridge.PlayPayload
 import kotlinx.coroutines.CoroutineScope
@@ -140,7 +141,7 @@ class PlayerViewModel(
      * expanded into [playlist] and the first item is loaded.
      */
     fun onPayload(payload: PlayPayload, settings: PlaybackSettings = PlaybackSettings()) {
-        logger.i(TAG, "onPayload: ${payload.url}")
+        logger.i(TAG, "onPayload: ${redactUrlForLog(payload.url)}")
         currentPayload = payload
 
         scope.launch {

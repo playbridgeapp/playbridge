@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.shared.logging.redactUrlForLog
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -186,7 +187,8 @@ class ExoPlayerActivity : PlayerActivity() {
 
     private val controlReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
+            if (intent == null || !isCommandForThisPlayer(intent)) return
+            when (intent.action) {
                 ServerService.ACTION_CONTROL -> {
                     val command = intent.getStringExtra(ServerService.EXTRA_COMMAND)
                     if (stillWatchingController.state.value.isPrompting && command != "stop") {
@@ -317,7 +319,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         onPrePlayBack = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlay(null)
-                            ServerService.notifyContextIdle()
+                            ServerService.notifyContextIdle(this@ExoPlayerActivity, playerProcessEngineId)
                             finish()
                         },
                         onSettingsTabSelected = { controlsViewModel.showSettings(it) },
@@ -483,16 +485,18 @@ class ExoPlayerActivity : PlayerActivity() {
         handleIntent(intent)
     }
 
-    private fun handleIntent(intent: Intent?) {
+    private fun handleIntent(intent: Intent) {
         recordStillWatchingMediaChanged()
         setupPlaybackExtras(intent)
 
         // Read playlist if present - needed early for button visibility logic
-        val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
-        val inMemoryPlaylist = PlaylistStore.currentPlaylist
-        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
-            val startIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
-            coordinator.setPlaylist(inMemoryPlaylist, startIndex)
+        val isPlaylist = intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
+        val intentPlaylist = PlayerLauncher.playlistFromIntent(intent)
+        val availablePlaylist = intentPlaylist?.items ?: PlaylistStore.currentPlaylist
+        if (isPlaylist && !availablePlaylist.isNullOrEmpty()) {
+            val startIndex = intentPlaylist?.start_index
+                ?: intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+            coordinator.setPlaylist(availablePlaylist, startIndex)
             FileLogger.i(TAG, "Playlist loaded: ${coordinator.playlist.size} items, starting at index ${coordinator.index}")
         } else {
             coordinator.setPlaylist(emptyList(), 0)
@@ -516,7 +520,7 @@ class ExoPlayerActivity : PlayerActivity() {
             controlsViewModel.setNavigationVisible(true)
         }
 
-        val startPos = intent?.getLongExtra(ServerService.EXTRA_START_POSITION, -1L) ?: -1L
+        val startPos = intent.getLongExtra(ServerService.EXTRA_START_POSITION, -1L)
         if (startPos > 0L) {
             FileLogger.i(TAG, "Starting from explicit position: ${startPos}ms (from intent)")
             pendingResumePosition = startPos
@@ -526,25 +530,25 @@ class ExoPlayerActivity : PlayerActivity() {
         // Handle pre-play metadata for pre-buffering via base class
         handlePrePlayMetadata(intent, controlsViewModel)
 
-        val url = intent?.getStringExtra(ServerService.EXTRA_URL)
-        val title = intent?.getStringExtra(ServerService.EXTRA_TITLE)
-        val contentType = intent?.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
-        val detectedBy = intent?.getStringExtra(ServerService.EXTRA_DETECTED_BY)
-        val headers = intent?.getStringMapExtra(ServerService.EXTRA_HEADERS)
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
+        val contentType = intent.getStringExtra(ServerService.EXTRA_CONTENT_TYPE)
+        val detectedBy = intent.getStringExtra(ServerService.EXTRA_DETECTED_BY)
+        val headers = intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
 
-        val subtitles = intent?.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
+        val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
         // Restore saved selections from history or incoming intent preferences
-        intent?.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
+        intent.getStringExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG)?.let {
             preferredAudioLanguage = it
             FileLogger.i(TAG, "Restored preferred audio language: $it")
         }
-        intent?.getStringExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG)?.let {
+        intent.getStringExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG)?.let {
             preferredSubtitleLanguage = it
             FileLogger.i(TAG, "Restored preferred subtitle language: $it")
         }
-        intent?.getStringExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL)?.let {
+        intent.getStringExtra(ServerService.EXTRA_EXTERNAL_SUBTITLE_URL)?.let {
             currentSubtitleUrl = it
-            FileLogger.i(TAG, "Restored external subtitle URL: $it")
+            FileLogger.i(TAG, "Restored external subtitle URL: ${redactUrlForLog(it)}")
         }
         if (url != null) {
             val baseTitle = title
@@ -555,7 +559,11 @@ class ExoPlayerActivity : PlayerActivity() {
             } else {
                 baseTitle
             }
-            FileLogger.i(TAG, "Playing video: $url (title: $displayTitle, type: $contentType, subs: $subtitles, detectedBy: $detectedBy)")
+            FileLogger.i(
+                TAG,
+                "Playing video: ${redactUrlForLog(url)} " +
+                    "(title: $displayTitle, type: $contentType, subs: ${subtitles?.size ?: 0}, detectedBy: $detectedBy)",
+            )
             playVideo(url, displayTitle, contentType, detectedBy, headers, subtitles)
         }
     }
@@ -594,9 +602,9 @@ class ExoPlayerActivity : PlayerActivity() {
     private fun playVideo(url: String, title: String?, contentType: String? = null, detectedBy: String? = null, intentHeaders: Map<String, String>? = null, subtitles: ArrayList<String>? = null) {
         
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
-        FileLogger.i(TAG, "Target URL: $url")
+        FileLogger.i(TAG, "Target URL: ${redactUrlForLog(url)}")
         FileLogger.i(TAG, "Target Title: $title")
-        FileLogger.i(TAG, "Raw Headers from Intent: $intentHeaders")
+        FileLogger.i(TAG, "Request headers: ${intentHeaders?.size ?: 0} field(s)")
         FileLogger.i(TAG, "Content Type: $contentType")
         FileLogger.i(TAG, "===========================================")
 
@@ -665,7 +673,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
 
     private fun startPlayback(url: String, title: String?, contentType: String?, detectedBy: String?, intentHeaders: Map<String, String>?, subtitles: ArrayList<String>?) {
-        FileLogger.i(TAG, "startPlayback() called with url: $url")
+        FileLogger.i(TAG, "startPlayback() called with url: ${redactUrlForLog(url)}")
         FileLogger.i(TAG, "Starting playback with Final Content Type: $contentType")
 
         if (engine == null) {
@@ -1192,7 +1200,7 @@ class ExoPlayerActivity : PlayerActivity() {
             is com.playbridge.shared.player.PlayerUiState.Idle ->
                 FileLogger.d(TAG, "VM state: Idle")
             is com.playbridge.shared.player.PlayerUiState.Loading ->
-                FileLogger.d(TAG, "VM state: Loading ${state.payload.url}")
+                FileLogger.d(TAG, "VM state: Loading ${redactUrlForLog(state.payload.url)}")
             is com.playbridge.shared.player.PlayerUiState.Playing ->
                 FileLogger.d(TAG, "VM state: Playing")
             is com.playbridge.shared.player.PlayerUiState.Error ->
