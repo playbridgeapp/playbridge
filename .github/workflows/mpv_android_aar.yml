@@ -1,0 +1,39 @@
+name: Verify Android libmpv Artifact
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/mpv_android_aar.yml'
+      - 'scripts/ci/verify-mpv-android-aar.sh'
+      - 'tv/android/player/app/libs/mpv-android-build.env'
+      - 'tv/android/player/app/libs/mpv-android.aar'
+      - 'tv/android/player/app/libs/README.md'
+  push:
+    branches: [ "main" ]
+    paths:
+      - '.github/workflows/mpv_android_aar.yml'
+      - 'scripts/ci/verify-mpv-android-aar.sh'
+      - 'tv/android/player/app/libs/mpv-android-build.env'
+      - 'tv/android/player/app/libs/mpv-android.aar'
+      - 'tv/android/player/app/libs/README.md'
+  workflow_dispatch:
+
+concurrency:
+  group: mpv-android-aar-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-integrity:
+    name: AAR checksum and ABIs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify committed AAR checksum and ABIs
+        run: scripts/ci/verify-mpv-android-aar.sh
