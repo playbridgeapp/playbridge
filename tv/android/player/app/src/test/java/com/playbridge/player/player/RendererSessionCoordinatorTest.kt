@@ -31,6 +31,7 @@ class RendererSessionCoordinatorTest {
         val session = coordinator.begin(RendererKind.MPV)
 
         assertTrue(coordinator.markReady(session.sessionId))
+        assertEquals(RendererSessionPhase.READY, coordinator.current().phase)
         assertTrue(coordinator.markFirstFrame(session.sessionId))
         assertEquals(RendererSessionPhase.PLAYING, coordinator.current().phase)
     }

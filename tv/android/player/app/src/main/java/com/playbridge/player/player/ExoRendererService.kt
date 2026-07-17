@@ -50,6 +50,8 @@ class ExoRendererService : Service() {
     private var readySessionId = 0L
     private var firstFrameSessionId = 0L
     private var endedSessionId = 0L
+    private var pendingPayload: PlayPayload? = null
+    private var pendingPayloadSessionId = 0L
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var loudnessSessionId = 0
     private var audioBoostEnabled = false
@@ -74,29 +76,29 @@ class ExoRendererService : Service() {
                 return@onMain
             }
             currentTitle = payload.title
+            pendingPayload = payload
+            pendingPayloadSessionId = requestedSessionId
 
             val renderer = engine ?: ExoPlayerEngine(applicationContext).also { engine = it }
-            scope.launch {
-                runCatching {
-                    renderer.load(payload)
-                    renderer.getExoPlayer()?.let(::installPlayerListener)
-                    observeState(renderer)
-                    surface?.let { renderer.getExoPlayer()?.setVideoSurface(it) }
-                    if (playWhenReady) renderer.play()
-                }.onFailure { error -> sendError(error.message ?: "Exo renderer failed") }
+            surface?.let {
+                renderer.setVideoSurface(it)
+                startPendingLoad(renderer, requestedSessionId)
             }
         }
 
         override fun attachSurface(newSurface: Surface?, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             surface = newSurface
-            engine?.getExoPlayer()?.setVideoSurface(newSurface)
+            engine?.let { renderer ->
+                renderer.setVideoSurface(newSurface)
+                if (newSurface != null) startPendingLoad(renderer, requestedSessionId)
+            }
         }
 
         override fun detachSurface(requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             surface = null
-            engine?.getExoPlayer()?.clearVideoSurface()
+            engine?.setVideoSurface(null)
         }
 
         override fun play(requestedSessionId: Long) = onMain {
@@ -185,12 +187,13 @@ class ExoRendererService : Service() {
         super.onDestroy()
     }
 
-    private fun installPlayerListener(player: androidx.media3.exoplayer.ExoPlayer) {
-        playerListener?.let(player::removeListener)
+    private fun installPlayerListener(renderer: ExoPlayerEngine) {
+        playerListener?.let(renderer::removePlayerListener)
         val listener = object : Player.Listener {
             override fun onRenderedFirstFrame() {
                 if (readySessionId == sessionId && firstFrameSessionId != sessionId) {
                     firstFrameSessionId = sessionId
+                    Log.d(TAG, "First video frame rendered for session $sessionId")
                     sendEvent(RendererProtocol.EVENT_FIRST_FRAME)
                 }
             }
@@ -225,7 +228,11 @@ class ExoRendererService : Service() {
             }
         }
         playerListener = listener
-        player.addListener(listener)
+        renderer.addPlayerListener(listener)
+    }
+
+    private fun sendCurrentPlayerSnapshot(renderer: ExoPlayerEngine) {
+        val player = renderer.getExoPlayer() ?: return
         if (player.playbackState == Player.STATE_READY) sendReadyOnce()
         sendVideoSize(player.videoSize)
         sendTracks(player.currentTracks)
@@ -370,8 +377,8 @@ class ExoRendererService : Service() {
     private fun releaseEngine() {
         stateJob?.cancel()
         stateJob = null
-        engine?.getExoPlayer()?.let { player ->
-            playerListener?.let(player::removeListener)
+        engine?.let { renderer ->
+            playerListener?.let(renderer::removePlayerListener)
         }
         playerListener = null
         surface = null
@@ -382,6 +389,8 @@ class ExoRendererService : Service() {
         readySessionId = 0L
         firstFrameSessionId = 0L
         endedSessionId = 0L
+        pendingPayload = null
+        pendingPayloadSessionId = 0L
         loudnessEnhancer?.release()
         loudnessEnhancer = null
         loudnessSessionId = 0
@@ -412,6 +421,24 @@ class ExoRendererService : Service() {
 
     private fun isCurrent(requestedSessionId: Long): Boolean =
         requestedSessionId > 0L && requestedSessionId == sessionId
+
+    private fun startPendingLoad(renderer: ExoPlayerEngine, requestedSessionId: Long) {
+        if (!isCurrent(requestedSessionId) || pendingPayloadSessionId != requestedSessionId) return
+        val payload = pendingPayload ?: return
+        val rendererSurface = surface ?: return
+        pendingPayload = null
+        pendingPayloadSessionId = 0L
+        renderer.setVideoSurface(rendererSurface)
+        scope.launch {
+            runCatching {
+                installPlayerListener(renderer)
+                renderer.load(payload)
+                sendCurrentPlayerSnapshot(renderer)
+                observeState(renderer)
+                if (playWhenReady) renderer.play() else renderer.pause()
+            }.onFailure { error -> sendError(error.message ?: "Exo renderer failed") }
+        }
+    }
 
     private fun onMain(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)

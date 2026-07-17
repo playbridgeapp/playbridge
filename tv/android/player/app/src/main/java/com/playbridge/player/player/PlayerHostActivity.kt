@@ -4,7 +4,6 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
@@ -19,18 +18,15 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.widget.FrameLayout
-import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
-import androidx.annotation.StringRes
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
-import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
@@ -65,7 +61,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private lateinit var playerRoot: FrameLayout
     private lateinit var surfaceView: SurfaceView
     private lateinit var composeView: ComposeView
-    private lateinit var transitionView: TextView
     private val controlsViewModel: PlayerControlsViewModel by viewModels()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val audioManager by lazy { getSystemService(AUDIO_SERVICE) as AudioManager }
@@ -191,34 +186,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         surfaceView = newRendererSurfaceView()
         composeView = ComposeView(this)
-        transitionView = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            textSize = 18f
-            gravity = Gravity.CENTER
-            setText(R.string.player_preparing)
-            visibility = View.GONE
-            setPadding(dp(24), dp(12), dp(24), dp(12))
-            setShadowLayer(dp(6).toFloat(), 0f, dp(2).toFloat(), Color.BLACK)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = dp(12).toFloat()
-                setColor(Color.argb(210, 18, 18, 18))
-            }
-            elevation = dp(8).toFloat()
-        }
         playerRoot = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
-            addView(
-                transitionView,
-                FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    gravity = Gravity.CENTER
-                    topMargin = dp(104)
-                },
-            )
             addView(composeView, FrameLayout.LayoutParams(-1, -1))
         }
         setContentView(playerRoot)
@@ -421,7 +391,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setEngine(controlsAdapter, target.name.lowercase(), this)
         ServerService.notifyContextPlayer(this, target.engineId)
         resetVideoSurfaceLayout()
-        showTransition(R.string.player_switching)
         bindRenderer()
     }
 
@@ -482,7 +451,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         controlsViewModel.setEngine(controlsAdapter, targetKind.engineId, this)
         ServerService.notifyContextPlayer(this, targetKind.engineId)
-        showTransition(R.string.player_preparing)
 
         if (targetKind != oldKind) {
             runCatching { oldSession?.let { oldRenderer?.release(it.sessionId) } }
@@ -552,7 +520,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             ?: RendererKind.EXO
 
     private fun failEmptyInitialRequest() {
-        showTransition(R.string.player_empty_request, force = true)
         finishingSession = true
         val finishRunnable = Runnable {
             failureFinishRunnable = null
@@ -581,11 +548,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
 
-        showTransition(if (attemptedRenderers.size > 1) {
-            R.string.player_switching
-        } else {
-            R.string.player_preparing
-        })
         scheduleRendererOpenWatchdog(expectedSessionId, expectedKind)
 
         val newConnection = object : ServiceConnection {
@@ -717,7 +679,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         controlsViewModel.setPrePlayLaunching(shouldShowPrePlay)
         controlsViewModel.setPrePlayCountdown(if (shouldShowPrePlay) -1 else 0)
-        if (shouldShowPrePlay) transitionView.visibility = View.GONE
         controlsViewModel.updatePlaylistData(playbackCoordinator.playlist, playbackCoordinator.index)
         controlsViewModel.setPlaylistVisible(playbackCoordinator.hasPlaylist)
         controlsViewModel.setBuffering(true)
@@ -763,12 +724,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when (event.getString(RendererProtocol.KEY_EVENT)) {
             RendererProtocol.EVENT_READY -> {
                 sessionCoordinator.markReady(currentSession.sessionId)
+                cancelStartupWatchdog()
                 controlsViewModel.setBuffering(false)
-                if (controlsViewModel.controlsState.value.prePlayMetadata != null) {
+                val hasPrePlay = controlsViewModel.controlsState.value.prePlayMetadata != null
+                if (hasPrePlay) {
                     startPrePlayCountdown(currentSession.sessionId)
-                }
-                if (sessionCoordinator.current().phase != RendererSessionPhase.PLAYING) {
-                    scheduleFirstFrameWatchdog(currentSession.sessionId, rendererKind)
                 }
             }
             RendererProtocol.EVENT_FIRST_FRAME -> {
@@ -779,7 +739,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 hostPlaying = state == "playing"
                 controlsViewModel.setPlaying(hostPlaying)
                 controlsViewModel.setBuffering(state == "buffering")
-                if (state == "playing") markPlaybackStarted(currentSession.sessionId)
                 val reportedPositionMs = event
                     .getLong(RendererProtocol.KEY_POSITION_MS)
                     .coerceAtLeast(0L)
@@ -851,7 +810,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.clearSubtitle()
         requestedStartPositionMs = null
         updateControlsForCurrentItem()
-        showTransition(R.string.player_preparing_next)
         scheduleRendererOpenWatchdog(session!!.sessionId, rendererKind)
         try {
             renderer.setCallback(callback)
@@ -993,7 +951,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             else -> null
         }
         if (fallback == null || fallback in attemptedRenderers) {
-            showTransition(R.string.player_failed, force = true)
             finishingSession = true
             val finishRunnable = Runnable {
                 failureFinishRunnable = null
@@ -1011,7 +968,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setEngine(controlsAdapter, fallback.name.lowercase(), this)
         ServerService.notifyContextPlayer(this, fallback.engineId)
         controlsViewModel.setBuffering(true)
-        showTransition(R.string.player_switching)
         bindRenderer()
     }
 
@@ -1026,6 +982,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun scheduleRendererOpenWatchdog(sessionId: Long, kind: RendererKind) {
         cancelStartupWatchdog()
         val watchdog = Runnable {
+            startupWatchdog = null
             if (isCurrentSession(sessionId, kind) &&
                 sessionCoordinator.current().phase == RendererSessionPhase.PREPARING
             ) {
@@ -1036,43 +993,23 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         mainHandler.postDelayed(watchdog, RENDERER_OPEN_TIMEOUT_MS)
     }
 
-    private fun scheduleFirstFrameWatchdog(sessionId: Long, kind: RendererKind) {
-        cancelStartupWatchdog()
-        val watchdog = Runnable {
-            if (isCurrentSession(sessionId, kind) &&
-                sessionCoordinator.current().phase != RendererSessionPhase.PLAYING
-            ) {
-                handleRendererFailure("$kind renderer did not present a frame in time")
-            }
-        }
-        startupWatchdog = watchdog
-        mainHandler.postDelayed(watchdog, RENDERER_FIRST_FRAME_TIMEOUT_MS)
-    }
-
     private fun cancelStartupWatchdog() {
         startupWatchdog?.let(mainHandler::removeCallbacks)
         startupWatchdog = null
     }
 
-    /**
-     * Some vendor Surface implementations do not deliver Media3's first-frame callback even
-     * though playback is visibly advancing. A renderer "playing" state is therefore also a
-     * valid startup confirmation and must disarm the watchdog.
-     */
     private fun markPlaybackStarted(sessionId: Long) {
         hostPlaying = true
         controlsViewModel.setPlaying(true)
         sessionCoordinator.markFirstFrame(sessionId)
         if (sessionCoordinator.current().phase == RendererSessionPhase.PLAYING) {
             cancelStartupWatchdog()
-            transitionView.visibility = View.GONE
         }
     }
 
     private fun startPrePlayCountdown(sessionId: Long) {
         if (prePlayCountdownJob?.isActive == true) return
         val renderer = rendererService ?: return
-        transitionView.visibility = View.GONE
         runCatching { renderer.pause(sessionId) }
         hostPlaying = false
         controlsViewModel.setPlaying(false)
@@ -1086,8 +1023,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             if (session?.sessionId != sessionId) return@launch
             controlsViewModel.setPrePlayCountdown(0)
             controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
-            transitionView.setText(R.string.player_starting)
-            transitionView.visibility = View.VISIBLE
             runCatching { rendererService?.play(sessionId) }
         }
     }
@@ -1097,8 +1032,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelPrePlayCountdown()
         controlsViewModel.setPrePlayCountdown(0)
         controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
-        transitionView.setText(R.string.player_starting)
-        transitionView.visibility = View.VISIBLE
         runCatching { rendererService?.play(currentSession.sessionId) }
     }
 
@@ -1359,17 +1292,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         view.holder.addCallback(surfaceCallback)
     }
 
-    private fun showTransition(@StringRes message: Int, force: Boolean = false) {
-        transitionView.setText(message)
-        transitionView.visibility = if (
-            force || controlsViewModel.controlsState.value.prePlayMetadata == null
-        ) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
-    }
-
     private fun resetVideoSurfaceLayout() {
         videoWidth = 0
         videoHeight = 0
@@ -1441,7 +1363,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         private const val TAG = "PlayerHostActivity"
         const val EXTRA_RENDERER = "renderer"
         private const val RENDERER_OPEN_TIMEOUT_MS = 60_000L
-        private const val RENDERER_FIRST_FRAME_TIMEOUT_MS = 15_000L
         private const val FAILURE_VISIBLE_MS = 600L
         private const val PROGRESS_SAVE_INTERVAL_MS = 5_000L
         private val activeHostCount = java.util.concurrent.atomic.AtomicInteger(0)

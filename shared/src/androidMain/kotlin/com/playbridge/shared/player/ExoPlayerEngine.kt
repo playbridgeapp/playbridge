@@ -2,6 +2,7 @@ package com.playbridge.shared.player
 
 import android.content.Context
 import android.net.Uri
+import android.view.Surface
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
@@ -72,6 +73,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     private var player: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
+    private var videoSurface: Surface? = null
+    private val externalPlayerListeners = linkedSetOf<Player.Listener>()
 
     private val _state = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
@@ -113,6 +116,26 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         } else {
             initializePlayer(payload)
         }
+    }
+
+    /**
+     * Retains the renderer surface across player creation so vendor codecs can be configured with
+     * a valid output from their first prepare call. Calling this after creation updates the live
+     * player as well.
+     */
+    fun setVideoSurface(surface: Surface?) {
+        videoSurface = surface
+        player?.setVideoSurface(surface)
+    }
+
+    /** Registers a listener immediately and carries it into a player created by the next load. */
+    fun addPlayerListener(listener: Player.Listener) {
+        if (externalPlayerListeners.add(listener)) player?.addListener(listener)
+    }
+
+    fun removePlayerListener(listener: Player.Listener) {
+        externalPlayerListeners.remove(listener)
+        player?.removeListener(listener)
     }
 
     /**
@@ -474,6 +497,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .also { exoPlayer ->
                 logger.i(TAG, "ExoPlayer instance created")
                 exoPlayer.addListener(playerListener)
+                externalPlayerListeners.forEach(exoPlayer::addListener)
+
+                videoSurface?.let(exoPlayer::setVideoSurface)
 
                 exoPlayer.setMediaSource(perItem.createMediaSource())
                 exoPlayer.prepare()
@@ -605,6 +631,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         progressJob?.cancel()
         player?.release()
         player = null
+        videoSurface = null
+        externalPlayerListeners.clear()
     }
 
     fun getExoPlayer(): ExoPlayer? = player
