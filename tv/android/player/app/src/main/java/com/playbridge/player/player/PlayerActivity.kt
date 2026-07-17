@@ -32,7 +32,7 @@ import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.UnifiedTrack
 import android.content.SharedPreferences
 
-abstract class PlayerActivity : ComponentActivity() {
+abstract class PlayerActivity : ComponentActivity(), PlaybackProgressSource {
 
     protected open val playerProcessEngineId: String = "exo"
     private var playerOwnershipReceiverRegistered = false
@@ -312,9 +312,9 @@ abstract class PlayerActivity : ComponentActivity() {
     abstract fun play()
     abstract fun pause()
     abstract fun isPlaying(): Boolean
-    abstract fun getMediaDuration(): Long
-    abstract fun getCurrentPosition(): Long
-    abstract fun seekTo(position: Long)
+    abstract override fun getMediaDuration(): Long
+    abstract override fun getCurrentPosition(): Long
+    abstract override fun seekTo(position: Long)
     abstract fun getVideoSurfaceView(): android.view.SurfaceView?
     /** Stop current playback and clear the video surface (make it black) for a smooth transition. */
     abstract fun stopPlayback()

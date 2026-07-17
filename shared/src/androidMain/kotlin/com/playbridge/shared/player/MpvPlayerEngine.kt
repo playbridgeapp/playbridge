@@ -191,6 +191,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         mpvCreated = true
 
         // Initial options
+        // Keep libmpv/FFmpeg from dumping authenticated stream URLs and routine verbose
+        // decoder chatter to logcat. Warnings and errors remain available for diagnosis.
+        MPVLib.setOptionString("msg-level", "all=warn")
         MPVLib.setOptionString("profile", "fast")
         MPVLib.setOptionString("vo", "gpu")
         MPVLib.setOptionString("gpu-context", "android")
@@ -533,17 +536,40 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     fun setVideoScale(mode: String) {
         logger.i(TAG, "setVideoScale($mode) queued")
         enqueueControl("setVideoScale") {
-            // MPV video scaling / aspect ratio control
+            // mpv 0.41 deprecated the old -1 sentinel. Explicitly preserve the container
+            // aspect so portrait video is letterboxed instead of stretched to the TV surface.
+            MPVLib.setPropertyString("video-aspect-method", "container")
+            MPVLib.setPropertyString("video-unscaled", "no")
+            MPVLib.setPropertyString("keepaspect", "yes")
             when (mode) {
-                "Fit" -> MPVLib.setPropertyString("video-aspect-override", "-1")
-                "Fill", "16:9" -> MPVLib.setPropertyString("video-aspect-override", "1.777")
-                "4:3" -> MPVLib.setPropertyString("video-aspect-override", "1.333")
-                "Center" -> MPVLib.setPropertyString("video-aspect-override", "-1")
+                "Fill", "Zoom" -> {
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                    MPVLib.setPropertyDouble("panscan", 1.0)
+                }
+                "16:9" -> {
+                    MPVLib.setPropertyString("video-aspect-override", "16:9")
+                    MPVLib.setPropertyDouble("panscan", 0.0)
+                }
+                "4:3" -> {
+                    MPVLib.setPropertyString("video-aspect-override", "4:3")
+                    MPVLib.setPropertyDouble("panscan", 0.0)
+                }
+                else -> {
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                    MPVLib.setPropertyDouble("panscan", 0.0)
+                }
             }
         }
     }
 
     fun getVideoScale(): String = "Fit"
+
+    fun setLooping(enabled: Boolean) {
+        logger.i(TAG, "setLooping($enabled) queued")
+        enqueueControl("setLooping") {
+            MPVLib.setPropertyString("loop-file", if (enabled) "inf" else "no")
+        }
+    }
 
     override fun setAudioTrack(id: String?) {
         logger.i(TAG, "setAudioTrack($id) queued")

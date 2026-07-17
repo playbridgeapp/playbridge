@@ -55,13 +55,9 @@ object PlayerLauncher {
             firstItem?.player_mode == "mpv" -> "mpv"
             else -> "exo"
         }
-        val activityClass = when (mode) {
-            "mpv" -> MpvPlayerActivity::class.java
-            else -> ExoPlayerActivity::class.java
-        }
-
-        return Intent(context, activityClass).apply {
+        return Intent(context, PlayerHostActivity::class.java).apply {
             putExtra(EXTRA_PLAYBACK_REQUEST_ID, playbackRequestIds.incrementAndGet())
+            putExtra(PlayerHostActivity.EXTRA_RENDERER, mode)
             putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(payload))
             firstItem?.let { item ->
                 putExtra(ServerService.EXTRA_URL, item.url)

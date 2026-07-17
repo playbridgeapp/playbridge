@@ -502,7 +502,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             context = this,
             historyStore = historyStore,
             lifecycleScope = lifecycleScope,
-            playerActivity = this
+            playbackSource = this
         )
 
         // Setup MpvPlayerEngine

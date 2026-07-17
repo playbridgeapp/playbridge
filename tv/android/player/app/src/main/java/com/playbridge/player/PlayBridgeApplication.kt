@@ -6,7 +6,10 @@ import android.os.Bundle
 import android.os.Looper
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.browser.WebProcess
+import com.playbridge.player.player.ExoProcess
 import com.playbridge.player.player.MpvProcess
+import com.playbridge.player.player.RendererProcessPrewarmer
 import com.playbridge.player.server.ServerService
 
 private const val TAG = "PlayBridgeApp"
@@ -30,9 +33,21 @@ class PlayBridgeApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         val isMpvProcess = MpvProcess.isCurrent(this)
+        val isExoProcess = ExoProcess.isCurrent(this)
+        val isWebProcess = WebProcess.isCurrent(this)
+        if (isWebProcess && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            // WebView storage must have a process-unique suffix before any WebView is created.
+            android.webkit.WebView.setDataDirectorySuffix("web")
+        }
         com.playbridge.shared.SharedContext.init(this)
 
-        FileLogger.init(this, if (isMpvProcess) "playbridge-mpv.log" else "playbridge.log")
+        val processLog = when {
+            isMpvProcess -> "playbridge-mpv.log"
+            isExoProcess -> "playbridge-exo.log"
+            isWebProcess -> "playbridge-web.log"
+            else -> "playbridge.log"
+        }
+        FileLogger.init(this, processLog)
         registerActivityLifecycleCallbacks(activityLifecycleCallbacks)
 
         if (isMpvProcess) {
@@ -40,7 +55,21 @@ class PlayBridgeApplication : Application() {
             return
         }
 
+        if (isExoProcess) {
+            installRendererProcessCrashHandler("Exo")
+            return
+        }
+
+        if (isWebProcess) {
+            installRendererProcessCrashHandler("WebView")
+            return
+        }
+
         installCrashHandler()
+
+        // Warm both isolated Binder endpoints without allocating either player/decoder. This
+        // makes first playback and MPV<->Exo failover avoid cold process startup.
+        RendererProcessPrewarmer.start(this)
 
         // Preload AdBlocker in background so filters are ready
         com.playbridge.player.browser.AdBlocker.preload(this)
@@ -50,10 +79,14 @@ class PlayBridgeApplication : Application() {
     }
 
     private fun installMpvProcessCrashHandler() {
+        installRendererProcessCrashHandler("MPV")
+    }
+
+    private fun installRendererProcessCrashHandler(rendererName: String) {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             FileLogger.logCrash(thread, throwable)
-            Log.e(TAG, "Crash in private MPV process on thread ${thread.name}", throwable)
+            Log.e(TAG, "Crash in private $rendererName process on thread ${thread.name}", throwable)
             if (defaultHandler != null) {
                 defaultHandler.uncaughtException(thread, throwable)
             } else {
@@ -92,11 +125,18 @@ class PlayBridgeApplication : Application() {
                 }
             }
 
-            // Make sure the service is still running (no-op if already running)
-            try {
-                ServerService.start(applicationContext)
-            } catch (e: Exception) {
-                FileLogger.e(TAG, "Failed to restart ServerService after crash", e)
+            // Renderer processes must not start or own ServerService. The main process
+            // remains responsible for the server and will observe renderer death through
+            // the next command/session request.
+            if (!MpvProcess.isCurrent(this) &&
+                !ExoProcess.isCurrent(this) &&
+                !WebProcess.isCurrent(this)
+            ) {
+                try {
+                    ServerService.start(applicationContext)
+                } catch (e: Exception) {
+                    FileLogger.e(TAG, "Failed to restart ServerService after crash", e)
+                }
             }
         }
     }

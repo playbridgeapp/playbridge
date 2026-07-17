@@ -256,7 +256,7 @@ class BrowserActivity : ComponentActivity() {
         // Forward the controller's playback status to the phone (drives its scrubber).
         // Same "status" message the native player emits, so the phone parses it as-is.
         engine?.onVideoStatus = { json ->
-            com.playbridge.player.server.ServerService.broadcastStatus(json)
+            com.playbridge.player.server.ServerService.broadcastStatus(this, json)
         }
 
         // Custom overlay support controlled by user scripts
@@ -1001,7 +1001,7 @@ class BrowserActivity : ComponentActivity() {
         // Claim the server context for the browser whenever we're foregrounded — so a
         // context_query reports "browser" regardless of how this activity was launched,
         // and we reclaim it after returning from a player launched on top of us.
-        com.playbridge.player.server.ServerService.notifyContextBrowser()
+        com.playbridge.player.server.ServerService.notifyContextBrowser(this)
     }
 
     override fun onStop() {

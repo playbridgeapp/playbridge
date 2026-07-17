@@ -33,6 +33,27 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+private val LEGACY_HTTP_DETECTIONS = setOf(
+    "body_content_m3u8",
+    "content_type",
+    "dom_source",
+    "dom_video_element",
+    "iptv_m3u",
+    "link_menu",
+    "player_config",
+    "unknown",
+    "url_extension",
+    "url_pattern_m3u8",
+    "url_pattern_mpd",
+)
+
+internal fun shouldUseLegacyHttpDataSource(detectedBy: String?): Boolean =
+    detectedBy?.lowercase()?.let(LEGACY_HTTP_DETECTIONS::contains) == true
+
+internal fun maxVideoBitrateBps(capMbps: Double?): Int? = capMbps
+    ?.takeIf { it.isFinite() && it > 0.0 }
+    ?.let { (it * 1_000_000).toInt() }
+
 /**
  * Android implementation of [PlaybackEngine] using Media3 ExoPlayer.
  *
@@ -159,10 +180,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
         logger.i(TAG, "Prepared ${requestProperties.size} request header(s)")
 
-        // Network stack:
-        // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.
-        // 2. Direct Hub/Debrid streams use OkHttp with IPv4-First DNS for performance.
-        val isBrowserStream = !payload.detected_by.isNullOrEmpty()
+        // Browser-captured/live streams use the legacy source for compatibility. Library,
+        // history, Stremio, and Debrid resolver URLs are direct sources and use OkHttp.
+        val isBrowserStream = shouldUseLegacyHttpDataSource(payload.detected_by)
 
         val httpDataSourceFactory = if (isBrowserStream) {
             logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detected_by}")
@@ -273,8 +293,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 paramsBuilder.setMaxVideoSize(maxW, maxH)
             }
         }
-        payload.max_bitrate_cap_mbps?.let { cap ->
-            paramsBuilder.setMaxVideoBitrate((cap * 1_000_000).toInt())
+        maxVideoBitrateBps(payload.max_bitrate_cap_mbps)?.let { capBps ->
+            paramsBuilder.setMaxVideoBitrate(capBps)
         }
         exoPlayer.trackSelectionParameters = paramsBuilder.build()
 
@@ -425,9 +445,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 }
             }
 
-            payload.max_bitrate_cap_mbps?.let { cap ->
-                val capBps = (cap * 1_000_000).toInt()
-                logger.i(TAG, "Applying max bitrate cap: $cap Mbps -> $capBps bps")
+            maxVideoBitrateBps(payload.max_bitrate_cap_mbps)?.let { capBps ->
+                logger.i(TAG, "Applying max bitrate cap: $capBps bps")
                 params.setMaxVideoBitrate(capBps)
             }
 

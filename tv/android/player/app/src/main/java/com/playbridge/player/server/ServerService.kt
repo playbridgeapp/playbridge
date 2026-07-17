@@ -12,9 +12,11 @@ import android.os.IBinder
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.player.MpvProcess
+import com.playbridge.player.player.RendererProcessSupervisor
 import androidx.core.app.NotificationCompat
 import com.playbridge.player.MainActivity
 import com.playbridge.player.R
+import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createContextJson
 import com.playbridge.player.pairing.PairingStore
@@ -32,7 +34,7 @@ private const val CHANNEL_ID = "playbridge_server"
 private const val CHANNEL_ID_LAUNCH = "playbridge_launch"
 private const val NOTIFICATION_ID = 1
 private const val NOTIFICATION_ID_LAUNCH = 2
-private const val MPV_PROCESS_RELEASE_GRACE_MS = 500L
+private const val MPV_PROCESS_EXIT_TIMEOUT_MS = 5_000L
 
 // browser_prefs keys for the TV browser User-Agent override (see IncomingMessage.UserAgent).
 private const val KEY_ACTIVE_UA_NAME = "active_user_agent_name"
@@ -55,7 +57,7 @@ class ServerService : Service() {
     private var activePlayerEngine: String? = null
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingPlayerLaunchAfterMpvExit: Runnable? = null
-    private var mpvProcessReleaseDeadlineMs = 0L
+    private var pendingPlayerLaunchGeneration = 0L
 
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
@@ -90,6 +92,7 @@ class ServerService : Service() {
                 PLAYER_PROCESS_EVENT_CONTEXT_PLAYER -> setContextPlayerInternal(
                     intent.getStringExtra(EXTRA_TARGET_PLAYER_ENGINE),
                 )
+                PLAYER_PROCESS_EVENT_CONTEXT_BROWSER -> setContextBrowserInternal()
                 PLAYER_PROCESS_EVENT_CONTEXT_IDLE -> setContextIdleInternal(
                     onlyIfOneOf = setOf("player"),
                     onlyIfEngine = intent.getStringExtra(EXTRA_TARGET_PLAYER_ENGINE),
@@ -105,25 +108,44 @@ class ServerService : Service() {
     }
 
     private fun launchAfterMpvProcessExit(intent: Intent, reason: String) {
-        if (MpvProcess.terminateRunningProcess(this)) {
-            mpvProcessReleaseDeadlineMs = android.os.SystemClock.elapsedRealtime() +
-                MPV_PROCESS_RELEASE_GRACE_MS
-        }
+        MpvProcess.terminateRunningProcess(this)
+        val generation = RendererProcessSupervisor.nextGeneration(
+            RendererProcessSupervisor.Kind.MPV,
+        )
 
         pendingPlayerLaunchAfterMpvExit?.let(mainHandler::removeCallbacks)
         val launch = Runnable {
             pendingPlayerLaunchAfterMpvExit = null
-            if (_staticInstance === this) launchActivityFromBackground(intent, reason)
+            if (_staticInstance === this &&
+                RendererProcessSupervisor.isCurrentGeneration(
+                    RendererProcessSupervisor.Kind.MPV,
+                    generation,
+                )
+            ) {
+                launchActivityFromBackground(intent, reason)
+            }
         }
         pendingPlayerLaunchAfterMpvExit = launch
+        pendingPlayerLaunchGeneration = generation
 
-        val delayMs = (mpvProcessReleaseDeadlineMs - android.os.SystemClock.elapsedRealtime())
-            .coerceAtLeast(0L)
-        if (delayMs == 0L) {
-            launch.run()
-        } else {
-            FileLogger.i(TAG, "Waiting ${delayMs}ms for private MPV process codec cleanup")
-            mainHandler.postDelayed(launch, delayMs)
+        FileLogger.i(TAG, "Waiting for private MPV process to exit before launching replacement")
+        MpvProcess.awaitExit(this, MPV_PROCESS_EXIT_TIMEOUT_MS) { exited ->
+            if (!exited) {
+                FileLogger.e(
+                    TAG,
+                    "Private MPV process did not exit within ${MPV_PROCESS_EXIT_TIMEOUT_MS}ms; " +
+                        "launching replacement after hard timeout",
+                )
+            }
+            if (pendingPlayerLaunchAfterMpvExit === launch &&
+                pendingPlayerLaunchGeneration == generation &&
+                RendererProcessSupervisor.isCurrentGeneration(
+                    RendererProcessSupervisor.Kind.MPV,
+                    generation,
+                )
+            ) {
+                launch.run()
+            }
         }
     }
 
@@ -425,7 +447,9 @@ class ServerService : Service() {
     private fun handleMessage(msg: IncomingMessage) {
         val isDebug = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (isDebug && msg !is IncomingMessage.Mouse) {
-            logDebugLong(TAG, "Command received: $msg")
+            // Incoming payloads can contain authenticated stream URLs and Cookie headers.
+            // Keep debug logs structural; individual handlers log safe summaries below.
+            logDebugLong(TAG, "Command received: ${msg.javaClass.simpleName}")
         }
 
         if (msg !is IncomingMessage.Mouse) {
@@ -443,7 +467,7 @@ class ServerService : Service() {
                 val userAgentValue = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                     .getString(KEY_ACTIVE_UA_VALUE, "") ?: ""
 
-                FileLogger.i(TAG, "Browser command: $url (mode: $browserMode)")
+                FileLogger.i(TAG, "Browser command: ${redactUrlForLog(url)} (mode: $browserMode)")
 
                 val useGecko = browserMode == "gecko"
 
@@ -608,18 +632,20 @@ class ServerService : Service() {
                 val playerIntent = com.playbridge.player.player.PlayerLauncher
                     .buildPlayerIntent(this, payload, tvPref)
                 val previousPlayerEngine = activePlayerEngine
-                val targetPlayerEngine = if (
-                    playerIntent.component?.className ==
-                    com.playbridge.player.player.MpvPlayerActivity::class.java.name
-                ) {
-                    "mpv"
-                } else {
-                    "exo"
-                }
+                val targetPlayerEngine = playerIntent
+                    .getStringExtra(com.playbridge.player.player.PlayerHostActivity.EXTRA_RENDERER)
+                    ?.takeIf { it == "mpv" || it == "exo" }
+                    ?: "exo"
                 activePlayerEngine = targetPlayerEngine
                 pendingQueueItems.clear() // discard any stale items from a previous session
                 val launchReason = "Playing playlist (${payload.items.size} items)"
-                if (previousPlayerEngine == "mpv" && targetPlayerEngine == "exo") {
+                if (!com.playbridge.player.player.PlayerHostActivity.isActive() &&
+                    previousPlayerEngine == "mpv" &&
+                    MpvProcess.isRunning(this)
+                ) {
+                    // One-time migration/rollback boundary: a legacy MPV Activity can still own
+                    // the private process when no permanent host exists yet. Once the host is
+                    // active, replacement intents go straight to it and it owns renderer swaps.
                     launchAfterMpvProcessExit(playerIntent, launchReason)
                 } else {
                     launchActivityFromBackground(playerIntent, launchReason)
@@ -1074,6 +1100,7 @@ class ServerService : Service() {
         const val EXTRA_TARGET_PLAYER_ENGINE = "target_player_engine"
         private const val PLAYER_PROCESS_EVENT_STATUS = "status"
         private const val PLAYER_PROCESS_EVENT_CONTEXT_PLAYER = "context_player"
+        private const val PLAYER_PROCESS_EVENT_CONTEXT_BROWSER = "context_browser"
         private const val PLAYER_PROCESS_EVENT_CONTEXT_IDLE = "context_idle"
         private const val PLAYER_PROCESS_EVENT_LAUNCH_PLAYER = "launch_player"
         const val EXTRA_QUEUE_ITEM_URL = "queue_item_url"
@@ -1171,6 +1198,15 @@ class ServerService : Service() {
         /** Mark activeContext as "browser" — called from the internal WebView's onResume. */
         fun notifyContextBrowser() {
             _staticInstance?.setContextBrowserInternal()
+        }
+
+        fun notifyContextBrowser(context: Context) {
+            val instance = _staticInstance
+            if (instance != null) {
+                instance.setContextBrowserInternal()
+            } else {
+                sendPlayerProcessEvent(context, PLAYER_PROCESS_EVENT_CONTEXT_BROWSER)
+            }
         }
 
         /**

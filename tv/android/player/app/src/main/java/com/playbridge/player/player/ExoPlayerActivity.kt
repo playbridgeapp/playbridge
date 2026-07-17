@@ -233,7 +233,7 @@ class ExoPlayerActivity : PlayerActivity() {
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
                     recordStillWatchingActivity()
-                    coordinator.queueAdd(ServerService.drainPendingQueueItems())
+                    coordinator.queueAdd(ServerService.drainPendingQueueItems(this@ExoPlayerActivity))
                     controlsViewModel.setPlaylistVisible(true)
                 }
                 ServerService.ACTION_PLAYLIST_JUMP -> {
@@ -432,7 +432,7 @@ class ExoPlayerActivity : PlayerActivity() {
             context = this,
             historyStore = historyStore,
             lifecycleScope = lifecycleScope,
-            playerActivity = this
+            playbackSource = this
         )
 
         inputHandler = InputHandler(
@@ -468,7 +468,7 @@ class ExoPlayerActivity : PlayerActivity() {
 
         // Drain any queue items that arrived before our receiver was registered.
         // Must happen AFTER handleIntent because handleIntent replaces the coordinator's queue.
-        coordinator.queueAdd(ServerService.drainPendingQueueItems())
+        coordinator.queueAdd(ServerService.drainPendingQueueItems(this@ExoPlayerActivity))
         if (coordinator.hasPlaylist) {
             controlsViewModel.setPlaylistVisible(true)
         }

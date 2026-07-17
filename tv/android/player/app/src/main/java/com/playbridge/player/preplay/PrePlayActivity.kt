@@ -12,8 +12,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
 import androidx.lifecycle.lifecycleScope
 import com.playbridge.player.logging.FileLogger
-import com.playbridge.player.player.ExoPlayerActivity
-import com.playbridge.player.player.MpvPlayerActivity
+import com.playbridge.player.player.PlayerLauncher
 import com.playbridge.player.server.ServerService
 import playbridge.PlayPayload
 import playbridge.PlaylistPayload
@@ -31,6 +30,7 @@ class PrePlayActivity : ComponentActivity() {
     private var streamUrl by mutableStateOf<String?>(null)
     private var contentType by mutableStateOf<String?>(null)
     private var playerMode by mutableStateOf<String?>(null)
+    private var launchPayload: PlaylistPayload? = null
     
     // Playback preferences for intent transport
     private var preferredAudioLanguage by mutableStateOf<String?>(null)
@@ -103,6 +103,7 @@ class PrePlayActivity : ComponentActivity() {
         try {
             if (isPlaylist) {
                 val playlist = PlaylistPayload.ADAPTER.decode(payloadBytes)
+                launchPayload = playlist
                 val firstItem = playlist.items.getOrNull(playlist.start_index) ?: playlist.items.firstOrNull()
                 visualMetadata = playlist.visual_metadata ?: firstItem?.visual_metadata
                 streamUrl = firstItem?.url
@@ -114,6 +115,11 @@ class PrePlayActivity : ComponentActivity() {
                 maxBitrateCapMbps = firstItem?.max_bitrate_cap_mbps
             } else {
                 val play = PlayPayload.ADAPTER.decode(payloadBytes)
+                launchPayload = PlaylistPayload(
+                    items = listOf(play),
+                    start_index = 0,
+                    visual_metadata = play.visual_metadata,
+                )
                 visualMetadata = play.visual_metadata
                 streamUrl = play.url
                 contentType = play.content_type
@@ -153,6 +159,7 @@ class PrePlayActivity : ComponentActivity() {
     private fun startPlayback() {
         val url = streamUrl ?: return
         val meta = visualMetadata ?: return
+        val payload = launchPayload ?: return
         if (isFinishing) return
         isLaunching = true
 
@@ -161,46 +168,27 @@ class PrePlayActivity : ComponentActivity() {
         val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
         val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
 
-        // TV pref forces an engine; otherwise honour the phone's per-cast choice ("phone"/"tv"
-        // /unset → ExoPlayer default).
-        val finalMode = when {
-            tvPref == "mpv" || tvPref == "exo" -> tvPref
-            playerMode == "mpv" -> "mpv"
-            else -> "exo"
-        }
-
-        val activityClass = if (finalMode == "mpv") {
-            MpvPlayerActivity::class.java
+        val fullTitle = if (contentType == "series" && meta.season != null && meta.episode != null) {
+            "${meta.title} S${meta.season}E${meta.episode}${if (meta.episode_title != null) " - ${meta.episode_title}" else ""}"
         } else {
-            ExoPlayerActivity::class.java
+            meta.title
         }
-
-        val intent = Intent(this, activityClass).apply {
-            putExtra(ServerService.EXTRA_URL, url)
-            val fullTitle = if (contentType == "series" && meta.season != null && meta.episode != null) {
-                "${meta.title} S${meta.season}E${meta.episode}${if (meta.episode_title != null) " - ${meta.episode_title}" else ""}"
-            } else {
-                meta.title
+        val index = payload.start_index.coerceIn(0, (payload.items.size - 1).coerceAtLeast(0))
+        val items = payload.items.toMutableList().apply {
+            getOrNull(index)?.let { item ->
+                this[index] = item.copy(
+                    url = url,
+                    title = fullTitle,
+                    content_type = contentType ?: item.content_type,
+                    detected_by = item.detected_by ?: "library",
+                )
             }
-            putExtra(ServerService.EXTRA_TITLE, fullTitle)
-            putExtra(ServerService.EXTRA_CONTENT_TYPE, contentType)
-            putExtra(ServerService.EXTRA_DETECTED_BY, "library")
-
-            preferredAudioLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_AUDIO_LANG, it) }
-            preferredSubtitleLanguage?.let { putExtra(ServerService.EXTRA_PREFERRED_SUBTITLE_LANG, it) }
-            defaultVideoQuality?.let { putExtra("default_video_quality", it) }
-            maxBitrateCapMbps?.let { putExtra(ServerService.EXTRA_MAX_BITRATE_CAP_MBPS, it) }
-
-            val isPlaylist = this@PrePlayActivity.intent.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false)
-            if (isPlaylist) {
-                putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
-                putExtra(ServerService.EXTRA_PLAYLIST_INDEX, this@PrePlayActivity.intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0))
-                this@PrePlayActivity.intent.getStringExtra(ServerService.EXTRA_PLAYLIST)
-                    ?.let { putExtra(ServerService.EXTRA_PLAYLIST, it) }
-            }
-
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         }
+        val intent = PlayerLauncher.buildPlayerIntent(
+            context = this,
+            payload = payload.copy(items = items, start_index = index),
+            tvPlayerMode = tvPref,
+        )
 
         startActivity(intent)
         finish()

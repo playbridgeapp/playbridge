@@ -13,6 +13,12 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "ProgressManager"
 
+interface PlaybackProgressSource {
+    fun getMediaDuration(): Long
+    fun getCurrentPosition(): Long
+    fun seekTo(position: Long)
+}
+
 /**
  * Manages playback progress persistence (save/restore). Artwork is the payload's
  * poster/backdrop URL — no on-device screenshot capture.
@@ -21,7 +27,7 @@ class ProgressManager(
     private val context: Context,
     private val historyStore: HistoryStore,
     private val lifecycleScope: LifecycleCoroutineScope,
-    private val playerActivity: PlayerActivity
+    private val playbackSource: PlaybackProgressSource,
 ) {
     private var currentUrl: String? = null
     private var currentTitle: String? = null
@@ -100,13 +106,16 @@ class ProgressManager(
      * Attempt to restore playback position from history for the given [url].
      * Returns the history item if found, so callers can restore other settings.
      */
-    suspend fun restoreProgress(url: String): com.playbridge.player.data.PlaybackHistoryItem? {
+    suspend fun restoreProgress(
+        url: String,
+        seek: (Long) -> Unit = playbackSource::seekTo,
+    ): com.playbridge.player.data.PlaybackHistoryItem? {
         return try {
             val history = historyStore.history.first()
             val item = history.find { it.url == url }
             if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
                 Log.i(TAG, "Resuming from history: ${item.position}ms")
-                playerActivity.seekTo(item.position)
+                seek(item.position)
             }
             item
         } catch (e: Exception) {
@@ -137,7 +146,7 @@ class ProgressManager(
                         url = url,
                         title = title,
                         position = startPositionMs.coerceAtLeast(0L),
-                        duration = playerActivity.getMediaDuration().coerceAtLeast(0L),
+                        duration = playbackSource.getMediaDuration().coerceAtLeast(0L),
                         thumbnailUrl = thumbnailUrl,
                     )
                 } catch (e: Exception) {
@@ -152,8 +161,8 @@ class ProgressManager(
      * poster/backdrop (set in [setCurrentMedia]) — no screenshot capture.
      */
     fun saveProgress() {
-        val duration = playerActivity.getMediaDuration()
-        val position = playerActivity.getCurrentPosition()
+        val duration = playbackSource.getMediaDuration()
+        val position = playbackSource.getCurrentPosition()
         val url = currentUrl
         val payloadJson = currentPayloadJson
         val historyId = currentHistoryId

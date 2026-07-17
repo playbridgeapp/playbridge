@@ -50,16 +50,36 @@ internal object MpvProcess {
 
     /** Kill a running private MPV process from the main process before another decoder starts. */
     fun terminateRunningProcess(context: Context): Boolean {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
-            ?: return false
-        val mpvProcessName = context.packageName + PROCESS_SUFFIX
-        val process = activityManager.runningAppProcesses
-            ?.firstOrNull { it.processName == mpvProcessName && it.pid != Process.myPid() }
-            ?: return false
+        val terminated = RendererProcessSupervisor.terminate(context, RendererProcessSupervisor.Kind.MPV)
+        if (terminated) FileLogger.w(TAG, "Terminating stale private MPV process")
+        return terminated
+    }
 
-        FileLogger.w(TAG, "Terminating stale private MPV process pid=${process.pid}")
-        Process.killProcess(process.pid)
-        return true
+    /**
+     * Returns whether the private MPV process is still visible to ActivityManager.
+     *
+     * ActivityManager can briefly retain a process entry after killProcess(), so callers
+     * must not use a fixed sleep as proof that libmpv has stopped. This method is deliberately
+     * kept in the main process and never performs a blocking wait.
+     */
+    fun isRunning(context: Context): Boolean =
+        RendererProcessSupervisor.isRunning(context, RendererProcessSupervisor.Kind.MPV)
+
+    /**
+     * Poll for actual process exit without blocking the caller's thread.
+     * [onComplete] receives true when the process disappeared before [timeoutMs].
+     */
+    fun awaitExit(
+        context: Context,
+        timeoutMs: Long,
+        onComplete: (exited: Boolean) -> Unit,
+    ) {
+        RendererProcessSupervisor.awaitExit(
+            context,
+            RendererProcessSupervisor.Kind.MPV,
+            timeoutMs,
+            onComplete,
+        )
     }
 
     private fun currentProcessName(context: Context): String? {
