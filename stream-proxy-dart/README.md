@@ -49,13 +49,13 @@ services:
     environment:
       - PORT=8888
       - ADDRESS=0.0.0.0
-      - PASSWORD=my_secure_proxy_token # Optional: Set to enforce token authorization
+      - PB_PROXY_PASSWORD=replace_with_a_unique_proxy_password # Required
     restart: unless-stopped
 ```
 
 - **`PORT`**: The internal port the server binds to (default: `8888`).
 - **`ADDRESS`**: The interface address to bind to. Use `0.0.0.0` for Docker.
-- **`PASSWORD`**: If set, requests must include a `token` query parameter or `Authorization: Bearer <password>` header matching this value.
+- **`PB_PROXY_PASSWORD`**: Required. The proxy refuses to start unless this is a unique, non-empty password. Requests must include a `token` query parameter or `Authorization: Bearer <password>` header matching this value.
 
 ---
 
@@ -65,7 +65,7 @@ To run or compile the proxy locally without Docker, make sure you have the [Dart
 
 ### Run Directly
 ```bash
-dart run bin/stream_proxy.dart -p 8888
+dart run bin/stream_proxy.dart -p 8888 -k replace_with_a_unique_proxy_password
 ```
 
 ### Compile to Standalone Native Binary

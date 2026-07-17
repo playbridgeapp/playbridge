@@ -27,7 +27,8 @@
   .section { margin-bottom: 20px; }
   .section-title { font-size: 0.95rem; color: #c9d1d9; margin-bottom: 8px; font-weight: 600; }
   .hint { font-size: 0.75rem; color: #484f58; margin-top: 4px; }
-  .btn-row { display: flex; gap: 8px; margin-top: 8px; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .copy-label { color: #8b949e; font-size: 0.8rem; margin-top: 14px; }
   #playerSection { display: none; }
   .tag { display: inline-block; background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb44; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem; margin-right: 4px; }
   .parsed-headers { margin-top: 8px; }
@@ -75,14 +76,20 @@
 <div class="section" id="resultSection" style="display:none">
   <div class="section-title">Generated Proxy URL</div>
   <div class="output-box" id="proxyUrlOutput">
-    <button class="copy-btn" onclick="copyProxyUrl()">Copy</button>
+    <button class="copy-btn" onclick="copyFor('url', this)">Copy URL</button>
     <span id="proxyUrlText"></span>
   </div>
   <div class="parsed-headers" id="parsedHeaders"></div>
   <div class="btn-row" style="margin-top:12px">
     <button onclick="playInPage()">▶ Play in Page</button>
-    <button class="secondary" onclick="openInExternal()">Open in External Player</button>
-    <button class="secondary" onclick="copyCurlForProxy()">Copy curl for Proxy</button>
+    <button class="secondary" onclick="openInBrowser()">Open URL in Browser</button>
+  </div>
+  <div class="copy-label">Copy for terminal</div>
+  <div class="btn-row">
+    <button class="secondary" onclick="copyFor('curl', this)">Copy curl</button>
+    <button class="secondary" onclick="copyFor('mpv', this)">Copy mpv</button>
+    <button class="secondary" onclick="copyFor('vlc', this)">Copy VLC</button>
+    <button class="secondary" onclick="copyFor('ffplay', this)">Copy ffplay</button>
   </div>
 </div>
 
@@ -100,6 +107,7 @@ let currentOriginalUrl = '';
 let currentHeaders = {};
 let hlsInstance = null;
 let dashPlayer = null;
+const STORAGE_KEY = 'pb-proxy-demo-state-v1';
 
 function parseCurl(curlStr) {
   const lines = curlStr.trim().replace(/\\\s*\n/g, ' ').trim();
@@ -173,16 +181,19 @@ function buildProxyUrl() {
   document.getElementById('proxyUrlText').textContent = currentProxyUrl;
   document.getElementById('resultSection').style.display = 'block';
 
-  // Show parsed headers
+  renderParsedHeaders(parsed.headers);
+  saveDraft();
+  clearError();
+}
+
+function renderParsedHeaders(headers) {
   const hdrDiv = document.getElementById('parsedHeaders');
-  let hdrHtml = `<span class="tag">${Object.keys(parsed.headers).length} headers</span> `;
-  for (const [k, v] of Object.entries(parsed.headers)) {
+  let hdrHtml = `<span class="tag">${Object.keys(headers).length} headers</span> `;
+  for (const [k, v] of Object.entries(headers)) {
     const shortV = v.length > 40 ? v.substring(0, 40) + '…' : v;
     hdrHtml += `<span class="hdr"><span class="k">${esc(k)}</span>: <span class="v">${esc(shortV)}</span></span> `;
   }
   hdrDiv.innerHTML = hdrHtml;
-
-  clearError();
 }
 
 function playInPage() {
@@ -227,26 +238,101 @@ function playInPage() {
   section.scrollIntoView({ behavior: 'smooth' });
 }
 
-function openInExternal() {
-  // Opens in default browser (useful for mpv:// or just new tab)
+function openInBrowser() {
   window.open(currentProxyUrl, '_blank');
 }
 
-function copyProxyUrl() {
-  navigator.clipboard.writeText(currentProxyUrl).then(() => {
-    const btn = document.querySelector('#proxyUrlOutput .copy-btn');
-    btn.textContent = 'Copied!';
-    setTimeout(() => btn.textContent = 'Copy', 1500);
-  });
+function shellQuote(value) {
+  return "'" + value.replace(/'/g, "'\"'\"'") + "'";
 }
 
-function copyCurlForProxy() {
-  const curlCmd = `curl '${currentProxyUrl}'`;
-  navigator.clipboard.writeText(curlCmd).then(() => {
-    const btn = document.querySelector('#proxyUrlOutput .copy-btn');
-    btn.textContent = 'Copied curl!';
-    setTimeout(() => btn.textContent = 'Copy', 1500);
-  });
+function copyTextFor(destination) {
+  if (destination === 'url') return currentProxyUrl;
+  return `${destination} ${shellQuote(currentProxyUrl)}`;
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error('Clipboard copy was rejected by the browser');
+}
+
+async function copyFor(destination, button) {
+  if (!currentProxyUrl) return;
+
+  const originalLabel = button.textContent;
+  try {
+    await writeClipboard(copyTextFor(destination));
+    button.textContent = 'Copied!';
+  } catch (_) {
+    button.textContent = 'Copy failed';
+  }
+  setTimeout(() => button.textContent = originalLabel, 1500);
+}
+
+function saveDraft() {
+  const state = {
+    proxyHost: document.getElementById('proxyHost').value,
+    proxyPort: document.getElementById('proxyPort').value,
+    proxyPassword: document.getElementById('proxyPassword').value,
+    curlInput: document.getElementById('curlInput').value,
+    currentProxyUrl,
+    currentOriginalUrl,
+    currentHeaders,
+  };
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (_) {
+    // Storage can be unavailable for file:// pages or private browsing.
+  }
+}
+
+function restoreDraft() {
+  let state;
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
+    state = JSON.parse(saved);
+  } catch (_) {
+    return;
+  }
+
+  if (!state || typeof state !== 'object') return;
+
+  for (const id of ['proxyHost', 'proxyPort', 'proxyPassword', 'curlInput']) {
+    if (typeof state[id] === 'string') {
+      document.getElementById(id).value = state[id];
+    }
+  }
+
+  currentProxyUrl = typeof state.currentProxyUrl === 'string'
+    ? state.currentProxyUrl
+    : '';
+  currentOriginalUrl = typeof state.currentOriginalUrl === 'string'
+    ? state.currentOriginalUrl
+    : '';
+  currentHeaders = state.currentHeaders && typeof state.currentHeaders === 'object'
+    ? state.currentHeaders
+    : {};
+
+  if (currentProxyUrl) {
+    document.getElementById('proxyUrlText').textContent = currentProxyUrl;
+    document.getElementById('resultSection').style.display = 'block';
+    renderParsedHeaders(currentHeaders);
+  }
 }
 
 function clearAll() {
@@ -259,6 +345,9 @@ function clearAll() {
   currentProxyUrl = '';
   currentOriginalUrl = '';
   currentHeaders = {};
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (_) {}
 }
 
 function showError(msg) {
@@ -299,6 +388,11 @@ function esc(s) {
     dashBadge.innerHTML = '<span class="tag" style="color:#f85149; border-color:#f8514944; background:#f8514922;">DASH: not supported</span>';
   }
 })();
+
+restoreDraft();
+for (const id of ['proxyHost', 'proxyPort', 'proxyPassword', 'curlInput']) {
+  document.getElementById(id).addEventListener('input', saveDraft);
+}
 </script>
 
 </body>
