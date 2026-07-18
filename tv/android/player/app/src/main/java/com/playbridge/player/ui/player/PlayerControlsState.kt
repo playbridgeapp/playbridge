@@ -18,6 +18,9 @@ data class UnifiedTrack(
     val type: String // "video", "audio", "sub", "external_sub"
 )
 
+internal fun List<UnifiedTrack>.hasSelectableVideoQualities(): Boolean =
+    count { it.type == "video" && it.id != "auto" } > 1
+
 /**
  * Represents the state of the video player controls overlay.
  */

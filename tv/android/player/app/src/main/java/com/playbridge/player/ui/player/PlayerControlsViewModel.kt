@@ -462,10 +462,20 @@ class PlayerControlsViewModel : ViewModel() {
             val existingIds = mergedSubs.map { it.id }.toSet()
             val newOnlineTracks = onlineTracks.filter { it.id !in existingIds }
             
+            val activeTab = if (
+                state.activeSettingsTab == SettingsTab.VIDEO &&
+                !video.hasSelectableVideoQualities()
+            ) {
+                SettingsTab.AUDIO
+            } else {
+                state.activeSettingsTab
+            }
+
             state.copy(
                 audioTracks = audio,
                 subtitleTracks = mergedSubs + newOnlineTracks,
-                videoTracks = video
+                videoTracks = video,
+                activeSettingsTab = activeTab,
             )
         }
     }

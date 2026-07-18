@@ -69,6 +69,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     private val _subtitleTracks = MutableStateFlow<List<Track>>(emptyList())
     override val subtitleTracks: StateFlow<List<Track>> = _subtitleTracks.asStateFlow()
 
+    private val _videoTracks = MutableStateFlow<List<Track>>(emptyList())
+    val videoTracks: StateFlow<List<Track>> = _videoTracks.asStateFlow()
+
     // MPV-specific stream info
     private val _videoHeight = MutableStateFlow(0L)
     val videoHeight: StateFlow<Long> = _videoHeight.asStateFlow()
@@ -435,21 +438,40 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             val arr = org.json.JSONArray(json)
             val audio = mutableListOf<Track>()
             val subtitles = mutableListOf<Track>()
+            val video = mutableListOf<Track>()
 
             for (i in 0 until arr.length()) {
                 val obj = arr.getJSONObject(i)
                 val id = obj.getInt("id").toString()
                 val type = obj.getString("type")
-                val title = obj.optString("title", "Track $id")
+                val title = obj.optString("title").takeIf { it.isNotBlank() }
                 val lang = if (obj.has("lang")) obj.getString("lang") else null
 
-                val track = Track(id, title, lang)
-                if (type == "audio") audio.add(track)
-                else if (type == "video" == false && type == "sub") subtitles.add(track)
+                when (type) {
+                    "audio" -> audio += Track(id, title ?: lang ?: "Track $id", lang)
+                    "sub" -> subtitles += Track(id, title ?: lang ?: "Track $id", lang)
+                    "video" -> {
+                        val height = obj.optInt("demux-h", 0)
+                        val bitrate = obj.optLong("demux-bitrate", 0L)
+                        val quality = if (height > 0) "${height}p" else title ?: "Video $id"
+                        val bitrateLabel = bitrate.takeIf { it > 0L }?.let {
+                            String.format(java.util.Locale.US, "%.1f Mbps", it / 1_000_000f)
+                        }
+                        video += Track(
+                            id = id,
+                            label = listOfNotNull(quality, bitrateLabel).joinToString(" • "),
+                            language = lang,
+                        )
+                    }
+                }
             }
             _audioTracks.value = audio
             _subtitleTracks.value = subtitles
-            logger.d(TAG, "Tracks updated: audio=${audio.size}, subtitles=${subtitles.size}")
+            _videoTracks.value = video
+            logger.d(
+                TAG,
+                "Tracks updated: video=${video.size}, audio=${audio.size}, subtitles=${subtitles.size}",
+            )
         } catch (e: Exception) {
             logger.e(TAG, "Failed to parse track-list JSON", e)
         }
@@ -542,7 +564,12 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             MPVLib.setPropertyString("video-unscaled", "no")
             MPVLib.setPropertyString("keepaspect", "yes")
             when (mode) {
-                "Fill", "Zoom" -> {
+                "Fill" -> {
+                    MPVLib.setPropertyString("video-aspect-override", "no")
+                    MPVLib.setPropertyString("keepaspect", "no")
+                    MPVLib.setPropertyDouble("panscan", 0.0)
+                }
+                "Zoom" -> {
                     MPVLib.setPropertyString("video-aspect-override", "no")
                     MPVLib.setPropertyDouble("panscan", 1.0)
                 }

@@ -43,6 +43,7 @@ class MpvRendererService : Service() {
     private var currentTitle: String? = null
     private var playWhenReady = false
     private var endedSessionId = 0L
+    private var selectedVideoTrackId: String? = null
     private var selectedAudioTrackId: String? = null
     private var selectedSubtitleTrackId: String? = null
     private var tracksJob: kotlinx.coroutines.Job? = null
@@ -68,6 +69,7 @@ class MpvRendererService : Service() {
             firstFrameSession = 0L
             playWhenReady = false
             endedSessionId = 0L
+            selectedVideoTrackId = null
             selectedAudioTrackId = null
             selectedSubtitleTrackId = null
             fileReadySessionId = 0L
@@ -164,10 +166,17 @@ class MpvRendererService : Service() {
             if (isCurrent(requestedSessionId)) engine?.setSubtitleDelay(delayMs)
         }
 
+        override fun setVideoTrack(trackId: String?, requestedSessionId: Long) = onMain {
+            if (!isCurrent(requestedSessionId)) return@onMain
+            selectedVideoTrackId = trackId?.takeUnless { it == "auto" }
+            engine?.setVideoTrack(if (trackId == "auto") "auto" else selectedVideoTrackId)
+            sendTracks()
+        }
+
         override fun setAudioTrack(trackId: String?, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             selectedAudioTrackId = trackId?.takeUnless { it == "auto" }
-            engine?.setAudioTrack(selectedAudioTrackId)
+            engine?.setAudioTrack(if (trackId == "auto") "auto" else selectedAudioTrackId)
             sendTracks()
         }
 
@@ -294,7 +303,7 @@ class MpvRendererService : Service() {
     private fun observeTracks(renderer: MpvPlayerEngine) {
         tracksJob?.cancel()
         tracksJob = scope.launch {
-            combine(renderer.audioTracks, renderer.subtitleTracks) { _, _ -> Unit }
+            combine(renderer.videoTracks, renderer.audioTracks, renderer.subtitleTracks) { _, _, _ -> Unit }
                 .collectLatest {
                     completePendingExternalSubtitleIfPresent(renderer)
                     sendTracks()
@@ -304,6 +313,12 @@ class MpvRendererService : Service() {
 
     private fun sendTracks() {
         val renderer = engine ?: return
+        val video = arrayListOf(
+            trackBundle("auto", "Auto", null, selectedVideoTrackId == null),
+        )
+        video += renderer.videoTracks.value.map { track ->
+            trackBundle(track.id, track.label, track.language, selectedVideoTrackId == track.id)
+        }
         val audio = arrayListOf(
             trackBundle("auto", "Auto / Default", null, selectedAudioTrackId == null),
         )
@@ -333,6 +348,7 @@ class MpvRendererService : Service() {
                 )
             }
         sendEvent(RendererProtocol.EVENT_TRACKS, Bundle().apply {
+            putParcelableArrayList(RendererProtocol.KEY_VIDEO_TRACKS, video)
             putParcelableArrayList(RendererProtocol.KEY_AUDIO_TRACKS, audio)
             putParcelableArrayList(RendererProtocol.KEY_SUBTITLE_TRACKS, subtitles)
         })
@@ -413,6 +429,7 @@ class MpvRendererService : Service() {
         currentTitle = null
         playWhenReady = false
         endedSessionId = 0L
+        selectedVideoTrackId = null
         selectedAudioTrackId = null
         selectedSubtitleTrackId = null
         pendingPayload = null

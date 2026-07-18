@@ -16,6 +16,7 @@ internal object RendererProtocol {
     const val KEY_VIDEO_WIDTH = "video_width"
     const val KEY_VIDEO_HEIGHT = "video_height"
     const val KEY_VIDEO_FPS = "video_fps"
+    const val KEY_VIDEO_TRACKS = "video_tracks"
     const val KEY_AUDIO_TRACKS = "audio_tracks"
     const val KEY_SUBTITLE_TRACKS = "subtitle_tracks"
     const val KEY_TRACK_ID = "track_id"

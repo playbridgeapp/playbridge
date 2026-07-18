@@ -103,6 +103,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
     private var requestedStartPositionMs: Long? = null
     private var lastSavedPositionMs = 0L
+    private var videoTracks: List<RendererTrack> = emptyList()
     private var audioTracks: List<RendererTrack> = emptyList()
     private var subtitleTracks: List<RendererTrack> = emptyList()
     private var externalSubtitleUrls: List<String> = emptyList()
@@ -388,6 +389,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val currentSession = session ?: return
         val renderer = rendererService ?: return
         when (track.type) {
+            "video" -> runCatching { renderer.setVideoTrack(track.id, currentSession.sessionId) }
             "audio" -> runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
             "sub" -> {
                 selectRendererSubtitle(track.id, renderer, currentSession.sessionId)
@@ -639,6 +641,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         lastDurationMs = 0L
         resetVideoSurfaceLayout()
         lastSavedPositionMs = 0L
+        videoTracks = emptyList()
         audioTracks = emptyList()
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
@@ -1083,6 +1086,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         lastPositionMs = 0L
         lastDurationMs = 0L
         resetVideoSurfaceLayout()
+        videoTracks = emptyList()
         audioTracks = emptyList()
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
@@ -1183,6 +1187,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     selected = track.getBoolean(RendererProtocol.KEY_TRACK_SELECTED),
                 )
             }
+        videoTracks = decode(RendererProtocol.KEY_VIDEO_TRACKS)
         audioTracks = decode(RendererProtocol.KEY_AUDIO_TRACKS)
         subtitleTracks = decode(RendererProtocol.KEY_SUBTITLE_TRACKS)
         progressManager.updateSelections(
@@ -1262,7 +1267,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     type = "external_sub",
                 )
             },
-            video = emptyList(),
+            video = videoTracks.map { UnifiedTrack(it.id, it.label, it.selected, "video") },
             currentSubtitleUrl = currentExternalSubtitleUrl,
         )
     }
@@ -1295,6 +1300,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         val status = org.json.JSONObject().apply {
             put("type", "tracks")
+            put("video", encode(videoTracks, "video"))
             put("audio", encode(audioTracks, "audio"))
             put("subtitle", encodedSubtitles)
         }.toString()

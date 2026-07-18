@@ -61,6 +61,7 @@ class ExoRendererService : Service() {
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var loudnessSessionId = 0
     private var audioBoostEnabled = false
+    private var selectedVideoTrackId: String? = null
     private var pendingExternalSubtitle: PendingExternalSubtitle? = null
     private var externalSubtitleTimeout: Runnable? = null
 
@@ -77,6 +78,7 @@ class ExoRendererService : Service() {
             readySessionId = 0L
             firstFrameSessionId = 0L
             endedSessionId = 0L
+            selectedVideoTrackId = null
             val payload = request.getString(RendererProtocol.KEY_PAYLOAD_JSON)
                 ?.let(::decodePlayPayloadListJson)
                 ?.firstOrNull()
@@ -137,7 +139,7 @@ class ExoRendererService : Service() {
         override fun setVideoScaling(mode: String?, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
             engine?.getExoPlayer()?.videoScalingMode = when (mode) {
-                "Fill", "Zoom" -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+                "Zoom" -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
                 else -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT
             }
         }
@@ -159,6 +161,12 @@ class ExoRendererService : Service() {
         }
 
         override fun setSubtitleDelay(delayMs: Long, requestedSessionId: Long) = Unit
+
+        override fun setVideoTrack(trackId: String?, requestedSessionId: Long) = onMain {
+            if (!isCurrent(requestedSessionId)) return@onMain
+            selectedVideoTrackId = trackId?.takeUnless { it == "auto" }
+            selectTrack(C.TRACK_TYPE_VIDEO, trackId)
+        }
 
         override fun setAudioTrack(trackId: String?, requestedSessionId: Long) = onMain {
             if (isCurrent(requestedSessionId)) selectTrack(C.TRACK_TYPE_AUDIO, trackId)
@@ -345,18 +353,21 @@ class ExoRendererService : Service() {
                 loudnessEnhancer = LoudnessEnhancer(sessionId)
                 loudnessSessionId = sessionId
             }
-            loudnessEnhancer?.setTargetGain(2_000)
+            loudnessEnhancer?.setTargetGain(800)
             loudnessEnhancer?.enabled = true
         }.onFailure { Log.w(TAG, "Audio boost unavailable", it) }
     }
 
     private fun sendTracks(tracks: Tracks) {
+        val video = arrayListOf<Bundle>()
         val audio = arrayListOf<Bundle>()
         val subtitles = arrayListOf<Bundle>()
+        video += trackBundle("auto", "Auto", null, selectedVideoTrackId == null)
         audio += trackBundle("auto", "Auto / Default", null, selected = false)
         subtitles += trackBundle("off", "Off", null, selected = false)
         tracks.groups.forEachIndexed { groupIndex, group ->
             val target = when (group.type) {
+                C.TRACK_TYPE_VIDEO -> video
                 C.TRACK_TYPE_AUDIO -> audio
                 C.TRACK_TYPE_TEXT -> subtitles
                 else -> return@forEachIndexed
@@ -368,17 +379,25 @@ class ExoRendererService : Service() {
                 }
                 target += trackBundle(
                     id = "$groupIndex:$trackIndex",
-                    label = if (group.type == C.TRACK_TYPE_TEXT) {
-                        buildSubtitleTrackLabel(
+                    label = when (group.type) {
+                        C.TRACK_TYPE_VIDEO -> buildVideoTrackLabel(
+                            height = format.height,
+                            bitrate = format.bitrate,
+                            fallback = format.label ?: "Video ${trackIndex + 1}",
+                        )
+                        C.TRACK_TYPE_TEXT -> buildSubtitleTrackLabel(
                             label = format.label,
                             language = format.language,
                             fallback = "Subtitle ${trackIndex + 1}",
                         )
-                    } else {
-                        format.label ?: format.language ?: "Track ${trackIndex + 1}"
+                        else -> format.label ?: format.language ?: "Track ${trackIndex + 1}"
                     },
                     language = format.language,
-                    selected = group.isTrackSelected(trackIndex),
+                    selected = if (group.type == C.TRACK_TYPE_VIDEO) {
+                        selectedVideoTrackId == "$groupIndex:$trackIndex"
+                    } else {
+                        group.isTrackSelected(trackIndex)
+                    },
                 )
             }
         }
@@ -391,9 +410,18 @@ class ExoRendererService : Service() {
             subtitles.drop(1).none { it.getBoolean(RendererProtocol.KEY_TRACK_SELECTED) },
         )
         sendEvent(RendererProtocol.EVENT_TRACKS, Bundle().apply {
+            putParcelableArrayList(RendererProtocol.KEY_VIDEO_TRACKS, video)
             putParcelableArrayList(RendererProtocol.KEY_AUDIO_TRACKS, audio)
             putParcelableArrayList(RendererProtocol.KEY_SUBTITLE_TRACKS, subtitles)
         })
+    }
+
+    private fun buildVideoTrackLabel(height: Int, bitrate: Int, fallback: String): String {
+        val quality = if (height > 0) "${height}p" else fallback
+        val bitrateLabel = bitrate.takeIf { it > 0 }?.let { value ->
+            String.format(java.util.Locale.US, "%.1f Mbps", value / 1_000_000f)
+        }
+        return listOfNotNull(quality, bitrateLabel).joinToString(" • ")
     }
 
     private fun selectExternalSubtitleTrack(tracks: Tracks): Boolean {
@@ -492,6 +520,7 @@ class ExoRendererService : Service() {
         loudnessEnhancer = null
         loudnessSessionId = 0
         audioBoostEnabled = false
+        selectedVideoTrackId = null
     }
 
     @OptIn(kotlinx.coroutines.FlowPreview::class)

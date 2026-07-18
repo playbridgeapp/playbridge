@@ -17,6 +17,7 @@ oneway interface IRendererService {
     void setLooping(boolean enabled, long sessionId);
     void setAudioBoost(boolean enabled, long sessionId);
     void setSubtitleDelay(long delayMs, long sessionId);
+    void setVideoTrack(String trackId, long sessionId);
     void setAudioTrack(String trackId, long sessionId);
     void setSubtitleTrack(String trackId, long sessionId);
     void addExternalSubtitle(String url, String language, long sessionId);

@@ -75,12 +75,14 @@ fun MediaSettingsPanel(
                     )
                 }
 
-                val tabs = listOf(
-                    SettingsTab.VIDEO to "Video",
-                    SettingsTab.AUDIO to "Audio",
-                    SettingsTab.SPEED to "Speed",
-                    SettingsTab.SCALING to "Scaling"
-                )
+                val tabs = buildList {
+                    if (state.videoTracks.hasSelectableVideoQualities()) {
+                        add(SettingsTab.VIDEO to "Quality")
+                    }
+                    add(SettingsTab.AUDIO to "Audio")
+                    add(SettingsTab.SPEED to "Speed")
+                    add(SettingsTab.SCALING to "Scaling")
+                }
 
                 items(tabs, key = { it.first.name }) { (tab, label) ->
                     SettingsTabButton(
@@ -111,7 +113,7 @@ fun MediaSettingsPanel(
                         }
                     }
                     SettingsTab.SPEED -> SpeedSettingsList(state.playbackSpeed, onSpeedSelected)
-                    SettingsTab.SCALING -> ScalingSettingsList(state.videoScalingMode, onScalingSelected, state.engineType)
+                    SettingsTab.SCALING -> ScalingSettingsList(state.videoScalingMode, onScalingSelected)
                 }
             }
         }
@@ -296,12 +298,9 @@ private fun SpeedSettingsList(
 private fun ScalingSettingsList(
     currentMode: String,
     onModeSelected: (String) -> Unit,
-    engineType: String
 ) {
-    val modes = when {
-        engineType.contains("mpv") -> listOf("Fit", "Fill", "Zoom")
-        else -> listOf("Fit", "Fill", "Zoom", "Fixed Width", "Fixed Height")
-    }
+    // These are the modes implemented consistently by both permanent renderer services.
+    val modes = listOf("Fit", "Fill", "Zoom")
 
     LazyColumn(
         modifier = Modifier
@@ -358,13 +357,13 @@ private fun AudioBoostItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Audio Boost (Night Mode)",
+                    text = "Audio Boost",
                     style = MaterialTheme.typography.labelLarge,
                     color = if (isEnabled) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Normalize loudness & boost dialogue",
+                    text = "Increase quiet audio and dialogue",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -372,4 +371,3 @@ private fun AudioBoostItem(
         }
     }
 }
-
