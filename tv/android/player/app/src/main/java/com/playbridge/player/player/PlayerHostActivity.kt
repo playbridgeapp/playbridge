@@ -22,11 +22,13 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
+import androidx.annotation.StringRes
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
@@ -96,6 +98,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var lastSavedPositionMs = 0L
     private var audioTracks: List<RendererTrack> = emptyList()
     private var subtitleTracks: List<RendererTrack> = emptyList()
+    private var externalSubtitleUrls: List<String> = emptyList()
     private var currentExternalSubtitleUrl: String? = null
     private val controlsAdapter = object : PlayerEngineAdapter {
         override val isPlaying: Boolean get() = hostPlaying
@@ -320,7 +323,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         lifecycleScope.launch { playbackCoordinator.jumpTo(index) }
                     },
                     onPlayerSwitched = { playerId ->
-                        controlsViewModel.hideOverlay()
+                        controlsViewModel.hideControls()
                         switchRenderer(
                             if (playerId.equals("mpv", ignoreCase = true)) {
                                 RendererKind.MPV
@@ -351,25 +354,49 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when (track.type) {
             "audio" -> runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
             "sub" -> {
-                currentExternalSubtitleUrl = null
-                controlsViewModel.clearSubtitle()
-                runCatching { renderer.setSubtitleTrack(track.id, currentSession.sessionId) }
+                selectRendererSubtitle(track.id, renderer, currentSession.sessionId)
             }
             "external_sub" -> {
-                currentExternalSubtitleUrl = track.id
-                runCatching { renderer.setSubtitleTrack("off", currentSession.sessionId) }
-                controlsViewModel.loadExternalSubtitle(
-                    track.id,
-                    playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)?.headers,
-                )
-                progressManager.updateSelections(externalSubtitleUrl = track.id)
+                selectExternalSubtitle(track.id, renderer, currentSession.sessionId)
             }
         }
+    }
+
+    private fun selectRendererSubtitle(
+        trackId: String,
+        renderer: IRendererService,
+        sessionId: Long,
+    ) {
+        currentExternalSubtitleUrl = null
+        controlsViewModel.clearSubtitle()
+        subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == trackId) }
+        runCatching { renderer.setSubtitleTrack(trackId, sessionId) }
+        updateTrackControls()
+        broadcastTracks()
+    }
+
+    private fun selectExternalSubtitle(
+        url: String,
+        renderer: IRendererService,
+        sessionId: Long,
+    ) {
+        if (url.isBlank()) return
+        externalSubtitleUrls = (externalSubtitleUrls + url).distinct()
+        currentExternalSubtitleUrl = url
+        runCatching { renderer.setSubtitleTrack("off", sessionId) }
+        controlsViewModel.loadExternalSubtitle(
+            url,
+            playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)?.headers,
+        )
+        progressManager.updateSelections(externalSubtitleUrl = url)
+        updateTrackControls()
+        broadcastTracks()
     }
 
     private fun switchRenderer(target: RendererKind) {
         if (target == rendererKind || target !in setOf(RendererKind.MPV, RendererKind.EXO)) return
         FileLogger.i(TAG, "Switching renderer from $rendererKind to $target")
+        showTransition(R.string.player_switching, force = true)
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         progressManager.saveProgress()
@@ -391,7 +418,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setEngine(controlsAdapter, target.name.lowercase(), this)
         ServerService.notifyContextPlayer(this, target.engineId)
         resetVideoSurfaceLayout()
-        bindRenderer()
+        bindRenderer(R.string.player_switching)
     }
 
     override fun onDestroy() {
@@ -457,7 +484,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             unbindCurrentRenderer()
             rotateRendererSurface()
             terminateRendererProcess(oldKind)
-            bindRenderer()
+            bindRenderer(R.string.player_switching)
             return
         }
 
@@ -471,6 +498,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
 
         val currentSession = session ?: return
+        showTransition(R.string.player_preparing)
         scheduleRendererOpenWatchdog(currentSession.sessionId, targetKind)
         try {
             renderer.setCallback(callback)
@@ -489,9 +517,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         lastSavedPositionMs = 0L
         audioTracks = emptyList()
         subtitleTracks = emptyList()
+        externalSubtitleUrls = emptyList()
         currentExternalSubtitleUrl = null
         controlsViewModel.setPlaying(false)
         controlsViewModel.setBuffering(true)
+        controlsViewModel.clearPlaybackTransition()
+        controlsViewModel.hideControls()
         controlsViewModel.clearSubtitle()
         controlsViewModel.updateTracks(
             audio = emptyList(),
@@ -520,6 +551,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             ?: RendererKind.EXO
 
     private fun failEmptyInitialRequest() {
+        showTransition(R.string.player_empty_request, force = true)
         finishingSession = true
         val finishRunnable = Runnable {
             failureFinishRunnable = null
@@ -534,7 +566,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         failureFinishRunnable = null
     }
 
-    private fun bindRenderer() {
+    private fun bindRenderer(@StringRes transitionMessage: Int = R.string.player_preparing) {
         val currentSession = session ?: return
         val expectedKind = rendererKind
         val expectedSessionId = currentSession.sessionId
@@ -548,6 +580,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
 
+        showTransition(transitionMessage)
         scheduleRendererOpenWatchdog(expectedSessionId, expectedKind)
 
         val newConnection = object : ServiceConnection {
@@ -661,6 +694,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             thumbnailUrl = visualMetadata?.backdrop_url ?: visualMetadata?.poster_url,
             preferredAudioLanguage = payload.preferred_audio_language,
             preferredSubtitleLanguage = payload.preferred_subtitle_language,
+            externalSubtitleUrl = currentExternalSubtitleUrl,
             playbackSpeed = controlsViewModel.controlsState.value.playbackSpeed,
         )
         progressManager.recordLanded(requestedStartPositionMs ?: 0L)
@@ -679,6 +713,15 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         controlsViewModel.setPrePlayLaunching(shouldShowPrePlay)
         controlsViewModel.setPrePlayCountdown(if (shouldShowPrePlay) -1 else 0)
+        externalSubtitleUrls = item.subtitles.filter(String::isNotBlank).distinct()
+        currentExternalSubtitleUrl = currentExternalSubtitleUrl
+            ?.takeIf { it in externalSubtitleUrls }
+            ?: externalSubtitleUrls.firstOrNull()
+        currentExternalSubtitleUrl?.let { url ->
+            controlsViewModel.loadExternalSubtitle(url, item.headers)
+        } ?: controlsViewModel.clearSubtitle()
+        updateTrackControls()
+        broadcastTracks()
         controlsViewModel.updatePlaylistData(playbackCoordinator.playlist, playbackCoordinator.index)
         controlsViewModel.setPlaylistVisible(playbackCoordinator.hasPlaylist)
         controlsViewModel.setBuffering(true)
@@ -726,12 +769,19 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 sessionCoordinator.markReady(currentSession.sessionId)
                 cancelStartupWatchdog()
                 controlsViewModel.setBuffering(false)
+                controlsViewModel.clearPlaybackTransition()
+                if (currentExternalSubtitleUrl != null) {
+                    runCatching {
+                        rendererService?.setSubtitleTrack("off", currentSession.sessionId)
+                    }
+                }
                 val hasPrePlay = controlsViewModel.controlsState.value.prePlayMetadata != null
                 if (hasPrePlay) {
                     startPrePlayCountdown(currentSession.sessionId)
                 }
             }
             RendererProtocol.EVENT_FIRST_FRAME -> {
+                controlsViewModel.clearPlaybackTransition()
                 markPlaybackStarted(currentSession.sessionId)
             }
             RendererProtocol.EVENT_STATE -> {
@@ -739,6 +789,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 hostPlaying = state == "playing"
                 controlsViewModel.setPlaying(hostPlaying)
                 controlsViewModel.setBuffering(state == "buffering")
+                if (state == "playing") controlsViewModel.clearPlaybackTransition()
                 val reportedPositionMs = event
                     .getLong(RendererProtocol.KEY_POSITION_MS)
                     .coerceAtLeast(0L)
@@ -806,10 +857,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         lastPositionMs = 0L
         lastDurationMs = 0L
         resetVideoSurfaceLayout()
+        audioTracks = emptyList()
+        subtitleTracks = emptyList()
+        externalSubtitleUrls = emptyList()
         currentExternalSubtitleUrl = null
         controlsViewModel.clearSubtitle()
         requestedStartPositionMs = null
         updateControlsForCurrentItem()
+        showTransition(R.string.player_preparing_next)
         scheduleRendererOpenWatchdog(session!!.sessionId, rendererKind)
         try {
             renderer.setCallback(callback)
@@ -901,14 +956,29 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         progressManager.updateSelections(
             preferredAudioLanguage = audioTracks.firstOrNull { it.selected }?.language,
             preferredSubtitleLanguage = subtitleTracks.firstOrNull { it.selected }?.language,
+            externalSubtitleUrl = currentExternalSubtitleUrl,
         )
+        updateTrackControls()
+        broadcastTracks()
+    }
+
+    private fun updateTrackControls() {
+        val hasExternalSelection = currentExternalSubtitleUrl != null
         controlsViewModel.updateTracks(
             audio = audioTracks.map { UnifiedTrack(it.id, it.label, it.selected, "audio") },
-            subtitles = subtitleTracks.map { UnifiedTrack(it.id, it.label, it.selected, "sub") },
+            subtitles = subtitleTracks.map {
+                UnifiedTrack(it.id, it.label, it.selected && !hasExternalSelection, "sub")
+            } + externalSubtitleUrls.map { url ->
+                UnifiedTrack(
+                    id = url,
+                    name = externalSubtitleName(url),
+                    isSelected = url == currentExternalSubtitleUrl,
+                    type = "external_sub",
+                )
+            },
             video = emptyList(),
             currentSubtitleUrl = currentExternalSubtitleUrl,
         )
-        broadcastTracks()
     }
 
     private fun broadcastTracks() {
@@ -922,10 +992,25 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 })
             }
         }
+        val encodedSubtitles = encode(
+            subtitleTracks.map { track ->
+                track.copy(selected = track.selected && currentExternalSubtitleUrl == null)
+            },
+            "sub",
+        ).apply {
+            externalSubtitleUrls.forEach { url ->
+                put(org.json.JSONObject().apply {
+                    put("id", url)
+                    put("name", externalSubtitleName(url))
+                    put("selected", url == currentExternalSubtitleUrl)
+                    put("type", "external_sub")
+                })
+            }
+        }
         val status = org.json.JSONObject().apply {
             put("type", "tracks")
             put("audio", encode(audioTracks, "audio"))
-            put("subtitle", encode(subtitleTracks, "sub"))
+            put("subtitle", encodedSubtitles)
         }.toString()
         ServerService.broadcastStatus(this, status)
     }
@@ -951,6 +1036,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             else -> null
         }
         if (fallback == null || fallback in attemptedRenderers) {
+            showTransition(R.string.player_failed, force = true)
             finishingSession = true
             val finishRunnable = Runnable {
                 failureFinishRunnable = null
@@ -968,7 +1054,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setEngine(controlsAdapter, fallback.name.lowercase(), this)
         ServerService.notifyContextPlayer(this, fallback.engineId)
         controlsViewModel.setBuffering(true)
-        bindRenderer()
+        bindRenderer(R.string.player_switching)
     }
 
     private fun terminateRendererProcess(kind: RendererKind) {
@@ -1023,6 +1109,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             if (session?.sessionId != sessionId) return@launch
             controlsViewModel.setPrePlayCountdown(0)
             controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
+            showTransition(R.string.player_starting, force = true)
             runCatching { rendererService?.play(sessionId) }
         }
     }
@@ -1032,6 +1119,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelPrePlayCountdown()
         controlsViewModel.setPrePlayCountdown(0)
         controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
+        showTransition(R.string.player_starting, force = true)
         runCatching { rendererService?.play(currentSession.sessionId) }
     }
 
@@ -1096,18 +1184,16 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             command?.startsWith("sub_track:") == true -> {
                 val trackId = command.removePrefix("sub_track:")
-                runCatching { renderer.setSubtitleTrack(trackId, currentSession.sessionId) }
+                if (trackId in externalSubtitleUrls) {
+                    selectExternalSubtitle(trackId, renderer, currentSession.sessionId)
+                } else {
+                    selectRendererSubtitle(trackId, renderer, currentSession.sessionId)
+                }
             }
             command?.startsWith("add_subtitle:") == true -> {
                 val url = command.removePrefix("add_subtitle:")
                 if (url.isNotBlank()) {
-                    currentExternalSubtitleUrl = url
-                    runCatching { renderer.setSubtitleTrack("off", currentSession.sessionId) }
-                    controlsViewModel.loadExternalSubtitle(
-                        url,
-                        playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)?.headers,
-                    )
-                    progressManager.updateSelections(externalSubtitleUrl = url)
+                    selectExternalSubtitle(url, renderer, currentSession.sessionId)
                 }
             }
             command?.startsWith("speed:") == true -> command
@@ -1164,6 +1250,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleRemote(key: String?) {
+        if (key != "back" &&
+            controlsViewModel.controlsState.value.playbackTransitionMessage != null
+        ) return
         when (key) {
             "back" -> {
                 handleBackPressed()
@@ -1182,6 +1271,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun handleDirectionalInput(keyCode: Int, repeatCount: Int = 0): Boolean {
         val state = controlsViewModel.controlsState.value
+        if (state.playbackTransitionMessage != null) return true
         val playbackShortcutsActive = !state.isVisible ||
             (!state.isFullControlsVisible && state.activeOverlay == ActiveOverlay.NONE)
         if (!playbackShortcutsActive) return false
@@ -1227,6 +1317,19 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (controlsViewModel.controlsState.value.playbackTransitionMessage != null) {
+            when (keyCode) {
+                KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_MEDIA_PLAY,
+                KeyEvent.KEYCODE_MEDIA_PAUSE,
+                KeyEvent.KEYCODE_DPAD_CENTER,
+                KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_DPAD_UP,
+                KeyEvent.KEYCODE_DPAD_DOWN,
+                KeyEvent.KEYCODE_DPAD_LEFT,
+                KeyEvent.KEYCODE_DPAD_RIGHT -> return true
+            }
+        }
         when (keyCode) {
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                 handleControl("toggle")
@@ -1290,6 +1393,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun newRendererSurfaceView(): SurfaceView = SurfaceView(this).also { view ->
         view.holder.addCallback(surfaceCallback)
+    }
+
+    private fun showTransition(@StringRes message: Int, force: Boolean = false) {
+        if (force || controlsViewModel.controlsState.value.prePlayMetadata == null) {
+            controlsViewModel.showPlaybackTransition(getString(message))
+        } else {
+            controlsViewModel.clearPlaybackTransition()
+        }
     }
 
     private fun resetVideoSurfaceLayout() {

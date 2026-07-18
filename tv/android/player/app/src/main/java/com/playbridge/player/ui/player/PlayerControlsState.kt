@@ -27,6 +27,7 @@ data class PlayerControlsState(
     val isFullControlsVisible: Boolean = false,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
+    val playbackTransitionMessage: String? = null,
     val currentPosition: Long = 0,
     val duration: Long = 0,
     val bufferedPosition: Long = 0,

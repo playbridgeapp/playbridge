@@ -155,6 +155,22 @@ class PlayerControlsViewModel : ViewModel() {
     fun setBuffering(isBuffering: Boolean) {
         _controlsState.update { it.copy(isBuffering = isBuffering) }
     }
+
+    fun showPlaybackTransition(message: String) {
+        autoHideJob?.cancel()
+        _controlsState.update {
+            it.copy(
+                playbackTransitionMessage = message,
+                isVisible = false,
+                isFullControlsVisible = false,
+                activeOverlay = ActiveOverlay.NONE,
+            )
+        }
+    }
+
+    fun clearPlaybackTransition() {
+        _controlsState.update { it.copy(playbackTransitionMessage = null) }
+    }
     
     private var skipSegmentsJob: kotlinx.coroutines.Job? = null
 

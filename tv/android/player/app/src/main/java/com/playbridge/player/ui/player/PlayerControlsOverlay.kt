@@ -63,7 +63,7 @@ fun PlayerControlsOverlay(
     Box(modifier = modifier.fillMaxSize()) {
         // Main Controls Overlay
         AnimatedVisibility(
-            visible = state.isVisible,
+            visible = state.isVisible && state.playbackTransitionMessage == null,
             enter = fadeIn(TvExpressiveMotion.effects()),
             exit = fadeOut(TvExpressiveMotion.effects()),
             modifier = Modifier.fillMaxSize()
@@ -221,22 +221,22 @@ fun PlayerControlsOverlay(
             }
         }
 
-        // Buffering Spinner (Only show if not already showing full controls)
-        if (state.isBuffering && !state.isVisible) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier
-                    .size(56.dp)
-                    .align(Alignment.Center),
-                color = MaterialTheme.colorScheme.primary,
-                strokeWidth = 4.dp
+        if (state.prePlayMetadata == null &&
+            (state.playbackTransitionMessage != null ||
+                (state.isBuffering && !state.isVisible))
+        ) {
+            PlaybackTransitionOverlay(
+                message = state.playbackTransitionMessage,
+                showSpinner = state.isBuffering,
+                modifier = Modifier.align(Alignment.Center),
             )
         }
 
         // Subtitle Overlay (Manual Parser)
-        if (state.currentSubtitleText != null) {
+        if (state.currentSubtitleText != null && state.playbackTransitionMessage == null) {
             SubtitleOverlay(
                 text = state.currentSubtitleText,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
 
@@ -353,35 +353,67 @@ private fun StillWatchingDialog(
 }
 
 @Composable
+private fun PlaybackTransitionOverlay(
+    message: String?,
+    showSpinner: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        if (showSpinner) {
+            androidx.compose.material3.CircularProgressIndicator(
+                modifier = Modifier.size(56.dp),
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 4.dp,
+            )
+        }
+        message?.let {
+            Text(
+                text = it,
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 22.dp, vertical = 12.dp),
+            )
+        }
+    }
+}
+
+@Composable
 private fun SubtitleOverlay(
     text: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 72.dp) // Lifted slightly higher for better multi-line clearance
-            .padding(horizontal = 64.dp),
+            .padding(horizontal = 96.dp, vertical = 72.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
         Text(
             text = text,
             style = androidx.compose.ui.text.TextStyle(
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = Color.White,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 shadow = androidx.compose.ui.graphics.Shadow(
-                    color = Color.Black.copy(alpha = 0.9f),
-                    offset = androidx.compose.ui.geometry.Offset(3f, 3f),
-                    blurRadius = 8f
+                    color = Color.Black,
+                    offset = androidx.compose.ui.geometry.Offset(0f, 2f),
+                    blurRadius = 5f,
                 ),
-                lineHeight = 34.sp // Explicit line height for 28sp text
+                lineHeight = 38.sp,
             ),
             softWrap = true,
             overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .widthIn(max = 1400.dp)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
     }
 }
