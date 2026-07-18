@@ -9,6 +9,7 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -17,6 +18,9 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.playbridge.shared.network.IPv4FirstDns
 import okhttp3.OkHttpClient
@@ -69,6 +73,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     private companion object {
         private const val TAG = "ExoPlayerEngine"
+        private const val EXTERNAL_SUBTITLE_ID = "playbridge-external-subtitle"
     }
 
     private var player: ExoPlayer? = null
@@ -104,6 +109,14 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     override suspend fun load(payload: PlayPayload) {
+        load(payload, externalSubtitleUrl = null, externalSubtitleLabel = null)
+    }
+
+    suspend fun load(
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ) {
         logger.i(TAG, "load() called with url: ${redactUrlForLog(payload.url)}")
         currentPayload = payload
         val livePlayer = player
@@ -112,9 +125,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             // Avoids a full release + rebuild (renderers, surface re-attach, decoder
             // warm-up) per item — the black gap between episodes — and preserves
             // player-level state like trackSelectionParameters.
-            reloadOnLivePlayer(livePlayer, payload)
+            reloadOnLivePlayer(livePlayer, payload, externalSubtitleUrl, externalSubtitleLabel)
         } else {
-            initializePlayer(payload)
+            initializePlayer(payload, externalSubtitleUrl, externalSubtitleLabel)
         }
     }
 
@@ -230,6 +243,10 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 .setUserAgent(userAgent)
                 .setDefaultRequestProperties(requestProperties)
         }
+        // Route HTTP(S) through the configured authenticated factory while retaining support for
+        // file/content URIs. Native external subtitles are staged as private file URIs so their
+        // browser headers never need to cross the renderer-process boundary.
+        val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
         val isHls = (payload.detected_by == "body_content_m3u8") ||
                     (payload.detected_by == "url_pattern_m3u8") ||
@@ -253,13 +270,13 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         val mediaSourceFactory = when {
             isHls -> {
                 logger.i(TAG, "Using HlsMediaSource.Factory")
-                HlsMediaSource.Factory(httpDataSourceFactory)
+                HlsMediaSource.Factory(dataSourceFactory)
                     .setAllowChunklessPreparation(true)
                     .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
             }
             isDash -> {
                 logger.i(TAG, "Using DashMediaSource.Factory")
-                DashMediaSource.Factory(httpDataSourceFactory)
+                DashMediaSource.Factory(dataSourceFactory)
                     .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
             }
             else -> {
@@ -267,7 +284,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
                     .setConstantBitrateSeekingEnabled(true)
                     .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
-                DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
+                DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory)
                     .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
             }
         }
@@ -292,7 +309,12 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
      * are layered onto the current parameters; stale per-item overrides are
      * cleared (they reference the previous item's track groups anyway).
      */
-    private fun reloadOnLivePlayer(exoPlayer: ExoPlayer, payload: PlayPayload) {
+    private fun reloadOnLivePlayer(
+        exoPlayer: ExoPlayer,
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ) {
         logger.i(TAG, "Reusing live ExoPlayer for new item (no rebuild)")
 
         val paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon().clearOverrides()
@@ -319,15 +341,24 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         maxVideoBitrateBps(payload.max_bitrate_cap_mbps)?.let { capBps ->
             paramsBuilder.setMaxVideoBitrate(capBps)
         }
+        if (externalSubtitleUrl != null) {
+            paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+        }
         exoPlayer.trackSelectionParameters = paramsBuilder.build()
 
-        exoPlayer.setMediaSource(buildPerItemSource(payload).createMediaSource())
+        exoPlayer.setMediaSource(
+            buildMediaSource(payload, externalSubtitleUrl, externalSubtitleLabel),
+        )
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         startProgressTracker()
     }
 
-    private fun initializePlayer(payload: PlayPayload) {
+    private fun initializePlayer(
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ) {
         val bufCfg = AndroidBufferConfig.compute(context)
         logger.i(TAG, "Initializing player with buffer config: maxBufferMs=${bufCfg.maxBufferMs}, targetBytes=${bufCfg.targetBytes}")
 
@@ -454,6 +485,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 params.setPreferredTextLanguage(it)
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
+            if (externalSubtitleUrl != null) {
+                params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            }
 
             payload.default_video_quality?.let { quality ->
                 val (maxW, maxH) = when (quality.lowercase()) {
@@ -501,7 +535,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
                 videoSurface?.let(exoPlayer::setVideoSurface)
 
-                exoPlayer.setMediaSource(perItem.createMediaSource())
+                exoPlayer.setMediaSource(
+                    createMediaSource(perItem, externalSubtitleUrl, externalSubtitleLabel),
+                )
                 exoPlayer.prepare()
                 }
         startProgressTracker()
@@ -622,8 +658,64 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     override suspend fun attachExternalSubtitle(url: String, language: String?) {
-        logger.i(TAG, "attachExternalSubtitle($url, $language)")
-        // Implementation for external subtitles
+        logger.i(TAG, "attachExternalSubtitle(${redactUrlForLog(url)})")
+        val exoPlayer = player ?: return
+        val payload = currentPayload ?: return
+        val perItem = buildPerItemSource(payload)
+        val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+        val shouldPlay = exoPlayer.playWhenReady
+        val mediaSource = createMediaSource(perItem, url, language)
+
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .build()
+        exoPlayer.setMediaSource(mediaSource, positionMs)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = shouldPlay
+    }
+
+    private fun buildMediaSource(
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ): MediaSource = createMediaSource(
+        buildPerItemSource(payload),
+        externalSubtitleUrl,
+        externalSubtitleLabel,
+    )
+
+    private fun createMediaSource(
+        perItem: PerItemSource,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ): MediaSource {
+        if (externalSubtitleUrl == null) return perItem.createMediaSource()
+        val subtitle = MediaItem.SubtitleConfiguration.Builder(Uri.parse(externalSubtitleUrl))
+            .setMimeType(externalSubtitleMimeType(externalSubtitleUrl))
+            .setLabel(externalSubtitleLabel)
+            .setId(EXTERNAL_SUBTITLE_ID)
+            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+            .build()
+        // HlsMediaSource.Factory and DashMediaSource.Factory only create their primary source;
+        // unlike DefaultMediaSourceFactory, they do not merge MediaItem sidecar configurations.
+        // Build the subtitle source explicitly so browser-cast HLS/DASH streams get the same
+        // native sidecar behavior as progressive media. The subtitle has already been staged as
+        // a private file URI, so a local-capable DefaultDataSource is sufficient here.
+        @Suppress("DEPRECATION")
+        val subtitleSource = SingleSampleMediaSource.Factory(DefaultDataSource.Factory(context))
+            .setTreatLoadErrorsAsEndOfStream(false)
+            .createMediaSource(subtitle, C.TIME_UNSET)
+        return MergingMediaSource(perItem.createMediaSource(), subtitleSource)
+    }
+
+    private fun externalSubtitleMimeType(url: String): String = when (
+        url.substringBefore('?').substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    ) {
+        "vtt" -> MimeTypes.TEXT_VTT
+        "ass", "ssa" -> MimeTypes.TEXT_SSA
+        "ttml", "dfxp", "xml" -> MimeTypes.APPLICATION_TTML
+        else -> MimeTypes.APPLICATION_SUBRIP
     }
 
     override fun release() {

@@ -22,6 +22,11 @@ internal object RendererProtocol {
     const val KEY_TRACK_LABEL = "track_label"
     const val KEY_TRACK_LANGUAGE = "track_language"
     const val KEY_TRACK_SELECTED = "track_selected"
+    const val KEY_CUE_GROUP = "cue_group"
+    const val KEY_SUBTITLE_URI = "subtitle_uri"
+    const val KEY_INITIAL_SUBTITLE_URI = "initial_subtitle_uri"
+    const val KEY_INITIAL_SUBTITLE_LABEL = "initial_subtitle_label"
+    const val KEY_SUCCESS = "success"
 
     const val EVENT_READY = "ready"
     const val EVENT_FIRST_FRAME = "first_frame"
@@ -29,6 +34,8 @@ internal object RendererProtocol {
     const val EVENT_ENDED = "ended"
     const val EVENT_VIDEO_SIZE = "video_size"
     const val EVENT_TRACKS = "tracks"
+    const val EVENT_CUES = "cues"
+    const val EVENT_EXTERNAL_SUBTITLE_RESULT = "external_subtitle_result"
     const val EVENT_STOPPED = "stopped"
     const val EVENT_ERROR = "error"
 }

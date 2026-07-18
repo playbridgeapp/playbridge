@@ -28,6 +28,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.text.CueGroup
+import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.SubtitleView
 import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.logging.FileLogger
@@ -41,9 +44,11 @@ import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.shared.protocol.createStatusJson
 import com.playbridge.shared.protocol.encodePlayPayloadListJson
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import playbridge.PlayPayload
+import java.io.File
 
 private data class RendererTrack(
     val id: String,
@@ -59,9 +64,11 @@ private data class RendererTrack(
  * player activity source remains temporarily for comparison during stress testing, but those
  * activities are no longer registered runtime entry points.
  */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private lateinit var playerRoot: FrameLayout
     private lateinit var surfaceView: SurfaceView
+    private lateinit var subtitleView: SubtitleView
     private lateinit var composeView: ComposeView
     private val controlsViewModel: PlayerControlsViewModel by viewModels()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -100,6 +107,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var subtitleTracks: List<RendererTrack> = emptyList()
     private var externalSubtitleUrls: List<String> = emptyList()
     private var currentExternalSubtitleUrl: String? = null
+    private var externalSubtitleOverlayActive = false
+    private val externalSubtitleStager by lazy { ExternalSubtitleStager(applicationContext) }
+    private val stagedSubtitleFiles = linkedSetOf<File>()
+    private var subtitleStageJob: Job? = null
+    private var pendingNativeSubtitleUri: String? = null
+    private var pendingNativeSubtitleMode: SubtitleRenderingMode? = null
+    private var initialSubtitleHandledSessionId = 0L
+    private var initialSubtitleHandledUrl: String? = null
     private val controlsAdapter = object : PlayerEngineAdapter {
         override val isPlaying: Boolean get() = hostPlaying
         override val currentPosition: Long get() = lastPositionMs
@@ -188,10 +203,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         activeHostCount.incrementAndGet()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         surfaceView = newRendererSurfaceView()
+        subtitleView = createSubtitleView()
         composeView = ComposeView(this)
         playerRoot = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView, FrameLayout.LayoutParams(-1, -1))
+            addView(subtitleView, FrameLayout.LayoutParams(-1, -1))
             addView(composeView, FrameLayout.LayoutParams(-1, -1))
         }
         setContentView(playerRoot)
@@ -348,6 +365,25 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
     }
 
+    private fun createSubtitleView(): SubtitleView = SubtitleView(this).apply {
+        setViewType(SubtitleView.VIEW_TYPE_CANVAS)
+        setApplyEmbeddedStyles(true)
+        setApplyEmbeddedFontSizes(true)
+        setBottomPaddingFraction(SubtitleView.DEFAULT_BOTTOM_PADDING_FRACTION)
+        setStyle(
+            CaptionStyleCompat(
+                Color.WHITE,
+                Color.TRANSPARENT,
+                Color.TRANSPARENT,
+                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                Color.BLACK,
+                null,
+            ),
+        )
+        isFocusable = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
     private fun selectTrack(track: UnifiedTrack) {
         val currentSession = session ?: return
         val renderer = rendererService ?: return
@@ -367,8 +403,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         renderer: IRendererService,
         sessionId: Long,
     ) {
+        subtitleStageJob?.cancel()
+        subtitleStageJob = null
+        clearPendingNativeSubtitle()
+        clearInitialSubtitleHandled()
         currentExternalSubtitleUrl = null
+        externalSubtitleOverlayActive = false
         controlsViewModel.clearSubtitle()
+        subtitleView.setCues(emptyList())
         subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == trackId) }
         runCatching { renderer.setSubtitleTrack(trackId, sessionId) }
         updateTrackControls()
@@ -383,14 +425,85 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         if (url.isBlank()) return
         externalSubtitleUrls = (externalSubtitleUrls + url).distinct()
         currentExternalSubtitleUrl = url
-        runCatching { renderer.setSubtitleTrack("off", sessionId) }
-        controlsViewModel.loadExternalSubtitle(
-            url,
-            playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)?.headers,
-        )
+        clearInitialSubtitleHandled()
+        applyExternalSubtitleSelection(renderer, sessionId)
         progressManager.updateSelections(externalSubtitleUrl = url)
         updateTrackControls()
         broadcastTracks()
+    }
+
+    private fun applyExternalSubtitleSelection(
+        renderer: IRendererService,
+        sessionId: Long,
+    ) {
+        val url = currentExternalSubtitleUrl ?: return
+        val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
+        subtitleStageJob?.cancel()
+        subtitleStageJob = null
+        clearPendingNativeSubtitle()
+        subtitleView.setCues(emptyList())
+        externalSubtitleOverlayActive = false
+        runCatching { renderer.setSubtitleTrack("off", sessionId) }
+        val renderingMode = SubtitleRenderingMode.read(this)
+
+        // Native sidecars are attached after the renderer reports READY. Attaching while MPV is
+        // still opening the file can be ignored, while Exo may rebuild an incomplete MediaItem.
+        if (renderingMode != SubtitleRenderingMode.PLAYBRIDGE_OVERLAY &&
+            sessionCoordinator.current().phase == RendererSessionPhase.PREPARING
+        ) {
+            controlsViewModel.clearSubtitle()
+            return
+        }
+
+        when (renderingMode) {
+            SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> {
+                externalSubtitleOverlayActive = true
+                controlsViewModel.loadExternalSubtitle(url, item.headers)
+            }
+            SubtitleRenderingMode.AUTO,
+            SubtitleRenderingMode.BUILT_IN,
+            -> {
+                controlsViewModel.clearSubtitle()
+                val requestedMode = renderingMode
+                subtitleStageJob = lifecycleScope.launch {
+                    try {
+                        val file = externalSubtitleStager.stage(url, item.headers)
+                        if (session?.sessionId != sessionId || currentExternalSubtitleUrl != url) {
+                            externalSubtitleStager.delete(file)
+                            return@launch
+                        }
+                        stagedSubtitleFiles += file
+                        val activeRenderer = rendererService ?: error("Renderer disconnected")
+                        val stagedUri = externalSubtitleStager.uriFor(file)
+                        pendingNativeSubtitleUri = stagedUri
+                        pendingNativeSubtitleMode = requestedMode
+                        activeRenderer.addExternalSubtitle(
+                            stagedUri,
+                            externalSubtitleName(url),
+                            sessionId,
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        clearPendingNativeSubtitle()
+                        FileLogger.w(TAG, "Unable to stage external subtitle for built-in rendering")
+                        if (requestedMode == SubtitleRenderingMode.AUTO &&
+                            session?.sessionId == sessionId &&
+                            currentExternalSubtitleUrl == url
+                        ) {
+                            externalSubtitleOverlayActive = true
+                            controlsViewModel.loadExternalSubtitle(url, item.headers)
+                        } else if (requestedMode == SubtitleRenderingMode.BUILT_IN) {
+                            Toast.makeText(
+                                this@PlayerHostActivity,
+                                "Unable to load subtitle with the built-in player",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private fun switchRenderer(target: RendererKind) {
@@ -404,6 +517,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val oldSession = session
         requestedStartPositionMs = lastPositionMs.takeIf { it > 0L }
         pendingSeekTracker.clear()
+        subtitleStageJob?.cancel()
+        subtitleStageJob = null
+        clearPendingNativeSubtitle()
+        clearInitialSubtitleHandled()
+        subtitleView.setCues(emptyList())
+        controlsViewModel.clearSubtitle()
         runCatching { oldSession?.let { rendererService?.release(it.sessionId) } }
         unbindCurrentRenderer()
         rotateRendererSurface()
@@ -426,6 +545,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         cancelFailureFinish()
+        subtitleStageJob?.cancel()
+        subtitleStageJob = null
         progressManager.saveProgress()
         val currentSession = session
         if (currentSession != null) {
@@ -433,6 +554,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             runCatching { rendererService?.release(currentSession.sessionId) }
         }
         unbindCurrentRenderer()
+        subtitleView.setCues(emptyList())
+        stagedSubtitleFiles.forEach(externalSubtitleStager::delete)
+        stagedSubtitleFiles.clear()
         surfaceView.holder.removeCallback(surfaceCallback)
         controlsViewModel.detach()
         ServerService.notifyContextIdle(this, rendererKind.engineId)
@@ -519,11 +643,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
         currentExternalSubtitleUrl = null
+        externalSubtitleOverlayActive = false
+        subtitleStageJob?.cancel()
+        subtitleStageJob = null
+        clearPendingNativeSubtitle()
+        clearInitialSubtitleHandled()
         controlsViewModel.setPlaying(false)
         controlsViewModel.setBuffering(true)
         controlsViewModel.clearPlaybackTransition()
         controlsViewModel.hideControls()
         controlsViewModel.clearSubtitle()
+        subtitleView.setCues(emptyList())
         controlsViewModel.updateTracks(
             audio = emptyList(),
             subtitles = emptyList(),
@@ -637,7 +767,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun prepareRenderer(renderer: IRendererService) {
         val currentSession = session ?: return
-        val rendererSurface = surface ?: run {
+        if (surface == null) {
             FileLogger.d(TAG, "Waiting for a fresh surface before preparing $rendererKind")
             return
         }
@@ -649,23 +779,105 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
 
         configureProgress(payload)
+        preparedSessionId = currentSession.sessionId
+        val externalUrl = currentExternalSubtitleUrl
+        val renderingMode = SubtitleRenderingMode.read(this)
+        val stageForInitialExoPrepare = rendererKind == RendererKind.EXO &&
+            externalUrl != null &&
+            renderingMode != SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
 
+        if (!stageForInitialExoPrepare) {
+            if (externalUrl != null && renderingMode == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY) {
+                markInitialSubtitleHandled(currentSession.sessionId, externalUrl)
+            }
+            prepareRendererNow(renderer, payload, currentSession.sessionId)
+            return
+        }
+        val initialExternalUrl = checkNotNull(externalUrl)
+
+        cancelStartupWatchdog()
+        subtitleStageJob?.cancel()
+        subtitleStageJob = lifecycleScope.launch {
+            try {
+                val file = externalSubtitleStager.stage(initialExternalUrl, payload.headers)
+                if (session?.sessionId != currentSession.sessionId ||
+                    currentExternalSubtitleUrl != initialExternalUrl ||
+                    rendererKind != RendererKind.EXO ||
+                    rendererService?.asBinder() != renderer.asBinder()
+                ) {
+                    externalSubtitleStager.delete(file)
+                    if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
+                    return@launch
+                }
+                stagedSubtitleFiles += file
+                val stagedUri = externalSubtitleStager.uriFor(file)
+                pendingNativeSubtitleUri = stagedUri
+                pendingNativeSubtitleMode = renderingMode
+                markInitialSubtitleHandled(currentSession.sessionId, initialExternalUrl)
+                prepareRendererNow(
+                    renderer,
+                    payload,
+                    currentSession.sessionId,
+                    initialSubtitleUri = stagedUri,
+                    initialSubtitleLabel = externalSubtitleName(initialExternalUrl),
+                )
+            } catch (error: CancellationException) {
+                if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
+                throw error
+            } catch (error: Exception) {
+                clearPendingNativeSubtitle()
+                markInitialSubtitleHandled(currentSession.sessionId, initialExternalUrl)
+                FileLogger.w(TAG, "Unable to stage subtitle before Exo playback")
+                if (renderingMode == SubtitleRenderingMode.AUTO &&
+                    session?.sessionId == currentSession.sessionId &&
+                    currentExternalSubtitleUrl == initialExternalUrl
+                ) {
+                    externalSubtitleOverlayActive = true
+                    controlsViewModel.loadExternalSubtitle(initialExternalUrl, payload.headers)
+                } else if (renderingMode == SubtitleRenderingMode.BUILT_IN) {
+                    Toast.makeText(
+                        this@PlayerHostActivity,
+                        "Unable to load subtitle with the built-in player",
+                        Toast.LENGTH_SHORT,
+                    ).show()
+                }
+                prepareRendererNow(renderer, payload, currentSession.sessionId)
+            }
+        }
+    }
+
+    private fun prepareRendererNow(
+        renderer: IRendererService,
+        payload: PlayPayload,
+        sessionId: Long,
+        initialSubtitleUri: String? = null,
+        initialSubtitleLabel: String? = null,
+    ) {
+        if (session?.sessionId != sessionId || preparedSessionId != sessionId) return
+        val rendererSurface = surface ?: run {
+            preparedSessionId = 0L
+            return
+        }
         val request = Bundle().apply {
             putString(RendererProtocol.KEY_PAYLOAD_JSON, encodePlayPayloadListJson(listOf(payload)))
+            initialSubtitleUri?.let {
+                putString(RendererProtocol.KEY_INITIAL_SUBTITLE_URI, it)
+                putString(RendererProtocol.KEY_INITIAL_SUBTITLE_LABEL, initialSubtitleLabel)
+            }
         }
-        preparedSessionId = currentSession.sessionId
+        scheduleRendererOpenWatchdog(sessionId, rendererKind)
         try {
-            renderer.prepare(request, currentSession.sessionId)
-            renderer.attachSurface(rendererSurface, currentSession.sessionId)
-            applyRendererSettings(renderer, currentSession.sessionId)
-            renderer.play(currentSession.sessionId)
+            renderer.prepare(request, sessionId)
+            renderer.attachSurface(rendererSurface, sessionId)
+            applyRendererSettings(renderer, sessionId)
+            renderer.play(sessionId)
             // Request resume immediately. MPV retains this until FILE_LOADED, while Exo can
             // accept a seek during preparation; waiting for a rendered-ready event can briefly
             // start long-form library media from zero.
-            restoreProgress(currentSession.sessionId)
+            restoreProgress(sessionId)
         } catch (error: RemoteException) {
             preparedSessionId = 0L
-            throw error
+            handleRendererFailure(error.message ?: "Renderer failed to prepare playback")
         }
     }
 
@@ -717,9 +929,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         currentExternalSubtitleUrl = currentExternalSubtitleUrl
             ?.takeIf { it in externalSubtitleUrls }
             ?: externalSubtitleUrls.firstOrNull()
-        currentExternalSubtitleUrl?.let { url ->
-            controlsViewModel.loadExternalSubtitle(url, item.headers)
-        } ?: controlsViewModel.clearSubtitle()
+        val externalUrl = currentExternalSubtitleUrl
+        if (externalUrl != null &&
+            SubtitleRenderingMode.read(this) == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
+        ) {
+            externalSubtitleOverlayActive = true
+            controlsViewModel.loadExternalSubtitle(externalUrl, item.headers)
+        } else {
+            externalSubtitleOverlayActive = false
+            controlsViewModel.clearSubtitle()
+        }
+        subtitleView.setCues(emptyList())
         updateTrackControls()
         broadcastTracks()
         controlsViewModel.updatePlaylistData(playbackCoordinator.playlist, playbackCoordinator.index)
@@ -770,9 +990,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 cancelStartupWatchdog()
                 controlsViewModel.setBuffering(false)
                 controlsViewModel.clearPlaybackTransition()
-                if (currentExternalSubtitleUrl != null) {
-                    runCatching {
-                        rendererService?.setSubtitleTrack("off", currentSession.sessionId)
+                currentExternalSubtitleUrl?.let { externalUrl ->
+                    if (!wasInitialSubtitleHandled(currentSession.sessionId, externalUrl)) {
+                        rendererService?.let { renderer ->
+                            applyExternalSubtitleSelection(renderer, currentSession.sessionId)
+                        }
                     }
                 }
                 val hasPrePlay = controlsViewModel.controlsState.value.prePlayMetadata != null
@@ -830,6 +1052,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 updateVideoSurfaceLayout()
             }
             RendererProtocol.EVENT_TRACKS -> handleTracks(event)
+            RendererProtocol.EVENT_CUES -> handleSubtitleCues(event)
+            RendererProtocol.EVENT_EXTERNAL_SUBTITLE_RESULT -> {
+                handleExternalSubtitleResult(event, currentSession.sessionId)
+            }
             RendererProtocol.EVENT_STOPPED -> {
                 hostPlaying = false
                 pendingSeekTracker.clear()
@@ -861,6 +1087,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
         currentExternalSubtitleUrl = null
+        externalSubtitleOverlayActive = false
+        subtitleStageJob?.cancel()
+        subtitleStageJob = null
+        clearPendingNativeSubtitle()
+        clearInitialSubtitleHandled()
+        subtitleView.setCues(emptyList())
         controlsViewModel.clearSubtitle()
         requestedStartPositionMs = null
         updateControlsForCurrentItem()
@@ -960,6 +1192,60 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         updateTrackControls()
         broadcastTracks()
+    }
+
+    private fun handleSubtitleCues(event: Bundle) {
+        if (rendererKind != RendererKind.EXO || externalSubtitleOverlayActive) {
+            subtitleView.setCues(emptyList())
+            return
+        }
+        val cueGroup = event.getBundle(RendererProtocol.KEY_CUE_GROUP)
+            ?.let(CueGroup::fromBundle)
+        subtitleView.setCues(cueGroup?.cues.orEmpty())
+    }
+
+    private fun handleExternalSubtitleResult(event: Bundle, sessionId: Long) {
+        val subtitleUri = event.getString(RendererProtocol.KEY_SUBTITLE_URI) ?: return
+        if (subtitleUri != pendingNativeSubtitleUri) return
+        val requestedMode = pendingNativeSubtitleMode
+        clearPendingNativeSubtitle()
+        if (event.getBoolean(RendererProtocol.KEY_SUCCESS)) return
+
+        val url = currentExternalSubtitleUrl ?: return
+        val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
+        FileLogger.w(TAG, "Built-in player did not expose the external subtitle track")
+        when (requestedMode) {
+            SubtitleRenderingMode.AUTO -> {
+                externalSubtitleOverlayActive = true
+                subtitleView.setCues(emptyList())
+                runCatching { rendererService?.setSubtitleTrack("off", sessionId) }
+                controlsViewModel.loadExternalSubtitle(url, item.headers)
+            }
+            SubtitleRenderingMode.BUILT_IN -> Toast.makeText(
+                this,
+                "The built-in player could not display this subtitle",
+                Toast.LENGTH_SHORT,
+            ).show()
+            else -> Unit
+        }
+    }
+
+    private fun clearPendingNativeSubtitle() {
+        pendingNativeSubtitleUri = null
+        pendingNativeSubtitleMode = null
+    }
+
+    private fun markInitialSubtitleHandled(sessionId: Long, url: String) {
+        initialSubtitleHandledSessionId = sessionId
+        initialSubtitleHandledUrl = url
+    }
+
+    private fun wasInitialSubtitleHandled(sessionId: Long, url: String): Boolean =
+        initialSubtitleHandledSessionId == sessionId && initialSubtitleHandledUrl == url
+
+    private fun clearInitialSubtitleHandled() {
+        initialSubtitleHandledSessionId = 0L
+        initialSubtitleHandledUrl = null
     }
 
     private fun updateTrackControls() {

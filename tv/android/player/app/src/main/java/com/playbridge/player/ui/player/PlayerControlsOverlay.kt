@@ -4,6 +4,9 @@ import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -389,16 +392,18 @@ private fun SubtitleOverlay(
     text: String,
     modifier: Modifier = Modifier,
 ) {
+    var fontSize by remember(text) { mutableStateOf(30.sp) }
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 96.dp, vertical = 72.dp),
+            .fillMaxHeight(0.65f)
+            .padding(start = 96.dp, end = 96.dp, top = 8.dp, bottom = 72.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
         Text(
             text = text,
             style = androidx.compose.ui.text.TextStyle(
-                fontSize = 30.sp,
+                fontSize = fontSize,
                 fontWeight = FontWeight.SemiBold,
                 color = Color.White,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -407,13 +412,26 @@ private fun SubtitleOverlay(
                     offset = androidx.compose.ui.geometry.Offset(0f, 2f),
                     blurRadius = 5f,
                 ),
-                lineHeight = 38.sp,
+                lineHeight = (fontSize.value * 1.25f).sp,
             ),
             softWrap = true,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
+            maxLines = 14,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+            onTextLayout = { result ->
+                if ((result.didOverflowHeight || result.didOverflowWidth) &&
+                    fontSize.value > MIN_SUBTITLE_TEXT_SIZE_SP
+                ) {
+                    fontSize = (fontSize.value - SUBTITLE_TEXT_SIZE_STEP_SP)
+                        .coerceAtLeast(MIN_SUBTITLE_TEXT_SIZE_SP)
+                        .sp
+                }
+            },
             modifier = Modifier
                 .widthIn(max = 1400.dp)
                 .padding(horizontal = 12.dp, vertical = 4.dp),
         )
     }
 }
+
+private const val MIN_SUBTITLE_TEXT_SIZE_SP = 18f
+private const val SUBTITLE_TEXT_SIZE_STEP_SP = 2f

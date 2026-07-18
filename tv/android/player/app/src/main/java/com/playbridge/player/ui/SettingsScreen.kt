@@ -42,6 +42,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.playbridge.player.player.PlayerActivity
+import com.playbridge.player.player.SubtitleRenderingMode
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -56,6 +57,16 @@ fun SettingsScreen(
 
     // Settings States
     var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
+    var subtitleRenderingMode by remember {
+        mutableStateOf(
+            SubtitleRenderingMode.fromPreference(
+                prefs.getString(
+                    SubtitleRenderingMode.PREFERENCE_KEY,
+                    SubtitleRenderingMode.AUTO.preferenceValue,
+                ),
+            ),
+        )
+    }
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
     var hideSoftKeyboard by remember { mutableStateOf(prefs.getBoolean("hide_soft_keyboard", false)) }
@@ -260,6 +271,35 @@ fun SettingsScreen(
                                     playerMode = mode
                                     prefs.edit().putString("player_mode", mode).apply()
                                 }
+                            )
+                        }
+                        item {
+                            SettingDropdownItem(
+                                label = "Subtitle Rendering",
+                                description = when (subtitleRenderingMode) {
+                                    SubtitleRenderingMode.AUTO ->
+                                        "Use the player renderer, with the PlayBridge overlay as a fallback."
+                                    SubtitleRenderingMode.BUILT_IN ->
+                                        "Use MPV/libass or ExoPlayer's built-in subtitle renderer."
+                                    SubtitleRenderingMode.PLAYBRIDGE_OVERLAY ->
+                                        "Use PlayBridge's header-aware overlay with adaptive text sizing."
+                                },
+                                options = listOf(
+                                    SubtitleRenderingMode.AUTO.preferenceValue to "Auto (Recommended)",
+                                    SubtitleRenderingMode.BUILT_IN.preferenceValue to "Built-in Player",
+                                    SubtitleRenderingMode.PLAYBRIDGE_OVERLAY.preferenceValue to
+                                        "PlayBridge Overlay",
+                                ),
+                                selected = subtitleRenderingMode.preferenceValue,
+                                onSelected = { value ->
+                                    subtitleRenderingMode = SubtitleRenderingMode.fromPreference(value)
+                                    prefs.edit()
+                                        .putString(
+                                            SubtitleRenderingMode.PREFERENCE_KEY,
+                                            subtitleRenderingMode.preferenceValue,
+                                        )
+                                        .apply()
+                                },
                             )
                         }
                         item {

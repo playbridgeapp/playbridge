@@ -7,16 +7,14 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.RemoteException
-import android.net.Uri
 import android.media.audiofx.LoudnessEnhancer
 import android.view.Surface
 import android.util.Log
 import androidx.media3.common.Player
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.MimeTypes
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
+import androidx.media3.common.text.CueGroup
 import com.playbridge.shared.player.ExoPlayerEngine
 import com.playbridge.shared.protocol.decodePlayPayloadListJson
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +28,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.sample
 import playbridge.PlayPayload
 import kotlin.math.roundToInt
+
+internal fun isExternalSubtitleTrackId(id: String?): Boolean =
+    id == EXTERNAL_SUBTITLE_TRACK_ID ||
+        id?.substringAfterLast(':') == EXTERNAL_SUBTITLE_TRACK_ID
+
+private const val EXTERNAL_SUBTITLE_TRACK_ID = "playbridge-external-subtitle"
 
 /**
  * Headless ExoPlayer renderer for the permanent player host. All binder calls are serialized
@@ -52,9 +56,13 @@ class ExoRendererService : Service() {
     private var endedSessionId = 0L
     private var pendingPayload: PlayPayload? = null
     private var pendingPayloadSessionId = 0L
+    private var pendingInitialSubtitleUri: String? = null
+    private var pendingInitialSubtitleLabel: String? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
     private var loudnessSessionId = 0
     private var audioBoostEnabled = false
+    private var pendingExternalSubtitle: PendingExternalSubtitle? = null
+    private var externalSubtitleTimeout: Runnable? = null
 
     private val binder = object : IRendererService.Stub() {
         override fun setCallback(callback: IRendererCallback?) = onMain {
@@ -63,6 +71,7 @@ class ExoRendererService : Service() {
 
         override fun prepare(request: Bundle?, requestedSessionId: Long) = onMain {
             if (request == null || requestedSessionId <= sessionId) return@onMain
+            clearPendingExternalSubtitle()
             sessionId = requestedSessionId
             playWhenReady = false
             readySessionId = 0L
@@ -78,6 +87,8 @@ class ExoRendererService : Service() {
             currentTitle = payload.title
             pendingPayload = payload
             pendingPayloadSessionId = requestedSessionId
+            pendingInitialSubtitleUri = request.getString(RendererProtocol.KEY_INITIAL_SUBTITLE_URI)
+            pendingInitialSubtitleLabel = request.getString(RendererProtocol.KEY_INITIAL_SUBTITLE_LABEL)
 
             val renderer = engine ?: ExoPlayerEngine(applicationContext).also { engine = it }
             surface?.let {
@@ -163,7 +174,22 @@ class ExoRendererService : Service() {
             requestedSessionId: Long,
         ) = onMain {
             if (!isCurrent(requestedSessionId) || url.isNullOrBlank()) return@onMain
-            attachExternalSubtitle(url, language)
+            clearPendingExternalSubtitle()
+            pendingExternalSubtitle = PendingExternalSubtitle(url, requestedSessionId)
+            scope.launch {
+                try {
+                    val renderer = engine ?: error("Exo renderer is unavailable")
+                    renderer.attachExternalSubtitle(url, language)
+                    if (pendingExternalSubtitle == PendingExternalSubtitle(url, requestedSessionId)) {
+                        scheduleExternalSubtitleTimeout(url, requestedSessionId)
+                    }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    Log.w(TAG, "Unable to attach external subtitle", error)
+                    completeExternalSubtitleAttachment(url, requestedSessionId, success = false)
+                }
+            }
         }
 
         override fun stop(requestedSessionId: Long) = onMain {
@@ -199,6 +225,13 @@ class ExoRendererService : Service() {
             }
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                pendingExternalSubtitle?.let { pending ->
+                    completeExternalSubtitleAttachment(
+                        pending.uri,
+                        pending.sessionId,
+                        success = false,
+                    )
+                }
                 sendError(error.errorCodeName)
             }
 
@@ -217,10 +250,24 @@ class ExoRendererService : Service() {
 
             override fun onTracksChanged(tracks: Tracks) {
                 sendTracks(tracks)
+                val pending = pendingExternalSubtitle
+                if (pending != null && selectExternalSubtitleTrack(tracks)) {
+                    completeExternalSubtitleAttachment(
+                        pending.uri,
+                        pending.sessionId,
+                        success = true,
+                    )
+                }
             }
 
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 sendVideoSize(videoSize)
+            }
+
+            override fun onCues(cueGroup: CueGroup) {
+                sendEvent(RendererProtocol.EVENT_CUES, Bundle().apply {
+                    putBundle(RendererProtocol.KEY_CUE_GROUP, cueGroup.toBundle())
+                })
             }
 
             override fun onAudioSessionIdChanged(audioSessionId: Int) {
@@ -236,6 +283,9 @@ class ExoRendererService : Service() {
         if (player.playbackState == Player.STATE_READY) sendReadyOnce()
         sendVideoSize(player.videoSize)
         sendTracks(player.currentTracks)
+        sendEvent(RendererProtocol.EVENT_CUES, Bundle().apply {
+            putBundle(RendererProtocol.KEY_CUE_GROUP, player.currentCues.toBundle())
+        })
     }
 
     private fun sendVideoSize(videoSize: VideoSize) {
@@ -283,25 +333,6 @@ class ExoRendererService : Service() {
         sendTracks(player.currentTracks)
     }
 
-    private fun attachExternalSubtitle(url: String, language: String?) {
-        val player = engine?.getExoPlayer() ?: return
-        val mediaItem = player.currentMediaItem ?: return
-        val existing = mediaItem.localConfiguration?.subtitleConfigurations.orEmpty()
-        val subtitle = MediaItem.SubtitleConfiguration.Builder(Uri.parse(url))
-            .setMimeType(subtitleMimeType(url))
-            .setLanguage(language)
-            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
-            .build()
-        val position = player.currentPosition.coerceAtLeast(0L)
-        val shouldPlay = playWhenReady
-        player.setMediaItem(
-            mediaItem.buildUpon().setSubtitleConfigurations(existing + subtitle).build(),
-            position,
-        )
-        player.prepare()
-        if (shouldPlay) player.play()
-    }
-
     private fun applyAudioBoost(sessionId: Int = engine?.getExoPlayer()?.audioSessionId ?: 0) {
         if (!audioBoostEnabled) {
             loudnessEnhancer?.enabled = false
@@ -317,14 +348,6 @@ class ExoRendererService : Service() {
             loudnessEnhancer?.setTargetGain(2_000)
             loudnessEnhancer?.enabled = true
         }.onFailure { Log.w(TAG, "Audio boost unavailable", it) }
-    }
-
-    private fun subtitleMimeType(url: String): String = when (
-        url.substringBefore('?').substringAfterLast('.', missingDelimiterValue = "").lowercase()
-    ) {
-        "vtt" -> MimeTypes.TEXT_VTT
-        "ass", "ssa" -> MimeTypes.TEXT_SSA
-        else -> MimeTypes.APPLICATION_SUBRIP
     }
 
     private fun sendTracks(tracks: Tracks) {
@@ -362,6 +385,66 @@ class ExoRendererService : Service() {
         })
     }
 
+    private fun selectExternalSubtitleTrack(tracks: Tracks): Boolean {
+        val player = engine?.getExoPlayer() ?: return false
+        tracks.groups.forEach { group ->
+            if (group.type != C.TRACK_TYPE_TEXT) return@forEach
+            for (trackIndex in 0 until group.length) {
+                if (!isExternalSubtitleTrackId(group.getTrackFormat(trackIndex).id)) continue
+                player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                    .setOverrideForType(
+                        androidx.media3.common.TrackSelectionOverride(
+                            group.mediaTrackGroup,
+                            trackIndex,
+                        ),
+                    )
+                    .build()
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun scheduleExternalSubtitleTimeout(uri: String, requestedSessionId: Long) {
+        externalSubtitleTimeout?.let(mainHandler::removeCallbacks)
+        externalSubtitleTimeout = Runnable {
+            val attached = engine?.getExoPlayer()?.currentTracks?.let(::selectExternalSubtitleTrack) == true
+            completeExternalSubtitleAttachment(uri, requestedSessionId, attached)
+        }.also { timeout ->
+            mainHandler.postDelayed(timeout, EXTERNAL_SUBTITLE_ATTACH_TIMEOUT_MS)
+        }
+    }
+
+    private fun completeExternalSubtitleAttachment(
+        uri: String,
+        requestedSessionId: Long,
+        success: Boolean,
+    ) {
+        val pending = pendingExternalSubtitle ?: return
+        if (pending.uri != uri || pending.sessionId != requestedSessionId) return
+        externalSubtitleTimeout?.let(mainHandler::removeCallbacks)
+        externalSubtitleTimeout = null
+        pendingExternalSubtitle = null
+        if (!isCurrent(requestedSessionId)) return
+        if (success) {
+            Log.i(TAG, "External subtitle track attached")
+        } else {
+            Log.w(TAG, "External subtitle track is unavailable")
+        }
+        sendEvent(RendererProtocol.EVENT_EXTERNAL_SUBTITLE_RESULT, Bundle().apply {
+            putString(RendererProtocol.KEY_SUBTITLE_URI, uri)
+            putBoolean(RendererProtocol.KEY_SUCCESS, success)
+        })
+    }
+
+    private fun clearPendingExternalSubtitle() {
+        externalSubtitleTimeout?.let(mainHandler::removeCallbacks)
+        externalSubtitleTimeout = null
+        pendingExternalSubtitle = null
+    }
+
     private fun trackBundle(
         id: String,
         label: String,
@@ -375,6 +458,7 @@ class ExoRendererService : Service() {
     }
 
     private fun releaseEngine() {
+        clearPendingExternalSubtitle()
         stateJob?.cancel()
         stateJob = null
         engine?.let { renderer ->
@@ -391,6 +475,8 @@ class ExoRendererService : Service() {
         endedSessionId = 0L
         pendingPayload = null
         pendingPayloadSessionId = 0L
+        pendingInitialSubtitleUri = null
+        pendingInitialSubtitleLabel = null
         loudnessEnhancer?.release()
         loudnessEnhancer = null
         loudnessSessionId = 0
@@ -426,13 +512,32 @@ class ExoRendererService : Service() {
         if (!isCurrent(requestedSessionId) || pendingPayloadSessionId != requestedSessionId) return
         val payload = pendingPayload ?: return
         val rendererSurface = surface ?: return
+        val initialSubtitleUri = pendingInitialSubtitleUri
+        val initialSubtitleLabel = pendingInitialSubtitleLabel
         pendingPayload = null
         pendingPayloadSessionId = 0L
+        pendingInitialSubtitleUri = null
+        pendingInitialSubtitleLabel = null
         renderer.setVideoSurface(rendererSurface)
         scope.launch {
             runCatching {
                 installPlayerListener(renderer)
-                renderer.load(payload)
+                if (initialSubtitleUri != null) {
+                    pendingExternalSubtitle = PendingExternalSubtitle(
+                        initialSubtitleUri,
+                        requestedSessionId,
+                    )
+                }
+                renderer.load(payload, initialSubtitleUri, initialSubtitleLabel)
+                if (initialSubtitleUri != null) {
+                    if (pendingExternalSubtitle == PendingExternalSubtitle(
+                            initialSubtitleUri,
+                            requestedSessionId,
+                        )
+                    ) {
+                        scheduleExternalSubtitleTimeout(initialSubtitleUri, requestedSessionId)
+                    }
+                }
                 sendCurrentPlayerSnapshot(renderer)
                 observeState(renderer)
                 if (playWhenReady) renderer.play() else renderer.pause()
@@ -464,5 +569,11 @@ class ExoRendererService : Service() {
 
     private companion object {
         const val TAG = "ExoRendererService"
+        const val EXTERNAL_SUBTITLE_ATTACH_TIMEOUT_MS = 8_000L
     }
+
+    private data class PendingExternalSubtitle(
+        val uri: String,
+        val sessionId: Long,
+    )
 }
