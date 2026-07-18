@@ -486,7 +486,47 @@ class PlayerControlsViewModel : ViewModel() {
     }
     
     fun setVideoScaling(mode: String) {
-        _controlsState.update { it.copy(videoScalingMode = mode) }
+        val normalized = if (mode == "Fixed Width" || mode == "Fixed Height") "Fit" else mode
+        _controlsState.update { it.copy(videoScalingMode = normalized) }
+    }
+
+    fun setVideoQuality(maxHeight: Int) {
+        _controlsState.update { it.copy(videoQualityMaxHeight = maxHeight.coerceAtLeast(0)) }
+    }
+
+    fun updateCapabilities(
+        capabilities: PlaybackCapabilities,
+        currentVideoHeight: Int,
+        qualityMaxHeight: Int,
+    ) {
+        _controlsState.update { state ->
+            val availableTabs = buildList {
+                if (capabilities.qualityAvailable && state.videoTracks.hasSelectableVideoQualities()) add(SettingsTab.VIDEO)
+                if (state.audioTracks.size > 1 || capabilities.audioBoostAvailable) add(SettingsTab.AUDIO)
+                if (capabilities.speedAvailable) add(SettingsTab.SPEED)
+                if (capabilities.scalingAvailable) add(SettingsTab.SCALING)
+            }
+            state.copy(
+                capabilities = capabilities,
+                currentVideoHeight = currentVideoHeight.coerceAtLeast(0),
+                videoQualityMaxHeight = qualityMaxHeight.coerceAtLeast(0),
+                activeSettingsTab = state.activeSettingsTab.takeIf { it in availableTabs }
+                    ?: availableTabs.firstOrNull()
+                    ?: SettingsTab.AUDIO,
+            )
+        }
+    }
+
+    fun resetSessionSettings(defaultQualityMaxHeight: Int) {
+        _controlsState.update {
+            it.copy(
+                playbackSpeed = 1f,
+                videoScalingMode = "Fit",
+                videoQualityMaxHeight = defaultQualityMaxHeight.coerceAtLeast(0),
+                capabilities = PlaybackCapabilities(),
+                currentVideoHeight = 0,
+            )
+        }
     }
 
     fun loadExternalSubtitle(url: String, headers: Map<String, String>? = null) {

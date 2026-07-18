@@ -28,6 +28,14 @@ internal object RendererProtocol {
     const val KEY_INITIAL_SUBTITLE_URI = "initial_subtitle_uri"
     const val KEY_INITIAL_SUBTITLE_LABEL = "initial_subtitle_label"
     const val KEY_SUCCESS = "success"
+    const val KEY_IS_LIVE = "is_live"
+    const val KEY_IS_SEEKABLE = "is_seekable"
+    const val KEY_SPEED_AVAILABLE = "speed_available"
+    const val KEY_SCALING_AVAILABLE = "scaling_available"
+    const val KEY_AUDIO_BOOST_AVAILABLE = "audio_boost_available"
+    const val KEY_QUALITY_AVAILABLE = "quality_available"
+    const val KEY_CURRENT_VIDEO_HEIGHT = "current_video_height"
+    const val KEY_QUALITY_MAX_HEIGHT = "quality_max_height"
 
     const val EVENT_READY = "ready"
     const val EVENT_FIRST_FRAME = "first_frame"
@@ -37,6 +45,7 @@ internal object RendererProtocol {
     const val EVENT_TRACKS = "tracks"
     const val EVENT_CUES = "cues"
     const val EVENT_EXTERNAL_SUBTITLE_RESULT = "external_subtitle_result"
+    const val EVENT_CAPABILITIES = "capabilities"
     const val EVENT_STOPPED = "stopped"
     const val EVENT_ERROR = "error"
 }

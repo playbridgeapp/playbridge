@@ -55,6 +55,12 @@ class MpvRendererService : Service() {
     private var externalSubtitleTimeout: Runnable? = null
     private val externalSubtitleTrackIds = linkedSetOf<String>()
     private var externalSubtitleRequestNumber = 0L
+    private var videoQualityMaxHeight = 0
+    private var desiredPlaybackSpeed = 1f
+    private var desiredScalingMode = "Fit"
+    private var desiredLooping = false
+    private var audioBoostEnabled = false
+    private var lastCapabilitiesLive: Boolean? = null
 
     private val binder = object : IRendererService.Stub() {
         override fun setCallback(callback: IRendererCallback?) = onMain {
@@ -74,6 +80,7 @@ class MpvRendererService : Service() {
             selectedSubtitleTrackId = null
             fileReadySessionId = 0L
             pendingSeekMs = null
+            lastCapabilitiesLive = null
             val payload = request.getString(RendererProtocol.KEY_PAYLOAD_JSON)
                 ?.let(::decodePlayPayloadListJson)
                 ?.firstOrNull()
@@ -141,29 +148,38 @@ class MpvRendererService : Service() {
         }
 
         override fun setPlaybackSpeed(speed: Float, requestedSessionId: Long) = onMain {
-            if (isCurrent(requestedSessionId)) engine?.setRate(speed.coerceIn(0.25f, 4f))
+            if (!isCurrent(requestedSessionId)) return@onMain
+            desiredPlaybackSpeed = speed.coerceIn(0.25f, 4f)
+            engine?.setRate(desiredPlaybackSpeed)
         }
 
         override fun setVideoScaling(mode: String?, requestedSessionId: Long) = onMain {
-            if (isCurrent(requestedSessionId) && mode != null) engine?.setVideoScale(mode)
+            if (!isCurrent(requestedSessionId) || mode == null) return@onMain
+            desiredScalingMode = mode
+            engine?.setVideoScale(mode)
         }
 
         override fun setLooping(enabled: Boolean, requestedSessionId: Long) = onMain {
-            if (isCurrent(requestedSessionId)) engine?.setLooping(enabled)
+            if (!isCurrent(requestedSessionId)) return@onMain
+            desiredLooping = enabled
+            engine?.setLooping(enabled)
         }
 
         override fun setAudioBoost(enabled: Boolean, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
-            val filter = if (enabled) {
-                "lavfi=[acompressor=threshold=-21dB:ratio=9:attack=5:release=50:makeup=8dB]"
-            } else {
-                ""
-            }
-            engine?.setAudioFilter(filter)
+            audioBoostEnabled = enabled
+            applyAudioBoost()
         }
 
         override fun setSubtitleDelay(delayMs: Long, requestedSessionId: Long) = onMain {
             if (isCurrent(requestedSessionId)) engine?.setSubtitleDelay(delayMs)
+        }
+
+        override fun setVideoQuality(maxHeight: Int, requestedSessionId: Long) = onMain {
+            if (!isCurrent(requestedSessionId)) return@onMain
+            videoQualityMaxHeight = maxHeight.coerceAtLeast(0)
+            applyVideoQuality()
+            sendTracks()
         }
 
         override fun setVideoTrack(trackId: String?, requestedSessionId: Long) = onMain {
@@ -253,6 +269,8 @@ class MpvRendererService : Service() {
                             pendingSeekMs?.let(renderer::seek)
                             pendingSeekMs = null
                             sendEvent(RendererProtocol.EVENT_READY)
+                            applyDesiredSettings(renderer)
+                            sendCapabilities(renderer)
                         }
                         PlaybackState.Playing -> {
                             if (fileReadySessionId == sessionId && firstFrameSession != sessionId) {
@@ -280,6 +298,11 @@ class MpvRendererService : Service() {
                 combine(renderer.state, renderer.position, renderer.duration) { state, position, duration ->
                     Triple(state, position, duration)
                 }.distinctUntilChanged().sample(250).collectLatest { (state, position, duration) ->
+                    val isLive = duration <= 0L
+                    if (lastCapabilitiesLive != isLive) {
+                        lastCapabilitiesLive = isLive
+                        sendCapabilities(renderer)
+                    }
                     val stateName = when (state) {
                         PlaybackState.Buffering -> "buffering"
                         PlaybackState.Playing -> if (fileReadySessionId == sessionId) {
@@ -306,6 +329,7 @@ class MpvRendererService : Service() {
             combine(renderer.videoTracks, renderer.audioTracks, renderer.subtitleTracks) { _, _, _ -> Unit }
                 .collectLatest {
                     completePendingExternalSubtitleIfPresent(renderer)
+                    applyVideoQuality()
                     sendTracks()
                 }
         }
@@ -313,11 +337,30 @@ class MpvRendererService : Service() {
 
     private fun sendTracks() {
         val renderer = engine ?: return
+        val tracksByHeight = renderer.videoTracks.value
+            .filter { qualityHeight(it) > 0 }
+            .groupBy(::qualityHeight)
+            .mapValues { (_, tracks) -> tracks.maxByOrNull { it.bitrate ?: 0L }!! }
+        val currentHeight = renderer.videoTracks.value
+            .firstOrNull { it.id == selectedVideoTrackId }
+            ?.let(::qualityHeight)
+            ?: renderer.videoTracks.value.firstOrNull { it.selected }
+            ?.let(::qualityHeight)
         val video = arrayListOf(
-            trackBundle("auto", "Auto", null, selectedVideoTrackId == null),
+            trackBundle(
+                "auto",
+                currentHeight?.let { "Auto · ${it}p" } ?: "Auto",
+                null,
+                videoQualityMaxHeight == 0,
+            ),
         )
-        video += renderer.videoTracks.value.map { track ->
-            trackBundle(track.id, track.label, track.language, selectedVideoTrackId == track.id)
+        video += tracksByHeight.keys.sortedDescending().map { height ->
+            trackBundle(
+                "max:$height",
+                "Up to ${height}p",
+                null,
+                videoQualityMaxHeight == height,
+            )
         }
         val audio = arrayListOf(
             trackBundle("auto", "Auto / Default", null, selectedAudioTrackId == null),
@@ -352,7 +395,62 @@ class MpvRendererService : Service() {
             putParcelableArrayList(RendererProtocol.KEY_AUDIO_TRACKS, audio)
             putParcelableArrayList(RendererProtocol.KEY_SUBTITLE_TRACKS, subtitles)
         })
+        sendCapabilities(renderer)
     }
+
+    private fun applyDesiredSettings(renderer: MpvPlayerEngine) {
+        renderer.setRate(desiredPlaybackSpeed)
+        renderer.setVideoScale(desiredScalingMode)
+        renderer.setLooping(desiredLooping)
+        applyAudioBoost()
+        applyVideoQuality()
+    }
+
+    private fun applyAudioBoost() {
+        engine?.setAudioFilter(if (audioBoostEnabled) "lavfi=[volume=6dB]" else "")
+    }
+
+    private fun applyVideoQuality() {
+        val renderer = engine ?: return
+        if (videoQualityMaxHeight == 0) {
+            selectedVideoTrackId = null
+            renderer.setVideoTrack("auto")
+            return
+        }
+        val selected = renderer.videoTracks.value
+            .filter { qualityHeight(it) <= videoQualityMaxHeight }
+            .maxWithOrNull(compareBy<com.playbridge.shared.player.Track>(::qualityHeight)
+                .thenBy { it.bitrate ?: 0L })
+            ?: return
+        if (selectedVideoTrackId != selected.id) {
+            selectedVideoTrackId = selected.id
+            renderer.setVideoTrack(selected.id)
+        }
+    }
+
+    private fun sendCapabilities(renderer: MpvPlayerEngine) {
+        val heights = renderer.videoTracks.value.map(::qualityHeight).filter { it > 0 }.distinct()
+        val isLive = renderer.duration.value <= 0L
+        sendEvent(RendererProtocol.EVENT_CAPABILITIES, Bundle().apply {
+            putBoolean(RendererProtocol.KEY_IS_LIVE, isLive)
+            putBoolean(RendererProtocol.KEY_IS_SEEKABLE, !isLive)
+            putBoolean(RendererProtocol.KEY_SPEED_AVAILABLE, !isLive)
+            putBoolean(RendererProtocol.KEY_SCALING_AVAILABLE, renderer.videoTracks.value.isNotEmpty())
+            putBoolean(RendererProtocol.KEY_AUDIO_BOOST_AVAILABLE, renderer.audioTracks.value.isNotEmpty())
+            putBoolean(RendererProtocol.KEY_QUALITY_AVAILABLE, heights.size > 1)
+            putInt(
+                RendererProtocol.KEY_CURRENT_VIDEO_HEIGHT,
+                (renderer.videoTracks.value.firstOrNull { it.id == selectedVideoTrackId }
+                    ?: renderer.videoTracks.value.firstOrNull { it.selected })
+                    ?.let(::qualityHeight)
+                    ?: 0,
+            )
+            putInt(RendererProtocol.KEY_QUALITY_MAX_HEIGHT, videoQualityMaxHeight)
+        })
+    }
+
+    private fun qualityHeight(track: com.playbridge.shared.player.Track): Int =
+        listOfNotNull(track.width, track.height).filter { it > 0 }.minOrNull() ?: 0
 
     private fun completePendingExternalSubtitleIfPresent(renderer: MpvPlayerEngine): Boolean {
         val pending = pendingExternalSubtitle ?: return false
@@ -436,6 +534,7 @@ class MpvRendererService : Service() {
         pendingPayloadSessionId = 0L
         fileReadySessionId = 0L
         pendingSeekMs = null
+        lastCapabilitiesLive = null
     }
 
     /**

@@ -76,12 +76,14 @@ fun MediaSettingsPanel(
                 }
 
                 val tabs = buildList {
-                    if (state.videoTracks.hasSelectableVideoQualities()) {
+                    if (state.capabilities.qualityAvailable && state.videoTracks.hasSelectableVideoQualities()) {
                         add(SettingsTab.VIDEO to "Quality")
                     }
-                    add(SettingsTab.AUDIO to "Audio")
-                    add(SettingsTab.SPEED to "Speed")
-                    add(SettingsTab.SCALING to "Scaling")
+                    if (state.audioTracks.size > 1 || state.capabilities.audioBoostAvailable) {
+                        add(SettingsTab.AUDIO to "Audio")
+                    }
+                    if (state.capabilities.speedAvailable) add(SettingsTab.SPEED to "Speed")
+                    if (state.capabilities.scalingAvailable) add(SettingsTab.SCALING to "Scaling")
                 }
 
                 items(tabs, key = { it.first.name }) { (tab, label) ->
@@ -107,7 +109,9 @@ fun MediaSettingsPanel(
                 when (activeTab) {
                     SettingsTab.VIDEO -> UnifiedTrackList(state.videoTracks, onTrackSelected)
                     SettingsTab.AUDIO -> Column {
-                        AudioBoostItem(isEnabled = state.isAudioBoostEnabled, onClick = onToggleAudioBoost)
+                        if (state.capabilities.audioBoostAvailable) {
+                            AudioBoostItem(isEnabled = state.isAudioBoostEnabled, onClick = onToggleAudioBoost)
+                        }
                         Box(modifier = Modifier.weight(1f)) {
                             UnifiedTrackList(state.audioTracks, onTrackSelected)
                         }
@@ -256,14 +260,24 @@ private fun UnifiedTrackItem(
                 modifier = Modifier.width(22.dp)
             )
 
-            Text(
-                text = track.name,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (track.isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = track.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (track.isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                track.secondaryText?.let { secondary ->
+                    Text(
+                        text = secondary,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -273,7 +287,7 @@ private fun SpeedSettingsList(
     currentSpeed: Float,
     onSpeedSelected: (Float) -> Unit
 ) {
-    val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+    val speeds = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -300,7 +314,11 @@ private fun ScalingSettingsList(
     onModeSelected: (String) -> Unit,
 ) {
     // These are the modes implemented consistently by both permanent renderer services.
-    val modes = listOf("Fit", "Fill", "Zoom")
+    val modes = listOf(
+        Triple("Fit", "Fit", "Show the whole picture with letterboxing"),
+        Triple("Zoom", "Crop to fill", "Fill the screen while preserving aspect ratio"),
+        Triple("Fill", "Stretch", "Fill the screen without preserving aspect ratio"),
+    )
 
     LazyColumn(
         modifier = Modifier
@@ -308,13 +326,14 @@ private fun ScalingSettingsList(
             .padding(start = 8.dp),
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        items(modes, key = { it }) { mode ->
+        items(modes, key = { it.first }) { (mode, label, description) ->
             UnifiedTrackItem(
                 track = UnifiedTrack(
                     id = mode,
-                    name = mode,
+                    name = label,
                     isSelected = mode == currentMode,
-                    type = "scaling"
+                    type = "scaling",
+                    secondaryText = description,
                 ),
                 onClick = { onModeSelected(mode) }
             )

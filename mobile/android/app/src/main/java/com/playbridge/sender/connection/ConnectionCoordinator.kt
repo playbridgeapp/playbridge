@@ -34,6 +34,7 @@ class ConnectionCoordinator(
     val tvActiveContext = MutableStateFlow("idle")
     val tvPlaylistState = MutableStateFlow<PlaylistUiState?>(null)
     val tvPlayback = MutableStateFlow<TvPlaybackStatus?>(null)
+    val tvVideoTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
@@ -120,6 +121,7 @@ class ConnectionCoordinator(
                                         }
                                     }
                                 }
+                            tvVideoTracks.value = parseTracks(json.optJSONArray("video"))
                             tvAudioTracks.value = parseTracks(json.optJSONArray("audio"))
                             tvSubtitleTracks.value = parseTracks(json.optJSONArray("subtitle"))
                             Log.d(TAG, "TV Audio/Subtitle tracks updated")
@@ -151,7 +153,15 @@ class ConnectionCoordinator(
                                 scaling = json.optString("scaling", "Fit"),
                                 audioBoost = json.optBoolean("audioBoost", false),
                                 subtitleOffsetMs = json.optLong("subtitleOffsetMs", 0L),
-                                engine = json.optString("engine", "")
+                                engine = json.optString("engine", ""),
+                                qualityMaxHeight = json.optInt("qualityMaxHeight", 0),
+                                currentVideoHeight = json.optInt("currentVideoHeight", 0),
+                                isLive = json.optBoolean("isLive", false),
+                                isSeekable = json.optBoolean("isSeekable", true),
+                                speedAvailable = json.optBoolean("speedAvailable", true),
+                                scalingAvailable = json.optBoolean("scalingAvailable", true),
+                                audioBoostAvailable = json.optBoolean("audioBoostAvailable", true),
+                                qualityAvailable = json.optBoolean("qualityAvailable", false),
                             )
                             Log.d(TAG, "TV Player settings updated")
                         }
@@ -197,6 +207,7 @@ class ConnectionCoordinator(
     private fun clearPlayerStates() {
         tvPlaylistState.value = null
         tvPlayback.value = null
+        tvVideoTracks.value = emptyList()
         tvAudioTracks.value = emptyList()
         tvSubtitleTracks.value = emptyList()
         tvPlayerSettings.value = TvPlayerSettings()

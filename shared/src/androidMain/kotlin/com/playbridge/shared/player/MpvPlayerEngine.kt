@@ -446,11 +446,36 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                 val type = obj.getString("type")
                 val title = obj.optString("title").takeIf { it.isNotBlank() }
                 val lang = if (obj.has("lang")) obj.getString("lang") else null
+                val selected = obj.optBoolean("selected", false)
 
                 when (type) {
-                    "audio" -> audio += Track(id, title ?: lang ?: "Track $id", lang)
+                    "audio" -> {
+                        val codec = obj.optString("codec").takeIf { it.isNotBlank() }
+                        val channels = obj.optInt("demux-channel-count", 0).takeIf { it > 0 }
+                        val channelLabel = when (channels) {
+                            1 -> "Mono"
+                            2 -> "Stereo"
+                            6 -> "5.1"
+                            8 -> "7.1"
+                            null -> null
+                            else -> "$channels channels"
+                        }
+                        audio += Track(
+                            id = id,
+                            label = listOfNotNull(
+                                title ?: lang ?: "Track $id",
+                                codec?.uppercase(),
+                                channelLabel,
+                            ).distinct().joinToString(" • "),
+                            language = lang,
+                            codec = codec,
+                            channelCount = channels,
+                            selected = selected,
+                        )
+                    }
                     "sub" -> subtitles += Track(id, title ?: lang ?: "Track $id", lang)
                     "video" -> {
+                        val width = obj.optInt("demux-w", 0)
                         val height = obj.optInt("demux-h", 0)
                         val bitrate = obj.optLong("demux-bitrate", 0L)
                         val quality = if (height > 0) "${height}p" else title ?: "Video $id"
@@ -461,6 +486,11 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
                             id = id,
                             label = listOfNotNull(quality, bitrateLabel).joinToString(" • "),
                             language = lang,
+                            width = width.takeIf { it > 0 },
+                            height = height.takeIf { it > 0 },
+                            bitrate = bitrate.takeIf { it > 0L },
+                            codec = obj.optString("codec").takeIf { it.isNotBlank() },
+                            selected = selected,
                         )
                     }
                 }

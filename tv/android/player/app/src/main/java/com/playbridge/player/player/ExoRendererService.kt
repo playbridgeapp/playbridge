@@ -62,6 +62,10 @@ class ExoRendererService : Service() {
     private var loudnessSessionId = 0
     private var audioBoostEnabled = false
     private var selectedVideoTrackId: String? = null
+    private var videoQualityMaxHeight = 0
+    private var desiredPlaybackSpeed = 1f
+    private var desiredScalingMode = "Fit"
+    private var desiredLooping = false
     private var pendingExternalSubtitle: PendingExternalSubtitle? = null
     private var externalSubtitleTimeout: Runnable? = null
 
@@ -133,11 +137,14 @@ class ExoRendererService : Service() {
         }
 
         override fun setPlaybackSpeed(speed: Float, requestedSessionId: Long) = onMain {
-            if (isCurrent(requestedSessionId)) engine?.setRate(speed.coerceIn(0.25f, 4f))
+            if (!isCurrent(requestedSessionId)) return@onMain
+            desiredPlaybackSpeed = speed.coerceIn(0.25f, 4f)
+            engine?.setRate(desiredPlaybackSpeed)
         }
 
         override fun setVideoScaling(mode: String?, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
+            desiredScalingMode = mode ?: "Fit"
             engine?.getExoPlayer()?.videoScalingMode = when (mode) {
                 "Zoom" -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
                 else -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT
@@ -146,6 +153,7 @@ class ExoRendererService : Service() {
 
         override fun setLooping(enabled: Boolean, requestedSessionId: Long) = onMain {
             if (isCurrent(requestedSessionId)) {
+                desiredLooping = enabled
                 engine?.getExoPlayer()?.repeatMode = if (enabled) {
                     Player.REPEAT_MODE_ONE
                 } else {
@@ -161,6 +169,12 @@ class ExoRendererService : Service() {
         }
 
         override fun setSubtitleDelay(delayMs: Long, requestedSessionId: Long) = Unit
+
+        override fun setVideoQuality(maxHeight: Int, requestedSessionId: Long) = onMain {
+            if (!isCurrent(requestedSessionId)) return@onMain
+            videoQualityMaxHeight = maxHeight.coerceAtLeast(0)
+            applyVideoQuality()
+        }
 
         override fun setVideoTrack(trackId: String?, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
@@ -291,6 +305,7 @@ class ExoRendererService : Service() {
         if (player.playbackState == Player.STATE_READY) sendReadyOnce()
         sendVideoSize(player.videoSize)
         sendTracks(player.currentTracks)
+        sendCapabilities(player)
         sendEvent(RendererProtocol.EVENT_CUES, Bundle().apply {
             putBundle(RendererProtocol.KEY_CUE_GROUP, player.currentCues.toBundle())
         })
@@ -306,6 +321,7 @@ class ExoRendererService : Service() {
             putInt(RendererProtocol.KEY_VIDEO_WIDTH, displayWidth)
             putInt(RendererProtocol.KEY_VIDEO_HEIGHT, videoSize.height)
         })
+        engine?.getExoPlayer()?.let(::sendCapabilities)
     }
 
     private fun sendReadyOnce() {
@@ -341,6 +357,36 @@ class ExoRendererService : Service() {
         sendTracks(player.currentTracks)
     }
 
+    private fun applyDesiredSettings(renderer: ExoPlayerEngine) {
+        renderer.setRate(desiredPlaybackSpeed)
+        val player = renderer.getExoPlayer() ?: return
+        player.videoScalingMode = when (desiredScalingMode) {
+            "Zoom" -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+            else -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+        }
+        player.repeatMode = if (desiredLooping) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+        applyVideoQuality()
+        applyAudioBoost()
+    }
+
+    private fun applyVideoQuality() {
+        val player = engine?.getExoPlayer() ?: return
+        val builder = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, false)
+            .clearOverridesOfType(C.TRACK_TYPE_VIDEO)
+        if (videoQualityMaxHeight > 0) {
+            val maxLongEdge = ((videoQualityMaxHeight * 16L) / 9L).toInt().coerceAtLeast(1)
+            // A square upper bound applies the same quality ceiling to landscape and portrait.
+            builder.setMaxVideoSize(maxLongEdge, maxLongEdge)
+        } else {
+            builder.setMaxVideoSize(Int.MAX_VALUE, Int.MAX_VALUE)
+        }
+        selectedVideoTrackId = null
+        player.trackSelectionParameters = builder.build()
+        sendTracks(player.currentTracks)
+        sendCapabilities(player)
+    }
+
     private fun applyAudioBoost(sessionId: Int = engine?.getExoPlayer()?.audioSessionId ?: 0) {
         if (!audioBoostEnabled) {
             loudnessEnhancer?.enabled = false
@@ -353,7 +399,7 @@ class ExoRendererService : Service() {
                 loudnessEnhancer = LoudnessEnhancer(sessionId)
                 loudnessSessionId = sessionId
             }
-            loudnessEnhancer?.setTargetGain(800)
+            loudnessEnhancer?.setTargetGain(600)
             loudnessEnhancer?.enabled = true
         }.onFailure { Log.w(TAG, "Audio boost unavailable", it) }
     }
@@ -362,28 +408,40 @@ class ExoRendererService : Service() {
         val video = arrayListOf<Bundle>()
         val audio = arrayListOf<Bundle>()
         val subtitles = arrayListOf<Bundle>()
-        video += trackBundle("auto", "Auto", null, selectedVideoTrackId == null)
+        val player = engine?.getExoPlayer()
+        val currentHeight = player?.videoSize?.let { size ->
+            listOf(size.width, size.height).filter { it > 0 }.minOrNull()
+        }
+        video += trackBundle(
+            "auto",
+            currentHeight?.let { "Auto · ${it}p" } ?: "Auto",
+            null,
+            videoQualityMaxHeight == 0,
+        )
         audio += trackBundle("auto", "Auto / Default", null, selected = false)
         subtitles += trackBundle("off", "Off", null, selected = false)
         tracks.groups.forEachIndexed { groupIndex, group ->
+            if (group.type == C.TRACK_TYPE_VIDEO) return@forEachIndexed
             val target = when (group.type) {
-                C.TRACK_TYPE_VIDEO -> video
                 C.TRACK_TYPE_AUDIO -> audio
                 C.TRACK_TYPE_TEXT -> subtitles
                 else -> return@forEachIndexed
             }
             for (trackIndex in 0 until group.length) {
                 val format = group.getTrackFormat(trackIndex)
+                if (!group.isTrackSupported(trackIndex)) continue
                 if (group.type == C.TRACK_TYPE_TEXT && isExternalSubtitleTrackId(format.id)) {
                     continue
                 }
                 target += trackBundle(
                     id = "$groupIndex:$trackIndex",
                     label = when (group.type) {
-                        C.TRACK_TYPE_VIDEO -> buildVideoTrackLabel(
-                            height = format.height,
-                            bitrate = format.bitrate,
-                            fallback = format.label ?: "Video ${trackIndex + 1}",
+                        C.TRACK_TYPE_AUDIO -> buildAudioTrackLabel(
+                            label = format.label,
+                            language = format.language,
+                            codec = format.codecs ?: format.sampleMimeType?.substringAfter('/'),
+                            channelCount = format.channelCount,
+                            fallback = "Audio ${trackIndex + 1}",
                         )
                         C.TRACK_TYPE_TEXT -> buildSubtitleTrackLabel(
                             label = format.label,
@@ -393,13 +451,28 @@ class ExoRendererService : Service() {
                         else -> format.label ?: format.language ?: "Track ${trackIndex + 1}"
                     },
                     language = format.language,
-                    selected = if (group.type == C.TRACK_TYPE_VIDEO) {
-                        selectedVideoTrackId == "$groupIndex:$trackIndex"
-                    } else {
-                        group.isTrackSelected(trackIndex)
-                    },
+                    selected = group.isTrackSelected(trackIndex),
                 )
             }
+        }
+        val heights = tracks.groups.asSequence()
+            .filter { it.type == C.TRACK_TYPE_VIDEO }
+            .flatMap { group ->
+                (0 until group.length).asSequence()
+                    .filter(group::isTrackSupported)
+                    .map { qualityHeight(group.getTrackFormat(it).width, group.getTrackFormat(it).height) }
+            }
+            .filter { it > 0 }
+            .distinct()
+            .sortedDescending()
+            .toList()
+        heights.forEach { height ->
+            video += trackBundle(
+                id = "max:$height",
+                label = "Up to ${height}p",
+                language = null,
+                selected = videoQualityMaxHeight == height,
+            )
         }
         audio.first().putBoolean(
             RendererProtocol.KEY_TRACK_SELECTED,
@@ -414,14 +487,60 @@ class ExoRendererService : Service() {
             putParcelableArrayList(RendererProtocol.KEY_AUDIO_TRACKS, audio)
             putParcelableArrayList(RendererProtocol.KEY_SUBTITLE_TRACKS, subtitles)
         })
+        player?.let(::sendCapabilities)
     }
 
-    private fun buildVideoTrackLabel(height: Int, bitrate: Int, fallback: String): String {
-        val quality = if (height > 0) "${height}p" else fallback
-        val bitrateLabel = bitrate.takeIf { it > 0 }?.let { value ->
-            String.format(java.util.Locale.US, "%.1f Mbps", value / 1_000_000f)
+    private fun sendCapabilities(player: Player) {
+        val supportedVideoHeights = player.currentTracks.groups.asSequence()
+            .filter { it.type == C.TRACK_TYPE_VIDEO }
+            .flatMap { group ->
+                (0 until group.length).asSequence()
+                    .filter(group::isTrackSupported)
+                    .map { qualityHeight(group.getTrackFormat(it).width, group.getTrackFormat(it).height) }
+            }
+            .filter { it > 0 }
+            .distinct()
+            .count()
+        val hasVideo = player.currentTracks.groups.any { it.type == C.TRACK_TYPE_VIDEO }
+        val hasAudio = player.currentTracks.groups.any { it.type == C.TRACK_TYPE_AUDIO }
+        sendEvent(RendererProtocol.EVENT_CAPABILITIES, Bundle().apply {
+            putBoolean(RendererProtocol.KEY_IS_LIVE, player.isCurrentMediaItemLive)
+            putBoolean(RendererProtocol.KEY_IS_SEEKABLE, player.isCurrentMediaItemSeekable)
+            putBoolean(RendererProtocol.KEY_SPEED_AVAILABLE, !player.isCurrentMediaItemLive)
+            putBoolean(RendererProtocol.KEY_SCALING_AVAILABLE, hasVideo)
+            putBoolean(RendererProtocol.KEY_AUDIO_BOOST_AVAILABLE, hasAudio)
+            putBoolean(RendererProtocol.KEY_QUALITY_AVAILABLE, supportedVideoHeights > 1)
+            putInt(
+                RendererProtocol.KEY_CURRENT_VIDEO_HEIGHT,
+                qualityHeight(player.videoSize.width, player.videoSize.height),
+            )
+            putInt(RendererProtocol.KEY_QUALITY_MAX_HEIGHT, videoQualityMaxHeight)
+        })
+    }
+
+    private fun qualityHeight(width: Int, height: Int): Int =
+        listOf(width, height).filter { it > 0 }.minOrNull() ?: 0
+
+    private fun buildAudioTrackLabel(
+        label: String?,
+        language: String?,
+        codec: String?,
+        channelCount: Int,
+        fallback: String,
+    ): String {
+        val channelLabel = when (channelCount) {
+            1 -> "Mono"
+            2 -> "Stereo"
+            6 -> "5.1"
+            8 -> "7.1"
+            in 3..Int.MAX_VALUE -> "$channelCount channels"
+            else -> null
         }
-        return listOfNotNull(quality, bitrateLabel).joinToString(" • ")
+        return listOfNotNull(
+            label?.takeIf { it.isNotBlank() } ?: language?.takeIf { it.isNotBlank() } ?: fallback,
+            codec?.takeIf { it.isNotBlank() }?.uppercase(),
+            channelLabel,
+        ).distinct().joinToString(" • ")
     }
 
     private fun selectExternalSubtitleTrack(tracks: Tracks): Boolean {
@@ -569,6 +688,7 @@ class ExoRendererService : Service() {
                     )
                 }
                 renderer.load(payload, initialSubtitleUri, initialSubtitleLabel)
+                applyDesiredSettings(renderer)
                 if (initialSubtitleUri != null) {
                     if (pendingExternalSubtitle == PendingExternalSubtitle(
                             initialSubtitleUri,

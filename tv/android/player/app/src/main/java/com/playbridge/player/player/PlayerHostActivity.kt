@@ -38,6 +38,7 @@ import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
 import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
+import com.playbridge.player.ui.player.PlaybackCapabilities
 import com.playbridge.player.ui.player.SettingsTab
 import com.playbridge.player.ui.player.UnifiedTrack
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
@@ -56,6 +57,14 @@ private data class RendererTrack(
     val language: String?,
     val selected: Boolean,
 )
+
+internal fun defaultQualityMaxHeight(payload: PlayPayload?): Int {
+    val value = payload?.default_video_quality.orEmpty().lowercase()
+    return when {
+        value == "4k" || value == "uhd" -> 2160
+        else -> value.filter(Char::isDigit).toIntOrNull() ?: 0
+    }
+}
 
 /**
  * Permanent host shell for renderer-process playback.
@@ -228,6 +237,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
+        controlsViewModel.resetSessionSettings(
+            defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
+        )
         requestedStartPositionMs = intent
             .getLongExtra(ServerService.EXTRA_START_POSITION, 0L)
             .takeIf { it > 0L }
@@ -352,6 +364,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     },
                     onToggleAudioBoost = {
                         controlsViewModel.toggleAudioBoost()
+                        getSharedPreferences("browser_prefs", MODE_PRIVATE).edit()
+                            .putBoolean(
+                                "loudness_enhancer",
+                                controlsViewModel.controlsState.value.isAudioBoostEnabled,
+                            )
+                            .apply()
                         broadcastPlayerSettings()
                     },
                     onAdjustSubtitleDelay = { delta ->
@@ -389,7 +407,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val currentSession = session ?: return
         val renderer = rendererService ?: return
         when (track.type) {
-            "video" -> runCatching { renderer.setVideoTrack(track.id, currentSession.sessionId) }
+            "video" -> {
+                val maxHeight = track.id.removePrefix("max:").toIntOrNull() ?: 0
+                controlsViewModel.setVideoQuality(maxHeight)
+                runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
+                broadcastPlayerSettings()
+            }
             "audio" -> runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
             "sub" -> {
                 selectRendererSubtitle(track.id, renderer, currentSession.sessionId)
@@ -590,6 +613,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers.clear()
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
+        controlsViewModel.resetSessionSettings(
+            defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
+        )
         playbackCoordinator.queueAdd(ServerService.drainPendingQueueItems(this))
         requestedStartPositionMs = requestIntent
             .getLongExtra(ServerService.EXTRA_START_POSITION, 0L)
@@ -891,6 +917,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         renderer.setLooping(state.isLooping, sessionId)
         renderer.setAudioBoost(state.isAudioBoostEnabled, sessionId)
         renderer.setSubtitleDelay(state.subtitleDelayMs, sessionId)
+        renderer.setVideoQuality(state.videoQualityMaxHeight, sessionId)
     }
 
     private fun configureProgress(payload: PlayPayload) {
@@ -1055,6 +1082,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 updateVideoSurfaceLayout()
             }
             RendererProtocol.EVENT_TRACKS -> handleTracks(event)
+            RendererProtocol.EVENT_CAPABILITIES -> handleCapabilities(event)
             RendererProtocol.EVENT_CUES -> handleSubtitleCues(event)
             RendererProtocol.EVENT_EXTERNAL_SUBTITLE_RESULT -> {
                 handleExternalSubtitleResult(event, currentSession.sessionId)
@@ -1172,6 +1200,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             put("audioBoost", state.isAudioBoostEnabled)
             put("subtitleOffsetMs", state.subtitleDelayMs)
             put("engine", rendererKind.name.lowercase())
+            put("qualityMaxHeight", state.videoQualityMaxHeight)
+            put("currentVideoHeight", state.currentVideoHeight)
+            put("isLive", state.capabilities.isLive)
+            put("isSeekable", state.capabilities.isSeekable)
+            put("speedAvailable", state.capabilities.speedAvailable)
+            put("scalingAvailable", state.capabilities.scalingAvailable)
+            put("audioBoostAvailable", state.capabilities.audioBoostAvailable)
+            put("qualityAvailable", state.capabilities.qualityAvailable)
         }.toString()
         ServerService.broadcastStatus(this, status)
     }
@@ -1197,6 +1233,25 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         updateTrackControls()
         broadcastTracks()
+    }
+
+    private fun handleCapabilities(event: Bundle) {
+        controlsViewModel.updateCapabilities(
+            capabilities = PlaybackCapabilities(
+                isLive = event.getBoolean(RendererProtocol.KEY_IS_LIVE),
+                isSeekable = event.getBoolean(RendererProtocol.KEY_IS_SEEKABLE, true),
+                speedAvailable = event.getBoolean(RendererProtocol.KEY_SPEED_AVAILABLE, true),
+                scalingAvailable = event.getBoolean(RendererProtocol.KEY_SCALING_AVAILABLE, true),
+                audioBoostAvailable = event.getBoolean(
+                    RendererProtocol.KEY_AUDIO_BOOST_AVAILABLE,
+                    true,
+                ),
+                qualityAvailable = event.getBoolean(RendererProtocol.KEY_QUALITY_AVAILABLE),
+            ),
+            currentVideoHeight = event.getInt(RendererProtocol.KEY_CURRENT_VIDEO_HEIGHT),
+            qualityMaxHeight = event.getInt(RendererProtocol.KEY_QUALITY_MAX_HEIGHT),
+        )
+        broadcastPlayerSettings()
     }
 
     private fun handleSubtitleCues(event: Bundle) {
@@ -1495,6 +1550,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     controlsViewModel.setPlaybackSpeed(speed)
                     broadcastPlayerSettings()
                 }
+            command?.startsWith("video_quality:") == true -> {
+                val value = command.removePrefix("video_quality:")
+                val maxHeight = value.takeUnless { it.equals("auto", true) }?.toIntOrNull() ?: 0
+                controlsViewModel.setVideoQuality(maxHeight)
+                runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
+                broadcastPlayerSettings()
+            }
             command?.startsWith("sub_offset:") == true -> command
                 .removePrefix("sub_offset:")
                 .toLongOrNull()
@@ -1511,6 +1573,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             command == "audio_boost" -> {
                 controlsViewModel.toggleAudioBoost()
+                getSharedPreferences("browser_prefs", MODE_PRIVATE).edit()
+                    .putBoolean(
+                        "loudness_enhancer",
+                        controlsViewModel.controlsState.value.isAudioBoostEnabled,
+                    )
+                    .apply()
                 broadcastPlayerSettings()
             }
             command == "loop_on" || command == "loop_off" -> {

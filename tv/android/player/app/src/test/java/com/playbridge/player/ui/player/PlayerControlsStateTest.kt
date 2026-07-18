@@ -11,14 +11,14 @@ class PlayerControlsStateTest {
         assertFalse(
             listOf(
                 videoTrack("auto"),
-                videoTrack("0:0"),
+                videoTrack("max:720"),
             ).hasSelectableVideoQualities(),
         )
         assertTrue(
             listOf(
                 videoTrack("auto"),
-                videoTrack("0:0"),
-                videoTrack("0:1"),
+                videoTrack("max:720"),
+                videoTrack("max:1080"),
             ).hasSelectableVideoQualities(),
         )
     }

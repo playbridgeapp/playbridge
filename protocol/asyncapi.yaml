@@ -278,6 +278,7 @@ components:
                     Transport: toggle, play, pause, stop, seek_back, seek_forward,
                     seek_to:<milliseconds>, loop_on, loop_off. Player configuration:
                     speed:<number>, scaling:<mode>, audio_boost, sub_offset:<milliseconds>,
+                    video_quality:auto|<maximum-height>,
                     switch_player:<engine>. Tracks: audio_track:<id>, sub_track:<id>,
                     add_subtitle:<url>.
               additionalProperties: false
@@ -453,6 +454,7 @@ components:
       required: [type, audio, subtitle]
       properties:
         type: { const: tracks }
+        video: { type: array, items: { $ref: '#/components/schemas/Track' } }
         audio: { type: array, items: { $ref: '#/components/schemas/Track' } }
         subtitle: { type: array, items: { $ref: '#/components/schemas/Track' } }
       additionalProperties: false
@@ -475,6 +477,14 @@ components:
         audioBoost: { type: boolean }
         subtitleOffsetMs: { type: integer }
         engine: { type: string }
+        qualityMaxHeight: { type: integer, minimum: 0 }
+        currentVideoHeight: { type: integer, minimum: 0 }
+        isLive: { type: boolean }
+        isSeekable: { type: boolean }
+        speedAvailable: { type: boolean }
+        scalingAvailable: { type: boolean }
+        audioBoostAvailable: { type: boolean }
+        qualityAvailable: { type: boolean }
       additionalProperties: false
     UserScript:
       type: object
