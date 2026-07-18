@@ -1,6 +1,12 @@
 package com.playbridge.player.ui.player
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
@@ -27,9 +33,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.playbridge.player.player.PlaylistPickerDialog
-import com.playbridge.player.player.SwitchPlayerDialog
-import com.playbridge.player.ui.theme.TvExpressiveMotion
 import com.playbridge.player.player.StillWatchingState
+import com.playbridge.player.player.SwitchPlayerDialog
+import com.playbridge.player.ui.components.LoadingBlob
+import com.playbridge.player.ui.theme.TvExpressiveMotion
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -230,7 +237,6 @@ fun PlayerControlsOverlay(
         ) {
             PlaybackTransitionOverlay(
                 message = state.playbackTransitionMessage,
-                showSpinner = state.isBuffering,
                 modifier = Modifier.align(Alignment.Center),
             )
         }
@@ -358,25 +364,29 @@ private fun StillWatchingDialog(
 @Composable
 private fun PlaybackTransitionOverlay(
     message: String?,
-    showSpinner: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val transition = rememberInfiniteTransition(label = "loading text")
+    val textAlpha by transition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "loading text pulse",
+    )
+
     Column(
         modifier = modifier,
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp),
+        verticalArrangement = Arrangement.spacedBy((-16).dp),
     ) {
-        if (showSpinner) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier.size(56.dp),
-                color = MaterialTheme.colorScheme.primary,
-                strokeWidth = 4.dp,
-            )
-        }
+        LoadingBlob(modifier = Modifier.size(220.dp))
         message?.let {
             Text(
                 text = it,
-                color = Color.White,
+                color = Color.White.copy(alpha = textAlpha),
                 fontSize = 18.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier
