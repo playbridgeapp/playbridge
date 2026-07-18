@@ -39,7 +39,6 @@ fun PairingScreen(
     ip: String,
     port: Int,
     deviceName: String,
-    deviceId: String,
     connectionState: WebSocketServer.ConnectionState,
     connectedCount: Int,
     pendingRequest: WebSocketServer.PairingRequest?,
@@ -177,14 +176,6 @@ fun PairingScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(text = "$ip:$port", fontSize = 28.sp, color = Color(0xFF00D9FF))
-                    if (deviceId.isNotEmpty()) {
-                        Text(
-                            text = "ID: $deviceId",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontSize = 12.sp
-                        )
-                    }
                     Text(
                         text = when (connectionState) {
                             is WebSocketServer.ConnectionState.Connected ->

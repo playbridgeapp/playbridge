@@ -102,6 +102,11 @@ class ProgressManager(
         currentVideoScalingMode = videoScalingMode
     }
 
+    /** Update cached artwork after a one-time frame capture. */
+    fun updateThumbnail(thumbnailUrl: String) {
+        currentThumbnailUrl = thumbnailUrl
+    }
+
     /**
      * Attempt to restore playback position from history for the given [url].
      * Returns the history item if found, so callers can restore other settings.

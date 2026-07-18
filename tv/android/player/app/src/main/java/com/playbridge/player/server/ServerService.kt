@@ -76,8 +76,6 @@ class ServerService : Service() {
     private val contextIdleReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: Intent) {
             if (intent.action == ACTION_CONTEXT_IDLE) {
-                // Only clear if a browser still owns the context — a player launched on
-                // top of the browser must not be reset to idle by the browser teardown.
                 setContextIdleInternal(setOf("browser", "browser_external"))
             }
         }
@@ -166,7 +164,9 @@ class ServerService : Service() {
 
 
         createNotificationChannel()
-        val filter = android.content.IntentFilter(ACTION_CONTEXT_IDLE)
+        val filter = android.content.IntentFilter().apply {
+            addAction(ACTION_CONTEXT_IDLE)
+        }
         // Require the signature-protected CONTEXT_IDLE permission so only our own
         // packages (signed with the same keystore) can reset activeContext.
         val contextIdlePermission = "com.playbridge.permission.CONTEXT_IDLE"
@@ -460,7 +460,11 @@ class ServerService : Service() {
         when (msg) {
             is IncomingMessage.Browser -> {
                 val url = msg.payload.url
-                val browserMode = msg.payload.browser_mode ?: "webview"
+                val phoneBrowserMode = msg.payload.browser_mode ?: "webview"
+                val tvBrowserMode = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+                    .getString("browser_mode_override", "phone") ?: "phone"
+                val browserMode = tvBrowserMode.takeIf { it == "webview" || it == "gecko" }
+                    ?: phoneBrowserMode
                 val desktopMode = msg.payload.desktop_mode ?: false
                 // Cold-start case: a freshly launched browser reads its UA override straight
                 // from prefs (live changes while already open go via ACTION_USER_AGENT_CHANGED).

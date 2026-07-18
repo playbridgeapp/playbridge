@@ -52,6 +52,7 @@ class BrowserActivity : ComponentActivity() {
     private var engine: GeckoViewEngine? = null
     private var canGoBack = false
     private var currentUrl: String? = null
+    private var explicitlyClosing = false
 
     // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
     private var isDragging = false
@@ -181,7 +182,7 @@ class BrowserActivity : ComponentActivity() {
             } else if (engine?.canGoBack() == true) {
                 engine?.goBack()
             } else {
-                finish()
+                closeBrowser()
             }
         }
 
@@ -221,7 +222,8 @@ class BrowserActivity : ComponentActivity() {
                 } else {
                     exitGeckoFullscreen()
                 }
-            }
+            },
+            onLocationChanged = { currentUrl = it },
         )
 
         // Add engine view at index 0 (behind cursor)
@@ -412,12 +414,12 @@ class BrowserActivity : ComponentActivity() {
                 if (engine?.canGoBack() == true) {
                     engine?.goBack()
                 } else {
-                    finish()
+                    closeBrowser()
                 }
             }
             "home" -> {
                 // Home always exits the browser.
-                finish()
+                closeBrowser()
             }
         }
     }
@@ -522,6 +524,11 @@ class BrowserActivity : ComponentActivity() {
         showCursorAndResetTimer()
     }
 
+    private fun closeBrowser() {
+        explicitlyClosing = true
+        finish()
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
@@ -549,10 +556,15 @@ class BrowserActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        super.onStop()
         if (!isFinishing && !isChangingConfigurations) {
-            finish()
+            engine?.pauseForBackground()
         }
+        super.onStop()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        engine?.resumeAfterBackground()
     }
 
     override fun onDestroy() {
@@ -564,10 +576,12 @@ class BrowserActivity : ComponentActivity() {
         // Notify the player app's ServerService that the browser session has ended so it can
         // reset activeContext to "idle".
         try {
-            val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
-                setPackage("com.playbridge.player")
+            if (explicitlyClosing || isFinishing) {
+                val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
+                    setPackage("com.playbridge.player")
+                }
+                sendBroadcast(idleIntent, "com.playbridge.permission.CONTEXT_IDLE")
             }
-            sendBroadcast(idleIntent, "com.playbridge.permission.CONTEXT_IDLE")
         } catch (_: Exception) {}
         super.onDestroy()
     }

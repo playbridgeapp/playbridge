@@ -48,10 +48,11 @@ fun MediaSettingsPanel(
                 .padding(12.dp)
         ) {
             val sideBarFocusRequester = remember { FocusRequester() }
+            val selectedTabFocusRequester = remember { FocusRequester() }
 
             // Initial focus on sidebar only once when panel opens
             LaunchedEffect(Unit) {
-                sideBarFocusRequester.requestFocus()
+                selectedTabFocusRequester.requestFocus()
             }
 
             // Sidebar tabs
@@ -90,7 +91,10 @@ fun MediaSettingsPanel(
                     SettingsTabButton(
                         text = label,
                         isSelected = activeTab == tab,
-                        onClick = { onTabSelected(tab) }
+                        onClick = { onTabSelected(tab) },
+                        modifier = if (activeTab == tab) {
+                            Modifier.focusRequester(selectedTabFocusRequester)
+                        } else Modifier,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                 }

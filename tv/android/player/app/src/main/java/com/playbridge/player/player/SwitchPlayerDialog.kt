@@ -97,9 +97,6 @@ fun SwitchPlayerDialog(
     val players = listOf(
         Pair("exo", "ExoPlayer"),
         Pair("mpv", "MPV"),
-        // Handled specially by the host (PlayerActivity): fires an ACTION_VIEW
-        // chooser with the current stream instead of switching internal engines.
-        Pair(SwitchPlayerIds.EXTERNAL, "External Player…")
     )
 
     val focusRequester = remember { FocusRequester() }

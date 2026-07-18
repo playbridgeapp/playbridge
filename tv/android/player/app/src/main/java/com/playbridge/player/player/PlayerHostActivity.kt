@@ -3,6 +3,7 @@ package com.playbridge.player.player
 import android.content.ComponentName
 import android.content.Intent
 import android.content.ServiceConnection
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.media.AudioManager
 import android.os.Bundle
@@ -13,6 +14,7 @@ import android.os.RemoteException
 import android.os.SystemClock
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.PixelCopy
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -26,6 +28,7 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.ComposeView
+import androidx.core.graphics.createBitmap
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.text.CueGroup
@@ -33,6 +36,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.SubtitleView
 import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.data.HistoryThumbnailStore
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
@@ -46,8 +50,10 @@ import com.playbridge.shared.protocol.createStatusJson
 import com.playbridge.shared.protocol.encodePlayPayloadListJson
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import playbridge.PlayPayload
 import java.io.File
 
@@ -102,6 +108,26 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var failureFinishRunnable: Runnable? = null
     private var prePlayCountdownJob: Job? = null
     private val historyStore by lazy { HistoryStore(applicationContext) }
+    private val historyThumbnailStore by lazy { HistoryThumbnailStore(applicationContext) }
+    private val stillWatchingController by lazy {
+        StillWatchingController(
+            scope = lifecycleScope,
+            pausePlayback = { handleControl("pause") },
+            resumePlayback = { handleControl("play") },
+            stopPlayback = ::finishPlaybackSession,
+        ).also { controller ->
+            val prefs = getSharedPreferences("browser_prefs", MODE_PRIVATE)
+            controller.updateSettings(
+                prefs.getBoolean(PlayerActivity.PREF_STILL_WATCHING_ENABLED, false),
+                PlayerActivity.normalizeStillWatchingThreshold(
+                    prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_THRESHOLD_MIN, 90),
+                ),
+                PlayerActivity.normalizeStillWatchingResponseSeconds(
+                    prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_RESPONSE_SEC, 300),
+                ),
+            )
+        }
+    }
     private val progressManager by lazy {
         ProgressManager(
             context = applicationContext,
@@ -112,7 +138,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
     private var requestedStartPositionMs: Long? = null
     private var lastSavedPositionMs = 0L
+    private var currentHistoryId: String? = null
+    private var currentHistoryHasThumbnail = false
+    private var thumbnailCaptureRequestedForId: String? = null
     private var videoTracks: List<RendererTrack> = emptyList()
+    private var videoFrameRate = 0f
     private var audioTracks: List<RendererTrack> = emptyList()
     private var subtitleTracks: List<RendererTrack> = emptyList()
     private var externalSubtitleUrls: List<String> = emptyList()
@@ -131,7 +161,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         override val duration: Long get() = lastDurationMs
         override val bufferedPosition: Long get() = lastPositionMs
         override val streamInfo: String? get() = null
-        override val frameRate: Float get() = 0f
+        override val frameRate: Float get() = videoFrameRate
         override val hdrFormat: String? get() = null
 
         override fun setLoudnessEnhancer(enabled: Boolean) {
@@ -289,6 +319,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     override fun onStop() {
+        if (!isFinishing && !isChangingConfigurations) {
+            handleControl("pause")
+        }
         runCatching { unregisterReceiver(controlReceiver) }
         super.onStop()
     }
@@ -303,8 +336,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         composeView.setContent {
             PlayBridgeTVTheme {
                 val state by controlsViewModel.controlsState.collectAsState()
+                val stillWatching by stillWatchingController.state.collectAsState()
                 PlayerControlsOverlay(
                     state = state,
+                    stillWatchingState = stillWatching,
+                    onContinueWatching = stillWatchingController::continueWatching,
                     onTogglePlay = controlsViewModel::togglePlayPause,
                     onTrackSelection = { controlsViewModel.showSettings(SettingsTab.AUDIO) },
                     onSubtitles = controlsViewModel::showSubtitles,
@@ -584,6 +620,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         stagedSubtitleFiles.clear()
         surfaceView.holder.removeCallback(surfaceCallback)
         controlsViewModel.detach()
+        stillWatchingController.dispose()
         ServerService.notifyContextIdle(this, rendererKind.engineId)
         activeHostCount.decrementAndGet()
         super.onDestroy()
@@ -926,14 +963,21 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val payloadJson = runCatching { PlayerLauncher.historyPayloadJson(items, index) }
             .getOrDefault("")
         val visualMetadata = payload.visual_metadata
+        val historyId = PlayerLauncher.historyId(items)
+        val thumbnailUrl = visualMetadata?.backdrop_url
+            ?: visualMetadata?.poster_url
+            ?: historyThumbnailStore.existingUrl(historyId)
+        if (currentHistoryId != historyId) thumbnailCaptureRequestedForId = null
+        currentHistoryId = historyId
+        currentHistoryHasThumbnail = thumbnailUrl != null
         progressManager.setCurrentMedia(
             url = payload.url,
             title = payload.title,
             contentType = payload.content_type,
             headers = payload.headers,
             payloadJson = payloadJson,
-            historyId = PlayerLauncher.historyId(items),
-            thumbnailUrl = visualMetadata?.backdrop_url ?: visualMetadata?.poster_url,
+            historyId = historyId,
+            thumbnailUrl = thumbnailUrl,
             preferredAudioLanguage = payload.preferred_audio_language,
             preferredSubtitleLanguage = payload.preferred_subtitle_language,
             externalSubtitleUrl = currentExternalSubtitleUrl,
@@ -941,6 +985,62 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         progressManager.recordLanded(requestedStartPositionMs ?: 0L)
         lastSavedPositionMs = 0L
+    }
+
+    private fun requestHistoryThumbnailCapture() {
+        val historyId = currentHistoryId ?: return
+        if (currentHistoryHasThumbnail || thumbnailCaptureRequestedForId == historyId) return
+        if (!getSharedPreferences("browser_prefs", MODE_PRIVATE)
+                .getBoolean("enable_history", true)
+        ) return
+
+        thumbnailCaptureRequestedForId = historyId
+        mainHandler.postDelayed({ captureHistoryThumbnail(historyId, attempt = 0) }, 250L)
+    }
+
+    private fun captureHistoryThumbnail(historyId: String, attempt: Int) {
+        if (isFinishing || currentHistoryId != historyId || !surfaceView.holder.surface.isValid) {
+            return
+        }
+        val bitmap = createBitmap(
+            HistoryThumbnailStore.WIDTH,
+            HistoryThumbnailStore.HEIGHT,
+            Bitmap.Config.ARGB_8888,
+        )
+        runCatching {
+            PixelCopy.request(
+                surfaceView,
+                bitmap,
+                { result ->
+                    if (result != PixelCopy.SUCCESS) {
+                        bitmap.recycle()
+                        if (attempt == 0 && currentHistoryId == historyId) {
+                            mainHandler.postDelayed(
+                                { captureHistoryThumbnail(historyId, attempt = 1) },
+                                500L,
+                            )
+                        }
+                    } else {
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val thumbnailUrl = try {
+                                historyThumbnailStore.save(historyId, bitmap)
+                            } finally {
+                                bitmap.recycle()
+                            } ?: return@launch
+                            historyStore.updateThumbnail(historyId, thumbnailUrl)
+                            withContext(Dispatchers.Main) {
+                                if (currentHistoryId == historyId) {
+                                    currentHistoryHasThumbnail = true
+                                    progressManager.updateThumbnail(thumbnailUrl)
+                                    progressManager.saveProgress()
+                                }
+                            }
+                        }
+                    }
+                },
+                mainHandler,
+            )
+        }.onFailure { bitmap.recycle() }
     }
 
     private fun updateControlsForCurrentItem(showPrePlay: Boolean = false) {
@@ -1035,10 +1135,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererProtocol.EVENT_FIRST_FRAME -> {
                 controlsViewModel.clearPlaybackTransition()
                 markPlaybackStarted(currentSession.sessionId)
+                requestHistoryThumbnailCapture()
             }
             RendererProtocol.EVENT_STATE -> {
                 val state = event.getString(RendererProtocol.KEY_STATE) ?: return
                 hostPlaying = state == "playing"
+                stillWatchingController.onPlayingChanged(hostPlaying && state != "buffering")
                 controlsViewModel.setPlaying(hostPlaying)
                 controlsViewModel.setBuffering(state == "buffering")
                 if (state == "playing") controlsViewModel.clearPlaybackTransition()
@@ -1079,7 +1181,15 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererProtocol.EVENT_VIDEO_SIZE -> {
                 videoWidth = event.getInt(RendererProtocol.KEY_VIDEO_WIDTH).coerceAtLeast(0)
                 videoHeight = event.getInt(RendererProtocol.KEY_VIDEO_HEIGHT).coerceAtLeast(0)
+                videoFrameRate = event.getFloat(RendererProtocol.KEY_VIDEO_FPS)
+                    .takeIf { it.isFinite() && it > 0f } ?: 0f
+                applyFrameRateMatching()
                 updateVideoSurfaceLayout()
+            }
+            RendererProtocol.EVENT_VIDEO_RATE -> {
+                videoFrameRate = event.getFloat(RendererProtocol.KEY_VIDEO_FPS)
+                    .takeIf { it.isFinite() && it > 0f } ?: 0f
+                applyFrameRateMatching()
             }
             RendererProtocol.EVENT_TRACKS -> handleTracks(event)
             RendererProtocol.EVENT_CAPABILITIES -> handleCapabilities(event)
@@ -1103,6 +1213,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun startPlaylistItem() {
         if (finishingSession) return
+        stillWatchingController.onMediaChanged()
         val renderer = rendererService ?: run {
             handleRendererFailure("Renderer disconnected while advancing the playlist")
             return
@@ -1664,6 +1775,20 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
     }
 
+    private fun applyFrameRateMatching() {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+        val enabled = getSharedPreferences("browser_prefs", MODE_PRIVATE)
+            .getBoolean("frame_rate_matching", false)
+        val requested = if (enabled) videoFrameRate else 0f
+        runCatching {
+            surfaceView.holder.surface.takeIf(Surface::isValid)?.setFrameRate(
+                requested,
+                if (requested > 0f) Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE
+                else Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+            )
+        }.onFailure { FileLogger.w(TAG, "Unable to apply frame-rate matching") }
+    }
+
     private fun handleBackPressed() {
         val state = controlsViewModel.controlsState.value
         when {
@@ -1677,6 +1802,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        stillWatchingController.onUserActivity()
         if (controlsViewModel.controlsState.value.playbackTransitionMessage != null) {
             when (keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
@@ -1766,6 +1892,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun resetVideoSurfaceLayout() {
         videoWidth = 0
         videoHeight = 0
+        videoFrameRate = 0f
+        applyFrameRateMatching()
         updateVideoSurfaceLayout()
     }
 
@@ -1820,6 +1948,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun rotateRendererSurface() {
         if (!::playerRoot.isInitialized) return
         val oldView = surfaceView
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            runCatching {
+                oldView.holder.surface.takeIf(Surface::isValid)?.setFrameRate(
+                    0f,
+                    Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
+                )
+            }
+        }
         oldView.holder.removeCallback(surfaceCallback)
         surface = null
         playerRoot.removeView(oldView)

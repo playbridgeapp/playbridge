@@ -42,6 +42,7 @@ internal object RendererProtocol {
     const val EVENT_STATE = "state"
     const val EVENT_ENDED = "ended"
     const val EVENT_VIDEO_SIZE = "video_size"
+    const val EVENT_VIDEO_RATE = "video_rate"
     const val EVENT_TRACKS = "tracks"
     const val EVENT_CUES = "cues"
     const val EVENT_EXTERNAL_SUBTITLE_RESULT = "external_subtitle_result"

@@ -34,9 +34,9 @@ object PlayerLauncher {
      * @param tvPlayerMode the TV's `player_mode` preference ("mpv"/"exo"/"phone"/unset);
      *   when "mpv"/"exo" it forces the engine, otherwise the payload's per-item
      *   `player_mode` wins (defaulting to ExoPlayer).
-     * @param overrideStartPositionMs when non-null and > 0, takes priority over the
-     *   payload's own `start_position_ms` (used by history replay to resume the TV's
-     *   last position).
+     * @param overrideStartPositionMs when non-null, takes priority over the payload's own
+     *   `start_position_ms`. A positive value resumes there; zero explicitly starts from the
+     *   beginning (used when replaying completed history).
      */
     fun buildPlayerIntent(
         context: Context,
@@ -92,10 +92,14 @@ object PlayerLauncher {
                 putExtra(ServerService.EXTRA_VISUAL_METADATA, visualMetadata.encode())
             }
 
-            // Resume point: a caller override (history's saved position) beats the
-            // payload's own start_position_ms. Both engines honour EXTRA_START_POSITION.
-            (overrideStartPositionMs?.takeIf { it > 0 }
-                ?: firstItem?.start_position_ms?.takeIf { it > 0 })
+            // Resume point: a caller override (including an explicit zero) beats the payload's
+            // own start_position_ms. Both engines honour a positive EXTRA_START_POSITION;
+            // omitting it represents a deliberate start from zero.
+            (if (overrideStartPositionMs != null) {
+                overrideStartPositionMs.takeIf { it > 0 }
+            } else {
+                firstItem?.start_position_ms?.takeIf { it > 0 }
+            })
                 ?.let { putExtra(ServerService.EXTRA_START_POSITION, it) }
 
             addFlags(

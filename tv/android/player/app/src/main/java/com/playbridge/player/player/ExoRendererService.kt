@@ -320,6 +320,10 @@ class ExoRendererService : Service() {
         sendEvent(RendererProtocol.EVENT_VIDEO_SIZE, Bundle().apply {
             putInt(RendererProtocol.KEY_VIDEO_WIDTH, displayWidth)
             putInt(RendererProtocol.KEY_VIDEO_HEIGHT, videoSize.height)
+            putFloat(
+                RendererProtocol.KEY_VIDEO_FPS,
+                engine?.getExoPlayer()?.videoFormat?.frameRate?.takeIf { it.isFinite() && it > 0f } ?: 0f,
+            )
         })
         engine?.getExoPlayer()?.let(::sendCapabilities)
     }

@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +40,9 @@ fun PrePlayScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val playNowFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) { playNowFocusRequester.requestFocus() }
 
     BackHandler(onBack = onBack)
 
@@ -143,6 +148,12 @@ fun PrePlayScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
+                        Button(
+                            onClick = onStartNow,
+                            modifier = Modifier.focusRequester(playNowFocusRequester),
+                        ) {
+                            Text("Play now")
+                        }
                         StatusSection(
                             isLaunching = isLaunching,
                             countdown = launchCountdown

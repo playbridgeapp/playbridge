@@ -37,6 +37,7 @@ data class PlaybackHistoryItem(
 )
 
 class HistoryStore(private val context: Context) {
+    private val thumbnailStore by lazy { HistoryThumbnailStore(context) }
 
     companion object {
         private val PLAYBACK_HISTORY = stringPreferencesKey("playback_history")
@@ -110,6 +111,7 @@ class HistoryStore(private val context: Context) {
     }
     
     suspend fun removeItem(id: String) {
+        var removed = false
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
@@ -119,15 +121,18 @@ class HistoryStore(private val context: Context) {
             }
 
             if (currentList.removeAll { it.id == id }) {
+                 removed = true
                  prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),
                     currentList
                 )
             }
         }
+        if (removed) thumbnailStore.remove(id)
     }
     
     suspend fun clearHistory() {
+        val removedIds = mutableListOf<String>()
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
@@ -137,6 +142,9 @@ class HistoryStore(private val context: Context) {
             }
 
             val favoritesOnly = currentList.filter { it.isFavorite }
+            removedIds += currentList.asSequence()
+                .filterNot(PlaybackHistoryItem::isFavorite)
+                .map(PlaybackHistoryItem::id)
 
             if (favoritesOnly.isEmpty()) {
                 prefs.remove(PLAYBACK_HISTORY)
@@ -144,6 +152,26 @@ class HistoryStore(private val context: Context) {
                 prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),
                     favoritesOnly
+                )
+            }
+        }
+        thumbnailStore.removeAll(removedIds)
+    }
+
+    suspend fun updateThumbnail(id: String, thumbnailUrl: String) {
+        context.historyDataStore.edit { prefs ->
+            val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
+            val currentList = try {
+                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(currentJson).toMutableList()
+            } catch (e: Exception) {
+                mutableListOf()
+            }
+            val index = currentList.indexOfFirst { it.id == id }
+            if (index >= 0 && currentList[index].thumbnailUrl != thumbnailUrl) {
+                currentList[index] = currentList[index].copy(thumbnailUrl = thumbnailUrl)
+                prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
+                    ListSerializer(PlaybackHistoryItem.serializer()),
+                    currentList,
                 )
             }
         }
@@ -161,12 +189,9 @@ class HistoryStore(private val context: Context) {
             val index = currentList.indexOfFirst { it.id == id }
             if (index != -1) {
                 val item = currentList[index]
-                if (item.isFavorite) {
-                    // Unfavoriting an item completely deletes it
-                    currentList.removeAt(index)
-                } else {
-                    currentList[index] = item.copy(isFavorite = true)
-                }
+                // Favorite is an independent Library attribute. Removing the flag must not
+                // delete playback history or make an item disappear from Recent.
+                currentList[index] = item.copy(isFavorite = !item.isFavorite)
 
                 prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),

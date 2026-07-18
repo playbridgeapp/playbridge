@@ -13,7 +13,8 @@ class GeckoViewEngine(
     private val context: Context,
     private val desktopMode: Boolean = false,
     private var userAgentOverride: String? = null,
-    private val onFullscreen: ((Boolean) -> Unit)? = null
+    private val onFullscreen: ((Boolean) -> Unit)? = null,
+    private val onLocationChanged: ((String) -> Unit)? = null,
 ) {
 
     companion object {
@@ -65,6 +66,18 @@ class GeckoViewEngine(
 
     fun destroy() {
         session.close()
+    }
+
+    fun pauseForBackground() {
+        evaluateJavascript(
+            "(function(){document.querySelectorAll('video,audio').forEach(function(m){m.pause();});})();",
+            null,
+        )
+        session.setActive(false)
+    }
+
+    fun resumeAfterBackground() {
+        session.setActive(true)
     }
 
     fun scrollBy(dx: Float, dy: Float) {
@@ -169,6 +182,14 @@ class GeckoViewEngine(
 
         // Navigation delegate
         session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onLocationChange(
+                session: GeckoSession,
+                url: String?,
+                perms: List<org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean,
+            ) {
+                if (url != null) onLocationChanged?.invoke(url)
+            }
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 _canGoBack = canGoBack
             }

@@ -26,10 +26,10 @@ import com.playbridge.player.server.ServerService
 import com.playbridge.player.server.WebSocketServer
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.data.PlaybackHistoryItem
-import com.playbridge.player.ui.HistoryScreen
-import com.playbridge.player.ui.FavoritesScreen
+import com.playbridge.player.ui.LibraryScreen
 import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.SettingsScreen
+import com.playbridge.player.ui.resumePositionForHistoryItem
 import com.playbridge.player.ui.components.AppSidebar
 import com.playbridge.player.ui.theme.AppTheme
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+
     }
 
     /**
@@ -151,8 +152,7 @@ class MainActivity : ComponentActivity() {
 // (no devices ever paired) and when navigating to "Pair New Device" from the Library.
 enum class Screen {
     Pairing,
-    History,
-    Favorites,
+    Library,
     Settings
 }
 
@@ -166,23 +166,11 @@ fun MainContent(
     val scope = rememberCoroutineScope()
     val currentContext = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { currentContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
-    var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
-
-    DisposableEffect(prefs) {
-        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-            if (key == "enable_history") {
-                enableHistory = prefs.getBoolean("enable_history", true)
-            }
-        }
-        prefs.registerOnSharedPreferenceChangeListener(listener)
-        onDispose {
-            prefs.unregisterOnSharedPreferenceChangeListener(listener)
-        }
-    }
-
-    // Default to History; overridden below once we know whether any device has paired.
-    var currentScreen by rememberSaveable { mutableStateOf(Screen.History) }
-    var isInitialCheckDone by remember { mutableStateOf(false) }
+    // Both values survive Activity recreation; the onboarding effect must not overwrite a
+    // restored destination after a temporary trip to Android settings.
+    var currentScreen by rememberSaveable { mutableStateOf(Screen.Library) }
+    var previousScreen by rememberSaveable { mutableStateOf<Screen?>(null) }
+    var isInitialCheckDone by rememberSaveable { mutableStateOf(false) }
 
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
@@ -190,21 +178,13 @@ fun MainContent(
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
 
-    LaunchedEffect(enableHistory) {
-        if (!enableHistory && currentScreen == Screen.History) {
-            currentScreen = Screen.Pairing
-        }
-    }
-
     // On first launch: show PairingScreen only if no device has ever connected AND onboarding not done.
-    LaunchedEffect(pairedDevices, isOnboardingDone, enableHistory) {
+    LaunchedEffect(pairedDevices, isOnboardingDone) {
         if (!isInitialCheckDone) {
-            currentScreen = if (!enableHistory) {
-                Screen.Pairing
-            } else if (pairedDevices.isEmpty() && !isOnboardingDone) {
+            currentScreen = if (pairedDevices.isEmpty() && !isOnboardingDone) {
                 Screen.Pairing
             } else {
-                Screen.History
+                Screen.Library
             }
             
             if (!isOnboardingDone) {
@@ -227,13 +207,11 @@ fun MainContent(
     var serverIp by remember { mutableStateOf<String?>(null) }
     var serverPort by remember { mutableStateOf<Int?>(null) }
     var deviceName by remember { mutableStateOf("Android TV") }
-    var deviceId by remember { mutableStateOf("") }
 
     // Load initial values
     LaunchedEffect(Unit) {
         val appCtx = currentContext.applicationContext ?: currentContext
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            deviceId = pairingStore.getOrCreateDeviceId()
             serverIp = getLocalIpAddress(appCtx)
         }
     }
@@ -252,16 +230,16 @@ fun MainContent(
     // (The pairing is done — now let the user see their history/favourites.)
     LaunchedEffect(connectionState) {
         if (connectionState is WebSocketServer.ConnectionState.Connected) {
-            if (currentScreen == Screen.Pairing && enableHistory) {
-                currentScreen = Screen.History
+            if (currentScreen == Screen.Pairing) {
+                previousScreen = Screen.Pairing
+                currentScreen = Screen.Library
             }
         }
     }
 
     val onPlayItem: (PlaybackHistoryItem) -> Unit = { item ->
-        // Replay = re-run the stored payload through the *same* launch path a live cast
-        // uses, resuming at the TV's saved position. Subtitles, audio language, headers and
-        // visual metadata all come back because they ride inside the payload.
+        // Replay runs through the same launch path as a live cast. Only unfinished items
+        // resume; completed Recent/Favorite items intentionally restart from the beginning.
         val payload = com.playbridge.shared.protocol.decodePlaylistPayloadJson(item.payloadJson)
         if (payload != null) {
             val tvPref = currentContext
@@ -271,7 +249,9 @@ fun MainContent(
                 context = currentContext,
                 payload = payload,
                 tvPlayerMode = tvPref,
-                overrideStartPositionMs = item.position.takeIf { it > 0 },
+                // A zero override deliberately suppresses any stale start_position_ms that
+                // arrived in the original cast payload for completed/non-resumable entries.
+                overrideStartPositionMs = resumePositionForHistoryItem(item) ?: 0L,
             )
             currentContext.startActivity(intent)
         }
@@ -283,8 +263,10 @@ fun MainContent(
         Row(modifier = Modifier.fillMaxSize()) {
             AppSidebar(
                 currentScreen = currentScreen,
-                onScreenSelected = { currentScreen = it },
-                enableHistory = enableHistory
+                onScreenSelected = {
+                    if (it != currentScreen) previousScreen = currentScreen
+                    currentScreen = it
+                },
             )
 
             // Content Area
@@ -296,7 +278,6 @@ fun MainContent(
                             // Show the wss:// port — the address senders connect to.
                             port = serverPort ?: com.playbridge.shared.protocol.Config.DEFAULT_PORT,
                             deviceName = deviceName,
-                            deviceId = deviceId,
                             connectionState = connectionState,
                             connectedCount = connectedCount,
                             pendingRequest = pendingPairingRequest,
@@ -306,14 +287,8 @@ fun MainContent(
                             onForgetAll = { scope.launch { pairingStore.forgetAllDevices() } }
                         )
                     }
-                    Screen.History -> {
-                        HistoryScreen(
-                            historyStore = historyStore,
-                            onPlayItem = onPlayItem
-                        )
-                    }
-                    Screen.Favorites -> {
-                        FavoritesScreen(
+                    Screen.Library -> {
+                        LibraryScreen(
                             historyStore = historyStore,
                             onPlayItem = onPlayItem
                         )
@@ -328,10 +303,10 @@ fun MainContent(
         }
     }
 
-    // Universal back handler: any screen that isn't primary screen goes back to primary screen.
-    val primaryScreen = if (enableHistory) Screen.History else Screen.Pairing
-    androidx.activity.compose.BackHandler(enabled = currentScreen != primaryScreen) {
-        currentScreen = primaryScreen
+    androidx.activity.compose.BackHandler(enabled = previousScreen != null) {
+        val target = previousScreen
+        previousScreen = null
+        if (target != null) currentScreen = target
     }
 }
 

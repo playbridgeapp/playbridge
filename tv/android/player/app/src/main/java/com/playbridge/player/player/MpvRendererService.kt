@@ -21,6 +21,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import playbridge.PlayPayload
+import `is`.xyz.mpv.MPVLib
+import `is`.xyz.mpv.MPVNode
 
 internal fun findAddedSubtitleTrackId(
     currentTracks: Iterable<Pair<String, String>>,
@@ -61,6 +63,21 @@ class MpvRendererService : Service() {
     private var desiredLooping = false
     private var audioBoostEnabled = false
     private var lastCapabilitiesLive: Boolean? = null
+    private val frameRateObserver = object : MPVLib.EventObserver {
+        override fun event(eventId: Int, data: MPVNode) = Unit
+        override fun eventProperty(property: String) = Unit
+        override fun eventProperty(property: String, value: Boolean) = Unit
+        override fun eventProperty(property: String, value: Long) = Unit
+        override fun eventProperty(property: String, value: String) = Unit
+        override fun eventProperty(property: String, value: MPVNode) = Unit
+        override fun eventProperty(property: String, value: Double) {
+            if (property == "container-fps") {
+                sendEvent(RendererProtocol.EVENT_VIDEO_RATE, Bundle().apply {
+                    putFloat(RendererProtocol.KEY_VIDEO_FPS, value.toFloat())
+                })
+            }
+        }
+    }
 
     private val binder = object : IRendererService.Stub() {
         override fun setCallback(callback: IRendererCallback?) = onMain {
@@ -96,6 +113,7 @@ class MpvRendererService : Service() {
                 engine = it
                 observeState(it)
                 observeTracks(it)
+                it.registerObserver(frameRateObserver, mapOf("container-fps" to 5))
             }
             surface?.let {
                 renderer.attachSurface(it)
@@ -522,6 +540,7 @@ class MpvRendererService : Service() {
         tracksJob?.cancel()
         tracksJob = null
         surface = null
+        engine?.unregisterObserver(frameRateObserver)
         engine?.release()
         engine = null
         currentTitle = null
