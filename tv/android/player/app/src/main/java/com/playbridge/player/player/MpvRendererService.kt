@@ -323,7 +323,11 @@ class MpvRendererService : Service() {
             .map { track ->
                 trackBundle(
                     track.id,
-                    track.label,
+                    buildSubtitleTrackLabel(
+                        label = track.label,
+                        language = track.language,
+                        fallback = "Subtitle ${track.id}",
+                    ),
                     track.language,
                     selectedSubtitleTrackId == track.id,
                 )

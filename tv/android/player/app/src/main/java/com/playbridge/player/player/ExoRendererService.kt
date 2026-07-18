@@ -368,7 +368,15 @@ class ExoRendererService : Service() {
                 }
                 target += trackBundle(
                     id = "$groupIndex:$trackIndex",
-                    label = format.label ?: format.language ?: "Track ${trackIndex + 1}",
+                    label = if (group.type == C.TRACK_TYPE_TEXT) {
+                        buildSubtitleTrackLabel(
+                            label = format.label,
+                            language = format.language,
+                            fallback = "Subtitle ${trackIndex + 1}",
+                        )
+                    } else {
+                        format.label ?: format.language ?: "Track ${trackIndex + 1}"
+                    },
                     language = format.language,
                     selected = group.isTrackSelected(trackIndex),
                 )

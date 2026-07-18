@@ -124,6 +124,40 @@ private fun classify(t: UnifiedTrack): SubInfo {
 
 private fun optionLabel(t: UnifiedTrack): String = classify(t).optionLabel
 
+private fun isOpenSubtitlesTrack(track: UnifiedTrack): Boolean =
+    track.type == "external_sub" && track.name.contains("OpenSubtitles #", ignoreCase = true)
+
+private val NATURAL_NAME_PART = Regex("\\d+|\\D+")
+
+internal fun compareSubtitleOptionNames(left: String, right: String): Int {
+    val leftParts = NATURAL_NAME_PART.findAll(left.lowercase()).map { it.value }.toList()
+    val rightParts = NATURAL_NAME_PART.findAll(right.lowercase()).map { it.value }.toList()
+    for (index in 0 until minOf(leftParts.size, rightParts.size)) {
+        val leftPart = leftParts[index]
+        val rightPart = rightParts[index]
+        val leftNumber = leftPart.toLongOrNull()
+        val rightNumber = rightPart.toLongOrNull()
+        val compared = if (leftNumber != null && rightNumber != null) {
+            leftNumber.compareTo(rightNumber)
+        } else {
+            leftPart.compareTo(rightPart)
+        }
+        if (compared != 0) return compared
+    }
+    return leftParts.size.compareTo(rightParts.size)
+}
+
+private fun sortOpenSubtitlesOptions(tracks: List<UnifiedTrack>): List<UnifiedTrack> {
+    if (tracks.none(::isOpenSubtitlesTrack)) return tracks
+    return tracks.sortedWith { left, right ->
+        when {
+            isOpenSubtitlesTrack(left) && !isOpenSubtitlesTrack(right) -> 1
+            !isOpenSubtitlesTrack(left) && isOpenSubtitlesTrack(right) -> -1
+            else -> compareSubtitleOptionNames(optionLabel(left), optionLabel(right))
+        }
+    }
+}
+
 private fun sourceLabel(t: UnifiedTrack): String =
     if (t.type == "external_sub") "EXTERNAL" else "EMBEDDED"
 
@@ -147,10 +181,15 @@ private fun groupSubtitleTracks(tracks: List<UnifiedTrack>): List<SubLangGroup> 
         groups.add(SubLangGroup(REMOTE_KEY, display, list, list.any { it.isSelected }))
     }
 
-    // Real languages first (encounter order)
-    byLang.filterKeys { it != EMBEDDED_KEY && it != REMOTE_KEY && it != EXTERNAL_KEY }.forEach { (k, v) ->
-        groups.add(SubLangGroup(k, v.first, v.second, v.second.any { it.isSelected }))
-    }
+    // OpenSubtitles languages are stable and easy to scan regardless of endpoint response order.
+    byLang
+        .filterKeys { it != EMBEDDED_KEY && it != REMOTE_KEY && it != EXTERNAL_KEY }
+        .toList()
+        .sortedBy { (_, value) -> value.first.lowercase() }
+        .forEach { (key, value) ->
+            val sortedTracks = sortOpenSubtitlesOptions(value.second)
+            groups.add(SubLangGroup(key, value.first, sortedTracks, sortedTracks.any { it.isSelected }))
+        }
     byLang[EXTERNAL_KEY]?.let { (display, list) ->
         groups.add(SubLangGroup(EXTERNAL_KEY, display, list, list.any { it.isSelected }))
     }
@@ -501,6 +540,5 @@ private fun SyncRow(label: String, minus: String, plus: String, step: Long, onAd
         ) { Text(plus, style = MaterialTheme.typography.labelSmall) }
     }
 }
-
 
 
