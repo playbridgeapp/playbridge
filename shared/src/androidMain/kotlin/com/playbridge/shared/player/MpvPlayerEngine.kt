@@ -589,7 +589,7 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
     override suspend fun attachExternalSubtitle(url: String, language: String?) {
         logger.i(TAG, "attachExternalSubtitle(${redactUrlForLog(url)}) queued")
         enqueueControl("attachExternalSubtitle") {
-            MPVLib.command("sub-add", url, "select")
+            MPVLib.command("sub-add", url, "select", language ?: "External Subtitle")
         }
     }
 

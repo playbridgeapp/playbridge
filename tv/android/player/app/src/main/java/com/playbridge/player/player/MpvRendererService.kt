@@ -22,6 +22,14 @@ import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import playbridge.PlayPayload
 
+internal fun findAddedSubtitleTrackId(
+    currentTracks: Iterable<Pair<String, String>>,
+    existingTrackIds: Set<String>,
+    expectedLabel: String,
+): String? = currentTracks.firstOrNull { (id, label) ->
+    id !in existingTrackIds && label == expectedLabel
+}?.first
+
 /** Headless MPV renderer for the permanent host process boundary. */
 class MpvRendererService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -42,6 +50,10 @@ class MpvRendererService : Service() {
     private var pendingPayloadSessionId = 0L
     private var fileReadySessionId = 0L
     private var pendingSeekMs: Long? = null
+    private var pendingExternalSubtitle: PendingExternalSubtitle? = null
+    private var externalSubtitleTimeout: Runnable? = null
+    private val externalSubtitleTrackIds = linkedSetOf<String>()
+    private var externalSubtitleRequestNumber = 0L
 
     private val binder = object : IRendererService.Stub() {
         override fun setCallback(callback: IRendererCallback?) = onMain {
@@ -50,6 +62,8 @@ class MpvRendererService : Service() {
 
         override fun prepare(request: Bundle?, requestedSessionId: Long) = onMain {
             if (request == null || requestedSessionId <= sessionId) return@onMain
+            clearPendingExternalSubtitle()
+            externalSubtitleTrackIds.clear()
             sessionId = requestedSessionId
             firstFrameSession = 0L
             playWhenReady = false
@@ -170,7 +184,29 @@ class MpvRendererService : Service() {
             requestedSessionId: Long,
         ) = onMain {
             if (!isCurrent(requestedSessionId) || url.isNullOrBlank()) return@onMain
-            scope.launch { engine?.attachExternalSubtitle(url, language) }
+            val renderer = engine ?: return@onMain
+            clearPendingExternalSubtitle()
+            val trackLabel = "playbridge-external-${requestedSessionId}-${++externalSubtitleRequestNumber}"
+            pendingExternalSubtitle = PendingExternalSubtitle(
+                uri = url,
+                sessionId = requestedSessionId,
+                existingTrackIds = renderer.subtitleTracks.value.mapTo(linkedSetOf()) { it.id },
+                trackLabel = trackLabel,
+            )
+            scope.launch {
+                try {
+                    renderer.attachExternalSubtitle(url, trackLabel)
+                    if (pendingExternalSubtitle?.uri == url &&
+                        pendingExternalSubtitle?.sessionId == requestedSessionId
+                    ) {
+                        scheduleExternalSubtitleTimeout(url, requestedSessionId)
+                    }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    completeExternalSubtitleAttachment(url, requestedSessionId, trackId = null)
+                }
+            }
         }
 
         override fun stop(requestedSessionId: Long) = onMain {
@@ -259,7 +295,10 @@ class MpvRendererService : Service() {
         tracksJob?.cancel()
         tracksJob = scope.launch {
             combine(renderer.audioTracks, renderer.subtitleTracks) { _, _ -> Unit }
-                .collectLatest { sendTracks() }
+                .collectLatest {
+                    completePendingExternalSubtitleIfPresent(renderer)
+                    sendTracks()
+                }
         }
     }
 
@@ -279,18 +318,70 @@ class MpvRendererService : Service() {
         val subtitles = arrayListOf(
             trackBundle("off", "Off", null, selectedSubtitleTrackId == null),
         )
-        subtitles += renderer.subtitleTracks.value.map { track ->
-            trackBundle(
-                track.id,
-                track.label,
-                track.language,
-                selectedSubtitleTrackId == track.id,
-            )
-        }
+        subtitles += renderer.subtitleTracks.value
+            .filterNot { it.id in externalSubtitleTrackIds }
+            .map { track ->
+                trackBundle(
+                    track.id,
+                    track.label,
+                    track.language,
+                    selectedSubtitleTrackId == track.id,
+                )
+            }
         sendEvent(RendererProtocol.EVENT_TRACKS, Bundle().apply {
             putParcelableArrayList(RendererProtocol.KEY_AUDIO_TRACKS, audio)
             putParcelableArrayList(RendererProtocol.KEY_SUBTITLE_TRACKS, subtitles)
         })
+    }
+
+    private fun completePendingExternalSubtitleIfPresent(renderer: MpvPlayerEngine): Boolean {
+        val pending = pendingExternalSubtitle ?: return false
+        val trackId = findAddedSubtitleTrackId(
+            renderer.subtitleTracks.value.map { it.id to it.label },
+            pending.existingTrackIds,
+            pending.trackLabel,
+        ) ?: return false
+        completeExternalSubtitleAttachment(pending.uri, pending.sessionId, trackId)
+        return true
+    }
+
+    private fun scheduleExternalSubtitleTimeout(uri: String, requestedSessionId: Long) {
+        externalSubtitleTimeout?.let(mainHandler::removeCallbacks)
+        externalSubtitleTimeout = Runnable {
+            val attached = engine?.let(::completePendingExternalSubtitleIfPresent) == true
+            if (!attached) {
+                completeExternalSubtitleAttachment(uri, requestedSessionId, trackId = null)
+            }
+        }.also { timeout ->
+            mainHandler.postDelayed(timeout, EXTERNAL_SUBTITLE_ATTACH_TIMEOUT_MS)
+        }
+    }
+
+    private fun completeExternalSubtitleAttachment(
+        uri: String,
+        requestedSessionId: Long,
+        trackId: String?,
+    ) {
+        val pending = pendingExternalSubtitle ?: return
+        if (pending.uri != uri || pending.sessionId != requestedSessionId) return
+        externalSubtitleTimeout?.let(mainHandler::removeCallbacks)
+        externalSubtitleTimeout = null
+        pendingExternalSubtitle = null
+        if (!isCurrent(requestedSessionId)) return
+        if (trackId != null) {
+            externalSubtitleTrackIds += trackId
+            selectedSubtitleTrackId = trackId
+        }
+        sendEvent(RendererProtocol.EVENT_EXTERNAL_SUBTITLE_RESULT, Bundle().apply {
+            putString(RendererProtocol.KEY_SUBTITLE_URI, uri)
+            putBoolean(RendererProtocol.KEY_SUCCESS, trackId != null)
+        })
+    }
+
+    private fun clearPendingExternalSubtitle() {
+        externalSubtitleTimeout?.let(mainHandler::removeCallbacks)
+        externalSubtitleTimeout = null
+        pendingExternalSubtitle = null
     }
 
     private fun trackBundle(
@@ -306,6 +397,8 @@ class MpvRendererService : Service() {
     }
 
     private fun releaseEngine() {
+        clearPendingExternalSubtitle()
+        externalSubtitleTrackIds.clear()
         stateJob?.cancel()
         stateJob = null
         tracksJob?.cancel()
@@ -365,5 +458,16 @@ class MpvRendererService : Service() {
         } catch (_: RemoteException) {
             callback = null
         }
+    }
+
+    private data class PendingExternalSubtitle(
+        val uri: String,
+        val sessionId: Long,
+        val existingTrackIds: Set<String>,
+        val trackLabel: String,
+    )
+
+    private companion object {
+        const val EXTERNAL_SUBTITLE_ATTACH_TIMEOUT_MS = 8_000L
     }
 }

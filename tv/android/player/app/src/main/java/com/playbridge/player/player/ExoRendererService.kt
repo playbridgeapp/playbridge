@@ -363,6 +363,9 @@ class ExoRendererService : Service() {
             }
             for (trackIndex in 0 until group.length) {
                 val format = group.getTrackFormat(trackIndex)
+                if (group.type == C.TRACK_TYPE_TEXT && isExternalSubtitleTrackId(format.id)) {
+                    continue
+                }
                 target += trackBundle(
                     id = "$groupIndex:$trackIndex",
                     label = format.label ?: format.language ?: "Track ${trackIndex + 1}",

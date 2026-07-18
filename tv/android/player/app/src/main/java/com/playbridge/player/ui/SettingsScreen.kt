@@ -275,7 +275,7 @@ fun SettingsScreen(
                         }
                         item {
                             SettingDropdownItem(
-                                label = "Subtitle Rendering",
+                                label = "External Subtitle Rendering",
                                 description = when (subtitleRenderingMode) {
                                     SubtitleRenderingMode.AUTO ->
                                         "Use the player renderer, with the PlayBridge overlay as a fallback."
