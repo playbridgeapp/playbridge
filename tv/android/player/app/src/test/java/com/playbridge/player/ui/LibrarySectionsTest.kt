@@ -30,6 +30,16 @@ class LibrarySectionsTest {
         assertEquals(240_000L, resumePositionForHistoryItem(unfinished))
     }
 
+    @Test
+    fun `thumbnail revision invalidates the library image cache key`() {
+        val first = item("snapshot", position = 60_000, duration = 600_000, timestamp = 1)
+            .copy(thumbnailUrl = "file:///snapshot.jpg", thumbnailRevision = 10)
+        val refreshed = first.copy(thumbnailRevision = 20)
+
+        assertEquals("file:///snapshot.jpg#10", historyThumbnailCacheKey(first))
+        assertEquals("file:///snapshot.jpg#20", historyThumbnailCacheKey(refreshed))
+    }
+
     private fun item(
         id: String,
         position: Long,

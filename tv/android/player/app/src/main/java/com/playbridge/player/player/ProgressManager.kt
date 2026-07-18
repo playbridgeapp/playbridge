@@ -20,8 +20,8 @@ interface PlaybackProgressSource {
 }
 
 /**
- * Manages playback progress persistence (save/restore). Artwork is the payload's
- * poster/backdrop URL — no on-device screenshot capture.
+ * Manages playback progress persistence (save/restore). Artwork can be supplied by the
+ * payload or updated by the host's lightweight frame-capture policy.
  */
 class ProgressManager(
     private val context: Context,
@@ -162,8 +162,7 @@ class ProgressManager(
     }
 
     /**
-     * Persist the current playback position to history. Artwork comes from the payload's
-     * poster/backdrop (set in [setCurrentMedia]) — no screenshot capture.
+     * Persist the current playback position and whichever artwork the host most recently set.
      */
     fun saveProgress() {
         val duration = playbackSource.getMediaDuration()

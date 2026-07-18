@@ -30,9 +30,11 @@ data class PlaybackHistoryItem(
     val position: Long,   // TV-side progress (not part of the phone payload)
     val duration: Long,   // TV-side progress
     val timestamp: Long = System.currentTimeMillis(),
-    // Remote poster/backdrop URL from the payload's visual_metadata (null for browser-
-    // detected videos with no metadata — the card falls back to a play glyph).
+    // Remote poster/backdrop URL or a private captured-frame file URL.
     val thumbnailUrl: String? = null,
+    // Changes only when a captured frame replaces the thumbnail. The Library uses this as
+    // its image-cache key so rewriting the same private JPEG path becomes visible at once.
+    val thumbnailRevision: Long = 0L,
     val isFavorite: Boolean = false
 )
 
@@ -89,6 +91,7 @@ class HistoryStore(private val context: Context) {
                 duration = duration,
                 timestamp = System.currentTimeMillis(),
                 thumbnailUrl = finalThumbnailUrl,
+                thumbnailRevision = existingItem?.thumbnailRevision ?: 0L,
                 isFavorite = existingItem?.isFavorite ?: false
             )
 
@@ -167,8 +170,11 @@ class HistoryStore(private val context: Context) {
                 mutableListOf()
             }
             val index = currentList.indexOfFirst { it.id == id }
-            if (index >= 0 && currentList[index].thumbnailUrl != thumbnailUrl) {
-                currentList[index] = currentList[index].copy(thumbnailUrl = thumbnailUrl)
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(
+                    thumbnailUrl = thumbnailUrl,
+                    thumbnailRevision = System.currentTimeMillis(),
+                )
                 prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),
                     currentList,

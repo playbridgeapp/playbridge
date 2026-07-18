@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.playbridge.player.player.PlayerActivity
 import com.playbridge.player.player.SubtitleRenderingMode
+import com.playbridge.player.data.HistoryThumbnailMode
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -83,6 +84,16 @@ fun SettingsScreen(
         mutableStateOf(PlayerActivity.normalizeStillWatchingResponseSeconds(prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_RESPONSE_SEC, 300)))
     }
     var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
+    var historyThumbnailMode by remember {
+        mutableStateOf(
+            HistoryThumbnailMode.fromPreference(
+                prefs.getString(
+                    HistoryThumbnailMode.PREFERENCE_KEY,
+                    HistoryThumbnailMode.SMART.preferenceValue,
+                ),
+            ),
+        )
+    }
     var isRestarting by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
@@ -467,6 +478,35 @@ fun SettingsScreen(
                                     prefs.edit().putBoolean("enable_history", it).apply()
                                 },
                             )
+                        }
+                        if (enableHistory) {
+                            item {
+                                SettingDropdownItem(
+                                    label = "History thumbnails",
+                                    description = when (historyThumbnailMode) {
+                                        HistoryThumbnailMode.SMART ->
+                                            "Capture missing artwork after 15 seconds, with an exit fallback."
+                                        HistoryThumbnailMode.LIVE ->
+                                            "Capture after 15 seconds, then refresh every 2 minutes."
+                                        HistoryThumbnailMode.ARTWORK_ONLY ->
+                                            "Use supplied poster and backdrop artwork without capturing frames."
+                                    },
+                                    options = listOf(
+                                        HistoryThumbnailMode.SMART.preferenceValue to "Smart capture",
+                                        HistoryThumbnailMode.LIVE.preferenceValue to "Live playback snapshots",
+                                        HistoryThumbnailMode.ARTWORK_ONLY.preferenceValue to "Artwork only",
+                                    ),
+                                    selected = historyThumbnailMode.preferenceValue,
+                                    onSelected = { selected ->
+                                        historyThumbnailMode =
+                                            HistoryThumbnailMode.fromPreference(selected)
+                                        prefs.edit().putString(
+                                            HistoryThumbnailMode.PREFERENCE_KEY,
+                                            historyThumbnailMode.preferenceValue,
+                                        ).apply()
+                                    },
+                                )
+                            }
                         }
                     }
 

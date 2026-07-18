@@ -55,6 +55,9 @@ internal fun resumePositionForHistoryItem(item: PlaybackHistoryItem): Long? = it
             it * 100L < item.duration * 95L
     }
 
+internal fun historyThumbnailCacheKey(item: PlaybackHistoryItem): String =
+    "${item.thumbnailUrl}#${item.thumbnailRevision}"
+
 internal fun buildLibrarySections(history: List<PlaybackHistoryItem>): LibrarySections {
     val recent = history.sortedByDescending { it.timestamp }
     return LibrarySections(
@@ -188,7 +191,15 @@ private fun LibraryShelf(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(title, style = MaterialTheme.typography.headlineSmall)
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(18.dp), contentPadding = PaddingValues(end = 48.dp)) {
+        LazyRow(
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            contentPadding = PaddingValues(
+                start = 12.dp,
+                top = 8.dp,
+                end = 48.dp,
+                bottom = 8.dp,
+            ),
+        ) {
             items(entries, key = PlaybackHistoryItem::id) { item ->
                 LibraryCard(item, { onPlayItem(item) }, { onActions(item) })
             }
@@ -212,7 +223,12 @@ private fun LibraryCard(item: PlaybackHistoryItem, onClick: () -> Unit, onLongCl
             ) {
                 if (item.thumbnailUrl != null) {
                     AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current).data(item.thumbnailUrl).crossfade(true).build(),
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(item.thumbnailUrl)
+                            .memoryCacheKey(historyThumbnailCacheKey(item))
+                            .diskCacheKey(historyThumbnailCacheKey(item))
+                            .crossfade(true)
+                            .build(),
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,

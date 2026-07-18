@@ -36,6 +36,7 @@ import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.SubtitleView
 import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.data.HistoryThumbnailMode
 import com.playbridge.player.data.HistoryThumbnailStore
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
@@ -56,6 +57,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import playbridge.PlayPayload
 import java.io.File
+import kotlin.math.abs
 
 private data class RendererTrack(
     val id: String,
@@ -140,7 +142,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var lastSavedPositionMs = 0L
     private var currentHistoryId: String? = null
     private var currentHistoryHasThumbnail = false
-    private var thumbnailCaptureRequestedForId: String? = null
+    private var thumbnailCaptureInFlightGeneration: Long? = null
+    private var thumbnailCaptureGeneration = 0L
+    private var thumbnailPlaybackElapsedMs = 0L
+    private var thumbnailPlayingSinceElapsedMs: Long? = null
+    private var lastThumbnailCapturePlaybackMs: Long? = null
     private var videoTracks: List<RendererTrack> = emptyList()
     private var videoFrameRate = 0f
     private var audioTracks: List<RendererTrack> = emptyList()
@@ -324,6 +330,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         }
         runCatching { unregisterReceiver(controlReceiver) }
         super.onStop()
+    }
+
+    override fun onPause() {
+        requestHistoryThumbnailCapture(exitFallback = true)
+        super.onPause()
     }
 
     private fun setupControlsOverlay() {
@@ -967,9 +978,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val thumbnailUrl = visualMetadata?.backdrop_url
             ?: visualMetadata?.poster_url
             ?: historyThumbnailStore.existingUrl(historyId)
-        if (currentHistoryId != historyId) thumbnailCaptureRequestedForId = null
         currentHistoryId = historyId
         currentHistoryHasThumbnail = thumbnailUrl != null
+        resetHistoryThumbnailCaptureClock()
         progressManager.setCurrentMedia(
             url = payload.url,
             title = payload.title,
@@ -987,19 +998,67 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         lastSavedPositionMs = 0L
     }
 
-    private fun requestHistoryThumbnailCapture() {
+    private fun resetHistoryThumbnailCaptureClock() {
+        thumbnailCaptureGeneration += 1L
+        thumbnailCaptureInFlightGeneration = null
+        thumbnailPlaybackElapsedMs = 0L
+        thumbnailPlayingSinceElapsedMs = null
+        lastThumbnailCapturePlaybackMs = null
+    }
+
+    private fun updateHistoryThumbnailPlaybackClock(state: String, nowMs: Long) {
+        val playingSince = thumbnailPlayingSinceElapsedMs
+        if (state == "playing") {
+            if (playingSince == null) thumbnailPlayingSinceElapsedMs = nowMs
+        } else if (playingSince != null) {
+            thumbnailPlaybackElapsedMs += (nowMs - playingSince).coerceAtLeast(0L)
+            thumbnailPlayingSinceElapsedMs = null
+        }
+    }
+
+    private fun historyThumbnailPlaybackElapsedMs(nowMs: Long): Long =
+        thumbnailPlaybackElapsedMs +
+            (thumbnailPlayingSinceElapsedMs?.let { (nowMs - it).coerceAtLeast(0L) } ?: 0L)
+
+    private fun requestHistoryThumbnailCapture(exitFallback: Boolean = false) {
         val historyId = currentHistoryId ?: return
-        if (currentHistoryHasThumbnail || thumbnailCaptureRequestedForId == historyId) return
+        if (thumbnailCaptureInFlightGeneration != null) return
         if (!getSharedPreferences("browser_prefs", MODE_PRIVATE)
                 .getBoolean("enable_history", true)
         ) return
 
-        thumbnailCaptureRequestedForId = historyId
-        mainHandler.postDelayed({ captureHistoryThumbnail(historyId, attempt = 0) }, 250L)
+        val playbackElapsedMs = historyThumbnailPlaybackElapsedMs(SystemClock.elapsedRealtime())
+        if (!shouldCaptureHistoryThumbnail(
+                mode = HistoryThumbnailMode.read(this),
+                hasThumbnail = currentHistoryHasThumbnail,
+                playbackElapsedMs = playbackElapsedMs,
+                lastCapturePlaybackMs = lastThumbnailCapturePlaybackMs,
+                exitFallback = exitFallback,
+            )
+        ) return
+
+        thumbnailCaptureInFlightGeneration = thumbnailCaptureGeneration
+        captureHistoryThumbnail(
+            historyId = historyId,
+            generation = thumbnailCaptureGeneration,
+            playbackElapsedMs = playbackElapsedMs,
+            attempt = 0,
+        )
     }
 
-    private fun captureHistoryThumbnail(historyId: String, attempt: Int) {
-        if (isFinishing || currentHistoryId != historyId || !surfaceView.holder.surface.isValid) {
+    private fun captureHistoryThumbnail(
+        historyId: String,
+        generation: Long,
+        playbackElapsedMs: Long,
+        attempt: Int,
+    ) {
+        if (currentHistoryId != historyId ||
+            thumbnailCaptureGeneration != generation ||
+            !surfaceView.holder.surface.isValid
+        ) {
+            if (thumbnailCaptureInFlightGeneration == generation) {
+                thumbnailCaptureInFlightGeneration = null
+            }
             return
         }
         val bitmap = createBitmap(
@@ -1014,11 +1073,32 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 { result ->
                     if (result != PixelCopy.SUCCESS) {
                         bitmap.recycle()
-                        if (attempt == 0 && currentHistoryId == historyId) {
+                        if (attempt == 0 &&
+                            currentHistoryId == historyId &&
+                            thumbnailCaptureGeneration == generation
+                        ) {
                             mainHandler.postDelayed(
-                                { captureHistoryThumbnail(historyId, attempt = 1) },
+                                {
+                                    captureHistoryThumbnail(
+                                        historyId,
+                                        generation,
+                                        playbackElapsedMs,
+                                        attempt = 1,
+                                    )
+                                },
                                 500L,
                             )
+                        } else {
+                            if (thumbnailCaptureInFlightGeneration == generation) {
+                                thumbnailCaptureInFlightGeneration = null
+                            }
+                        }
+                    } else if (currentHistoryId != historyId ||
+                        thumbnailCaptureGeneration != generation
+                    ) {
+                        bitmap.recycle()
+                        if (thumbnailCaptureInFlightGeneration == generation) {
+                            thumbnailCaptureInFlightGeneration = null
                         }
                     } else {
                         lifecycleScope.launch(Dispatchers.IO) {
@@ -1026,13 +1106,32 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                                 historyThumbnailStore.save(historyId, bitmap)
                             } finally {
                                 bitmap.recycle()
-                            } ?: return@launch
-                            historyStore.updateThumbnail(historyId, thumbnailUrl)
+                            }
+                            if (thumbnailUrl == null) {
+                                withContext(Dispatchers.Main) {
+                                    if (thumbnailCaptureInFlightGeneration == generation) {
+                                        thumbnailCaptureInFlightGeneration = null
+                                    }
+                                }
+                                return@launch
+                            }
+                            val historyUpdated = runCatching {
+                                historyStore.updateThumbnail(historyId, thumbnailUrl)
+                            }.onFailure {
+                                FileLogger.w(TAG, "Unable to update the Library thumbnail")
+                            }.isSuccess
                             withContext(Dispatchers.Main) {
-                                if (currentHistoryId == historyId) {
+                                if (historyUpdated &&
+                                    currentHistoryId == historyId &&
+                                    thumbnailCaptureGeneration == generation
+                                ) {
                                     currentHistoryHasThumbnail = true
+                                    lastThumbnailCapturePlaybackMs = playbackElapsedMs
                                     progressManager.updateThumbnail(thumbnailUrl)
                                     progressManager.saveProgress()
+                                }
+                                if (thumbnailCaptureInFlightGeneration == generation) {
+                                    thumbnailCaptureInFlightGeneration = null
                                 }
                             }
                         }
@@ -1040,7 +1139,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 },
                 mainHandler,
             )
-        }.onFailure { bitmap.recycle() }
+        }.onFailure {
+            bitmap.recycle()
+            if (thumbnailCaptureInFlightGeneration == generation) {
+                thumbnailCaptureInFlightGeneration = null
+            }
+        }
     }
 
     private fun updateControlsForCurrentItem(showPrePlay: Boolean = false) {
@@ -1135,10 +1239,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererProtocol.EVENT_FIRST_FRAME -> {
                 controlsViewModel.clearPlaybackTransition()
                 markPlaybackStarted(currentSession.sessionId)
-                requestHistoryThumbnailCapture()
             }
             RendererProtocol.EVENT_STATE -> {
                 val state = event.getString(RendererProtocol.KEY_STATE) ?: return
+                updateHistoryThumbnailPlaybackClock(state, SystemClock.elapsedRealtime())
                 hostPlaying = state == "playing"
                 stillWatchingController.onPlayingChanged(hostPlaying && state != "buffering")
                 controlsViewModel.setPlaying(hostPlaying)
@@ -1155,10 +1259,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 lastDurationMs = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L)
                 if (state == "playing" &&
                     !pendingSeekTracker.isPending(currentSession.sessionId) &&
-                    lastPositionMs - lastSavedPositionMs >= PROGRESS_SAVE_INTERVAL_MS
+                    abs(lastPositionMs - lastSavedPositionMs) >= PROGRESS_SAVE_INTERVAL_MS
                 ) {
                     lastSavedPositionMs = lastPositionMs
                     progressManager.saveProgress()
+                    requestHistoryThumbnailCapture()
                 }
                 val status = createStatusJson(
                     state = state,
