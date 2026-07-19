@@ -9,6 +9,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   media_kit_video
   screen_retriever_linux
   tray_manager
+  volume_controller
   window_manager
 )
 

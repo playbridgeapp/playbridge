@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/pairing_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,6 +14,17 @@ void main() {
 
     final reloaded = await PairingStore.load();
     expect(reloaded.preselectHlsQuality, isTrue);
+  });
+
+  test('video output renderer defaults safely and persists changes', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PairingStore.load();
+
+    expect(store.hardwareVideoOutput, !Platform.isLinux);
+    await store.setHardwareVideoOutput(true);
+    expect((await PairingStore.load()).hardwareVideoOutput, isTrue);
+    await store.setHardwareVideoOutput(false);
+    expect((await PairingStore.load()).hardwareVideoOutput, isFalse);
   });
 
   test('receiver port defaults to 8765 and persists successful values',

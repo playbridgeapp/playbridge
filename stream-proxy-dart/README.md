@@ -28,30 +28,16 @@ The easiest way to run the stream proxy on a home server (Raspberry Pi, NAS, VPS
 - Docker and Docker Compose installed.
 - Note: The Docker image installs the `libavformat` runtime and its dependencies, enabling the **AVIO FFI fallback out-of-the-box** without the FFmpeg CLI or development packages.
 
-### 2. Startup
-To start the proxy, simply run:
+### 2. Configuration and startup
+Copy `docker-compose.yml.local` to `docker-compose.yml`, update
+`PB_PROXY_PASSWORD` to a unique password, and start the proxy:
+
 ```bash
+cp docker-compose.yml.local docker-compose.yml
 docker compose up -d
 ```
 
-### 3. Configuration (`docker-compose.yml`)
-You can configure the service using the environment variables in `docker-compose.yml`:
-
-```yaml
-services:
-  pb-proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: pb-proxy
-    ports:
-      - "8888:8888"
-    environment:
-      - PORT=8888
-      - ADDRESS=0.0.0.0
-      - PB_PROXY_PASSWORD=replace_with_a_unique_proxy_password # Required
-    restart: unless-stopped
-```
+The Compose settings are maintained in [`docker-compose.yml.local`](docker-compose.yml.local).
 
 - **`PORT`**: The internal port the server binds to (default: `8888`).
 - **`ADDRESS`**: The interface address to bind to. Use `0.0.0.0` for Docker.
