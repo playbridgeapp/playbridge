@@ -2,6 +2,11 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] — 2026-07-19
+
+### Changed
+- **Store Submission Build**: Incremented the synchronized Chrome and Firefox package version for the next store submission.
+
 ## [0.6.1] — 2026-07-19
 
 ### Changed
