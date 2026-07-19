@@ -38,6 +38,8 @@ import com.playbridge.player.R
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.data.HistoryThumbnailMode
 import com.playbridge.player.data.HistoryThumbnailStore
+import com.playbridge.player.data.PlaybackContext
+import com.playbridge.player.data.PlaybackTrackPreference
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
@@ -140,6 +142,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
     private var requestedStartPositionMs: Long? = null
     private var lastSavedPositionMs = 0L
+    private var activeHistoryId: String? = null
+    private var sessionPlaybackContext: PlaybackContext? = null
+    private var restoreSavedExternalForCurrentItem = false
+    private var pendingAudioContextRestore = false
+    private var pendingSubtitleContextRestore = false
     private var currentHistoryId: String? = null
     private var currentHistoryHasThumbnail = false
     private var thumbnailCaptureInFlightGeneration: Long? = null
@@ -273,9 +280,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
+        activeHistoryId = intent.getStringExtra(PlayerLauncher.EXTRA_HISTORY_ID)
+            ?: PlayerLauncher.historyId(playlist.items)
+        sessionPlaybackContext = PlayerLauncher.playbackContextFromIntent(intent)
+        restoreSavedExternalForCurrentItem = sessionPlaybackContext != null
         controlsViewModel.resetSessionSettings(
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
         )
+        applySavedPlaybackSettings()
         requestedStartPositionMs = intent
             .getLongExtra(ServerService.EXTRA_START_POSITION, 0L)
             .takeIf { it > 0L }
@@ -381,6 +393,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     onTrackSelected = ::selectTrack,
                     onSpeedSelected = { speed ->
                         controlsViewModel.setPlaybackSpeed(speed)
+                        syncPlaybackContext()
                         broadcastPlayerSettings()
                     },
                     onScalingSelected = { mode ->
@@ -391,6 +404,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         }
                         controlsViewModel.setVideoScaling(mode)
                         updateVideoSurfaceLayout()
+                        syncPlaybackContext()
                         broadcastPlayerSettings()
                     },
                     onSettingsDismiss = controlsViewModel::hideOverlay,
@@ -421,6 +435,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     },
                     onAdjustSubtitleDelay = { delta ->
                         controlsViewModel.adjustSubtitleDelay(delta)
+                        syncPlaybackContext()
                         broadcastPlayerSettings()
                     },
                     onPreloadSubtitles = controlsViewModel::preloadSubtitleCues,
@@ -458,6 +473,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val maxHeight = track.id.removePrefix("max:").toIntOrNull() ?: 0
                 controlsViewModel.setVideoQuality(maxHeight)
                 runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
+                syncPlaybackContext()
                 broadcastPlayerSettings()
             }
             "audio" -> runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
@@ -486,6 +502,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == trackId) }
         runCatching { renderer.setSubtitleTrack(trackId, sessionId) }
         updateTrackControls()
+        syncPlaybackContext()
         broadcastTracks()
     }
 
@@ -501,6 +518,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         applyExternalSubtitleSelection(renderer, sessionId)
         progressManager.updateSelections(externalSubtitleUrl = url)
         updateTrackControls()
+        syncPlaybackContext()
         broadcastTracks()
     }
 
@@ -661,9 +679,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         attemptedRenderers.clear()
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
+        activeHistoryId = requestIntent.getStringExtra(PlayerLauncher.EXTRA_HISTORY_ID)
+            ?: PlayerLauncher.historyId(playlist.items)
+        sessionPlaybackContext = PlayerLauncher.playbackContextFromIntent(requestIntent)
+        restoreSavedExternalForCurrentItem = sessionPlaybackContext != null
         controlsViewModel.resetSessionSettings(
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
         )
+        applySavedPlaybackSettings()
         playbackCoordinator.queueAdd(ServerService.drainPendingQueueItems(this))
         requestedStartPositionMs = requestIntent
             .getLongExtra(ServerService.EXTRA_START_POSITION, 0L)
@@ -968,13 +991,101 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         renderer.setVideoQuality(state.videoQualityMaxHeight, sessionId)
     }
 
+    private fun applySavedPlaybackSettings() {
+        val context = sessionPlaybackContext ?: return
+        context.playbackSpeed
+            ?.takeIf { it in 0.25f..2f }
+            ?.let(controlsViewModel::setPlaybackSpeed)
+        context.videoScalingMode
+            ?.takeIf { it in setOf("Fit", "Zoom", "Fill") }
+            ?.let(controlsViewModel::setVideoScaling)
+        context.videoQualityMaxHeight
+            ?.coerceAtLeast(0)
+            ?.let(controlsViewModel::setVideoQuality)
+        context.subtitleDelayMs?.let(controlsViewModel::setSubtitleDelay)
+    }
+
+    private fun restoreSavedTrackSelections() {
+        val context = sessionPlaybackContext ?: return
+        val currentSession = session ?: return
+        val renderer = rendererService ?: return
+        val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)
+
+        if (pendingAudioContextRestore && audioTracks.isNotEmpty()) {
+            pendingAudioContextRestore = false
+            val match = resolveTrackPreference(
+                tracks = audioTracks.map { it.asPlaybackCandidate() },
+                saved = context.audioTrack,
+                fallbackLanguage = item?.preferred_audio_language,
+                excludedIds = setOf("auto"),
+            )
+            if (match != null && audioTracks.none { it.id == match.id && it.selected }) {
+                audioTracks = audioTracks.map { it.copy(selected = it.id == match.id) }
+                runCatching { renderer.setAudioTrack(match.id, currentSession.sessionId) }
+            }
+        }
+
+        if (pendingSubtitleContextRestore && subtitleTracks.isNotEmpty()) {
+            pendingSubtitleContextRestore = false
+            if (context.subtitlesDisabled) {
+                subtitleTracks = subtitleTracks.map {
+                    it.copy(selected = it.id == "off" || it.id == "none")
+                }
+                runCatching { renderer.setSubtitleTrack("off", currentSession.sessionId) }
+            } else {
+                val match = resolveTrackPreference(
+                    tracks = subtitleTracks.map { it.asPlaybackCandidate() },
+                    saved = context.subtitleTrack,
+                    fallbackLanguage = item?.preferred_subtitle_language,
+                    excludedIds = setOf("off", "none", "auto"),
+                )
+                if (match != null && subtitleTracks.none { it.id == match.id && it.selected }) {
+                    subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == match.id) }
+                    runCatching { renderer.setSubtitleTrack(match.id, currentSession.sessionId) }
+                }
+            }
+        }
+    }
+
+    private fun syncPlaybackContext() {
+        val state = controlsViewModel.controlsState.value
+        val selectedAudio = audioTracks.firstOrNull {
+            it.selected && it.id != "auto"
+        }?.asPreference()
+        val selectedSubtitle = subtitleTracks.firstOrNull {
+            it.selected && it.id !in setOf("off", "none", "auto")
+        }?.asPreference()
+        val subtitlesDisabled = currentExternalSubtitleUrl == null && subtitleTracks.any {
+            it.selected && it.id in setOf("off", "none")
+        }
+        sessionPlaybackContext = PlaybackContext(
+            audioTrack = selectedAudio ?: sessionPlaybackContext?.audioTrack,
+            subtitleTrack = selectedSubtitle ?: sessionPlaybackContext?.subtitleTrack,
+            subtitlesDisabled = subtitlesDisabled,
+            externalSubtitleUrl = currentExternalSubtitleUrl,
+            playbackSpeed = state.playbackSpeed,
+            videoScalingMode = state.videoScalingMode,
+            videoQualityMaxHeight = state.videoQualityMaxHeight,
+            subtitleDelayMs = state.subtitleDelayMs,
+        )
+        progressManager.updatePlaybackContext(checkNotNull(sessionPlaybackContext))
+    }
+
+    private fun RendererTrack.asPlaybackCandidate(): PlaybackTrackCandidate =
+        PlaybackTrackCandidate(id = id, label = label, language = language)
+
+    private fun RendererTrack.asPreference(): PlaybackTrackPreference =
+        PlaybackTrackPreference(id = id, label = label, language = language)
+
     private fun configureProgress(payload: PlayPayload) {
         val items = playbackCoordinator.playlist
         val index = playbackCoordinator.index
         val payloadJson = runCatching { PlayerLauncher.historyPayloadJson(items, index) }
             .getOrDefault("")
         val visualMetadata = payload.visual_metadata
-        val historyId = PlayerLauncher.historyId(items)
+        val historyId = activeHistoryId ?: PlayerLauncher.historyId(items).also {
+            activeHistoryId = it
+        }
         val thumbnailUrl = visualMetadata?.backdrop_url
             ?: visualMetadata?.poster_url
             ?: historyThumbnailStore.existingUrl(historyId)
@@ -993,6 +1104,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             preferredSubtitleLanguage = payload.preferred_subtitle_language,
             externalSubtitleUrl = currentExternalSubtitleUrl,
             playbackSpeed = controlsViewModel.controlsState.value.playbackSpeed,
+            playbackContext = sessionPlaybackContext,
         )
         progressManager.recordLanded(requestedStartPositionMs ?: 0L)
         lastSavedPositionMs = 0L
@@ -1159,10 +1271,20 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         controlsViewModel.setPrePlayLaunching(shouldShowPrePlay)
         controlsViewModel.setPrePlayCountdown(if (shouldShowPrePlay) -1 else 0)
-        externalSubtitleUrls = item.subtitles.filter(String::isNotBlank).distinct()
-        currentExternalSubtitleUrl = currentExternalSubtitleUrl
-            ?.takeIf { it in externalSubtitleUrls }
-            ?: externalSubtitleUrls.firstOrNull()
+        val savedExternal = sessionPlaybackContext?.externalSubtitleUrl
+            ?.takeIf { restoreSavedExternalForCurrentItem }
+        externalSubtitleUrls = (item.subtitles + listOfNotNull(savedExternal))
+            .filter(String::isNotBlank)
+            .distinct()
+        currentExternalSubtitleUrl = when {
+            sessionPlaybackContext?.subtitlesDisabled == true -> null
+            savedExternal != null -> savedExternal
+            else -> externalSubtitleUrls.firstOrNull()
+        }
+        pendingAudioContextRestore = sessionPlaybackContext?.audioTrack != null
+        pendingSubtitleContextRestore = currentExternalSubtitleUrl == null &&
+            (sessionPlaybackContext?.subtitleTrack != null ||
+                sessionPlaybackContext?.subtitlesDisabled == true)
         val externalUrl = currentExternalSubtitleUrl
         if (externalUrl != null &&
             SubtitleRenderingMode.read(this) == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
@@ -1318,6 +1440,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun startPlaylistItem() {
         if (finishingSession) return
+        restoreSavedExternalForCurrentItem = false
         stillWatchingController.onMediaChanged()
         val renderer = rendererService ?: run {
             handleRendererFailure("Renderer disconnected while advancing the playlist")
@@ -1442,31 +1565,52 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         videoTracks = decode(RendererProtocol.KEY_VIDEO_TRACKS)
         audioTracks = decode(RendererProtocol.KEY_AUDIO_TRACKS)
         subtitleTracks = decode(RendererProtocol.KEY_SUBTITLE_TRACKS)
+        restoreSavedTrackSelections()
         progressManager.updateSelections(
             preferredAudioLanguage = audioTracks.firstOrNull { it.selected }?.language,
             preferredSubtitleLanguage = subtitleTracks.firstOrNull { it.selected }?.language,
             externalSubtitleUrl = currentExternalSubtitleUrl,
         )
+        syncPlaybackContext()
         updateTrackControls()
         broadcastTracks()
     }
 
     private fun handleCapabilities(event: Bundle) {
-        controlsViewModel.updateCapabilities(
-            capabilities = PlaybackCapabilities(
-                isLive = event.getBoolean(RendererProtocol.KEY_IS_LIVE),
-                isSeekable = event.getBoolean(RendererProtocol.KEY_IS_SEEKABLE, true),
-                speedAvailable = event.getBoolean(RendererProtocol.KEY_SPEED_AVAILABLE, true),
-                scalingAvailable = event.getBoolean(RendererProtocol.KEY_SCALING_AVAILABLE, true),
-                audioBoostAvailable = event.getBoolean(
-                    RendererProtocol.KEY_AUDIO_BOOST_AVAILABLE,
-                    true,
-                ),
-                qualityAvailable = event.getBoolean(RendererProtocol.KEY_QUALITY_AVAILABLE),
+        val previousState = controlsViewModel.controlsState.value
+        val capabilities = PlaybackCapabilities(
+            isLive = event.getBoolean(RendererProtocol.KEY_IS_LIVE),
+            isSeekable = event.getBoolean(RendererProtocol.KEY_IS_SEEKABLE, true),
+            speedAvailable = event.getBoolean(RendererProtocol.KEY_SPEED_AVAILABLE, true),
+            scalingAvailable = event.getBoolean(RendererProtocol.KEY_SCALING_AVAILABLE, true),
+            audioBoostAvailable = event.getBoolean(
+                RendererProtocol.KEY_AUDIO_BOOST_AVAILABLE,
+                true,
             ),
+            qualityAvailable = event.getBoolean(RendererProtocol.KEY_QUALITY_AVAILABLE),
+        )
+        controlsViewModel.updateCapabilities(
+            capabilities = capabilities,
             currentVideoHeight = event.getInt(RendererProtocol.KEY_CURRENT_VIDEO_HEIGHT),
             qualityMaxHeight = event.getInt(RendererProtocol.KEY_QUALITY_MAX_HEIGHT),
         )
+        val currentSession = session
+        val renderer = rendererService
+        if (sessionPlaybackContext != null && currentSession != null && renderer != null) {
+            if (!capabilities.speedAvailable && previousState.playbackSpeed != 1f) {
+                controlsViewModel.setPlaybackSpeed(1f)
+            }
+            if (!capabilities.scalingAvailable && previousState.videoScalingMode != "Fit") {
+                controlsViewModel.setVideoScaling("Fit")
+                runCatching { renderer.setVideoScaling("Fit", currentSession.sessionId) }
+                updateVideoSurfaceLayout()
+            }
+            if (!capabilities.qualityAvailable && previousState.videoQualityMaxHeight != 0) {
+                controlsViewModel.setVideoQuality(0)
+                runCatching { renderer.setVideoQuality(0, currentSession.sessionId) }
+            }
+            syncPlaybackContext()
+        }
         broadcastPlayerSettings()
     }
 
@@ -1764,6 +1908,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 .toFloatOrNull()
                 ?.let { speed ->
                     controlsViewModel.setPlaybackSpeed(speed)
+                    syncPlaybackContext()
                     broadcastPlayerSettings()
                 }
             command?.startsWith("video_quality:") == true -> {
@@ -1771,6 +1916,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val maxHeight = value.takeUnless { it.equals("auto", true) }?.toIntOrNull() ?: 0
                 controlsViewModel.setVideoQuality(maxHeight)
                 runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
+                syncPlaybackContext()
                 broadcastPlayerSettings()
             }
             command?.startsWith("sub_offset:") == true -> command
@@ -1778,6 +1924,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 .toLongOrNull()
                 ?.let { delta ->
                     controlsViewModel.adjustSubtitleDelay(delta)
+                    syncPlaybackContext()
                     broadcastPlayerSettings()
                 }
             command?.startsWith("scaling:") == true -> {
@@ -1785,6 +1932,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 runCatching { renderer.setVideoScaling(mode, currentSession.sessionId) }
                 controlsViewModel.setVideoScaling(mode)
                 updateVideoSurfaceLayout()
+                syncPlaybackContext()
                 broadcastPlayerSettings()
             }
             command == "audio_boost" -> {

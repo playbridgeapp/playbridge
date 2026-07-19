@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.LifecycleCoroutineScope
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.data.PlaybackContext
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -43,6 +44,7 @@ class ProgressManager(
     private var currentExternalSubtitleUrl: String? = null
     private var currentPlaybackSpeed: Float? = null
     private var currentVideoScalingMode: Int? = null
+    private var currentPlaybackContext: PlaybackContext? = null
 
     val url: String? get() = currentUrl
     val title: String? get() = currentTitle
@@ -69,7 +71,8 @@ class ProgressManager(
         preferredSubtitleLanguage: String? = null,
         externalSubtitleUrl: String? = null,
         playbackSpeed: Float? = null,
-        videoScalingMode: Int? = null
+        videoScalingMode: Int? = null,
+        playbackContext: PlaybackContext? = null,
     ) {
         currentUrl = url
         currentTitle = title
@@ -83,6 +86,7 @@ class ProgressManager(
         currentExternalSubtitleUrl = externalSubtitleUrl
         currentPlaybackSpeed = playbackSpeed
         currentVideoScalingMode = videoScalingMode
+        currentPlaybackContext = playbackContext
     }
 
     /**
@@ -100,6 +104,10 @@ class ProgressManager(
         currentExternalSubtitleUrl = externalSubtitleUrl
         currentPlaybackSpeed = playbackSpeed
         currentVideoScalingMode = videoScalingMode
+    }
+
+    fun updatePlaybackContext(playbackContext: PlaybackContext) {
+        currentPlaybackContext = playbackContext
     }
 
     /** Update cached artwork after a one-time frame capture. */
@@ -153,6 +161,7 @@ class ProgressManager(
                         position = startPositionMs.coerceAtLeast(0L),
                         duration = playbackSource.getMediaDuration().coerceAtLeast(0L),
                         thumbnailUrl = thumbnailUrl,
+                        playbackContext = currentPlaybackContext,
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to record landed item", e)
@@ -184,6 +193,7 @@ class ProgressManager(
                             position = position,
                             duration = duration,
                             thumbnailUrl = thumbnailUrl,
+                            playbackContext = currentPlaybackContext,
                         )
                         Log.d(TAG, "Saved progress: $position / $duration")
                     } catch (e: Exception) {

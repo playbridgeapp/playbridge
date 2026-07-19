@@ -19,6 +19,25 @@ import kotlinx.serialization.builtins.ListSerializer
 private val Context.historyDataStore: DataStore<Preferences> by preferencesDataStore(name = "history_store_v2")
 
 @Serializable
+data class PlaybackTrackPreference(
+    val id: String? = null,
+    val label: String? = null,
+    val language: String? = null,
+)
+
+@Serializable
+data class PlaybackContext(
+    val audioTrack: PlaybackTrackPreference? = null,
+    val subtitleTrack: PlaybackTrackPreference? = null,
+    val subtitlesDisabled: Boolean = false,
+    val externalSubtitleUrl: String? = null,
+    val playbackSpeed: Float? = null,
+    val videoScalingMode: String? = null,
+    val videoQualityMaxHeight: Int? = null,
+    val subtitleDelayMs: Long? = null,
+)
+
+@Serializable
 data class PlaybackHistoryItem(
     val id: String, // Stable, index-independent key (PlayerLauncher.historyId)
     // The exact PlaylistPayload (items + start_index + visual_metadata) the phone sent.
@@ -35,7 +54,10 @@ data class PlaybackHistoryItem(
     // Changes only when a captured frame replaces the thumbnail. The Library uses this as
     // its image-cache key so rewriting the same private JPEG path becomes visible at once.
     val thumbnailRevision: Long = 0L,
-    val isFavorite: Boolean = false
+    val isFavorite: Boolean = false,
+    // TV-side choices made after the cast began. Nullable keeps history written by older
+    // versions readable and lets current global player/rendering settings remain authoritative.
+    val playbackContext: PlaybackContext? = null,
 )
 
 class HistoryStore(private val context: Context) {
@@ -62,7 +84,8 @@ class HistoryStore(private val context: Context) {
         title: String?,
         position: Long,
         duration: Long,
-        thumbnailUrl: String? = null
+        thumbnailUrl: String? = null,
+        playbackContext: PlaybackContext? = null,
     ) {
         if (url.isBlank() || payloadJson.isBlank()) return
 
@@ -92,7 +115,8 @@ class HistoryStore(private val context: Context) {
                 timestamp = System.currentTimeMillis(),
                 thumbnailUrl = finalThumbnailUrl,
                 thumbnailRevision = existingItem?.thumbnailRevision ?: 0L,
-                isFavorite = existingItem?.isFavorite ?: false
+                isFavorite = existingItem?.isFavorite ?: false,
+                playbackContext = playbackContext ?: existingItem?.playbackContext,
             )
 
             // Remove existing item with same ID to update it (move to top)

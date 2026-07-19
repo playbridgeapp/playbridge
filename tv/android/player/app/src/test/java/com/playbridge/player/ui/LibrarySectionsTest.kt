@@ -8,17 +8,17 @@ import org.junit.Test
 
 class LibrarySectionsTest {
     @Test
-    fun `shelves keep favorites in recent and only include resumable progress`() {
+    fun `recent excludes continue watching entries while favorites remain independent`() {
         val recentFavorite = item("favorite", position = 60_000, duration = 600_000, timestamp = 3, favorite = true)
         val completed = item("complete", position = 590_000, duration = 600_000, timestamp = 2)
         val barelyStarted = item("start", position = 10_000, duration = 600_000, timestamp = 1)
 
         val sections = buildLibrarySections(listOf(barelyStarted, completed, recentFavorite))
 
-        assertEquals(listOf("favorite", "complete", "start"), sections.recent.map { it.id })
+        assertEquals(listOf("complete", "start"), sections.recent.map { it.id })
         assertEquals(listOf("favorite"), sections.continueWatching.map { it.id })
         assertEquals(listOf("favorite"), sections.favorites.map { it.id })
-        assertTrue(sections.recent.first().isFavorite)
+        assertTrue(sections.favorites.first().isFavorite)
     }
 
     @Test

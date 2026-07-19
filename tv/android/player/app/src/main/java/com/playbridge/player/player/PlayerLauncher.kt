@@ -2,9 +2,13 @@ package com.playbridge.player.player
 
 import android.content.Context
 import android.content.Intent
+import com.playbridge.player.data.PlaybackContext
 import com.playbridge.player.server.ServerService
 import com.playbridge.shared.protocol.decodePlaylistPayloadJson
 import com.playbridge.shared.protocol.encodePlaylistPayloadJson
+import com.playbridge.shared.protocol.protocolJson
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import playbridge.PlayPayload
 import playbridge.PlaylistPayload
 import java.util.concurrent.atomic.AtomicLong
@@ -21,6 +25,8 @@ import java.util.concurrent.atomic.AtomicLong
 object PlayerLauncher {
 
     const val EXTRA_PLAYBACK_REQUEST_ID = "extra_playback_request_id"
+    const val EXTRA_HISTORY_ID = "extra_history_id"
+    private const val EXTRA_PLAYBACK_CONTEXT = "extra_playback_context"
     private const val REQUEST_ID_SEQUENCE_BITS = 16
     // Seed from wall time so an Activity restored after process recreation does not reject
     // new requests merely because the process-local counter restarted from zero.
@@ -43,6 +49,8 @@ object PlayerLauncher {
         payload: PlaylistPayload,
         tvPlayerMode: String,
         overrideStartPositionMs: Long? = null,
+        historyId: String? = null,
+        playbackContext: PlaybackContext? = null,
     ): Intent {
         // The coordinator/engine reads the live queue from PlaylistStore — set it here so
         // both callers get identical queue setup.
@@ -57,6 +65,10 @@ object PlayerLauncher {
         }
         return Intent(context, PlayerHostActivity::class.java).apply {
             putExtra(EXTRA_PLAYBACK_REQUEST_ID, playbackRequestIds.incrementAndGet())
+            historyId?.let { putExtra(EXTRA_HISTORY_ID, it) }
+            playbackContext?.let {
+                putExtra(EXTRA_PLAYBACK_CONTEXT, protocolJson.encodeToString(it))
+            }
             putExtra(PlayerHostActivity.EXTRA_RENDERER, mode)
             putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(payload))
             firstItem?.let { item ->
@@ -115,6 +127,12 @@ object PlayerLauncher {
         intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
             ?.let(::decodePlaylistPayloadJson)
 
+    fun playbackContextFromIntent(intent: Intent?): PlaybackContext? = intent
+        ?.getStringExtra(EXTRA_PLAYBACK_CONTEXT)
+        ?.let { encoded ->
+            runCatching { protocolJson.decodeFromString<PlaybackContext>(encoded) }.getOrNull()
+        }
+
     /**
      * Encode the live queue into the canonical history blob. [items] are the original,
      * untouched per-episode [PlayPayload]s (so subtitles/headers/langs survive), [index]
@@ -128,9 +146,13 @@ object PlayerLauncher {
      * entry instead of spawning one row per episode. Single items key on their URL.
      */
     fun historyId(items: List<PlayPayload>): String =
-        if (items.size > 1) {
-            "playlist_${items.joinToString("|") { it.url }.hashCode()}"
-        } else {
-            items.firstOrNull()?.url ?: "unknown"
-        }
+        items.asSequence()
+            .mapNotNull(PlayPayload::binge_group)
+            .firstOrNull(String::isNotBlank)
+            ?.let { "playlist_${it.hashCode()}" }
+            ?: if (items.size > 1) {
+                "playlist_${items.joinToString("|") { it.url }.hashCode()}"
+            } else {
+                items.firstOrNull()?.url ?: "unknown"
+            }
 }

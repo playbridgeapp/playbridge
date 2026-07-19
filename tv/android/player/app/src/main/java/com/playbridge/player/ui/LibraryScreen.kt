@@ -62,7 +62,7 @@ internal fun buildLibrarySections(history: List<PlaybackHistoryItem>): LibrarySe
     val recent = history.sortedByDescending { it.timestamp }
     return LibrarySections(
         continueWatching = recent.filter { resumePositionForHistoryItem(it) != null },
-        recent = recent,
+        recent = recent.filter { resumePositionForHistoryItem(it) == null },
         favorites = recent.filter(PlaybackHistoryItem::isFavorite),
     )
 }
@@ -100,12 +100,12 @@ fun LibraryScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (recent.any { !it.isFavorite }) {
-                Button(onClick = { showClearConfirmation = true }) { Text("Clear recent") }
+            if (history.any { !it.isFavorite }) {
+                Button(onClick = { showClearConfirmation = true }) { Text("Clear history") }
             }
         }
 
-        if (recent.isEmpty()) {
+        if (history.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
                     "Your Library is empty. Connect a phone and cast something to get started.",
@@ -121,7 +121,7 @@ fun LibraryScreen(
                 if (continueWatching.isNotEmpty()) item("continue") {
                     LibraryShelf("Continue watching", continueWatching, onPlayItem) { actionsFor = it }
                 }
-                item("recent") {
+                if (recent.isNotEmpty()) item("recent") {
                     LibraryShelf("Recent", recent, onPlayItem) { actionsFor = it }
                 }
                 if (favorites.isNotEmpty()) item("favorites") {
@@ -163,8 +163,8 @@ fun LibraryScreen(
         ThemedDialog(onDismissRequest = { showClearConfirmation = false }) {
             Surface(shape = MaterialTheme.shapes.large, modifier = Modifier.width(480.dp)) {
                 Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("Clear recent activity?", style = MaterialTheme.typography.headlineSmall)
-                    Text("Favorites will remain in your Library.")
+                    Text("Clear playback history?", style = MaterialTheme.typography.headlineSmall)
+                    Text("Continue watching and Recent will be cleared. Favorites will remain.")
                     Button(onClick = { showClearConfirmation = false }, modifier = Modifier.fillMaxWidth()) {
                         Text("Cancel")
                     }
@@ -174,7 +174,7 @@ fun LibraryScreen(
                             scope.launch { historyStore.clearHistory() }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Clear recent") }
+                    ) { Text("Clear history") }
                 }
             }
         }

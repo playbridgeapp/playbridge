@@ -252,6 +252,8 @@ fun MainContent(
                 // A zero override deliberately suppresses any stale start_position_ms that
                 // arrived in the original cast payload for completed/non-resumable entries.
                 overrideStartPositionMs = resumePositionForHistoryItem(item) ?: 0L,
+                historyId = item.id,
+                playbackContext = item.playbackContext,
             )
             currentContext.startActivity(intent)
         }
