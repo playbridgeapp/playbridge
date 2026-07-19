@@ -3,6 +3,8 @@ package com.playbridge.player.player
 import android.content.Context
 import android.content.Intent
 import com.playbridge.player.data.PlaybackContext
+import com.playbridge.player.data.toSafeLogString
+import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
 import com.playbridge.shared.protocol.decodePlaylistPayloadJson
 import com.playbridge.shared.protocol.encodePlaylistPayloadJson
@@ -23,6 +25,8 @@ import java.util.concurrent.atomic.AtomicLong
  * free because they are derived from the same payload by the same code.
  */
 object PlayerLauncher {
+
+    private const val TAG = "PlayerLauncher"
 
     const val EXTRA_PLAYBACK_REQUEST_ID = "extra_playback_request_id"
     const val EXTRA_HISTORY_ID = "extra_history_id"
@@ -67,8 +71,13 @@ object PlayerLauncher {
             putExtra(EXTRA_PLAYBACK_REQUEST_ID, playbackRequestIds.incrementAndGet())
             historyId?.let { putExtra(EXTRA_HISTORY_ID, it) }
             playbackContext?.let {
+                FileLogger.i(
+                    TAG,
+                    "Adding saved playback context to Library launch intent: " +
+                        it.toSafeLogString(),
+                )
                 putExtra(EXTRA_PLAYBACK_CONTEXT, protocolJson.encodeToString(it))
-            }
+            } ?: FileLogger.d(TAG, "Launch intent has no saved playback context")
             putExtra(PlayerHostActivity.EXTRA_RENDERER, mode)
             putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(payload))
             firstItem?.let { item ->
@@ -127,11 +136,24 @@ object PlayerLauncher {
         intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
             ?.let(::decodePlaylistPayloadJson)
 
-    fun playbackContextFromIntent(intent: Intent?): PlaybackContext? = intent
-        ?.getStringExtra(EXTRA_PLAYBACK_CONTEXT)
-        ?.let { encoded ->
-            runCatching { protocolJson.decodeFromString<PlaybackContext>(encoded) }.getOrNull()
+    fun playbackContextFromIntent(intent: Intent?): PlaybackContext? {
+        val encoded = intent?.getStringExtra(EXTRA_PLAYBACK_CONTEXT)
+        if (encoded == null) {
+            FileLogger.d(TAG, "Playback request contains no saved playback context")
+            return null
         }
+        return runCatching { protocolJson.decodeFromString<PlaybackContext>(encoded) }
+            .onSuccess { context ->
+                FileLogger.i(
+                    TAG,
+                    "Decoded saved playback context from intent: ${context.toSafeLogString()}",
+                )
+            }
+            .onFailure { error ->
+                FileLogger.e(TAG, "Unable to decode saved playback context from intent", error)
+            }
+            .getOrNull()
+    }
 
     /**
      * Encode the live queue into the canonical history blob. [items] are the original,

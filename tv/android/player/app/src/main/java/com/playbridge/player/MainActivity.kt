@@ -26,6 +26,9 @@ import com.playbridge.player.server.ServerService
 import com.playbridge.player.server.WebSocketServer
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.data.PlaybackHistoryItem
+import com.playbridge.player.data.historyLogKey
+import com.playbridge.player.data.toSafeLogString
+import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.ui.LibraryScreen
 import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.SettingsScreen
@@ -242,6 +245,13 @@ fun MainContent(
         // resume; completed Recent/Favorite items intentionally restart from the beginning.
         val payload = com.playbridge.shared.protocol.decodePlaylistPayloadJson(item.payloadJson)
         if (payload != null) {
+            val resumePosition = resumePositionForHistoryItem(item)
+            FileLogger.i(
+                "LibraryPlayback",
+                "Launching history entry=${historyLogKey(item.id)}, " +
+                    "position=${resumePosition ?: 0L}/${item.duration}, " +
+                    "savedContext=${item.playbackContext.toSafeLogString()}",
+            )
             val tvPref = currentContext
                 .getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
                 .getString("player_mode", "phone") ?: "phone"
@@ -251,11 +261,16 @@ fun MainContent(
                 tvPlayerMode = tvPref,
                 // A zero override deliberately suppresses any stale start_position_ms that
                 // arrived in the original cast payload for completed/non-resumable entries.
-                overrideStartPositionMs = resumePositionForHistoryItem(item) ?: 0L,
+                overrideStartPositionMs = resumePosition ?: 0L,
                 historyId = item.id,
                 playbackContext = item.playbackContext,
             )
             currentContext.startActivity(intent)
+        } else {
+            FileLogger.e(
+                "LibraryPlayback",
+                "Unable to decode playlist payload for history entry=${historyLogKey(item.id)}",
+            )
         }
     }
 

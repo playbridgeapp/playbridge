@@ -41,6 +41,7 @@ import com.playbridge.player.data.HistoryThumbnailMode
 import com.playbridge.player.data.HistoryThumbnailStore
 import com.playbridge.player.data.PlaybackContext
 import com.playbridge.player.data.PlaybackTrackPreference
+import com.playbridge.player.data.toSafeLogString
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
@@ -298,6 +299,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         activeHistoryId = intent.getStringExtra(PlayerLauncher.EXTRA_HISTORY_ID)
             ?: PlayerLauncher.historyId(playlist.items)
         sessionPlaybackContext = PlayerLauncher.playbackContextFromIntent(intent)
+        FileLogger.i(
+            TAG,
+            "Initial playback request context: ${sessionPlaybackContext.toSafeLogString()}",
+        )
         restoreSavedExternalForCurrentItem = sessionPlaybackContext != null
         controlsViewModel.resetSessionSettings(
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
@@ -356,6 +361,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     override fun onStop() {
         isHostStarted = false
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        logPlaybackContextCheckpoint(
+            "onStop(finishing=$isFinishing, changingConfigurations=$isChangingConfigurations)",
+        )
         if (!isFinishing && !isChangingConfigurations) {
             handleControl("pause")
         }
@@ -364,6 +372,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     override fun onPause() {
+        logPlaybackContextCheckpoint("onPause")
         requestHistoryThumbnailCapture(exitFallback = true)
         super.onPause()
     }
@@ -403,6 +412,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             }
                         }
                         controlsViewModel.setLooping(enabled)
+                        syncPlaybackContext()
+                        FileLogger.i(TAG, "Loop changed to $enabled and was added to playback context")
                         broadcastPlayerSettings()
                     },
                     onSwitchPlayer = controlsViewModel::showSwitchPlayer,
@@ -490,17 +501,31 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val renderer = rendererService ?: return
         when (track.type) {
             "video" -> {
+                FileLogger.i(TAG, "Video quality selected: ${track.id}")
                 val maxHeight = track.id.removePrefix("max:").toIntOrNull() ?: 0
                 controlsViewModel.setVideoQuality(maxHeight)
                 runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
                 syncPlaybackContext()
                 broadcastPlayerSettings()
             }
-            "audio" -> runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
+            "audio" -> {
+                FileLogger.i(
+                    TAG,
+                    "Audio track requested: id=${track.id}, name=${track.name}, " +
+                        "details=${track.secondaryText}; awaiting renderer track confirmation",
+                )
+                runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
+            }
             "sub" -> {
+                FileLogger.i(
+                    TAG,
+                    "Renderer subtitle requested: id=${track.id}, name=${track.name}, " +
+                        "details=${track.secondaryText}",
+                )
                 selectRendererSubtitle(track.id, renderer, currentSession.sessionId)
             }
             "external_sub" -> {
+                FileLogger.i(TAG, "External subtitle requested from overlay (URL redacted)")
                 selectExternalSubtitle(track.id, renderer, currentSession.sessionId)
             }
         }
@@ -653,6 +678,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     override fun onDestroy() {
         finishingSession = true
+        logPlaybackContextCheckpoint("onDestroy")
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         cancelFailureFinish()
@@ -703,6 +729,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         activeHistoryId = requestIntent.getStringExtra(PlayerLauncher.EXTRA_HISTORY_ID)
             ?: PlayerLauncher.historyId(playlist.items)
         sessionPlaybackContext = PlayerLauncher.playbackContextFromIntent(requestIntent)
+        FileLogger.i(
+            TAG,
+            "Replacement playback request context: ${sessionPlaybackContext.toSafeLogString()}",
+        )
         restoreSavedExternalForCurrentItem = sessionPlaybackContext != null
         controlsViewModel.resetSessionSettings(
             defaultQualityMaxHeight(playlist.items.getOrNull(playlist.start_index)),
@@ -1018,7 +1048,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun applySavedPlaybackSettings() {
-        val context = sessionPlaybackContext ?: return
+        val context = sessionPlaybackContext ?: run {
+            FileLogger.d(TAG, "No saved playback context to apply before renderer preparation")
+            return
+        }
+        FileLogger.i(
+            TAG,
+            "Applying saved scalar playback settings: ${context.toSafeLogString()}",
+        )
         context.playbackSpeed
             ?.takeIf { it in 0.25f..2f }
             ?.let(controlsViewModel::setPlaybackSpeed)
@@ -1029,6 +1066,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             ?.coerceAtLeast(0)
             ?.let(controlsViewModel::setVideoQuality)
         context.subtitleDelayMs?.let(controlsViewModel::setSubtitleDelay)
+        context.isLooping?.let(controlsViewModel::setLooping)
     }
 
     private fun restoreSavedTrackSelections() {
@@ -1037,37 +1075,141 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val renderer = rendererService ?: return
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)
 
-        if (pendingAudioContextRestore && audioTracks.isNotEmpty()) {
-            pendingAudioContextRestore = false
-            val match = resolveTrackPreference(
-                tracks = audioTracks.map { it.asPlaybackCandidate() },
-                saved = context.audioTrack,
-                fallbackLanguage = item?.preferred_audio_language,
-                excludedIds = setOf("auto"),
-            )
-            if (match != null && audioTracks.none { it.id == match.id && it.selected }) {
-                audioTracks = audioTracks.map { it.copy(selected = it.id == match.id) }
-                runCatching { renderer.setAudioTrack(match.id, currentSession.sessionId) }
+        if (pendingAudioContextRestore) {
+            val audioCandidates = audioTracks.map { it.asPlaybackCandidate() }
+            val excludedAudioIds = setOf("auto")
+            if (!hasRestorableTrackCandidates(audioCandidates, excludedAudioIds)) {
+                FileLogger.i(
+                    TAG,
+                    "Saved audio restoration deferred: renderer has only placeholder tracks",
+                )
+            } else {
+                FileLogger.i(
+                    TAG,
+                    "Resolving saved audio track from ${audioTracks.size} candidates: " +
+                        context.audioTrack.toSafeLogString(),
+                )
+                val match = resolveTrackPreference(
+                    tracks = audioCandidates,
+                    saved = context.audioTrack,
+                    fallbackLanguage = item?.preferred_audio_language,
+                    excludedIds = excludedAudioIds,
+                )
+                when {
+                    match == null -> {
+                        pendingAudioContextRestore = false
+                        FileLogger.i(
+                            TAG,
+                            "Saved audio resolution result: <no match; renderer default retained>",
+                        )
+                    }
+                    audioTracks.any { it.id == match.id && it.selected } -> {
+                        pendingAudioContextRestore = false
+                        FileLogger.i(
+                            TAG,
+                            "Saved audio restoration confirmed: " +
+                                PlaybackTrackPreference(
+                                    match.id,
+                                    match.label,
+                                    match.language,
+                                ).toSafeLogString(),
+                        )
+                    }
+                    else -> {
+                        FileLogger.i(
+                            TAG,
+                            "Saved audio restoration requested; awaiting renderer confirmation: " +
+                                PlaybackTrackPreference(
+                                    match.id,
+                                    match.label,
+                                    match.language,
+                                ).toSafeLogString(),
+                        )
+                        audioTracks = audioTracks.map { it.copy(selected = it.id == match.id) }
+                        runCatching { renderer.setAudioTrack(match.id, currentSession.sessionId) }
+                    }
+                }
             }
         }
 
-        if (pendingSubtitleContextRestore && subtitleTracks.isNotEmpty()) {
-            pendingSubtitleContextRestore = false
+        if (pendingSubtitleContextRestore) {
             if (context.subtitlesDisabled) {
-                subtitleTracks = subtitleTracks.map {
-                    it.copy(selected = it.id == "off" || it.id == "none")
+                val alreadyDisabled = subtitleTracks.any {
+                    it.selected && it.id in setOf("off", "none")
                 }
-                runCatching { renderer.setSubtitleTrack("off", currentSession.sessionId) }
+                if (alreadyDisabled) {
+                    pendingSubtitleContextRestore = false
+                    FileLogger.i(TAG, "Saved subtitle-disabled state confirmed")
+                } else {
+                    FileLogger.i(
+                        TAG,
+                        "Saved subtitle-disabled state requested; awaiting renderer confirmation",
+                    )
+                    subtitleTracks = subtitleTracks.map {
+                        it.copy(selected = it.id == "off" || it.id == "none")
+                    }
+                    runCatching { renderer.setSubtitleTrack("off", currentSession.sessionId) }
+                }
             } else {
-                val match = resolveTrackPreference(
-                    tracks = subtitleTracks.map { it.asPlaybackCandidate() },
-                    saved = context.subtitleTrack,
-                    fallbackLanguage = item?.preferred_subtitle_language,
-                    excludedIds = setOf("off", "none", "auto"),
-                )
-                if (match != null && subtitleTracks.none { it.id == match.id && it.selected }) {
-                    subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == match.id) }
-                    runCatching { renderer.setSubtitleTrack(match.id, currentSession.sessionId) }
+                val subtitleCandidates = subtitleTracks.map { it.asPlaybackCandidate() }
+                val excludedSubtitleIds = setOf("off", "none", "auto")
+                if (!hasRestorableTrackCandidates(subtitleCandidates, excludedSubtitleIds)) {
+                    FileLogger.i(
+                        TAG,
+                        "Saved subtitle restoration deferred: renderer has only placeholder tracks",
+                    )
+                } else {
+                    FileLogger.i(
+                        TAG,
+                        "Resolving saved subtitle track from ${subtitleTracks.size} candidates: " +
+                            context.subtitleTrack.toSafeLogString(),
+                    )
+                    val match = resolveTrackPreference(
+                        tracks = subtitleCandidates,
+                        saved = context.subtitleTrack,
+                        fallbackLanguage = item?.preferred_subtitle_language,
+                        excludedIds = excludedSubtitleIds,
+                    )
+                    when {
+                        match == null -> {
+                            pendingSubtitleContextRestore = false
+                            FileLogger.i(
+                                TAG,
+                                "Saved subtitle resolution result: " +
+                                    "<no match; renderer default retained>",
+                            )
+                        }
+                        subtitleTracks.any { it.id == match.id && it.selected } -> {
+                            pendingSubtitleContextRestore = false
+                            FileLogger.i(
+                                TAG,
+                                "Saved subtitle restoration confirmed: " +
+                                    PlaybackTrackPreference(
+                                        match.id,
+                                        match.label,
+                                        match.language,
+                                    ).toSafeLogString(),
+                            )
+                        }
+                        else -> {
+                            FileLogger.i(
+                                TAG,
+                                "Saved subtitle restoration requested; " +
+                                    "awaiting renderer confirmation: " +
+                                    PlaybackTrackPreference(
+                                        match.id,
+                                        match.label,
+                                        match.language,
+                                    ).toSafeLogString(),
+                            )
+                            subtitleTracks = subtitleTracks.map {
+                                it.copy(selected = it.id == match.id)
+                            }
+                            runCatching {
+                                renderer.setSubtitleTrack(match.id, currentSession.sessionId)
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1081,8 +1223,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val selectedSubtitle = subtitleTracks.firstOrNull {
             it.selected && it.id !in setOf("off", "none", "auto")
         }?.asPreference()
-        val subtitlesDisabled = currentExternalSubtitleUrl == null && subtitleTracks.any {
+        val rendererReportsSubtitlesDisabled = currentExternalSubtitleUrl == null && subtitleTracks.any {
             it.selected && it.id in setOf("off", "none")
+        }
+        val subtitlesDisabled = if (pendingSubtitleContextRestore) {
+            sessionPlaybackContext?.subtitlesDisabled ?: rendererReportsSubtitlesDisabled
+        } else {
+            rendererReportsSubtitlesDisabled
         }
         sessionPlaybackContext = PlaybackContext(
             audioTrack = selectedAudio ?: sessionPlaybackContext?.audioTrack,
@@ -1093,8 +1240,24 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             videoScalingMode = state.videoScalingMode,
             videoQualityMaxHeight = state.videoQualityMaxHeight,
             subtitleDelayMs = state.subtitleDelayMs,
+            isLooping = state.isLooping,
         )
         progressManager.updatePlaybackContext(checkNotNull(sessionPlaybackContext))
+        FileLogger.i(
+            TAG,
+            "Synchronized playback context from renderer/UI: " +
+                sessionPlaybackContext.toSafeLogString(),
+        )
+    }
+
+    private fun logPlaybackContextCheckpoint(reason: String) {
+        val state = controlsViewModel.controlsState.value
+        FileLogger.i(
+            TAG,
+            "Playback context checkpoint [$reason]: " +
+                "context=${sessionPlaybackContext.toSafeLogString()}, " +
+                "loop=${state.isLooping}, position=$lastPositionMs/$lastDurationMs",
+        )
     }
 
     private fun RendererTrack.asPlaybackCandidate(): PlaybackTrackCandidate =
@@ -1299,6 +1462,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setPrePlayCountdown(if (shouldShowPrePlay) -1 else 0)
         val savedExternal = sessionPlaybackContext?.externalSubtitleUrl
             ?.takeIf { restoreSavedExternalForCurrentItem }
+        FileLogger.i(
+            TAG,
+            "Preparing item context restore: savedContext=" +
+                "${sessionPlaybackContext.toSafeLogString()}, " +
+                "restoreSavedExternal=$restoreSavedExternalForCurrentItem, " +
+                "savedExternalPresent=${savedExternal != null}",
+        )
         externalSubtitleUrls = (item.subtitles + listOfNotNull(savedExternal))
             .filter(String::isNotBlank)
             .distinct()
@@ -1514,6 +1684,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun finishPlaybackSession() {
         if (finishingSession) return
         finishingSession = true
+        logPlaybackContextCheckpoint("finishPlaybackSession")
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
         progressManager.saveProgress()
@@ -1611,6 +1782,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         videoTracks = decode(RendererProtocol.KEY_VIDEO_TRACKS)
         audioTracks = decode(RendererProtocol.KEY_AUDIO_TRACKS)
         subtitleTracks = decode(RendererProtocol.KEY_SUBTITLE_TRACKS)
+        FileLogger.i(
+            TAG,
+            "Renderer tracks confirmed: audioSelected=" +
+                audioTracks.firstOrNull { it.selected }?.asPreference().toSafeLogString() +
+                ", subtitleSelected=" +
+                subtitleTracks.firstOrNull { it.selected }?.asPreference().toSafeLogString() +
+                ", audioCount=${audioTracks.size}, subtitleCount=${subtitleTracks.size}",
+        )
         restoreSavedTrackSelections()
         progressManager.updateSelections(
             preferredAudioLanguage = audioTracks.firstOrNull { it.selected }?.language,
@@ -2002,6 +2181,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val enabled = command == "loop_on"
                 runCatching { renderer.setLooping(enabled, currentSession.sessionId) }
                 controlsViewModel.setLooping(enabled)
+                syncPlaybackContext()
+                FileLogger.i(
+                    TAG,
+                    "Remote loop changed to $enabled and was added to playback context",
+                )
                 broadcastPlayerSettings()
             }
             command == "seek_back" -> seekRelative(-10_000L, currentSession.sessionId)
@@ -2102,6 +2286,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             state.activeOverlay != ActiveOverlay.NONE -> controlsViewModel.hideOverlay()
             state.isVisible -> controlsViewModel.hideControls()
             else -> {
+                logPlaybackContextCheckpoint("Back finishing player")
                 finishingSession = true
                 finish()
             }

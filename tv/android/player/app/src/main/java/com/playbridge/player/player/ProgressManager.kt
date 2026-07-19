@@ -5,6 +5,9 @@ import android.util.Log
 import androidx.lifecycle.LifecycleCoroutineScope
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.data.PlaybackContext
+import com.playbridge.player.data.historyLogKey
+import com.playbridge.player.data.toSafeLogString
+import com.playbridge.player.logging.FileLogger
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -87,6 +90,11 @@ class ProgressManager(
         currentPlaybackSpeed = playbackSpeed
         currentVideoScalingMode = videoScalingMode
         currentPlaybackContext = playbackContext
+        FileLogger.i(
+            TAG,
+            "Configured history entry=${historyLogKey(historyId)} with context=" +
+                playbackContext.toSafeLogString(),
+        )
     }
 
     /**
@@ -108,6 +116,7 @@ class ProgressManager(
 
     fun updatePlaybackContext(playbackContext: PlaybackContext) {
         currentPlaybackContext = playbackContext
+        FileLogger.i(TAG, "Updated in-memory playback context: ${playbackContext.toSafeLogString()}")
     }
 
     /** Update cached artwork after a one-time frame capture. */
@@ -150,6 +159,12 @@ class ProgressManager(
         val historyId = currentHistoryId ?: return
         val title = currentTitle
         val thumbnailUrl = currentThumbnailUrl
+        val playbackContext = currentPlaybackContext
+        FileLogger.i(
+            TAG,
+            "Recording landed entry=${historyLogKey(historyId)}, position=$startPositionMs, " +
+                "context=${playbackContext.toSafeLogString()}",
+        )
         lifecycleScope.launch {
             withContext(NonCancellable + Dispatchers.IO) {
                 try {
@@ -161,7 +176,7 @@ class ProgressManager(
                         position = startPositionMs.coerceAtLeast(0L),
                         duration = playbackSource.getMediaDuration().coerceAtLeast(0L),
                         thumbnailUrl = thumbnailUrl,
-                        playbackContext = currentPlaybackContext,
+                        playbackContext = playbackContext,
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to record landed item", e)
@@ -179,9 +194,15 @@ class ProgressManager(
         val url = currentUrl
         val payloadJson = currentPayloadJson
         val historyId = currentHistoryId
+        val playbackContext = currentPlaybackContext
         if (url != null && payloadJson != null && historyId != null && duration > 0 && position > 0) {
             val title = currentTitle
             val thumbnailUrl = currentThumbnailUrl
+            FileLogger.i(
+                TAG,
+                "Queueing progress/context save entry=${historyLogKey(historyId)}, " +
+                    "position=$position/$duration, context=${playbackContext.toSafeLogString()}",
+            )
             lifecycleScope.launch {
                 withContext(NonCancellable + Dispatchers.IO) {
                     try {
@@ -193,7 +214,7 @@ class ProgressManager(
                             position = position,
                             duration = duration,
                             thumbnailUrl = thumbnailUrl,
-                            playbackContext = currentPlaybackContext,
+                            playbackContext = playbackContext,
                         )
                         Log.d(TAG, "Saved progress: $position / $duration")
                     } catch (e: Exception) {
@@ -202,11 +223,11 @@ class ProgressManager(
                 }
             }
         } else {
-            Log.d(
-                TAG,
-                "Not saving: URL=${redactUrlForLog(url)}, payload=${payloadJson != null}, " +
-                    "Duration=$duration, Pos=$position",
-            )
+            val message =
+                "Not saving progress/context: URL=${redactUrlForLog(url)}, payload=${payloadJson != null}, " +
+                    "historyEntry=${historyId?.let(::historyLogKey) ?: "<none>"}, " +
+                    "Duration=$duration, Pos=$position, context=${playbackContext.toSafeLogString()}"
+            FileLogger.d(TAG, message)
         }
     }
 }

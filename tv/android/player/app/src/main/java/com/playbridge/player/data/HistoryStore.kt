@@ -6,11 +6,14 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.playbridge.player.logging.FileLogger
 import com.playbridge.shared.protocol.protocolJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
+
+private const val TAG = "HistoryStore"
 
 // v2: history now stores the raw PlaylistPayload JSON the phone sent (source of truth for
 // replay) plus the TV-side progress and a little UI metadata — nothing flattened. The name
@@ -35,6 +38,7 @@ data class PlaybackContext(
     val videoScalingMode: String? = null,
     val videoQualityMaxHeight: Int? = null,
     val subtitleDelayMs: Long? = null,
+    val isLooping: Boolean? = null,
 )
 
 @Serializable
@@ -90,10 +94,21 @@ class HistoryStore(private val context: Context) {
         thumbnailUrl: String? = null,
         playbackContext: PlaybackContext? = null,
     ) {
-        if (url.isBlank() || payloadJson.isBlank()) return
+        val logKey = historyLogKey(id)
+        if (url.isBlank() || payloadJson.isBlank()) {
+            FileLogger.w(
+                TAG,
+                "Context persistence skipped for entry=$logKey: " +
+                    "urlPresent=${url.isNotBlank()}, payloadPresent=${payloadJson.isNotBlank()}",
+            )
+            return
+        }
 
         val prefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
-        if (!prefs.getBoolean("enable_history", true)) return
+        if (!prefs.getBoolean("enable_history", true)) {
+            FileLogger.d(TAG, "Context persistence skipped for entry=$logKey: history disabled")
+            return
+        }
 
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
@@ -111,6 +126,15 @@ class HistoryStore(private val context: Context) {
             // duration so immediately backing out of a resumed item does not temporarily move
             // it out of Continue Watching.
             val finalDuration = historyDurationForSave(duration, existingItem?.duration)
+            val finalPlaybackContext = playbackContext ?: existingItem?.playbackContext
+
+            FileLogger.i(
+                TAG,
+                "Persisting playback context entry=$logKey, position=$position/$finalDuration, " +
+                    "incoming=${playbackContext.toSafeLogString()}, " +
+                    "existing=${existingItem?.playbackContext.toSafeLogString()}, " +
+                    "final=${finalPlaybackContext.toSafeLogString()}",
+            )
 
             val newItem = PlaybackHistoryItem(
                 id = id,
@@ -123,7 +147,7 @@ class HistoryStore(private val context: Context) {
                 thumbnailUrl = finalThumbnailUrl,
                 thumbnailRevision = existingItem?.thumbnailRevision ?: 0L,
                 isFavorite = existingItem?.isFavorite ?: false,
-                playbackContext = playbackContext ?: existingItem?.playbackContext,
+                playbackContext = finalPlaybackContext,
             )
 
             // Remove existing item with same ID to update it (move to top)

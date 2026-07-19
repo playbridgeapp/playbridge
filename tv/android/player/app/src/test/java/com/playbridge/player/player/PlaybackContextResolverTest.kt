@@ -13,13 +13,44 @@ class PlaybackContextResolverTest {
     )
 
     @Test
-    fun `exact id wins when renderer exposes the saved track`() {
+    fun `exact id is used when saved metadata remains compatible`() {
         val result = resolveTrackPreference(
             tracks,
-            PlaybackTrackPreference(id = "1:2", label = "stale", language = "ja"),
+            PlaybackTrackPreference(
+                id = "1:2",
+                label = "English Commentary",
+                language = "eng",
+            ),
         )
 
         assertEquals("1:2", result?.id)
+    }
+
+    @Test
+    fun `reused id cannot override conflicting saved metadata`() {
+        val result = resolveTrackPreference(
+            tracks,
+            PlaybackTrackPreference(id = "1:2", label = "Japanese", language = "ja"),
+        )
+
+        assertEquals("1:1", result?.id)
+    }
+
+    @Test
+    fun `saved role label wins when id is reused by another same-language track`() {
+        val result = resolveTrackPreference(
+            listOf(
+                PlaybackTrackCandidate("2:0", "English Stereo", "en"),
+                PlaybackTrackCandidate("5:0", "English Commentary", "en"),
+            ),
+            PlaybackTrackPreference(
+                id = "2:0",
+                label = "English Commentary",
+                language = "en",
+            ),
+        )
+
+        assertEquals("5:0", result?.id)
     }
 
     @Test
@@ -62,5 +93,28 @@ class PlaybackContextResolverTest {
         )
 
         assertNull(result)
+    }
+
+    @Test
+    fun `placeholder-only track snapshots are not ready for restoration`() {
+        val ready = hasRestorableTrackCandidates(
+            tracks = listOf(PlaybackTrackCandidate("auto", "Auto / Default", null)),
+            excludedIds = setOf("auto"),
+        )
+
+        assertEquals(false, ready)
+    }
+
+    @Test
+    fun `real track makes snapshot ready for restoration`() {
+        val ready = hasRestorableTrackCandidates(
+            tracks = listOf(
+                PlaybackTrackCandidate("auto", "Auto / Default", null),
+                PlaybackTrackCandidate("2:0", "English", "en"),
+            ),
+            excludedIds = setOf("auto"),
+        )
+
+        assertEquals(true, ready)
     }
 }
