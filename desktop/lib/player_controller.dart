@@ -135,6 +135,8 @@ class PlayerController extends ChangeNotifier {
   bool get isOpening => _opening;
   bool _proxyToggleInProgress = false;
   bool get proxyToggleInProgress => _proxyToggleInProgress;
+  bool _videoOutputChanging = false;
+  bool get videoOutputChanging => _videoOutputChanging;
   Future<void>? _proxyToggleFuture;
   int _proxyToggleGeneration = 0;
 
@@ -157,6 +159,7 @@ class PlayerController extends ChangeNotifier {
   int get positionMs => _engine.positionMs;
   int get durationMs => _engine.durationMs;
   double get volume => _engine.volume;
+  bool get hardwareVideoOutput => store?.hardwareVideoOutput ?? true;
 
   dynamic get tracks => _engine.tracks;
   dynamic get track => _engine.track;
@@ -333,6 +336,65 @@ class PlayerController extends ChangeNotifier {
   Future<void> pause() => _engine.pause();
   Future<void> seek(Duration position) => _engine.seek(position);
   Future<void> setVolume(double volume) => _engine.setVolume(volume);
+
+  /// Recreates libmpv so media_kit can construct a new video output using the
+  /// selected software or hardware renderer. The renderer choice is immutable
+  /// after [VideoController] creation, so changing a property on the live
+  /// player is not sufficient.
+  Future<void> setHardwareVideoOutput(bool enabled) async {
+    if (_videoOutputChanging || hardwareVideoOutput == enabled) return;
+    await _waitForProxyToggle();
+    await store?.setHardwareVideoOutput(enabled);
+
+    final oldEngine = _engine;
+    if (oldEngine is! MpvEngine) {
+      notifyListeners();
+      return;
+    }
+
+    _videoOutputChanging = true;
+    _opening = true;
+    notifyListeners();
+
+    final itemIndex = _currentIndex;
+    final currentPosition = oldEngine.positionMs;
+    final currentVolume = oldEngine.volume;
+    final wasPlaying = state == 'playing' || state == 'buffering';
+
+    try {
+      oldEngine.removeListener(notifyListeners);
+      await oldEngine.dispose();
+
+      _hasInited = false;
+      _setEngine(_currentType);
+
+      if (itemIndex >= 0 && itemIndex < _queue.length) {
+        await _engine.openPlaylist(
+          _queue,
+          itemIndex,
+          play: wasPlaying,
+        );
+        await _engine.setVolume(currentVolume);
+
+        var retries = 0;
+        while (_engine.durationMs <= 0 && retries < 40) {
+          await Future.delayed(const Duration(milliseconds: 50));
+          retries++;
+        }
+        if (currentPosition > 0 && _engine.durationMs > currentPosition) {
+          await _engine.seek(Duration(milliseconds: currentPosition));
+        }
+        if (!wasPlaying) await _engine.pause();
+      }
+    } catch (error) {
+      debugPrint('[player] video output switch failed (${error.runtimeType})');
+    } finally {
+      _opening = false;
+      _videoOutputChanging = false;
+      notifyListeners();
+    }
+  }
+
   Future<void> stop() async {
     await _waitForProxyToggle();
     await _engine.stop();

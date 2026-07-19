@@ -132,3 +132,5 @@ mobile/android/store/icon_variants/*.svg
 # Local desktop development tool probes
 desktop/tool/
 
+# Local stream proxy Compose configuration
+stream-proxy-dart/docker-compose.yml

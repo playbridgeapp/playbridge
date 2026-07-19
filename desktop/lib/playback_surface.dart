@@ -1,5 +1,3 @@
-import 'dart:io' show Platform;
-
 import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'player_controller.dart';
@@ -21,27 +19,39 @@ class PlaybackSurface extends StatefulWidget {
 
 class _PlaybackSurfaceState extends State<PlaybackSurface> {
   VideoController? _mpvVideo;
+  MpvEngine? _boundEngine;
+  late bool _mask;
+
+  bool get _shouldMask =>
+      widget.controller.queue.isEmpty || widget.controller.isOpening;
 
   @override
   void initState() {
     super.initState();
+    _mask = _shouldMask;
     _initMpv();
     widget.controller.addListener(_onControllerChange);
   }
 
   void _onControllerChange() {
-    // Rebuild for isOpening / queue changes (black mask).
-    if (mounted) setState(() {});
-    if (_mpvVideo == null) _initMpv();
+    _initMpv();
+    // Position updates arrive about five times per second. Rebuilding the Video
+    // texture for those ticks disrupts frame presentation on Linux, so rebuild
+    // only when the stale-frame mask actually needs to change.
+    final nextMask = _shouldMask;
+    if (mounted && nextMask != _mask) {
+      setState(() => _mask = nextMask);
+    }
   }
 
   void _initMpv() {
     final engine = widget.controller.engine;
-    if (engine is MpvEngine) {
+    if (engine is MpvEngine && !identical(engine, _boundEngine)) {
+      _boundEngine = engine;
       _mpvVideo = VideoController(
         engine.player,
         configuration: VideoControllerConfiguration(
-          enableHardwareAcceleration: !Platform.isLinux,
+          enableHardwareAcceleration: widget.controller.hardwareVideoOutput,
         ),
       );
       if (mounted) setState(() {});
@@ -56,11 +66,8 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
 
   @override
   Widget build(BuildContext context) {
-    final hasMedia = widget.controller.queue.isNotEmpty;
     // Cover the VO while idle or while the next item is still opening so a
     // frozen last-frame of the previous title cannot flash (esp. after unfocus).
-    final mask = !hasMedia || widget.controller.isOpening;
-
     if (_mpvVideo == null) {
       return const ColoredBox(color: Colors.black);
     }
@@ -84,7 +91,7 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
             ),
           ),
         ),
-        if (mask) const ColoredBox(color: Colors.black),
+        if (_mask) const ColoredBox(color: Colors.black),
       ],
     );
   }
