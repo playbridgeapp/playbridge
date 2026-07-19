@@ -4,6 +4,7 @@
   "path": "/ABSOLUTE/PATH/TO/playbridge_host",
   "type": "stdio",
   "allowed_origins": [
-    "chrome-extension://lhkbcaaoomlmoleggodlbafalokdgokn/"
+    "chrome-extension://lhkbcaaoomlmoleggodlbafalokdgokn/",
+    "chrome-extension://gofdcnocpnieoonficfnfccolcocoaim/"
   ]
 }
