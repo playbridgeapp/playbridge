@@ -149,14 +149,18 @@ Media and codec support ultimately depends on the selected playback engine, oper
 - **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
 - **Desktop (receiver)**: download the build for your OS from [Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
-- **Android Phone (sender)**: install [PlayBridge from Google Play](https://play.google.com/store/apps/details?id=com.playbridge.sender).
+- **Android Phone (sender)**:
+  - <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
+  - or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) and install it.
 - **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
 
 ### Google Play
 
 The Android phone sender is publicly available on Google Play:
 
-* **Android Phone (Sender)**: [Google Play Store](https://play.google.com/store/apps/details?id=com.playbridge.sender)
+* **Android Phone (Sender)**:
+  * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
+  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 * **Android TV (Player) — closed testing**
   * **Group invite**: [pbtvclosedtesters Google Group](https://groups.google.com/g/pbtvclosedtesters)
   * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.player)
