@@ -3,6 +3,29 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.10.0] — 2026-07-19 (versionCode 224)
+
+### Added
+- **Integrated TV Library**: Replaced separate history/favorites screens with a unified, TV-friendly Library featuring "Continue watching" (resumable items), "Recent" (new or completed items), and "Favorites" sections.
+- **Library Session Playback**: Saves the full playlist and current index to allow resuming playlist sessions directly from the Library.
+- **Private Frame Thumbnails**: Added lightweight, private frame captures (320x180 JPEGs) stored locally under `noBackupFilesDir` for items lacking artwork, with support for automatic refresh and cache invalidation.
+- **Adaptive Video Quality Settings**: Extended the `tracks` event and `player_settings` command flow to support adaptive video quality selection (auto/max height) from phone remotes.
+- **Looping Support**: Added persistence and restoration of playback looping state.
+- **Process Isolation**: Moved MPV, ExoPlayer, and WebView player engines into their own dedicated, isolated background processes to prevent renderer instability or crashes from affecting the main application.
+- **Private-Process Provider Bridge**: Added a non-exported broadcast bridge for WebView status, queue draining, and replacement launches.
+
+### Changed
+- **UX & Focus Styling**: Consolidated sidebar destinations, improved dropdown initial focus, added consistent TV focus scaling and overlay transitions, and replaced the generic spinner with an animated PlayBridge loading blob.
+- **WebView Separation**: Moved System WebView browser into `:web` with a unique data-directory suffix to isolate renderer processes.
+- **Security & Redaction**: Redacted credentials/tokens and hashed media/history identifiers in diagnostic logs, with URL redaction helpers for authenticated streams and external subtitles.
+
+### Fixed
+- **Playback Context Restoration**: Restores audio, subtitle, and loop preferences reliably by deferring restoration while placeholder tracks exist, persisting pending status until verified, and prioritizing normalized metadata matching over fragile positional track IDs.
+- **Stale Start Positions**: Restart completed Recent/Favorite items from zero even if the cast payload contains a stale position.
+- **Activity Recreation**: Preserves the active main-screen destination across Activity recreation and trips to settings.
+- **Dialog & UI Races**: Resolved races where long-press dialogs accidentally triggered resume, and delayed the pre-play "Play now" action until counting down.
+- **Browser Media Control**: Pauses backgrounded browser media, and prevents WebView processes from improperly owning or starting `ServerService`.
+
 ## Player [0.9.3] — 2026-07-14 (versionCode 223)
 
 ### Fixed
