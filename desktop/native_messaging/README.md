@@ -8,9 +8,11 @@ ride the pinned link, not the cleartext LAN.
 > **Most users don't need this file.** The desktop app auto-registers the host on
 > launch and via **Send to TV → "Set up browser casting"**
 > (`lib/native_host_installer.dart`) for Firefox + Chrome/Chromium/Brave/Edge on
-> macOS and Linux. The extension ids are fixed: Firefox `video-detector@playbridge`,
-> Chrome `lhkbcaaoomlmoleggodlbafalokdgokn` (from the `key` baked into the MV3
-> manifest). The steps below are the manual fallback / Windows path.
+> macOS and Linux. The extension ids are fixed: Firefox
+> `video-detector@playbridge`, Chrome unpacked development
+> `lhkbcaaoomlmoleggodlbafalokdgokn`, and Chrome Web Store
+> `gofdcnocpnieoonficfnfccolcocoaim`. The steps below are the manual fallback /
+> Windows path.
 
 ## 1. Build the host binary
 

@@ -27,8 +27,7 @@ class NativeHostInstaller {
   /// `chrome-extension://<id>/` entry in the host manifest's `allowed_origins`.)
   static const chromeExtIds = <String>[
     'lhkbcaaoomlmoleggodlbafalokdgokn', // unpacked dev (from manifest `key`)
-    // TODO: add the Chrome Web Store id after publishing, e.g.
-    // 'abcdefghijklmnopabcdefghijklmnop',
+    'gofdcnocpnieoonficfnfccolcocoaim', // Chrome Web Store
     // TODO: add the Edge Add-ons id if shipping there.
   ];
 
