@@ -144,7 +144,11 @@
   function log(msg, cls) {
     var line = document.createElement('div');
     var t = new Date().toTimeString().slice(0, 8);
-    line.innerHTML = '<span class="t">' + t + '</span> ' + msg;
+    var span = document.createElement('span');
+    span.className = 't';
+    span.textContent = t;
+    line.appendChild(span);
+    line.appendChild(document.createTextNode(' ' + msg));
     if (cls) line.className = cls;
     logEl.appendChild(line);
     logEl.scrollTop = logEl.scrollHeight;
