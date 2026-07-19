@@ -7,7 +7,7 @@ Use this prompt with an implementation agent working in the PlayBridge repositor
 You are working in:
 
 ```text
-/Users/atulmehla/repos/personal/playbridgeapp/PlayBridge
+.
 ```
 
 Add a non-destructive PlayBridge cast-button overlay to web videos in the browser extension. Put the feature behind a persisted toggle in the extension's popup settings.
@@ -196,7 +196,7 @@ Treat content-script input as untrusted. Validate actions and payloads, ensure t
 Run:
 
 ```bash
-cd /Users/atulmehla/repos/personal/playbridgeapp/PlayBridge/extension
+cd extension
 npm run build
 ```
 

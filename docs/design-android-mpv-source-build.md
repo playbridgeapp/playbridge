@@ -185,7 +185,7 @@ mpv version upgrade. One variable at a time is the central risk-control rule.
 The source-built armv7 AAR was rebuilt with FFmpeg's `image_png_pipe` demuxer
 disabled (`CONFIG_IMAGE_PNG_PIPE_DEMUXER=0`). PNG decoding and encoding remain
 enabled. The resulting AAR was integrated into the TV app, installed on the
-connected armv7 TV, and verified to play `/Users/atulmehla/test.ts` correctly.
+connected armv7 TV, and verified to play `test.ts` correctly.
 Ordinary HLS playback also remained functional. The initial armv7-only AAR
 checksum was:
 
