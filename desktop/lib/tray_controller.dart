@@ -26,6 +26,7 @@ class TrayController with TrayListener {
 
   bool _launchAtLogin = false;
   bool _ready = false;
+  String? _lastStatus;
   AutoLaunch? _auto;
 
   Future<void> init() async {
@@ -60,10 +61,12 @@ class TrayController with TrayListener {
       }
     }
 
-    try {
-      await trayManager.setToolTip('PlayBridge');
-    } catch (e) {
-      debugPrint('[tray] setToolTip failed: $e');
+    if (!Platform.isLinux) {
+      try {
+        await trayManager.setToolTip('PlayBridge');
+      } catch (e) {
+        debugPrint('[tray] setToolTip failed: $e');
+      }
     }
 
     trayManager.addListener(this);
@@ -95,10 +98,19 @@ class TrayController with TrayListener {
           ? 'Playing: ${player.currentTitle ?? '—'}'
           : 'Paired · idle',
     };
-    try {
-      await trayManager.setToolTip('PlayBridge\n$status');
-    } catch (e) {
-      debugPrint('[tray] setToolTip failed: $e');
+    // Player position updates arrive about five times per second. The tray only
+    // represents coarse playback/pairing state, so avoid repeating native calls
+    // when its visible status has not changed.
+    if (status == _lastStatus) return;
+    _lastStatus = status;
+
+    // tray_manager has no Linux setToolTip implementation.
+    if (!Platform.isLinux) {
+      try {
+        await trayManager.setToolTip('PlayBridge\n$status');
+      } catch (e) {
+        debugPrint('[tray] setToolTip failed: $e');
+      }
     }
 
     final menu = Menu(items: [
