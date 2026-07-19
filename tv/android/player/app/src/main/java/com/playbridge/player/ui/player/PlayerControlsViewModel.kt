@@ -559,6 +559,7 @@ class PlayerControlsViewModel : ViewModel() {
                 playbackSpeed = 1f,
                 videoScalingMode = "Fit",
                 videoQualityMaxHeight = defaultQualityMaxHeight.coerceAtLeast(0),
+                isLooping = false,
                 capabilities = PlaybackCapabilities(),
                 currentVideoHeight = 0,
             )

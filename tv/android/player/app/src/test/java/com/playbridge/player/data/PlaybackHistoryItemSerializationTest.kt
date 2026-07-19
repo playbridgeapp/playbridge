@@ -4,7 +4,9 @@ import com.playbridge.shared.protocol.protocolJson
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackHistoryItemSerializationTest {
@@ -31,6 +33,7 @@ class PlaybackHistoryItemSerializationTest {
                 audioTrack = PlaybackTrackPreference("audio-1", "Japanese", "ja"),
                 playbackSpeed = 1.25f,
                 videoScalingMode = "Zoom",
+                isLooping = true,
             ),
         )
 
@@ -39,5 +42,21 @@ class PlaybackHistoryItemSerializationTest {
         )
 
         assertEquals(original, restored)
+    }
+
+    @Test
+    fun `playback context diagnostics redact external subtitle urls`() {
+        val context = PlaybackContext(
+            audioTrack = PlaybackTrackPreference("audio-1", "Japanese", "ja"),
+            externalSubtitleUrl = "https://example.invalid/subtitle?token=secret",
+            playbackSpeed = 1.25f,
+        )
+
+        val summary = context.toSafeLogString()
+
+        assertTrue(summary.contains("audio-1"))
+        assertTrue(summary.contains("externalSubtitle=true"))
+        assertFalse(summary.contains("example.invalid"))
+        assertFalse(summary.contains("secret"))
     }
 }
