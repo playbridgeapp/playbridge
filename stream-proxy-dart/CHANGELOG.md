@@ -5,6 +5,14 @@ All notable changes to the PlayBridge Stream Proxy (`playbridge_stream_proxy`) w
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-07-19
+
+### Changed
+- **Proxy Authentication**: Require explicit non-default passwords for standalone proxy deployments and align local Docker configuration with the authenticated proxy flow.
+
+### Fixed
+- **Desktop Compatibility**: Keep proxy startup and local routing behavior compatible with the stabilized Desktop playback integration.
+
 ## [0.2.0] - 2026-07-15
 
 ### Added
