@@ -56,13 +56,13 @@ bump the final/squashed release commit merged to `main`.
 
 These items cannot be completed safely from the repository alone:
 
-1. **Create the Chrome Web Store draft and provide its permanent extension ID.**
-   After the ID is known, add it to
+1. **Install and test a desktop build containing the Chrome Web Store ID.** The
+   draft ID `gofdcnocpnieoonficfnfccolcocoaim` is now present in
    `desktop/lib/native_host_installer.dart` (`chromeExtIds`) and
    `desktop/native_messaging/com.playbridge.host.chrome.json`
-   (`allowed_origins`). Install a desktop build containing that ID and test a
-   store-installed extension. Also copy the store-issued public key if the
-   source manifest will retain a stable `key`.
+   (`allowed_origins`). Test a store-installed extension, then copy the
+   store-issued public key only if the source manifest will retain a stable
+   `key`.
 2. **Choose the next extension version.** Request an explicit release/uprev with
    the chosen version so both manifests and `CHANGELOG.md` are updated together.
    Do not upload the generated `0.4.2` artifacts as the new release.
@@ -367,11 +367,18 @@ permission if it is accidentally reintroduced.
 
 Reference: [Chrome WebRequest API](https://developer.chrome.com/docs/extensions/reference/api/webRequest).
 
-### Blocker: connect the Chrome Web Store ID to native messaging
+### Chrome Web Store ID and native messaging
 
 The Chrome manifest contains a development `key`, producing extension ID
-`lhkbcaaoomlmoleggodlbafalokdgokn`. The desktop native-host installer currently
-allows only that ID and contains TODOs for the future Chrome Web Store ID.
+`lhkbcaaoomlmoleggodlbafalokdgokn`. The Chrome Web Store draft has assigned the
+production ID `gofdcnocpnieoonficfnfccolcocoaim`.
+
+The source manifest keeps this key for stable unpacked development IDs, but
+`pnpm store:package` removes `key` from the Chrome runtime ZIP because the
+Chrome Web Store rejects that field during upload. The production ID is now
+included in the desktop native-host allowlists. A desktop build containing this
+change must be distributed before relying on a store-installed extension for
+native messaging.
 
 A store-installed extension cannot connect to `com.playbridge.host` unless its
 actual production ID appears in the native host's `allowed_origins`. The release
@@ -383,7 +390,8 @@ sequence should be:
    `key` primarily as a development-ID mechanism and says it is usually not
    needed.
 3. Add the permanent store ID to `NativeHostInstaller.chromeExtIds` and the
-   checked-in Chrome native-host manifest.
+   checked-in Chrome native-host manifest. (Completed for
+   `gofdcnocpnieoonficfnfccolcocoaim`.)
 4. Release a desktop build that installs the production origin.
 5. Test the extension installed from the store/draft channel, not only unpacked.
 6. Submit the extension only after a generally available desktop build supports
@@ -551,7 +559,7 @@ References:
 - [x] Chrome first-run disclosure/consent implemented
 - [x] `webRequestExtraHeaders` manifest entry removed
 - [x] redundant `activeTab` permission removed
-- [ ] Chrome production ID added to native-host allowlists
+- [x] Chrome production ID added to native-host allowlists
 - [ ] release version and changelog updated
 - [x] TypeScript, tests, and both builds pass
 - [x] zero-warning `web-ext lint` and packaged-manifest validation pass
