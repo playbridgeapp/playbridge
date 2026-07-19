@@ -3,7 +3,6 @@
     <string name="player_preparing">Preparing playback…</string>
     <string name="player_switching">Switching player…</string>
     <string name="player_starting">Starting playback…</string>
-    <string name="player_preparing_next">Preparing next item…</string>
     <string name="player_empty_request">Playback request is empty</string>
     <string name="player_failed">Playback failed</string>
 </resources>

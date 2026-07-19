@@ -13,6 +13,20 @@ import com.playbridge.player.player.SubtitleManager
 import com.playbridge.player.player.SubtitleCueLoader
 import com.playbridge.player.player.SkipSegment
 
+private const val END_SEEK_PADDING_MS = 250L
+
+internal fun skipSegmentEndsPlayback(segment: SkipSegment, durationMs: Long): Boolean =
+    segment.endMs == com.playbridge.player.player.SkipSegmentFetcher.OPEN_ENDED_MS ||
+        (durationMs > 0L && segment.endMs >= durationMs - 1_000L)
+
+internal fun skipTargetMs(segment: SkipSegment, durationMs: Long): Long = when {
+    durationMs > 0L && skipSegmentEndsPlayback(segment, durationMs) ->
+        (durationMs - END_SEEK_PADDING_MS).coerceAtLeast(0L)
+    segment.endMs == com.playbridge.player.player.SkipSegmentFetcher.OPEN_ENDED_MS ->
+        segment.startMs.coerceAtLeast(0L)
+    else -> segment.endMs + 1_000L
+}
+
 class PlayerControlsViewModel : ViewModel() {
     private val _controlsState = MutableStateFlow(PlayerControlsState())
     val controlsState = _controlsState.asStateFlow()
@@ -24,6 +38,7 @@ class PlayerControlsViewModel : ViewModel() {
     private var onlineSubtitleJob: Job? = null
     private var cachedOnlineTracks: List<UnifiedTrack> = emptyList()
     private var lastSkippedSegment: SkipSegment? = null
+    private var onEndSegmentSkipped: (() -> Unit)? = null
 
     /** Request headers for fetching subtitle files (set by the activity when media loads). */
     var subtitleRequestHeaders: Map<String, String>? = null
@@ -50,6 +65,10 @@ class PlayerControlsViewModel : ViewModel() {
         this.contextRef = java.lang.ref.WeakReference(context.applicationContext)
         _controlsState.update { it.copy(engineType = engineType) }
         startProgressUpdates()
+    }
+
+    fun setEndSegmentSkipHandler(handler: (() -> Unit)?) {
+        onEndSegmentSkipped = handler
     }
 
     fun showControls(full: Boolean = true, playing: Boolean? = null) {
@@ -153,7 +172,13 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun setBuffering(isBuffering: Boolean) {
-        _controlsState.update { it.copy(isBuffering = isBuffering) }
+        _controlsState.update {
+            it.copy(
+                isBuffering = isBuffering,
+                activeSkipSegment = if (isBuffering) null else it.activeSkipSegment,
+                isSkipButtonFocused = if (isBuffering) false else it.isSkipButtonFocused,
+            )
+        }
     }
 
     fun showPlaybackTransition(message: String) {
@@ -164,6 +189,8 @@ class PlayerControlsViewModel : ViewModel() {
                 isVisible = false,
                 isFullControlsVisible = false,
                 activeOverlay = ActiveOverlay.NONE,
+                activeSkipSegment = null,
+                isSkipButtonFocused = false,
             )
         }
     }
@@ -310,9 +337,14 @@ class PlayerControlsViewModel : ViewModel() {
                     val currentPos = if (isScrubbing) _controlsState.value.currentPosition else it.currentPosition
                     val duration = it.duration
                     
-                    val activeSegment = _controlsState.value.skipSegments.firstOrNull { segment ->
-                        currentPos >= segment.startMs && currentPos <= segment.endMs && segment != lastSkippedSegment
-                    }
+                    val activeSegment = _controlsState.value
+                        .takeUnless { it.isPlaybackObscured() }
+                        ?.skipSegments
+                        ?.firstOrNull { segment ->
+                            currentPos >= segment.startMs &&
+                                currentPos <= segment.endMs &&
+                                segment != lastSkippedSegment
+                        }
                     
                     lastSkippedSegment?.let { skipped ->
                         if (currentPos < skipped.startMs || currentPos > skipped.endMs) {
@@ -333,7 +365,7 @@ class PlayerControlsViewModel : ViewModel() {
                         if (shouldAutoSkip) {
                             lastSkippedSegment = activeSegment
                             isAutoSkipTriggered = true
-                            engine?.seekTo(skipTargetMs(activeSegment, duration))
+                            performSegmentSkip(activeSegment, duration)
                             viewModelScope.launch(kotlinx.coroutines.Dispatchers.Main) {
                                 android.widget.Toast.makeText(context, "Auto-skipped ${activeSegment.type}", android.widget.Toast.LENGTH_SHORT).show()
                             }
@@ -366,7 +398,11 @@ class PlayerControlsViewModel : ViewModel() {
                             isPlaying = it.isPlaying,
                             streamInfo = it.streamInfo,
                             hdrFormat = it.hdrFormat,
-                            activeSkipSegment = uiActiveSegment
+                            activeSkipSegment = if (s.isPlaybackObscured()) {
+                                null
+                            } else {
+                                uiActiveSegment
+                            },
                         )
                     }
                 }
@@ -548,25 +584,18 @@ class PlayerControlsViewModel : ViewModel() {
     fun skipCurrentSegment() {
         val segment = _controlsState.value.activeSkipSegment ?: return
         lastSkippedSegment = segment
-        engine?.seekTo(skipTargetMs(segment, _controlsState.value.duration))
+        performSegmentSkip(segment, _controlsState.value.duration)
         _controlsState.update { it.copy(activeSkipSegment = null) }
         resetAutoHideTimer()
     }
 
-    /**
-     * Seek target for skipping [segment]. Clamped to the known duration: open-ended
-     * segments carry [com.playbridge.player.player.SkipSegmentFetcher.OPEN_ENDED_MS]
-     * as their end, and while ExoPlayer clamps out-of-range seeks internally, MPV
-     * passes the raw value straight to `seek` — an unclamped Long.MAX_VALUE/2 target
-     * is undefined behavior there. Clamping to duration means "jump to the end",
-     * which is the intent for credits that run to the end of the file.
-     */
-    private fun skipTargetMs(
-        segment: com.playbridge.player.player.SkipSegment,
-        durationMs: Long,
-    ): Long {
-        val target = segment.endMs + 1000
-        return if (durationMs > 0) target.coerceAtMost(durationMs) else target
+    private fun performSegmentSkip(segment: SkipSegment, durationMs: Long) {
+        val endHandler = onEndSegmentSkipped
+        if (skipSegmentEndsPlayback(segment, durationMs) && endHandler != null) {
+            endHandler()
+        } else {
+            engine?.seekTo(skipTargetMs(segment, durationMs))
+        }
     }
 
     fun setSkipButtonFocused(focused: Boolean) {
@@ -579,6 +608,7 @@ class PlayerControlsViewModel : ViewModel() {
         commitSeekJob?.cancel()
         onlineSubtitleJob?.cancel()
         cachedOnlineTracks = emptyList()
+        onEndSegmentSkipped = null
         engine = null
     }
 }

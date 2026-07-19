@@ -23,6 +23,24 @@ class PlayerControlsStateTest {
         )
     }
 
+    @Test
+    fun `named playback transition obscures skip controls`() {
+        assertTrue(
+            PlayerControlsState(playbackTransitionMessage = "Preparing playback…")
+                .isPlaybackObscured(),
+        )
+    }
+
+    @Test
+    fun `buffering obscures skip controls without transition text`() {
+        assertTrue(PlayerControlsState(isBuffering = true).isPlaybackObscured())
+    }
+
+    @Test
+    fun `ready playback allows skip controls`() {
+        assertFalse(PlayerControlsState().isPlaybackObscured())
+    }
+
     private fun videoTrack(id: String) = UnifiedTrack(
         id = id,
         name = id,

@@ -87,3 +87,6 @@ data class PlayerControlsState(
     val activeSkipSegment: com.playbridge.player.player.SkipSegment? = null,
     val isSkipButtonFocused: Boolean = false,
 )
+
+internal fun PlayerControlsState.isPlaybackObscured(): Boolean =
+    playbackTransitionMessage != null || isBuffering || prePlayMetadata != null

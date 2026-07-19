@@ -250,7 +250,9 @@ fun PlayerControlsOverlay(
         }
 
         // Skip Segment Button (Netflix style)
-        state.activeSkipSegment?.let { segment ->
+        state.activeSkipSegment
+            ?.takeUnless { state.isPlaybackObscured() }
+            ?.let { segment ->
             val focusRequester = remember { FocusRequester() }
             
             // Request focus when the button becomes visible
@@ -377,22 +379,28 @@ private fun PlaybackTransitionOverlay(
         label = "loading text pulse",
     )
 
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy((-16).dp),
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(if (message != null) Color.Black else Color.Transparent),
+        contentAlignment = Alignment.Center,
     ) {
-        LoadingBlob(modifier = Modifier.size(220.dp))
-        message?.let {
-            Text(
-                text = it,
-                color = Color.White.copy(alpha = textAlpha),
-                fontSize = 18.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier
-                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
-                    .padding(horizontal = 22.dp, vertical = 12.dp),
-            )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy((-16).dp),
+        ) {
+            LoadingBlob(modifier = Modifier.size(220.dp))
+            message?.let {
+                Text(
+                    text = it,
+                    color = Color.White.copy(alpha = textAlpha),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 22.dp, vertical = 12.dp),
+                )
+            }
         }
     }
 }

@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -76,6 +77,7 @@ fun LibraryScreen(
     val history by historyStore.history.collectAsState(initial = emptyList())
     val scope = rememberCoroutineScope()
     var actionsFor by remember { mutableStateOf<PlaybackHistoryItem?>(null) }
+    var consumeActionsCenterRelease by remember { mutableStateOf(false) }
     var showClearConfirmation by remember { mutableStateOf(false) }
 
     val sections = remember(history) { buildLibrarySections(history) }
@@ -119,21 +121,49 @@ fun LibraryScreen(
                 contentPadding = PaddingValues(bottom = 48.dp),
             ) {
                 if (continueWatching.isNotEmpty()) item("continue") {
-                    LibraryShelf("Continue watching", continueWatching, onPlayItem) { actionsFor = it }
+                    LibraryShelf("Continue watching", continueWatching, onPlayItem) {
+                        actionsFor = it
+                        consumeActionsCenterRelease = true
+                    }
                 }
                 if (recent.isNotEmpty()) item("recent") {
-                    LibraryShelf("Recent", recent, onPlayItem) { actionsFor = it }
+                    LibraryShelf("Recent", recent, onPlayItem) {
+                        actionsFor = it
+                        consumeActionsCenterRelease = true
+                    }
                 }
                 if (favorites.isNotEmpty()) item("favorites") {
-                    LibraryShelf("Favorites", favorites, onPlayItem) { actionsFor = it }
+                    LibraryShelf("Favorites", favorites, onPlayItem) {
+                        actionsFor = it
+                        consumeActionsCenterRelease = true
+                    }
                 }
             }
         }
     }
 
     actionsFor?.let { item ->
-        ThemedDialog(onDismissRequest = { actionsFor = null }) {
-            Surface(shape = MaterialTheme.shapes.large, modifier = Modifier.width(460.dp)) {
+        ThemedDialog(onDismissRequest = {
+            actionsFor = null
+            consumeActionsCenterRelease = false
+        }) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier
+                    .width(460.dp)
+                    .onPreviewKeyEvent { event ->
+                        if (!consumeActionsCenterRelease) return@onPreviewKeyEvent false
+                        val nativeEvent = event.nativeKeyEvent
+                        val isCenter = nativeEvent.keyCode == android.view.KeyEvent.KEYCODE_DPAD_CENTER ||
+                            nativeEvent.keyCode == android.view.KeyEvent.KEYCODE_ENTER ||
+                            nativeEvent.keyCode == android.view.KeyEvent.KEYCODE_NUMPAD_ENTER
+                        if (!isCenter) return@onPreviewKeyEvent false
+                        if (nativeEvent.action == android.view.KeyEvent.ACTION_UP) {
+                            consumeActionsCenterRelease = false
+                        }
+                        true
+                    },
+            ) {
                 Column(Modifier.padding(28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     Text(item.title ?: "Library item", style = MaterialTheme.typography.headlineSmall)
                     Button(onClick = { actionsFor = null; onPlayItem(item) }, modifier = Modifier.fillMaxWidth()) {

@@ -42,7 +42,10 @@ fun PrePlayScreen(
     val context = LocalContext.current
     val playNowFocusRequester = remember { FocusRequester() }
 
-    LaunchedEffect(Unit) { playNowFocusRequester.requestFocus() }
+    val canStartNow = launchCountdown > 0
+    LaunchedEffect(canStartNow) {
+        if (canStartNow) playNowFocusRequester.requestFocus()
+    }
 
     BackHandler(onBack = onBack)
 
@@ -148,17 +151,18 @@ fun PrePlayScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(24.dp)
                     ) {
-                        Button(
-                            onClick = onStartNow,
-                            modifier = Modifier.focusRequester(playNowFocusRequester),
-                        ) {
-                            Text("Play now")
-                        }
                         StatusSection(
                             isLaunching = isLaunching,
                             countdown = launchCountdown
                         )
-                        
+                        if (canStartNow) {
+                            Button(
+                                onClick = onStartNow,
+                                modifier = Modifier.focusRequester(playNowFocusRequester),
+                            ) {
+                                Text("Play now")
+                            }
+                        }
                     }
                 }
                 

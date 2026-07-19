@@ -60,6 +60,9 @@ data class PlaybackHistoryItem(
     val playbackContext: PlaybackContext? = null,
 )
 
+internal fun historyDurationForSave(duration: Long, existingDuration: Long?): Long =
+    duration.takeIf { it > 0L } ?: existingDuration ?: 0L
+
 class HistoryStore(private val context: Context) {
     private val thumbnailStore by lazy { HistoryThumbnailStore(context) }
 
@@ -104,6 +107,10 @@ class HistoryStore(private val context: Context) {
             // periodic position-only save), and keep the existing favorite flag.
             val existingItem = currentList.find { it.id == id }
             val finalThumbnailUrl = thumbnailUrl ?: existingItem?.thumbnailUrl
+            // Landing is recorded before the renderer knows its duration. Preserve the known
+            // duration so immediately backing out of a resumed item does not temporarily move
+            // it out of Continue Watching.
+            val finalDuration = historyDurationForSave(duration, existingItem?.duration)
 
             val newItem = PlaybackHistoryItem(
                 id = id,
@@ -111,7 +118,7 @@ class HistoryStore(private val context: Context) {
                 url = url,
                 title = title,
                 position = position,
-                duration = duration,
+                duration = finalDuration,
                 timestamp = System.currentTimeMillis(),
                 thumbnailUrl = finalThumbnailUrl,
                 thumbnailRevision = existingItem?.thumbnailRevision ?: 0L,

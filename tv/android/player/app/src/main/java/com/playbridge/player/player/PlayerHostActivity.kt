@@ -19,6 +19,7 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
+import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -76,6 +77,17 @@ internal fun defaultQualityMaxHeight(payload: PlayPayload?): Int {
     }
 }
 
+internal fun shouldKeepPlayerScreenOn(
+    isHostStarted: Boolean,
+    isPlaying: Boolean,
+    isBuffering: Boolean,
+    hasTransition: Boolean,
+    hasPrePlay: Boolean,
+    isStillWatchingPrompting: Boolean,
+): Boolean = isHostStarted && (
+    isPlaying || isBuffering || hasTransition || hasPrePlay || isStillWatchingPrompting
+    )
+
 /**
  * Permanent host shell for renderer-process playback.
  *
@@ -102,6 +114,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var connection: ServiceConnection? = null
     private var surface: Surface? = null
     private var hostPlaying = false
+    private var pendingPlayingState: Boolean? = null
+    private var isHostStarted = false
     private var lastPositionMs = 0L
     private var lastDurationMs = 0L
     private var videoWidth = 0
@@ -119,6 +133,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             pausePlayback = { handleControl("pause") },
             resumePlayback = { handleControl("play") },
             stopPlayback = ::finishPlaybackSession,
+            onPromptChanged = { refreshKeepScreenOn() },
         ).also { controller ->
             val prefs = getSharedPreferences("browser_prefs", MODE_PRIVATE)
             controller.updateSettings(
@@ -317,6 +332,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     override fun onStart() {
         super.onStart()
+        isHostStarted = true
         val filter = android.content.IntentFilter().apply {
             addAction(ServerService.ACTION_CONTROL)
             addAction(ServerService.ACTION_REMOTE)
@@ -334,9 +350,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         // while the Activity is starting. If the broadcast preceded registration, the pending
         // store is drained here; if it followed registration, the receiver drains it first.
         playbackCoordinator.queueAdd(ServerService.drainPendingQueueItems(this))
+        refreshKeepScreenOn()
     }
 
     override fun onStop() {
+        isHostStarted = false
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         if (!isFinishing && !isChangingConfigurations) {
             handleControl("pause")
         }
@@ -351,6 +370,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun setupControlsOverlay() {
         controlsViewModel.setEngine(controlsAdapter, rendererKind.name.lowercase(), this)
+        controlsViewModel.setEndSegmentSkipHandler(::advanceAfterEndSegment)
         if (getSharedPreferences("browser_prefs", MODE_PRIVATE)
                 .getBoolean("loudness_enhancer", false)
         ) {
@@ -622,6 +642,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         rendererKind = target
         session = sessionCoordinator.begin(target)
         hostPlaying = false
+        pendingPlayingState = null
         controlsViewModel.setPlaying(false)
         controlsViewModel.setBuffering(true)
         controlsViewModel.setEngine(controlsAdapter, target.name.lowercase(), this)
@@ -707,7 +728,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             unbindCurrentRenderer()
             rotateRendererSurface()
             terminateRendererProcess(oldKind)
-            bindRenderer(R.string.player_switching)
+            // This renderer replacement belongs to a new cast request, not an in-session
+            // player switch. Describe the user-facing action as playback preparation even when
+            // the previous session happened to use a different renderer.
+            bindRenderer(R.string.player_preparing)
             return
         }
 
@@ -734,6 +758,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun resetPlaybackUi() {
         pendingSeekTracker.clear()
         hostPlaying = false
+        pendingPlayingState = null
         lastPositionMs = 0L
         lastDurationMs = 0L
         resetVideoSurfaceLayout()
@@ -970,6 +995,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             renderer.prepare(request, sessionId)
             renderer.attachSurface(rendererSurface, sessionId)
             applyRendererSettings(renderer, sessionId)
+            pendingPlayingState = true
             renderer.play(sessionId)
             // Request resume immediately. MPV retains this until FILE_LOADED, while Exo can
             // accept a seek during preparation; waiting for a rendered-ready event can briefly
@@ -1365,8 +1391,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererProtocol.EVENT_STATE -> {
                 val state = event.getString(RendererProtocol.KEY_STATE) ?: return
                 updateHistoryThumbnailPlaybackClock(state, SystemClock.elapsedRealtime())
-                hostPlaying = state == "playing"
-                stillWatchingController.onPlayingChanged(hostPlaying && state != "buffering")
+                val rendererPlaying = state == "playing"
+                val pendingState = pendingPlayingState
+                if (pendingState == null || pendingState == rendererPlaying) {
+                    hostPlaying = rendererPlaying
+                    if (pendingState == rendererPlaying) pendingPlayingState = null
+                }
+                stillWatchingController.onPlayingChanged(rendererPlaying && state != "buffering")
                 controlsViewModel.setPlaying(hostPlaying)
                 controlsViewModel.setBuffering(state == "buffering")
                 if (state == "playing") controlsViewModel.clearPlaybackTransition()
@@ -1426,6 +1457,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             RendererProtocol.EVENT_STOPPED -> {
                 hostPlaying = false
+                pendingPlayingState = null
                 pendingSeekTracker.clear()
                 sessionCoordinator.markStopped(currentSession.sessionId)
                 runCatching { rendererService?.release(currentSession.sessionId) }
@@ -1436,6 +1468,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 event.getString(RendererProtocol.KEY_ERROR) ?: "Renderer error",
             )
         }
+        refreshKeepScreenOn()
     }
 
     private fun startPlaylistItem() {
@@ -1450,6 +1483,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelPrePlayCountdown()
         pendingSeekTracker.clear()
         hostPlaying = false
+        pendingPlayingState = null
         lastPositionMs = 0L
         lastDurationMs = 0L
         resetVideoSurfaceLayout()
@@ -1467,7 +1501,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.clearSubtitle()
         requestedStartPositionMs = null
         updateControlsForCurrentItem()
-        showTransition(R.string.player_preparing_next)
+        showTransition(R.string.player_preparing)
         scheduleRendererOpenWatchdog(session!!.sessionId, rendererKind)
         try {
             renderer.setCallback(callback)
@@ -1488,6 +1522,18 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             runCatching { rendererService?.stop(currentSession.sessionId) }
         }
         finish()
+    }
+
+    private fun advanceAfterEndSegment() {
+        val currentSession = session ?: return
+        if (!sessionCoordinator.requestStop(currentSession.sessionId)) return
+        if (lastDurationMs > 0L) {
+            lastPositionMs = lastDurationMs
+            controlsViewModel.setPendingSeekTime(lastDurationMs)
+        }
+        showTransition(R.string.player_preparing)
+        controlsViewModel.setBuffering(true)
+        lifecycleScope.launch { playbackCoordinator.next() }
     }
 
     private fun broadcastPlaylistStatus(items: List<PlayPayload>, index: Int) {
@@ -1792,8 +1838,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun markPlaybackStarted(sessionId: Long) {
-        hostPlaying = true
-        controlsViewModel.setPlaying(true)
+        // First-frame delivery can race a user pause during startup. Playback state events are
+        // the acknowledgement for play/pause intent; a rendered frame only advances readiness.
         sessionCoordinator.markFirstFrame(sessionId)
         if (sessionCoordinator.current().phase == RendererSessionPhase.PLAYING) {
             cancelStartupWatchdog()
@@ -1805,6 +1851,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val renderer = rendererService ?: return
         runCatching { renderer.pause(sessionId) }
         hostPlaying = false
+        pendingPlayingState = false
         controlsViewModel.setPlaying(false)
         prePlayCountdownJob = lifecycleScope.launch {
             controlsViewModel.setPrePlayLaunching(true)
@@ -1817,6 +1864,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             controlsViewModel.setPrePlayCountdown(0)
             controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
             showTransition(R.string.player_starting, force = true)
+            pendingPlayingState = true
             runCatching { rendererService?.play(sessionId) }
         }
     }
@@ -1827,6 +1875,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setPrePlayCountdown(0)
         controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
         showTransition(R.string.player_starting, force = true)
+        pendingPlayingState = true
         runCatching { rendererService?.play(currentSession.sessionId) }
     }
 
@@ -1852,11 +1901,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when {
             command == "play" -> {
                 hostPlaying = true
+                pendingPlayingState = true
                 controlsViewModel.setPlaying(true)
                 runCatching { renderer.play(currentSession.sessionId) }
             }
             command == "pause" -> {
                 hostPlaying = false
+                pendingPlayingState = false
                 runCatching { renderer.pause(currentSession.sessionId) }
                 controlsViewModel.showControls(full = true, playing = false)
                 progressManager.saveProgress()
@@ -1864,11 +1915,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             command == "toggle" -> {
                 if (hostPlaying) {
                     hostPlaying = false
+                    pendingPlayingState = false
                     runCatching { renderer.pause(currentSession.sessionId) }
                     controlsViewModel.showControls(full = true, playing = false)
                     progressManager.saveProgress()
                 } else {
                     hostPlaying = true
+                    pendingPlayingState = true
                     controlsViewModel.setPlaying(true)
                     runCatching { renderer.play(currentSession.sessionId) }
                 }
@@ -1956,6 +2009,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             command == "next" -> lifecycleScope.launch { playbackCoordinator.next() }
             command == "previous" -> lifecycleScope.launch { playbackCoordinator.previous() }
         }
+        refreshKeepScreenOn()
     }
 
     private fun seekRelative(deltaMs: Long, sessionId: Long) {
@@ -2139,6 +2193,24 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             controlsViewModel.showPlaybackTransition(getString(message))
         } else {
             controlsViewModel.clearPlaybackTransition()
+        }
+        refreshKeepScreenOn()
+    }
+
+    private fun refreshKeepScreenOn() {
+        val state = controlsViewModel.controlsState.value
+        val shouldKeepScreenOn = shouldKeepPlayerScreenOn(
+            isHostStarted = isHostStarted,
+            isPlaying = hostPlaying,
+            isBuffering = state.isBuffering,
+            hasTransition = state.playbackTransitionMessage != null,
+            hasPrePlay = state.prePlayMetadata != null,
+            isStillWatchingPrompting = stillWatchingController.state.value.isPrompting,
+        )
+        if (shouldKeepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
