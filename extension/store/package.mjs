@@ -18,6 +18,7 @@ const extensionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = resolve(extensionRoot, "..");
 const artifactsDir = resolve(extensionRoot, "artifacts");
 const sourceStage = resolve(artifactsDir, "source");
+const chromeStoreStage = resolve(artifactsDir, "chrome-store");
 const fixedDate = new Date("1980-01-01T00:00:00.000Z");
 
 const manifest = JSON.parse(
@@ -77,6 +78,23 @@ async function checksum(path) {
   return `${hash.digest("hex")}  ${basename(path)}`;
 }
 
+async function prepareChromeStoreDirectory() {
+  await rm(chromeStoreStage, { recursive: true, force: true });
+  await cp(resolve(extensionRoot, "dist/chrome"), chromeStoreStage, {
+    recursive: true,
+  });
+
+  const manifestPath = resolve(chromeStoreStage, "manifest.json");
+  const chromeManifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  // Chrome Web Store rejects the development-only `key` manifest field. Keep
+  // it in manifests/chrome.json for stable unpacked development IDs, but do
+  // not include it in the production upload artifact.
+  delete chromeManifest.key;
+  await writeFile(manifestPath, `${JSON.stringify(chromeManifest, null, 2)}\n`);
+
+  return chromeStoreStage;
+}
+
 await rm(artifactsDir, { recursive: true, force: true });
 await mkdir(sourceStage, { recursive: true });
 
@@ -124,7 +142,7 @@ const outputs = [
     ),
   },
   {
-    source: resolve(extensionRoot, "dist/chrome"),
+    source: await prepareChromeStoreDirectory(),
     destination: resolve(
       artifactsDir,
       `playbridge-extension-chrome-${version}.zip`,
@@ -151,6 +169,7 @@ const sums = [];
 for (const output of outputs) sums.push(await checksum(output.destination));
 await writeFile(resolve(artifactsDir, "SHA256SUMS.txt"), `${sums.join("\n")}\n`);
 await rm(sourceStage, { recursive: true, force: true });
+await rm(chromeStoreStage, { recursive: true, force: true });
 
 console.log(`Store artifacts created in ${artifactsDir}:`);
 for (const output of outputs) console.log(`- ${basename(output.destination)}`);
