@@ -15,7 +15,22 @@ data class UnifiedTrack(
     val id: String,
     val name: String,
     val isSelected: Boolean,
-    val type: String // "video", "audio", "sub", "external_sub"
+    val type: String, // "video", "audio", "sub", "external_sub"
+    val secondaryText: String? = null,
+    val isEnabled: Boolean = true,
+)
+
+internal fun List<UnifiedTrack>.hasSelectableVideoQualities(): Boolean =
+    count { it.type == "video" && it.id != "auto" } > 1
+
+@Immutable
+data class PlaybackCapabilities(
+    val isLive: Boolean = false,
+    val isSeekable: Boolean = true,
+    val speedAvailable: Boolean = true,
+    val scalingAvailable: Boolean = true,
+    val audioBoostAvailable: Boolean = true,
+    val qualityAvailable: Boolean = false,
 )
 
 /**
@@ -27,6 +42,7 @@ data class PlayerControlsState(
     val isFullControlsVisible: Boolean = false,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
+    val playbackTransitionMessage: String? = null,
     val currentPosition: Long = 0,
     val duration: Long = 0,
     val bufferedPosition: Long = 0,
@@ -52,6 +68,9 @@ data class PlayerControlsState(
     val videoTracks: List<UnifiedTrack> = emptyList(),
     val playbackSpeed: Float = 1.0f,
     val videoScalingMode: String = "Fit",
+    val videoQualityMaxHeight: Int = 0,
+    val currentVideoHeight: Int = 0,
+    val capabilities: PlaybackCapabilities = PlaybackCapabilities(),
     
     // Playlist Data
     val playlistItems: List<playbridge.PlayPayload> = emptyList(),
@@ -68,3 +87,6 @@ data class PlayerControlsState(
     val activeSkipSegment: com.playbridge.player.player.SkipSegment? = null,
     val isSkipButtonFocused: Boolean = false,
 )
+
+internal fun PlayerControlsState.isPlaybackObscured(): Boolean =
+    playbackTransitionMessage != null || isBuffering || prePlayMetadata != null

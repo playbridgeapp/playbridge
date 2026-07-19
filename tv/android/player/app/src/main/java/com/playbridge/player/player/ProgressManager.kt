@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.LifecycleCoroutineScope
 import com.playbridge.player.data.HistoryStore
+import com.playbridge.player.data.PlaybackContext
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -12,15 +14,21 @@ import kotlinx.coroutines.withContext
 
 private const val TAG = "ProgressManager"
 
+interface PlaybackProgressSource {
+    fun getMediaDuration(): Long
+    fun getCurrentPosition(): Long
+    fun seekTo(position: Long)
+}
+
 /**
- * Manages playback progress persistence (save/restore). Artwork is the payload's
- * poster/backdrop URL — no on-device screenshot capture.
+ * Manages playback progress persistence (save/restore). Artwork can be supplied by the
+ * payload or updated by the host's lightweight frame-capture policy.
  */
 class ProgressManager(
     private val context: Context,
     private val historyStore: HistoryStore,
     private val lifecycleScope: LifecycleCoroutineScope,
-    private val playerActivity: PlayerActivity
+    private val playbackSource: PlaybackProgressSource,
 ) {
     private var currentUrl: String? = null
     private var currentTitle: String? = null
@@ -36,6 +44,7 @@ class ProgressManager(
     private var currentExternalSubtitleUrl: String? = null
     private var currentPlaybackSpeed: Float? = null
     private var currentVideoScalingMode: Int? = null
+    private var currentPlaybackContext: PlaybackContext? = null
 
     val url: String? get() = currentUrl
     val title: String? get() = currentTitle
@@ -62,7 +71,8 @@ class ProgressManager(
         preferredSubtitleLanguage: String? = null,
         externalSubtitleUrl: String? = null,
         playbackSpeed: Float? = null,
-        videoScalingMode: Int? = null
+        videoScalingMode: Int? = null,
+        playbackContext: PlaybackContext? = null,
     ) {
         currentUrl = url
         currentTitle = title
@@ -76,6 +86,7 @@ class ProgressManager(
         currentExternalSubtitleUrl = externalSubtitleUrl
         currentPlaybackSpeed = playbackSpeed
         currentVideoScalingMode = videoScalingMode
+        currentPlaybackContext = playbackContext
     }
 
     /**
@@ -95,17 +106,29 @@ class ProgressManager(
         currentVideoScalingMode = videoScalingMode
     }
 
+    fun updatePlaybackContext(playbackContext: PlaybackContext) {
+        currentPlaybackContext = playbackContext
+    }
+
+    /** Update cached artwork after a one-time frame capture. */
+    fun updateThumbnail(thumbnailUrl: String) {
+        currentThumbnailUrl = thumbnailUrl
+    }
+
     /**
      * Attempt to restore playback position from history for the given [url].
      * Returns the history item if found, so callers can restore other settings.
      */
-    suspend fun restoreProgress(url: String): com.playbridge.player.data.PlaybackHistoryItem? {
+    suspend fun restoreProgress(
+        url: String,
+        seek: (Long) -> Unit = playbackSource::seekTo,
+    ): com.playbridge.player.data.PlaybackHistoryItem? {
         return try {
             val history = historyStore.history.first()
             val item = history.find { it.url == url }
             if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
                 Log.i(TAG, "Resuming from history: ${item.position}ms")
-                playerActivity.seekTo(item.position)
+                seek(item.position)
             }
             item
         } catch (e: Exception) {
@@ -136,8 +159,9 @@ class ProgressManager(
                         url = url,
                         title = title,
                         position = startPositionMs.coerceAtLeast(0L),
-                        duration = playerActivity.getMediaDuration().coerceAtLeast(0L),
+                        duration = playbackSource.getMediaDuration().coerceAtLeast(0L),
                         thumbnailUrl = thumbnailUrl,
+                        playbackContext = currentPlaybackContext,
                     )
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to record landed item", e)
@@ -147,12 +171,11 @@ class ProgressManager(
     }
 
     /**
-     * Persist the current playback position to history. Artwork comes from the payload's
-     * poster/backdrop (set in [setCurrentMedia]) — no screenshot capture.
+     * Persist the current playback position and whichever artwork the host most recently set.
      */
     fun saveProgress() {
-        val duration = playerActivity.getMediaDuration()
-        val position = playerActivity.getCurrentPosition()
+        val duration = playbackSource.getMediaDuration()
+        val position = playbackSource.getCurrentPosition()
         val url = currentUrl
         val payloadJson = currentPayloadJson
         val historyId = currentHistoryId
@@ -170,6 +193,7 @@ class ProgressManager(
                             position = position,
                             duration = duration,
                             thumbnailUrl = thumbnailUrl,
+                            playbackContext = currentPlaybackContext,
                         )
                         Log.d(TAG, "Saved progress: $position / $duration")
                     } catch (e: Exception) {
@@ -178,7 +202,11 @@ class ProgressManager(
                 }
             }
         } else {
-            Log.d(TAG, "Not saving: URL=$url, payload=${payloadJson != null}, Duration=$duration, Pos=$position")
+            Log.d(
+                TAG,
+                "Not saving: URL=${redactUrlForLog(url)}, payload=${payloadJson != null}, " +
+                    "Duration=$duration, Pos=$position",
+            )
         }
     }
 }

@@ -1,9 +1,18 @@
 package com.playbridge.player.ui.player
 
 import androidx.compose.animation.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -24,9 +33,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.playbridge.player.player.PlaylistPickerDialog
-import com.playbridge.player.player.SwitchPlayerDialog
-import com.playbridge.player.ui.theme.TvExpressiveMotion
 import com.playbridge.player.player.StillWatchingState
+import com.playbridge.player.player.SwitchPlayerDialog
+import com.playbridge.player.ui.components.LoadingBlob
+import com.playbridge.player.ui.theme.TvExpressiveMotion
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -63,7 +73,7 @@ fun PlayerControlsOverlay(
     Box(modifier = modifier.fillMaxSize()) {
         // Main Controls Overlay
         AnimatedVisibility(
-            visible = state.isVisible,
+            visible = state.isVisible && state.playbackTransitionMessage == null,
             enter = fadeIn(TvExpressiveMotion.effects()),
             exit = fadeOut(TvExpressiveMotion.effects()),
             modifier = Modifier.fillMaxSize()
@@ -221,27 +231,28 @@ fun PlayerControlsOverlay(
             }
         }
 
-        // Buffering Spinner (Only show if not already showing full controls)
-        if (state.isBuffering && !state.isVisible) {
-            androidx.compose.material3.CircularProgressIndicator(
-                modifier = Modifier
-                    .size(56.dp)
-                    .align(Alignment.Center),
-                color = MaterialTheme.colorScheme.primary,
-                strokeWidth = 4.dp
+        if (state.prePlayMetadata == null &&
+            (state.playbackTransitionMessage != null ||
+                (state.isBuffering && !state.isVisible))
+        ) {
+            PlaybackTransitionOverlay(
+                message = state.playbackTransitionMessage,
+                modifier = Modifier.align(Alignment.Center),
             )
         }
 
         // Subtitle Overlay (Manual Parser)
-        if (state.currentSubtitleText != null) {
+        if (state.currentSubtitleText != null && state.playbackTransitionMessage == null) {
             SubtitleOverlay(
                 text = state.currentSubtitleText,
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
 
         // Skip Segment Button (Netflix style)
-        state.activeSkipSegment?.let { segment ->
+        state.activeSkipSegment
+            ?.takeUnless { state.isPlaybackObscured() }
+            ?.let { segment ->
             val focusRequester = remember { FocusRequester() }
             
             // Request focus when the button becomes visible
@@ -353,35 +364,92 @@ private fun StillWatchingDialog(
 }
 
 @Composable
+private fun PlaybackTransitionOverlay(
+    message: String?,
+    modifier: Modifier = Modifier,
+) {
+    val transition = rememberInfiniteTransition(label = "loading text")
+    val textAlpha by transition.animateFloat(
+        initialValue = 0.55f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 850, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "loading text pulse",
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(if (message != null) Color.Black else Color.Transparent),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy((-16).dp),
+        ) {
+            LoadingBlob(modifier = Modifier.size(220.dp))
+            message?.let {
+                Text(
+                    text = it,
+                    color = Color.White.copy(alpha = textAlpha),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 22.dp, vertical = 12.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SubtitleOverlay(
     text: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
+    var fontSize by remember(text) { mutableStateOf(30.sp) }
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .padding(bottom = 72.dp) // Lifted slightly higher for better multi-line clearance
-            .padding(horizontal = 64.dp),
+            .fillMaxHeight(0.65f)
+            .padding(start = 96.dp, end = 96.dp, top = 8.dp, bottom = 72.dp),
         contentAlignment = Alignment.BottomCenter
     ) {
         Text(
             text = text,
             style = androidx.compose.ui.text.TextStyle(
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
+                fontSize = fontSize,
+                fontWeight = FontWeight.SemiBold,
                 color = Color.White,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 shadow = androidx.compose.ui.graphics.Shadow(
-                    color = Color.Black.copy(alpha = 0.9f),
-                    offset = androidx.compose.ui.geometry.Offset(3f, 3f),
-                    blurRadius = 8f
+                    color = Color.Black,
+                    offset = androidx.compose.ui.geometry.Offset(0f, 2f),
+                    blurRadius = 5f,
                 ),
-                lineHeight = 34.sp // Explicit line height for 28sp text
+                lineHeight = (fontSize.value * 1.25f).sp,
             ),
             softWrap = true,
-            overflow = androidx.compose.ui.text.style.TextOverflow.Visible,
+            maxLines = 14,
+            overflow = androidx.compose.ui.text.style.TextOverflow.Clip,
+            onTextLayout = { result ->
+                if ((result.didOverflowHeight || result.didOverflowWidth) &&
+                    fontSize.value > MIN_SUBTITLE_TEXT_SIZE_SP
+                ) {
+                    fontSize = (fontSize.value - SUBTITLE_TEXT_SIZE_STEP_SP)
+                        .coerceAtLeast(MIN_SUBTITLE_TEXT_SIZE_SP)
+                        .sp
+                }
+            },
             modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .widthIn(max = 1400.dp)
+                .padding(horizontal = 12.dp, vertical = 4.dp),
         )
     }
 }
+
+private const val MIN_SUBTITLE_TEXT_SIZE_SP = 18f
+private const val SUBTITLE_TEXT_SIZE_STEP_SP = 2f

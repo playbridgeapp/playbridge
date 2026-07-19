@@ -36,4 +36,14 @@ sealed class PlaybackState {
     data class  Error(val code: String, val msg: String) : PlaybackState()
 }
 
-data class Track(val id: String, val label: String, val language: String?)
+data class Track(
+    val id: String,
+    val label: String,
+    val language: String?,
+    val width: Int? = null,
+    val height: Int? = null,
+    val bitrate: Long? = null,
+    val codec: String? = null,
+    val channelCount: Int? = null,
+    val selected: Boolean = false,
+)

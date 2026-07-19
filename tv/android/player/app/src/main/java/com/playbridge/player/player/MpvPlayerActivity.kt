@@ -1,7 +1,5 @@
 package com.playbridge.player.player
 
-import com.playbridge.shared.player.PlaybackEngine
-import com.playbridge.shared.player.PlaybackState
 import com.playbridge.shared.player.MpvPlayerEngine
 
 import android.content.BroadcastReceiver
@@ -23,13 +21,16 @@ import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.player.util.getStringMapExtra
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
-import `is`.xyz.mpv.Utils
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.shared.logging.redactUrlForLog
 import androidx.annotation.OptIn
 import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -76,8 +77,20 @@ data class MpvTrack(
  */
 class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
+    override val playerProcessEngineId: String = "mpv"
+
     companion object {
         private const val TAG = "MpvPlayerActivity"
+        private const val DECODER_RELEASE_GRACE_MS = 250L
+        private const val REPLACEMENT_STOP_TIMEOUT_MS = 2_000L
+        private const val STOP_FINISH_TIMEOUT_MS = 3_000L
+        private val MPV_RECOVERABLE_ERROR_CODES = setOf(
+            "mpv_control_timeout",
+            "mpv_instance_busy",
+        )
+
+        @Volatile
+        private var activeInstance: java.lang.ref.WeakReference<MpvPlayerActivity>? = null
     }
 
 
@@ -92,6 +105,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private lateinit var resumeStore: com.playbridge.player.data.HistoryResumeStore
     private var vmUiJob: kotlinx.coroutines.Job? = null
     private var receiverRegistered = false
+    private var mpvObserverRegistered = false
+    private val playbackRequestGate = PlaybackRequestGate()
+    private var controlFallbackRequested = false
+    private var pendingPlayerSwitchIntent: Intent? = null
 
     // Current media state (updated via MPV property observers)
     private var positionMs: Long = 0L
@@ -116,12 +133,24 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     private var audioChannels: String = ""
     private var subtitleDelayMs: Long = 0L
     private var isAudioBoostEnabled: Boolean = false
+    @Volatile
+    private var trackListJson: String = "[]"
 
     // Position to seek to once MPV_EVENT_FILE_LOADED fires
     private var pendingResumePositionMs: Long = 0L
 
     private var isLooping = false
     private var isLoadingNewStream = false
+    @Volatile
+    private var finishAfterStop = false
+    private var stopFinishJob: kotlinx.coroutines.Job? = null
+    private val decoderTransitionLock = Any()
+    @Volatile
+    private var hasActiveFile = false
+    @Volatile
+    private var lastDecoderEndElapsedRealtime = 0L
+    @Volatile
+    private var decoderStopCompletion: CompletableDeferred<Unit>? = null
 
     /**
      * Counter for intentional [engine?.stop()] calls. MPV fires END_FILE for every
@@ -144,7 +173,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             Toast.makeText(this, "Seek failed (network error)", Toast.LENGTH_SHORT).show()
             // Seek back to the pre-seek position (known-good). Using positionMs here would
             // re-seek to the stuck target because MPV reports the target as time-pos mid-seek.
-            MPVLib.command("seek", (preSeePositionMs / 1000.0).toString(), "absolute")
+            engine?.seek(preSeePositionMs)
         }
     }
 
@@ -160,7 +189,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 controlsViewModel.setPrePlay(item.visual_metadata, context = this@MpvPlayerActivity, showCountdown = false)
                 controlsViewModel.hideControls()
             }
-            stopPlayback()
             currentHeaders = item.headers
             playVideo(item.url, item.headers)
         }
@@ -202,6 +230,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     override fun getMediaDuration(): Long = durationMs
     override fun getCurrentPosition(): Long = positionMs
     override fun getVideoSurfaceView(): android.view.SurfaceView? = surfaceView
+    override fun retainExistingInstanceOnDuplicateLaunch(): Boolean = true
 
     override fun stopPlayback() {
         FileLogger.i(TAG, "stopPlayback() — clearing MPV state for transition")
@@ -216,6 +245,135 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             // Do NOT set surfaceView.visibility = INVISIBLE here.
             // That triggers surfaceDestroyed → engine.detachSurface(), causing
             // black screen on the next load. The old frame clears when MPV stops.
+        }
+    }
+
+    override fun requestStop() {
+        stopThenFinish(null)
+    }
+
+    override fun launchPlayerSwitch(intent: Intent) {
+        stopThenFinish(intent)
+    }
+
+    private fun stopThenFinish(nextPlayerIntent: Intent?) {
+        if (isFinishing || finishAfterStop) return
+
+        val currentEngine = engine
+        if (currentEngine == null) {
+            nextPlayerIntent?.let(::launchReplacementPlayer)
+            finish()
+            return
+        }
+
+        FileLogger.i(
+            TAG,
+            if (nextPlayerIntent == null) {
+                "Stop requested — waiting for MPV to end before finishing activity"
+            } else {
+                "Player switch requested — waiting for MPV to end before launching replacement"
+            },
+        )
+        launchJob?.cancel()
+        playJob?.cancel()
+        navigationJob?.cancel()
+        finishAfterStop = true
+        pendingPlayerSwitchIntent = nextPlayerIntent
+        currentEngine.isTransitioning = true
+        val stopCompletion = requestDecoderStop(
+            currentEngine,
+            if (nextPlayerIntent == null) "ending player session" else "switching player engines",
+        )
+
+        stopFinishJob?.cancel()
+        stopFinishJob = lifecycleScope.launch {
+            val stopped = stopCompletion == null || withTimeoutOrNull(STOP_FINISH_TIMEOUT_MS) {
+                stopCompletion.await()
+                true
+            } == true
+            if (!stopped) {
+                FileLogger.w(TAG, "Timed out waiting for MPV stop; finishing with guarded surface teardown")
+            }
+            awaitRemainingDecoderReleaseGrace()
+            clearDecoderStopCompletion(stopCompletion)
+            if (finishAfterStop && !isFinishing) {
+                pendingPlayerSwitchIntent?.also {
+                    pendingPlayerSwitchIntent = null
+                    launchReplacementPlayer(it)
+                }
+                finish()
+            }
+        }
+    }
+
+    private fun launchReplacementPlayer(intent: Intent) {
+        ServerService.launchPlayerFromPrivateProcess(this, intent)
+    }
+
+    private fun cancelPendingStopFinish(reason: String) {
+        if (!finishAfterStop) return
+        FileLogger.i(TAG, "Cancelling pending stop finish: $reason")
+        finishAfterStop = false
+        pendingPlayerSwitchIntent = null
+        stopFinishJob?.cancel()
+        stopFinishJob = null
+    }
+
+    private fun requestDecoderStop(currentEngine: MpvPlayerEngine, reason: String): CompletableDeferred<Unit>? {
+        var issueStop = false
+        val completion = synchronized(decoderTransitionLock) {
+            decoderStopCompletion?.takeUnless { it.isCancelled } ?: if (hasActiveFile) {
+                CompletableDeferred<Unit>().also {
+                    decoderStopCompletion = it
+                    issueStop = true
+                }
+            } else {
+                null
+            }
+        }
+
+        if (issueStop) {
+            FileLogger.i(TAG, "Stopping current MPV file before $reason")
+            currentEngine.stop()
+        }
+        return completion
+    }
+
+    private suspend fun awaitDecoderReleaseForReplacement() {
+        val currentEngine = engine ?: return
+        val stopCompletion = requestDecoderStop(currentEngine, "loading replacement")
+        if (stopCompletion != null) {
+            val stopped = withTimeoutOrNull(REPLACEMENT_STOP_TIMEOUT_MS) {
+                stopCompletion.await()
+                true
+            } == true
+            if (!stopped) {
+                FileLogger.w(TAG, "Timed out waiting for MPV END_FILE before replacement")
+            }
+        }
+
+        awaitRemainingDecoderReleaseGrace()
+        clearDecoderStopCompletion(stopCompletion)
+    }
+
+    private suspend fun awaitRemainingDecoderReleaseGrace() {
+        val endedAt = lastDecoderEndElapsedRealtime
+        if (endedAt == 0L) return
+
+        val elapsed = android.os.SystemClock.elapsedRealtime() - endedAt
+        val remaining = DECODER_RELEASE_GRACE_MS - elapsed
+        if (remaining > 0L) {
+            FileLogger.d(TAG, "Waiting ${remaining}ms for MediaCodec release")
+            delay(remaining)
+        }
+    }
+
+    private fun clearDecoderStopCompletion(completion: CompletableDeferred<Unit>?) {
+        if (completion == null) return
+        synchronized(decoderTransitionLock) {
+            if (decoderStopCompletion === completion) {
+                decoderStopCompletion = null
+            }
         }
     }
 
@@ -235,7 +393,18 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        MpvProcess.cancelScheduledTermination()
+        val existingInstance = activeInstance?.get()?.takeIf { it !== this && !it.isFinishing }
         super.onCreate(savedInstanceState)
+        if (isFinishing) {
+            if (existingInstance != null) {
+                FileLogger.w(TAG, "Forwarding duplicate activity launch to the existing MPV owner")
+                existingInstance.handleReplacementIntent(Intent(intent))
+            }
+            return
+        }
+        activeInstance = java.lang.ref.WeakReference(this)
+
         FileLogger.i(TAG, "=== MpvPlayerActivity CREATED ===")
         FileLogger.i(TAG, "Intent action: ${intent?.action}")
 
@@ -295,7 +464,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         onPrePlayBack = {
                             launchJob?.cancel()
                             controlsViewModel.setPrePlay(null)
-                            ServerService.notifyContextIdle()
+                            ServerService.notifyContextIdle(this@MpvPlayerActivity, playerProcessEngineId)
                             finish()
                         },
                         onSettingsTabSelected = { controlsViewModel.showSettings(it) },
@@ -333,7 +502,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             context = this,
             historyStore = historyStore,
             lifecycleScope = lifecycleScope,
-            playerActivity = this
+            playbackSource = this
         )
 
         // Setup MpvPlayerEngine
@@ -391,14 +560,14 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 // 'loudnorm' is too CPU intensive for many TVs.
                 // Using 'acompressor' provides similar dialogue boosting with much lower overhead.
                 val filter = if (enabled) "lavfi=[acompressor=threshold=-21dB:ratio=9:attack=5:release=50:makeup=8dB]" else ""
-                MPVLib.setPropertyString("af", filter)
+                engine?.setAudioFilter(filter)
                 isAudioBoostEnabled = enabled
             }
             override fun setSubtitleDelay(delayMs: Long) {
-                MPVLib.setPropertyDouble("sub-delay", delayMs / 1000.0)
+                engine?.setSubtitleDelay(delayMs)
             }
             override fun setPlaybackSpeed(speed: Float) {
-                MPVLib.setPropertyDouble("speed", speed.toDouble())
+                engine?.setPlaybackSpeed(speed)
             }
 
             override fun play() { engine?.play() }
@@ -422,18 +591,24 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Register MPV observer NOW — after controlsManager is initialized — so that
         // property-change callbacks can safely reference controlsManager without crashing.
         // Format IDs: MPV_FORMAT_STRING=1, MPV_FORMAT_FLAG=3, MPV_FORMAT_INT64=4, MPV_FORMAT_DOUBLE=5
-        MPVLib.addObserver(this)
-        MPVLib.observeProperty("pause",               3) // Boolean
-        MPVLib.observeProperty("time-pos",            5) // Double (seconds)
-        MPVLib.observeProperty("duration",            4) // Long (seconds)
-        MPVLib.observeProperty("height",              4) // Long (px)
-        MPVLib.observeProperty("video-bitrate",       4) // Long (bits/s)
-        MPVLib.observeProperty("video-codec",         1) // String
-        MPVLib.observeProperty("audio-codec",         1) // String
-        MPVLib.observeProperty("audio-channels",      1) // String e.g. "stereo", "5.1"
-        MPVLib.observeProperty("demuxer-cache-time",  5) // Double (seconds buffered ahead)
-        MPVLib.observeProperty("container-fps",       5) // Double (fps)
-        MPVLib.observeProperty("sub-delay",           5) // Double (seconds)
+        engine?.registerObserver(
+            this,
+            linkedMapOf(
+                "pause" to 3,              // Boolean
+                "time-pos" to 5,           // Double (seconds)
+                "duration" to 4,           // Long (seconds)
+                "height" to 4,             // Long (px)
+                "video-bitrate" to 4,      // Long (bits/s)
+                "video-codec" to 1,        // String
+                "audio-codec" to 1,        // String
+                "audio-channels" to 1,     // String e.g. "stereo", "5.1"
+                "demuxer-cache-time" to 5, // Double (seconds buffered ahead)
+                "container-fps" to 5,      // Double (fps)
+                "sub-delay" to 5,          // Double (seconds)
+                "track-list" to 1,         // String (JSON)
+            ),
+        )
+        mpvObserverRegistered = true
 
         val filter = IntentFilter().apply {
             addAction(ServerService.ACTION_REMOTE)
@@ -451,11 +626,13 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
         receiverRegistered = true
 
-        handleIntent(intent)
+        if (acceptPlaybackRequest(intent)) {
+            handleIntent(intent)
+        }
 
         // Drain any queue items that arrived before our receiver was registered.
         // Must happen AFTER handleIntent because handleIntent replaces the coordinator's queue.
-        coordinator.queueAdd(ServerService.drainPendingQueueItems())
+        coordinator.queueAdd(ServerService.drainPendingQueueItems(this))
         if (coordinator.hasPlaylist) {
             controlsViewModel.setPlaylistVisible(true)
         }
@@ -466,22 +643,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (isFinishing) return
-        val url = intent.getStringExtra(ServerService.EXTRA_URL)
-        val now = System.currentTimeMillis()
-        if (url != null && url == lastOnNewIntentUrl && (now - lastOnNewIntentTime) < 2000) {
-            FileLogger.i(TAG, "Debounced duplicate onNewIntent for $url")
-            return
-        }
-        lastOnNewIntentUrl = url
-        lastOnNewIntentTime = now
-        FileLogger.i(TAG, "onNewIntent received")
-
-        launchJob?.cancel()
-
-        // We skip stopPlayback() here because it hides the surface, causing reconstruction lag.
-        // playVideoInternal() will handle stopping the engine and loading the new stream.
-        handleIntent(intent)
+        handleReplacementIntent(intent)
     }
 
     override fun onStart() {
@@ -500,7 +662,16 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     }
 
     override fun onDestroy() {
-        MPVLib.removeObserver(this)
+        val ownedActiveInstance = activeInstance?.get() === this
+        finishAfterStop = false
+        pendingPlayerSwitchIntent = null
+        stopFinishJob?.cancel()
+        stopFinishJob = null
+        synchronized(decoderTransitionLock) {
+            hasActiveFile = false
+            decoderStopCompletion?.cancel()
+            decoderStopCompletion = null
+        }
         if (receiverRegistered) {
             unregisterReceiver(remoteReceiver)
             receiverRegistered = false
@@ -509,9 +680,21 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         if (::viewModel.isInitialized) {
             viewModel.dispose()
         }
-        engine?.release()
+        engine?.let { currentEngine ->
+            if (mpvObserverRegistered) {
+                currentEngine.unregisterObserver(this)
+                mpvObserverRegistered = false
+            }
+            currentEngine.release()
+        }
         engine = null
+        if (ownedActiveInstance) {
+            activeInstance = null
+        }
         super.onDestroy()
+        if (ownedActiveInstance) {
+            MpvProcess.terminateAfterActivityDestroy(applicationContext)
+        }
     }
 
     /**
@@ -525,11 +708,21 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
             is com.playbridge.shared.player.PlayerUiState.Idle ->
                 FileLogger.d(TAG, "VM state: Idle")
             is com.playbridge.shared.player.PlayerUiState.Loading ->
-                FileLogger.d(TAG, "VM state: Loading ${state.payload.url}")
+                FileLogger.d(TAG, "VM state: Loading ${redactUrlForLog(state.payload.url)}")
             is com.playbridge.shared.player.PlayerUiState.Playing ->
                 FileLogger.d(TAG, "VM state: Playing")
-            is com.playbridge.shared.player.PlayerUiState.Error ->
+            is com.playbridge.shared.player.PlayerUiState.Error -> {
                 FileLogger.d(TAG, "VM state: Error ${state.code}: ${state.message}")
+                if (
+                    state.code in MPV_RECOVERABLE_ERROR_CODES &&
+                    !controlFallbackRequested &&
+                    !isFinishing
+                ) {
+                    controlFallbackRequested = true
+                    FileLogger.e(TAG, "MPV control thread is unresponsive; falling back to ExoPlayer")
+                    switchPlayer("exo", automatic = true)
+                }
+            }
             is com.playbridge.shared.player.PlayerUiState.Ended ->
                 FileLogger.d(TAG, "VM state: Ended")
         }
@@ -587,6 +780,10 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 audioChannels = value
                 updateStreamInfo()
             }
+            "track-list" -> {
+                trackListJson = value
+                runOnUiThread { updateUnifiedTracks() }
+            }
         }
     }
 
@@ -624,6 +821,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     override fun event(eventId: Int, data: MPVNode) {
         when (eventId) {
             MPVLib.MpvEvent.MPV_EVENT_START_FILE -> {
+                synchronized(decoderTransitionLock) {
+                    hasActiveFile = true
+                }
                 // A new file is starting; any pending stops from prior transitions are moot.
                 pendingStops = 0
                 runOnUiThread { controlsViewModel.setBuffering(true) }
@@ -650,7 +850,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     // Apply Loudness Enhancer if enabled
                     if (isAudioBoostEnabled) {
                         val filter = "lavfi=[acompressor=threshold=-21dB:ratio=9:attack=5:release=50:makeup=8dB]"
-                        MPVLib.setPropertyString("af", filter)
+                        engine?.setAudioFilter(filter)
                     }
 
                     if (containerFps > 0.0) {
@@ -673,6 +873,17 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 }
             }
             MPVLib.MpvEvent.MPV_EVENT_END_FILE -> {
+                val stopCompletion = synchronized(decoderTransitionLock) {
+                    hasActiveFile = false
+                    lastDecoderEndElapsedRealtime = android.os.SystemClock.elapsedRealtime()
+                    decoderStopCompletion
+                }
+                stopCompletion?.complete(Unit)
+
+                if (finishAfterStop) {
+                    return
+                }
+
                 if (pendingStops > 0) {
                     pendingStops--
                     runOnUiThread { controlsViewModel.setBuffering(false) }
@@ -710,7 +921,8 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private val remoteReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
+            if (intent == null || !isCommandForThisPlayer(intent)) return
+            when (intent.action) {
                 ServerService.ACTION_REMOTE -> {
                     val key = intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY)
                     handleRemoteKey(key)
@@ -740,7 +952,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 }
                 ServerService.ACTION_QUEUE_ADD -> {
                     recordStillWatchingActivity()
-                    coordinator.queueAdd(ServerService.drainPendingQueueItems())
+                    coordinator.queueAdd(ServerService.drainPendingQueueItems(this@MpvPlayerActivity))
                     controlsViewModel.setPlaylistVisible(true)
                 }
                 ServerService.ACTION_PLAYLIST_JUMP -> {
@@ -756,19 +968,56 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                     broadcastPlaylistStatus()
                 }
                 ServerService.ACTION_PLAY -> {
-                    val url = intent.getStringExtra(ServerService.EXTRA_URL)
-                    val title = intent.getStringExtra(ServerService.EXTRA_TITLE)
-                    val headers = intent.getStringMapExtra(ServerService.EXTRA_HEADERS)
-                    val subtitles = intent.getStringArrayListExtra(ServerService.EXTRA_SUBTITLES)
-
-                    if (url != null) {
-                        stopPlayback()
-                        handleIntent(intent)
+                    if (intent.getStringExtra(ServerService.EXTRA_URL) != null) {
+                        handleReplacementIntent(intent)
                     }
                 }
             }
         }
     }
+
+    private fun handleReplacementIntent(intent: Intent) {
+        if (isFinishing || !acceptPlaybackRequest(intent)) return
+
+        val requestId = playbackRequestId(intent)
+        val url = intent.getStringExtra(ServerService.EXTRA_URL)
+        val now = System.currentTimeMillis()
+        if (
+            requestId == null &&
+            !finishAfterStop &&
+            url != null &&
+            url == lastOnNewIntentUrl &&
+            (now - lastOnNewIntentTime) < 2_000
+        ) {
+            FileLogger.i(TAG, "Debounced duplicate replacement intent for ${redactUrlForLog(url)}")
+            return
+        }
+
+        cancelPendingStopFinish("replacement intent received")
+        lastOnNewIntentUrl = url
+        lastOnNewIntentTime = now
+        setIntent(intent)
+        FileLogger.i(TAG, "Replacement intent received (requestId=${requestId ?: "legacy"})")
+
+        launchJob?.cancel()
+
+        // Keep the surface attached. playVideoInternal() serializes decoder teardown while
+        // retaining the same Activity, MPV instance, and rendering surface.
+        handleIntent(intent)
+    }
+
+    private fun acceptPlaybackRequest(intent: Intent?): Boolean {
+        val requestId = playbackRequestId(intent)
+        val accepted = playbackRequestGate.accept(requestId)
+        if (!accepted) {
+            FileLogger.i(TAG, "Ignoring stale playback request $requestId")
+        }
+        return accepted
+    }
+
+    private fun playbackRequestId(intent: Intent?): Long? =
+        intent?.takeIf { it.hasExtra(PlayerLauncher.EXTRA_PLAYBACK_REQUEST_ID) }
+            ?.getLongExtra(PlayerLauncher.EXTRA_PLAYBACK_REQUEST_ID, Long.MIN_VALUE)
 
     private fun handleIntent(intent: Intent?) {
         if (isFinishing) return
@@ -777,10 +1026,12 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
         // Read playlist if present
         val isPlaylist = intent?.getBooleanExtra(ServerService.EXTRA_IS_PLAYLIST, false) ?: false
-        val inMemoryPlaylist = PlaylistStore.currentPlaylist
-        if (isPlaylist && inMemoryPlaylist != null && inMemoryPlaylist.isNotEmpty()) {
-            val startIndex = intent?.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0) ?: 0
-            coordinator.setPlaylist(inMemoryPlaylist, startIndex)
+        val intentPlaylist = PlayerLauncher.playlistFromIntent(intent)
+        val availablePlaylist = intentPlaylist?.items ?: PlaylistStore.currentPlaylist
+        if (isPlaylist && !availablePlaylist.isNullOrEmpty()) {
+            val startIndex = intentPlaylist?.start_index
+                ?: intent.getIntExtra(ServerService.EXTRA_PLAYLIST_INDEX, 0)
+            coordinator.setPlaylist(availablePlaylist, startIndex)
             FileLogger.i(TAG, "Playlist loaded: ${coordinator.playlist.size} items, starting at index ${coordinator.index}")
         } else {
             coordinator.setPlaylist(emptyList(), 0)
@@ -864,9 +1115,15 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
     private suspend fun playVideoInternal(url: String, headers: Map<String, String>?, startPaused: Boolean = false, subtitles: ArrayList<String>? = null) {
         currentUrl = url
+        // A replacement keeps the same engine instance, so clear the previous file's values
+        // before history restore. Otherwise seekTo() can seek the old file instead of staging
+        // the resume position for MPV_EVENT_FILE_LOADED.
+        positionMs = 0L
+        durationMs = 0L
+        bufferAheadMs = 0L
         controlsViewModel.setSeasonInfo(null)
         FileLogger.i(TAG, "========== PLAY COMMAND RECEIVED ==========")
-        FileLogger.i(TAG, "URL: $url")
+        FileLogger.i(TAG, "URL: ${redactUrlForLog(url)}")
         FileLogger.i(TAG, "Title: ${controlsViewModel.getTitle()}")
         FileLogger.i(TAG, "Request headers: ${headers?.size ?: 0} field(s)")
         FileLogger.i(TAG, "Start Paused: $startPaused")
@@ -918,13 +1175,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         // Write the entry immediately so it survives a force-kill before the first save.
         progressManager.recordLanded(startPos.coerceAtLeast(0L))
 
-        // Only stop/reset the engine if it's currently doing something, to avoid redundant
-        // END_FILE events during rapid transitions.
-        if (engine?.state?.value != com.playbridge.shared.player.PlaybackState.Idle) {
-            pendingStops++
-            engine?.stop()
-        }
-
         if (startPaused) {
             engine?.pause()
         }
@@ -946,16 +1196,19 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         }
         coroutineContext.ensureActive()
 
-        if (sniffedType != null) {
+        val demuxerFormat = if (sniffedType != null) {
             FileLogger.i(TAG, "Pre-flight sniff detected: $sniffedType")
-            // If HLS detected, give MPV a hint to use the HLS demuxer immediately
-            if (sniffedType == "application/x-mpegURL") {
-                MPVLib.setOptionString("demuxer-lavf-format", "hls")
-            } else {
-                MPVLib.setOptionString("demuxer-lavf-format", "")
-            }
-        }
+            // If HLS was detected, hint MPV after the old decoder has stopped.
+            if (sniffedType == "application/x-mpegURL") "hls" else null
+        } else null
 
+        // Some Android TV MediaCodec implementations start the replacement decoder before
+        // the old one has released its output surface. Stop explicitly, wait for END_FILE,
+        // then leave a short release grace before allocating the next decoder.
+        awaitDecoderReleaseForReplacement()
+        coroutineContext.ensureActive()
+
+        engine?.setDemuxerFormat(demuxerFormat)
         val payload = playbridge.PlayPayload(url = url, headers = headers ?: emptyMap())
         engine?.load(payload)
 
@@ -979,25 +1232,6 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         playJob?.cancel()
         playJob = lifecycleScope.launch {
             playVideoInternal(url, headers, startPaused, subtitles = subtitles)
-        }
-    }
-
-    private fun getMpvHdrFormat(): String? {
-        val colormatrix = MPVLib.getPropertyString("video-params/colormatrix") ?: ""
-        val primaries = MPVLib.getPropertyString("video-params/primaries") ?: ""
-        val gamma = MPVLib.getPropertyString("video-params/gamma") ?: ""
-        val pixelformat = MPVLib.getPropertyString("video-params/pixelformat") ?: ""
-
-        // Common HDR markers in MPV
-        return when {
-            gamma == "pq" || colormatrix == "bt.2020-ncl" || primaries == "bt.2020" -> {
-                if (gamma == "hlg") "HLG" else "HDR10"
-            }
-            "10" in pixelformat || "12" in pixelformat -> {
-                // If 10-bit but not caught by above, might be generic HDR or High Bit Depth
-                if (gamma == "pq") "HDR10" else null 
-            }
-            else -> null
         }
     }
 
@@ -1129,8 +1363,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
 
 
     private fun buildTrackList(): List<MpvTrack> {
-        val json = try { MPVLib.getPropertyString("track-list") ?: return emptyList() }
-                   catch (e: Exception) { return emptyList() }
+        val json = trackListJson
         return try {
             val arr = org.json.JSONArray(json)
             (0 until arr.length()).mapNotNull { i ->

@@ -189,6 +189,7 @@ fun AppNavHost(
     val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsState()
     val tvPlaylistState by connectionCoordinator.tvPlaylistState.collectAsState()
     val tvPlayback by connectionCoordinator.tvPlayback.collectAsState()
+    val tvVideoTracks by connectionCoordinator.tvVideoTracks.collectAsState()
     val tvAudioTracks by connectionCoordinator.tvAudioTracks.collectAsState()
     val tvSubtitleTracks by connectionCoordinator.tvSubtitleTracks.collectAsState()
     val tvPlayerSettings by connectionCoordinator.tvPlayerSettings.collectAsState()
@@ -807,11 +808,13 @@ fun AppNavHost(
                     } else RemoteControlScreen(
                         activeContext = tvActiveContext,
                         playbackState = tvPlayback?.state,
+                        isLive = tvPlayerSettings.isLive,
                         positionMs = tvPlayback?.positionMs ?: 0L,
                         durationMs = tvPlayback?.durationMs ?: 0L,
                         mediaTitle = tvPlayback?.title,
                         episodes = tvPlaylistState?.items ?: emptyList(),
                         currentEpisodeIndex = tvPlaylistState?.currentIndex ?: 0,
+                        videoTracks = tvVideoTracks,
                         audioTracks = tvAudioTracks,
                         subtitleTracks = tvSubtitleTracks,
                         onSeekTo = { positionMs ->
@@ -825,6 +828,10 @@ fun AppNavHost(
                         },
                         onSelectSubtitle = { id ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("sub_track:$id"))
+                        },
+                        onSetVideoQuality = { maxHeight ->
+                            val value = maxHeight.takeIf { it > 0 }?.toString() ?: "auto"
+                            connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("video_quality:$value"))
                         },
                         playerSettings = tvPlayerSettings,
                         onSetSpeed = { speed ->

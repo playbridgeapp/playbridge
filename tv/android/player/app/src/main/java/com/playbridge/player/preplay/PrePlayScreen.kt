@@ -8,11 +8,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -24,6 +25,7 @@ import androidx.tv.material3.*
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.request.crossfade
+import com.playbridge.player.ui.components.LoadingBlob
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
 import com.playbridge.player.ui.theme.TvExpressiveMotion
 import playbridge.VisualMetadata
@@ -38,6 +40,12 @@ fun PrePlayScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val playNowFocusRequester = remember { FocusRequester() }
+
+    val canStartNow = launchCountdown > 0
+    LaunchedEffect(canStartNow) {
+        if (canStartNow) playNowFocusRequester.requestFocus()
+    }
 
     BackHandler(onBack = onBack)
 
@@ -147,7 +155,14 @@ fun PrePlayScreen(
                             isLaunching = isLaunching,
                             countdown = launchCountdown
                         )
-                        
+                        if (canStartNow) {
+                            Button(
+                                onClick = onStartNow,
+                                modifier = Modifier.focusRequester(playNowFocusRequester),
+                            ) {
+                                Text("Play now")
+                            }
+                        }
                     }
                 }
                 
@@ -200,11 +215,7 @@ private fun StatusSection(
                 StatusText(countdown)
             }
         } else if (countdown == -1 && isLaunching) {
-             CircularProgressIndicator(
-                color = MaterialTheme.colorScheme.secondary,
-                modifier = Modifier.size(28.dp),
-                strokeWidth = 3.dp
-            )
+            LoadingBlob(modifier = Modifier.size(32.dp))
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = "Connecting to stream...",
@@ -213,11 +224,7 @@ private fun StatusSection(
                 color = Color.White
             )
         } else if (isLaunching || countdown == 0) {
-             CircularProgressIndicator(
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp),
-                strokeWidth = 3.dp
-            )
+            LoadingBlob(modifier = Modifier.size(32.dp))
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = "Starting playback...",

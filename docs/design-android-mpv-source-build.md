@@ -346,6 +346,8 @@ published and source-built modes expose the same API and behavior.
 
 ### Runtime checks
 
+Follow the tester-ready procedures and acceptance criteria in
+[`testing-android-mpv-source-build.md`](testing-android-mpv-source-build.md).
 Run on armv7 and arm64 hardware where available:
 
 - ordinary H.264/AAC local file;

@@ -2,12 +2,14 @@ package com.playbridge.shared.player
 
 import android.content.Context
 import android.net.Uri
+import android.view.Surface
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Tracks
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
@@ -16,12 +18,16 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.playbridge.shared.network.IPv4FirstDns
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import java.util.concurrent.TimeUnit
 import com.playbridge.shared.logging.logger
+import com.playbridge.shared.logging.redactUrlForLog
 import playbridge.PlayPayload
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +37,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+private val LEGACY_HTTP_DETECTIONS = setOf(
+    "body_content_m3u8",
+    "content_type",
+    "dom_source",
+    "dom_video_element",
+    "iptv_m3u",
+    "link_menu",
+    "player_config",
+    "unknown",
+    "url_extension",
+    "url_pattern_m3u8",
+    "url_pattern_mpd",
+)
+
+internal fun shouldUseLegacyHttpDataSource(detectedBy: String?): Boolean =
+    detectedBy?.lowercase()?.let(LEGACY_HTTP_DETECTIONS::contains) == true
+
+internal fun maxVideoBitrateBps(capMbps: Double?): Int? = capMbps
+    ?.takeIf { it.isFinite() && it > 0.0 }
+    ?.let { (it * 1_000_000).toInt() }
 
 /**
  * Android implementation of [PlaybackEngine] using Media3 ExoPlayer.
@@ -46,10 +73,13 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     private companion object {
         private const val TAG = "ExoPlayerEngine"
+        private const val EXTERNAL_SUBTITLE_ID = "playbridge-external-subtitle"
     }
 
     private var player: ExoPlayer? = null
     private var trackSelector: DefaultTrackSelector? = null
+    private var videoSurface: Surface? = null
+    private val externalPlayerListeners = linkedSetOf<Player.Listener>()
 
     private val _state = MutableStateFlow<PlaybackState>(PlaybackState.Idle)
     override val state: StateFlow<PlaybackState> = _state.asStateFlow()
@@ -79,7 +109,15 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     override suspend fun load(payload: PlayPayload) {
-        logger.i(TAG, "load() called with url: ${payload.url}")
+        load(payload, externalSubtitleUrl = null, externalSubtitleLabel = null)
+    }
+
+    suspend fun load(
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ) {
+        logger.i(TAG, "load() called with url: ${redactUrlForLog(payload.url)}")
         currentPayload = payload
         val livePlayer = player
         if (livePlayer != null) {
@@ -87,10 +125,30 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             // Avoids a full release + rebuild (renderers, surface re-attach, decoder
             // warm-up) per item — the black gap between episodes — and preserves
             // player-level state like trackSelectionParameters.
-            reloadOnLivePlayer(livePlayer, payload)
+            reloadOnLivePlayer(livePlayer, payload, externalSubtitleUrl, externalSubtitleLabel)
         } else {
-            initializePlayer(payload)
+            initializePlayer(payload, externalSubtitleUrl, externalSubtitleLabel)
         }
+    }
+
+    /**
+     * Retains the renderer surface across player creation so vendor codecs can be configured with
+     * a valid output from their first prepare call. Calling this after creation updates the live
+     * player as well.
+     */
+    fun setVideoSurface(surface: Surface?) {
+        videoSurface = surface
+        player?.setVideoSurface(surface)
+    }
+
+    /** Registers a listener immediately and carries it into a player created by the next load. */
+    fun addPlayerListener(listener: Player.Listener) {
+        if (externalPlayerListeners.add(listener)) player?.addListener(listener)
+    }
+
+    fun removePlayerListener(listener: Player.Listener) {
+        externalPlayerListeners.remove(listener)
+        player?.removeListener(listener)
     }
 
     /**
@@ -158,10 +216,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
         logger.i(TAG, "Prepared ${requestProperties.size} request header(s)")
 
-        // Network stack:
-        // 1. Browser-captured streams (detectedBy is not null) use the legacy DefaultHttpDataSource for live stream compatibility.
-        // 2. Direct Hub/Debrid streams use OkHttp with IPv4-First DNS for performance.
-        val isBrowserStream = !payload.detected_by.isNullOrEmpty()
+        // Browser-captured/live streams use the legacy source for compatibility. Library,
+        // history, Stremio, and Debrid resolver URLs are direct sources and use OkHttp.
+        val isBrowserStream = shouldUseLegacyHttpDataSource(payload.detected_by)
 
         val httpDataSourceFactory = if (isBrowserStream) {
             logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detected_by}")
@@ -186,6 +243,10 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 .setUserAgent(userAgent)
                 .setDefaultRequestProperties(requestProperties)
         }
+        // Route HTTP(S) through the configured authenticated factory while retaining support for
+        // file/content URIs. Native external subtitles are staged as private file URIs so their
+        // browser headers never need to cross the renderer-process boundary.
+        val dataSourceFactory = DefaultDataSource.Factory(context, httpDataSourceFactory)
 
         val isHls = (payload.detected_by == "body_content_m3u8") ||
                     (payload.detected_by == "url_pattern_m3u8") ||
@@ -209,13 +270,13 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         val mediaSourceFactory = when {
             isHls -> {
                 logger.i(TAG, "Using HlsMediaSource.Factory")
-                HlsMediaSource.Factory(httpDataSourceFactory)
+                HlsMediaSource.Factory(dataSourceFactory)
                     .setAllowChunklessPreparation(true)
                     .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
             }
             isDash -> {
                 logger.i(TAG, "Using DashMediaSource.Factory")
-                DashMediaSource.Factory(httpDataSourceFactory)
+                DashMediaSource.Factory(dataSourceFactory)
                     .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
             }
             else -> {
@@ -223,7 +284,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 val extractorsFactory = androidx.media3.extractor.DefaultExtractorsFactory()
                     .setConstantBitrateSeekingEnabled(true)
                     .setTsExtractorFlags(androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory.FLAG_ENABLE_HDMV_DTS_AUDIO_STREAMS)
-                DefaultMediaSourceFactory(httpDataSourceFactory, extractorsFactory)
+                DefaultMediaSourceFactory(dataSourceFactory, extractorsFactory)
                     .setLoadErrorHandlingPolicy(CustomLoadErrorHandlingPolicy())
             }
         }
@@ -248,7 +309,12 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
      * are layered onto the current parameters; stale per-item overrides are
      * cleared (they reference the previous item's track groups anyway).
      */
-    private fun reloadOnLivePlayer(exoPlayer: ExoPlayer, payload: PlayPayload) {
+    private fun reloadOnLivePlayer(
+        exoPlayer: ExoPlayer,
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ) {
         logger.i(TAG, "Reusing live ExoPlayer for new item (no rebuild)")
 
         val paramsBuilder = exoPlayer.trackSelectionParameters.buildUpon().clearOverrides()
@@ -272,18 +338,27 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 paramsBuilder.setMaxVideoSize(maxW, maxH)
             }
         }
-        payload.max_bitrate_cap_mbps?.let { cap ->
-            paramsBuilder.setMaxVideoBitrate((cap * 1_000_000).toInt())
+        maxVideoBitrateBps(payload.max_bitrate_cap_mbps)?.let { capBps ->
+            paramsBuilder.setMaxVideoBitrate(capBps)
+        }
+        if (externalSubtitleUrl != null) {
+            paramsBuilder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
         }
         exoPlayer.trackSelectionParameters = paramsBuilder.build()
 
-        exoPlayer.setMediaSource(buildPerItemSource(payload).createMediaSource())
+        exoPlayer.setMediaSource(
+            buildMediaSource(payload, externalSubtitleUrl, externalSubtitleLabel),
+        )
         exoPlayer.prepare()
         exoPlayer.playWhenReady = true
         startProgressTracker()
     }
 
-    private fun initializePlayer(payload: PlayPayload) {
+    private fun initializePlayer(
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ) {
         val bufCfg = AndroidBufferConfig.compute(context)
         logger.i(TAG, "Initializing player with buffer config: maxBufferMs=${bufCfg.maxBufferMs}, targetBytes=${bufCfg.targetBytes}")
 
@@ -410,6 +485,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 params.setPreferredTextLanguage(it)
                 params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
             }
+            if (externalSubtitleUrl != null) {
+                params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            }
 
             payload.default_video_quality?.let { quality ->
                 val (maxW, maxH) = when (quality.lowercase()) {
@@ -424,9 +502,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 }
             }
 
-            payload.max_bitrate_cap_mbps?.let { cap ->
-                val capBps = (cap * 1_000_000).toInt()
-                logger.i(TAG, "Applying max bitrate cap: $cap Mbps -> $capBps bps")
+            maxVideoBitrateBps(payload.max_bitrate_cap_mbps)?.let { capBps ->
+                logger.i(TAG, "Applying max bitrate cap: $capBps bps")
                 params.setMaxVideoBitrate(capBps)
             }
 
@@ -454,8 +531,13 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .also { exoPlayer ->
                 logger.i(TAG, "ExoPlayer instance created")
                 exoPlayer.addListener(playerListener)
+                externalPlayerListeners.forEach(exoPlayer::addListener)
 
-                exoPlayer.setMediaSource(perItem.createMediaSource())
+                videoSurface?.let(exoPlayer::setVideoSurface)
+
+                exoPlayer.setMediaSource(
+                    createMediaSource(perItem, externalSubtitleUrl, externalSubtitleLabel),
+                )
                 exoPlayer.prepare()
                 }
         startProgressTracker()
@@ -576,8 +658,64 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     override suspend fun attachExternalSubtitle(url: String, language: String?) {
-        logger.i(TAG, "attachExternalSubtitle($url, $language)")
-        // Implementation for external subtitles
+        logger.i(TAG, "attachExternalSubtitle(${redactUrlForLog(url)})")
+        val exoPlayer = player ?: return
+        val payload = currentPayload ?: return
+        val perItem = buildPerItemSource(payload)
+        val positionMs = exoPlayer.currentPosition.coerceAtLeast(0L)
+        val shouldPlay = exoPlayer.playWhenReady
+        val mediaSource = createMediaSource(perItem, url, language)
+
+        exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+            .build()
+        exoPlayer.setMediaSource(mediaSource, positionMs)
+        exoPlayer.prepare()
+        exoPlayer.playWhenReady = shouldPlay
+    }
+
+    private fun buildMediaSource(
+        payload: PlayPayload,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ): MediaSource = createMediaSource(
+        buildPerItemSource(payload),
+        externalSubtitleUrl,
+        externalSubtitleLabel,
+    )
+
+    private fun createMediaSource(
+        perItem: PerItemSource,
+        externalSubtitleUrl: String?,
+        externalSubtitleLabel: String?,
+    ): MediaSource {
+        if (externalSubtitleUrl == null) return perItem.createMediaSource()
+        val subtitle = MediaItem.SubtitleConfiguration.Builder(Uri.parse(externalSubtitleUrl))
+            .setMimeType(externalSubtitleMimeType(externalSubtitleUrl))
+            .setLabel(externalSubtitleLabel)
+            .setId(EXTERNAL_SUBTITLE_ID)
+            .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+            .build()
+        // HlsMediaSource.Factory and DashMediaSource.Factory only create their primary source;
+        // unlike DefaultMediaSourceFactory, they do not merge MediaItem sidecar configurations.
+        // Build the subtitle source explicitly so browser-cast HLS/DASH streams get the same
+        // native sidecar behavior as progressive media. The subtitle has already been staged as
+        // a private file URI, so a local-capable DefaultDataSource is sufficient here.
+        @Suppress("DEPRECATION")
+        val subtitleSource = SingleSampleMediaSource.Factory(DefaultDataSource.Factory(context))
+            .setTreatLoadErrorsAsEndOfStream(false)
+            .createMediaSource(subtitle, C.TIME_UNSET)
+        return MergingMediaSource(perItem.createMediaSource(), subtitleSource)
+    }
+
+    private fun externalSubtitleMimeType(url: String): String = when (
+        url.substringBefore('?').substringAfterLast('.', missingDelimiterValue = "").lowercase()
+    ) {
+        "vtt" -> MimeTypes.TEXT_VTT
+        "ass", "ssa" -> MimeTypes.TEXT_SSA
+        "ttml", "dfxp", "xml" -> MimeTypes.APPLICATION_TTML
+        else -> MimeTypes.APPLICATION_SUBRIP
     }
 
     override fun release() {
@@ -585,6 +723,8 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         progressJob?.cancel()
         player?.release()
         player = null
+        videoSurface = null
+        externalPlayerListeners.clear()
     }
 
     fun getExoPlayer(): ExoPlayer? = player

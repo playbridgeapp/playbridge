@@ -2,10 +2,16 @@ package com.playbridge.player.player
 
 import android.content.Context
 import android.content.Intent
+import com.playbridge.player.data.PlaybackContext
 import com.playbridge.player.server.ServerService
+import com.playbridge.shared.protocol.decodePlaylistPayloadJson
 import com.playbridge.shared.protocol.encodePlaylistPayloadJson
+import com.playbridge.shared.protocol.protocolJson
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import playbridge.PlayPayload
 import playbridge.PlaylistPayload
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Single source of truth for turning a [PlaylistPayload] into a player [Intent].
@@ -18,21 +24,33 @@ import playbridge.PlaylistPayload
  */
 object PlayerLauncher {
 
+    const val EXTRA_PLAYBACK_REQUEST_ID = "extra_playback_request_id"
+    const val EXTRA_HISTORY_ID = "extra_history_id"
+    private const val EXTRA_PLAYBACK_CONTEXT = "extra_playback_context"
+    private const val REQUEST_ID_SEQUENCE_BITS = 16
+    // Seed from wall time so an Activity restored after process recreation does not reject
+    // new requests merely because the process-local counter restarted from zero.
+    private val playbackRequestIds = AtomicLong(
+        System.currentTimeMillis() shl REQUEST_ID_SEQUENCE_BITS
+    )
+
     /**
      * Build the player launch intent for [payload].
      *
      * @param tvPlayerMode the TV's `player_mode` preference ("mpv"/"exo"/"phone"/unset);
      *   when "mpv"/"exo" it forces the engine, otherwise the payload's per-item
      *   `player_mode` wins (defaulting to ExoPlayer).
-     * @param overrideStartPositionMs when non-null and > 0, takes priority over the
-     *   payload's own `start_position_ms` (used by history replay to resume the TV's
-     *   last position).
+     * @param overrideStartPositionMs when non-null, takes priority over the payload's own
+     *   `start_position_ms`. A positive value resumes there; zero explicitly starts from the
+     *   beginning (used when replaying completed history).
      */
     fun buildPlayerIntent(
         context: Context,
         payload: PlaylistPayload,
         tvPlayerMode: String,
         overrideStartPositionMs: Long? = null,
+        historyId: String? = null,
+        playbackContext: PlaybackContext? = null,
     ): Intent {
         // The coordinator/engine reads the live queue from PlaylistStore — set it here so
         // both callers get identical queue setup.
@@ -45,12 +63,14 @@ object PlayerLauncher {
             firstItem?.player_mode == "mpv" -> "mpv"
             else -> "exo"
         }
-        val activityClass = when (mode) {
-            "mpv" -> MpvPlayerActivity::class.java
-            else -> ExoPlayerActivity::class.java
-        }
-
-        return Intent(context, activityClass).apply {
+        return Intent(context, PlayerHostActivity::class.java).apply {
+            putExtra(EXTRA_PLAYBACK_REQUEST_ID, playbackRequestIds.incrementAndGet())
+            historyId?.let { putExtra(EXTRA_HISTORY_ID, it) }
+            playbackContext?.let {
+                putExtra(EXTRA_PLAYBACK_CONTEXT, protocolJson.encodeToString(it))
+            }
+            putExtra(PlayerHostActivity.EXTRA_RENDERER, mode)
+            putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(payload))
             firstItem?.let { item ->
                 putExtra(ServerService.EXTRA_URL, item.url)
                 putExtra(ServerService.EXTRA_TITLE, item.title)
@@ -84,15 +104,34 @@ object PlayerLauncher {
                 putExtra(ServerService.EXTRA_VISUAL_METADATA, visualMetadata.encode())
             }
 
-            // Resume point: a caller override (history's saved position) beats the
-            // payload's own start_position_ms. Both engines honour EXTRA_START_POSITION.
-            (overrideStartPositionMs?.takeIf { it > 0 }
-                ?: firstItem?.start_position_ms?.takeIf { it > 0 })
+            // Resume point: a caller override (including an explicit zero) beats the payload's
+            // own start_position_ms. Both engines honour a positive EXTRA_START_POSITION;
+            // omitting it represents a deliberate start from zero.
+            (if (overrideStartPositionMs != null) {
+                overrideStartPositionMs.takeIf { it > 0 }
+            } else {
+                firstItem?.start_position_ms?.takeIf { it > 0 }
+            })
                 ?.let { putExtra(ServerService.EXTRA_START_POSITION, it) }
 
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
         }
     }
+
+    /** Resolve a playlist across the main/MPV process boundary. */
+    fun playlistFromIntent(intent: Intent?): PlaylistPayload? =
+        intent?.getStringExtra(ServerService.EXTRA_PLAYLIST)
+            ?.let(::decodePlaylistPayloadJson)
+
+    fun playbackContextFromIntent(intent: Intent?): PlaybackContext? = intent
+        ?.getStringExtra(EXTRA_PLAYBACK_CONTEXT)
+        ?.let { encoded ->
+            runCatching { protocolJson.decodeFromString<PlaybackContext>(encoded) }.getOrNull()
+        }
 
     /**
      * Encode the live queue into the canonical history blob. [items] are the original,
@@ -107,9 +146,13 @@ object PlayerLauncher {
      * entry instead of spawning one row per episode. Single items key on their URL.
      */
     fun historyId(items: List<PlayPayload>): String =
-        if (items.size > 1) {
-            "playlist_${items.joinToString("|") { it.url }.hashCode()}"
-        } else {
-            items.firstOrNull()?.url ?: "unknown"
-        }
+        items.asSequence()
+            .mapNotNull(PlayPayload::binge_group)
+            .firstOrNull(String::isNotBlank)
+            ?.let { "playlist_${it.hashCode()}" }
+            ?: if (items.size > 1) {
+                "playlist_${items.joinToString("|") { it.url }.hashCode()}"
+            } else {
+                items.firstOrNull()?.url ?: "unknown"
+            }
 }

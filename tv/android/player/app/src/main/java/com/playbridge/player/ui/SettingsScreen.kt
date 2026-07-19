@@ -42,6 +42,8 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.playbridge.player.player.PlayerActivity
+import com.playbridge.player.player.SubtitleRenderingMode
+import com.playbridge.player.data.HistoryThumbnailMode
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
@@ -52,15 +54,27 @@ fun SettingsScreen(
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
 
-    var selectedCategory by remember { mutableStateOf(SettingsCategory.PLAYER) }
+    var selectedCategory by androidx.compose.runtime.saveable.rememberSaveable {
+        mutableStateOf(SettingsCategory.PLAYER)
+    }
 
     // Settings States
     var playerMode by remember { mutableStateOf(prefs.getString("player_mode", "phone") ?: "phone") }
+    var browserMode by remember { mutableStateOf(prefs.getString("browser_mode_override", "phone") ?: "phone") }
+    var subtitleRenderingMode by remember {
+        mutableStateOf(
+            SubtitleRenderingMode.fromPreference(
+                prefs.getString(
+                    SubtitleRenderingMode.PREFERENCE_KEY,
+                    SubtitleRenderingMode.AUTO.preferenceValue,
+                ),
+            ),
+        )
+    }
     var customIp by remember { mutableStateOf(prefs.getString("preferred_ip", "") ?: "") }
     var showIpDialog by remember { mutableStateOf(false) }
     var hideSoftKeyboard by remember { mutableStateOf(prefs.getBoolean("hide_soft_keyboard", false)) }
     var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
-    var tunneledPlayback by remember { mutableStateOf(prefs.getBoolean("tunneled_playback", false)) }
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
     var stillWatchingEnabled by remember { mutableStateOf(prefs.getBoolean(PlayerActivity.PREF_STILL_WATCHING_ENABLED, false)) }
     var stillWatchingMinutes by remember {
@@ -70,6 +84,16 @@ fun SettingsScreen(
         mutableStateOf(PlayerActivity.normalizeStillWatchingResponseSeconds(prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_RESPONSE_SEC, 300)))
     }
     var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
+    var historyThumbnailMode by remember {
+        mutableStateOf(
+            HistoryThumbnailMode.fromPreference(
+                prefs.getString(
+                    HistoryThumbnailMode.PREFERENCE_KEY,
+                    HistoryThumbnailMode.SMART.preferenceValue,
+                ),
+            ),
+        )
+    }
     var isRestarting by remember { mutableStateOf(false) }
     var showExitDialog by remember { mutableStateOf(false) }
     var themeStr by remember { mutableStateOf(prefs.getString("app_theme", "DARK") ?: "DARK") }
@@ -149,7 +173,7 @@ fun SettingsScreen(
             )
 
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(SettingsCategory.entries) { category ->
+                items(SettingsCategory.entries, key = SettingsCategory::name) { category ->
                     val isSelected = selectedCategory == category
                     ListItem(
                         selected = isSelected,
@@ -284,57 +308,25 @@ fun SettingsScreen(
                                 }
                             )
                         }
-                        item {
-                            SettingToggleItem(
-                                label = "Tunneled Playback",
-                                description = "Hardware-level sync. Fixes 4K DV issues.",
-                                checked = tunneledPlayback,
-                                onCheckedChange = {
-                                    tunneledPlayback = it
-                                    // An explicit user choice clears any automatic block set
-                                    // after a tunneled decoder crash (see ExoPlayerActivity).
-                                    prefs.edit()
-                                        .putBoolean("tunneled_playback", it)
-                                        .remove("tunneling_auto_blocked")
-                                        .apply()
-                                }
-                            )
-                        }
-                        item {
-                            // Escape hatch for the persistent decoder-compatibility flags the
-                            // failover ladder sets after fatal decoder errors (see
-                            // ExoPlayerActivity): tunneling / async MediaCodec / Dolby Vision.
-                            SettingClickableItem(
-                                label = "Reset Decoder Compatibility",
-                                description = "Clear automatic decoder blocks set after playback errors (tunneling, async codec, Dolby Vision)",
-                                onClick = {
-                                    prefs.edit()
-                                        .remove("tunneling_auto_blocked")
-                                        .remove("codec_async_blocked")
-                                        .remove("dv_decoders_blocked")
-                                        .apply()
-                                    android.widget.Toast.makeText(
-                                        context,
-                                        "Decoder compatibility flags reset",
-                                        android.widget.Toast.LENGTH_SHORT
-                                    ).show()
-                                }
-                            )
-                        }
-                        item {
-                            SettingToggleItem(
-                                label = "Save Cast History",
-                                description = "Keep track of recently played videos and your progress.",
-                                checked = enableHistory,
-                                onCheckedChange = {
-                                    enableHistory = it
-                                    prefs.edit().putBoolean("enable_history", it).apply()
-                                }
-                            )
-                        }
                     }
 
                     SettingsCategory.BROWSER -> {
+                        item {
+                            SettingDropdownItem(
+                                label = "Browser Engine",
+                                description = "Choose which browser opens pages cast from your phone.",
+                                options = buildList {
+                                    add("phone" to "Use Phone Setting")
+                                    add("webview" to "System WebView")
+                                    if (isGeckoInstalled) add("gecko" to "GeckoView")
+                                },
+                                selected = browserMode,
+                                onSelected = {
+                                    browserMode = it
+                                    prefs.edit().putString("browser_mode_override", it).apply()
+                                },
+                            )
+                        }
                         item {
                             SettingToggleItem(
                                 label = "Hide on-screen keyboard",
@@ -350,19 +342,37 @@ fun SettingsScreen(
 
                     SettingsCategory.INTEGRATIONS -> {
                         item {
-                            SettingClickableItem(
+                            SettingDropdownItem(
+                                label = "Subtitle Rendering",
+                                description = when (subtitleRenderingMode) {
+                                    SubtitleRenderingMode.AUTO -> "Use the player renderer, with the PlayBridge overlay as a fallback."
+                                    SubtitleRenderingMode.BUILT_IN -> "Use MPV/libass or ExoPlayer's built-in subtitle renderer."
+                                    SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> "Use PlayBridge's header-aware overlay with adaptive text sizing."
+                                },
+                                options = listOf(
+                                    SubtitleRenderingMode.AUTO.preferenceValue to "Auto (Recommended)",
+                                    SubtitleRenderingMode.BUILT_IN.preferenceValue to "Built-in Player",
+                                    SubtitleRenderingMode.PLAYBRIDGE_OVERLAY.preferenceValue to "PlayBridge Overlay",
+                                ),
+                                selected = subtitleRenderingMode.preferenceValue,
+                                onSelected = { value ->
+                                    subtitleRenderingMode = SubtitleRenderingMode.fromPreference(value)
+                                    prefs.edit().putString(SubtitleRenderingMode.PREFERENCE_KEY, subtitleRenderingMode.preferenceValue).apply()
+                                },
+                            )
+                        }
+                        item {
+                            SettingDropdownItem(
                                 label = "Skip Segments Provider",
                                 description = when (skipProvider) {
                                     "introdb" -> "IntroDB only"
                                     "theintrodb" -> "TheIntroDB only"
                                     else -> "Both — IntroDB first, TheIntroDB fills gaps (movies too)"
                                 },
-                                onClick = {
-                                    skipProvider = when (skipProvider) {
-                                        "both" -> "introdb"
-                                        "introdb" -> "theintrodb"
-                                        else -> "both"
-                                    }
+                                options = listOf("both" to "Both providers", "introdb" to "IntroDB", "theintrodb" to "TheIntroDB"),
+                                selected = skipProvider,
+                                onSelected = {
+                                    skipProvider = it
                                     prefs.edit().putString("skip_segments_provider", skipProvider).apply()
                                 }
                             )
@@ -458,6 +468,46 @@ fun SettingsScreen(
                                 }
                             )
                         }
+                        item {
+                            SettingToggleItem(
+                                label = "Save playback history",
+                                description = "Add future casts and progress to Library.",
+                                checked = enableHistory,
+                                onCheckedChange = {
+                                    enableHistory = it
+                                    prefs.edit().putBoolean("enable_history", it).apply()
+                                },
+                            )
+                        }
+                        if (enableHistory) {
+                            item {
+                                SettingDropdownItem(
+                                    label = "History thumbnails",
+                                    description = when (historyThumbnailMode) {
+                                        HistoryThumbnailMode.SMART ->
+                                            "Capture missing artwork after 15 seconds, with an exit fallback."
+                                        HistoryThumbnailMode.LIVE ->
+                                            "Capture after 15 seconds, then refresh every 2 minutes."
+                                        HistoryThumbnailMode.ARTWORK_ONLY ->
+                                            "Use supplied poster and backdrop artwork without capturing frames."
+                                    },
+                                    options = listOf(
+                                        HistoryThumbnailMode.SMART.preferenceValue to "Smart capture",
+                                        HistoryThumbnailMode.LIVE.preferenceValue to "Live playback snapshots",
+                                        HistoryThumbnailMode.ARTWORK_ONLY.preferenceValue to "Artwork only",
+                                    ),
+                                    selected = historyThumbnailMode.preferenceValue,
+                                    onSelected = { selected ->
+                                        historyThumbnailMode =
+                                            HistoryThumbnailMode.fromPreference(selected)
+                                        prefs.edit().putString(
+                                            HistoryThumbnailMode.PREFERENCE_KEY,
+                                            historyThumbnailMode.preferenceValue,
+                                        ).apply()
+                                    },
+                                )
+                            }
+                        }
                     }
 
                     SettingsCategory.LOGS -> {
@@ -500,12 +550,13 @@ fun SettingsScreen(
                                     )
                                 }
                             } else {
-                                // Newest last; show a bounded tail to keep the list snappy on TV.
-                                items(recentLogs.takeLast(500)) { line ->
+                                // A short recent-error summary is readable at ten-foot distance;
+                                // the phone can still pull the complete diagnostic file.
+                                items(recentLogs.takeLast(12)) { line ->
                                     Text(
                                         text = line,
                                         fontFamily = FontFamily.Monospace,
-                                        fontSize = 12.sp,
+                                        fontSize = 14.sp,
                                         color = MaterialTheme.colorScheme.onSurface,
                                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp)
                                     )
@@ -870,12 +921,12 @@ fun SettingsScreen(
 }
 
 enum class SettingsCategory(val label: String, val icon: ImageVector) {
-    PLAYER("Player", Icons.Default.PlayArrow),
+    PLAYER("Playback", Icons.Default.PlayArrow),
     BROWSER("Browser", Icons.Default.Search),
+    INTEGRATIONS("Subtitles & Skipping", Icons.Default.Build),
+    APPEARANCE("General", Icons.Default.Add),
     NETWORK("Network", Icons.Default.Settings),
-    INTEGRATIONS("Integrations", Icons.Default.Build),
-    APPEARANCE("Appearance", Icons.Default.Add),
-    LOGS("Logs", Icons.AutoMirrored.Filled.List),
+    LOGS("Diagnostics", Icons.AutoMirrored.Filled.List),
     ABOUT("About", Icons.Default.Info)
 }
 
@@ -928,7 +979,17 @@ private fun SettingDropdownItem(
 ) {
     var expanded by remember { mutableStateOf(false) }
     val selectedLabel = options.find { it.first == selected }?.second ?: selected
-    val focusRequester = remember { FocusRequester() }
+    val parentFocusRequester = remember { FocusRequester() }
+    val optionFocusRequesters = remember(options) {
+        options.associate { (value, _) -> value to FocusRequester() }
+    }
+
+    LaunchedEffect(expanded, selected, options) {
+        if (expanded) {
+            kotlinx.coroutines.android.awaitFrame()
+            optionFocusRequesters[selected]?.requestFocus()
+        }
+    }
 
     Column {
         ListItem(
@@ -940,7 +1001,7 @@ private fun SettingDropdownItem(
                 Text(selectedLabel, color = MaterialTheme.colorScheme.primary)
             },
             scale = ListItemDefaults.scale(focusedScale = 1.02f),
-            modifier = Modifier.focusRequester(focusRequester)
+            modifier = Modifier.focusRequester(parentFocusRequester)
         )
 
         if (expanded) {
@@ -958,14 +1019,21 @@ private fun SettingDropdownItem(
                             onClick = {
                                 onSelected(value)
                                 expanded = false
-                                focusRequester.requestFocus()
+                                parentFocusRequester.requestFocus()
                             },
                             headlineContent = { Text(displayLabel) },
                             trailingContent = {
                                 if (value == selected) {
                                     Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
                                 }
-                            }
+                            },
+                            colors = ListItemDefaults.colors(
+                                selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                selectedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                focusedSelectedContainerColor = MaterialTheme.colorScheme.primary,
+                                focusedSelectedContentColor = MaterialTheme.colorScheme.onPrimary,
+                            ),
+                            modifier = Modifier.focusRequester(optionFocusRequesters.getValue(value)),
                         )
                     }
                 }

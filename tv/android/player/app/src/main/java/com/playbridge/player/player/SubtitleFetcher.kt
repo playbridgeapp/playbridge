@@ -1,6 +1,7 @@
 package com.playbridge.player.player
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -33,7 +34,7 @@ object SubtitleFetcher {
             "https://opensubtitles-v3.strem.io/subtitles/movie/$imdbId.json"
         }
 
-        Log.i(TAG, "Fetching subtitles from: $url")
+        Log.i(TAG, "Fetching subtitles from: ${redactUrlForLog(url)}")
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", "Mozilla/5.0")

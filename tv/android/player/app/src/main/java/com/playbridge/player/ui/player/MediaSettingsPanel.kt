@@ -48,10 +48,11 @@ fun MediaSettingsPanel(
                 .padding(12.dp)
         ) {
             val sideBarFocusRequester = remember { FocusRequester() }
+            val selectedTabFocusRequester = remember { FocusRequester() }
 
             // Initial focus on sidebar only once when panel opens
             LaunchedEffect(Unit) {
-                sideBarFocusRequester.requestFocus()
+                selectedTabFocusRequester.requestFocus()
             }
 
             // Sidebar tabs
@@ -75,18 +76,25 @@ fun MediaSettingsPanel(
                     )
                 }
 
-                val tabs = listOf(
-                    SettingsTab.VIDEO to "Video",
-                    SettingsTab.AUDIO to "Audio",
-                    SettingsTab.SPEED to "Speed",
-                    SettingsTab.SCALING to "Scaling"
-                )
+                val tabs = buildList {
+                    if (state.capabilities.qualityAvailable && state.videoTracks.hasSelectableVideoQualities()) {
+                        add(SettingsTab.VIDEO to "Quality")
+                    }
+                    if (state.audioTracks.size > 1 || state.capabilities.audioBoostAvailable) {
+                        add(SettingsTab.AUDIO to "Audio")
+                    }
+                    if (state.capabilities.speedAvailable) add(SettingsTab.SPEED to "Speed")
+                    if (state.capabilities.scalingAvailable) add(SettingsTab.SCALING to "Scaling")
+                }
 
                 items(tabs, key = { it.first.name }) { (tab, label) ->
                     SettingsTabButton(
                         text = label,
                         isSelected = activeTab == tab,
-                        onClick = { onTabSelected(tab) }
+                        onClick = { onTabSelected(tab) },
+                        modifier = if (activeTab == tab) {
+                            Modifier.focusRequester(selectedTabFocusRequester)
+                        } else Modifier,
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                 }
@@ -105,13 +113,15 @@ fun MediaSettingsPanel(
                 when (activeTab) {
                     SettingsTab.VIDEO -> UnifiedTrackList(state.videoTracks, onTrackSelected)
                     SettingsTab.AUDIO -> Column {
-                        AudioBoostItem(isEnabled = state.isAudioBoostEnabled, onClick = onToggleAudioBoost)
+                        if (state.capabilities.audioBoostAvailable) {
+                            AudioBoostItem(isEnabled = state.isAudioBoostEnabled, onClick = onToggleAudioBoost)
+                        }
                         Box(modifier = Modifier.weight(1f)) {
                             UnifiedTrackList(state.audioTracks, onTrackSelected)
                         }
                     }
                     SettingsTab.SPEED -> SpeedSettingsList(state.playbackSpeed, onSpeedSelected)
-                    SettingsTab.SCALING -> ScalingSettingsList(state.videoScalingMode, onScalingSelected, state.engineType)
+                    SettingsTab.SCALING -> ScalingSettingsList(state.videoScalingMode, onScalingSelected)
                 }
             }
         }
@@ -254,14 +264,24 @@ private fun UnifiedTrackItem(
                 modifier = Modifier.width(22.dp)
             )
 
-            Text(
-                text = track.name,
-                style = MaterialTheme.typography.labelLarge,
-                color = if (track.isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = track.name,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (track.isSelected) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                track.secondaryText?.let { secondary ->
+                    Text(
+                        text = secondary,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        fontSize = 11.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
         }
     }
 }
@@ -271,7 +291,7 @@ private fun SpeedSettingsList(
     currentSpeed: Float,
     onSpeedSelected: (Float) -> Unit
 ) {
-    val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+    val speeds = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -296,12 +316,13 @@ private fun SpeedSettingsList(
 private fun ScalingSettingsList(
     currentMode: String,
     onModeSelected: (String) -> Unit,
-    engineType: String
 ) {
-    val modes = when {
-        engineType.contains("mpv") -> listOf("Fit", "Fill", "Zoom")
-        else -> listOf("Fit", "Fill", "Zoom", "Fixed Width", "Fixed Height")
-    }
+    // These are the modes implemented consistently by both permanent renderer services.
+    val modes = listOf(
+        Triple("Fit", "Fit", "Show the whole picture with letterboxing"),
+        Triple("Zoom", "Crop to fill", "Fill the screen while preserving aspect ratio"),
+        Triple("Fill", "Stretch", "Fill the screen without preserving aspect ratio"),
+    )
 
     LazyColumn(
         modifier = Modifier
@@ -309,13 +330,14 @@ private fun ScalingSettingsList(
             .padding(start = 8.dp),
         contentPadding = PaddingValues(vertical = 4.dp)
     ) {
-        items(modes, key = { it }) { mode ->
+        items(modes, key = { it.first }) { (mode, label, description) ->
             UnifiedTrackItem(
                 track = UnifiedTrack(
                     id = mode,
-                    name = mode,
+                    name = label,
                     isSelected = mode == currentMode,
-                    type = "scaling"
+                    type = "scaling",
+                    secondaryText = description,
                 ),
                 onClick = { onModeSelected(mode) }
             )
@@ -358,13 +380,13 @@ private fun AudioBoostItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Audio Boost (Night Mode)",
+                    text = "Audio Boost",
                     style = MaterialTheme.typography.labelLarge,
                     color = if (isEnabled) Color(0xFF00D9FF) else MaterialTheme.colorScheme.onSurface,
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Normalize loudness & boost dialogue",
+                    text = "Increase quiet audio and dialogue",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -372,4 +394,3 @@ private fun AudioBoostItem(
         }
     }
 }
-

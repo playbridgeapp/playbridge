@@ -61,6 +61,7 @@ class SystemWebViewEngine(
     // because setupWebView() reads them. An init block here would run too early.
 
     fun getView(): View = webView
+    fun getCurrentUrl(): String? = currentUrl
 
     fun loadUrl(url: String) {
         currentUrl = url
@@ -109,6 +110,22 @@ class SystemWebViewEngine(
 
     fun evaluateJavascript(script: String, callback: ((String?) -> Unit)? = null) {
         webView.evaluateJavascript(script, callback)
+    }
+
+    /** Pause page media and rendering while the user is in Android TV settings or Home. */
+    fun pauseForBackground() {
+        webView.evaluateJavascript(
+            "(function(){document.querySelectorAll('video,audio').forEach(function(m){m.pause();});})();",
+            null,
+        )
+        webView.onPause()
+        webView.pauseTimers()
+    }
+
+    /** Resume the page engine, but deliberately leave media paused for an explicit user action. */
+    fun resumeAfterBackground() {
+        webView.resumeTimers()
+        webView.onResume()
     }
 
     // ── Injected video controller bridge (pb-video-control.js) ────────────────

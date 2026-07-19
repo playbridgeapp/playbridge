@@ -36,6 +36,7 @@ object FileLogger {
 
     private lateinit var logDir: File
     @Volatile private lateinit var logFile: File
+    @Volatile private var activeLogFileName: String = LOG_FILE_NAME
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
     // Logging is OFF by default: persisted logs can contain stream URLs and request headers
@@ -61,10 +62,11 @@ object FileLogger {
     /**
      * Must be called once from Application.onCreate() before any logging.
      */
-    fun init(context: Context) {
+    fun init(context: Context, logFileName: String = LOG_FILE_NAME) {
         logDir = File(context.filesDir, LOG_DIR)
         logDir.mkdirs()
-        logFile = File(logDir, LOG_FILE_NAME)
+        activeLogFileName = logFileName
+        logFile = File(logDir, activeLogFileName)
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         enabled = prefs?.getBoolean(PREF_LOGGING_ENABLED, false) ?: false
         if (enabled) i(TAG, "FileLogger initialized — log path: ${logFile.absolutePath}")
@@ -182,17 +184,17 @@ object FileLogger {
     private fun rotateIfNeeded() {
         if (!logFile.exists() || logFile.length() < MAX_FILE_SIZE) return
         // Delete oldest
-        val oldest = File(logDir, "$LOG_FILE_NAME.${MAX_FILES}")
+        val oldest = File(logDir, "$activeLogFileName.${MAX_FILES}")
         if (oldest.exists()) oldest.delete()
         // Shift existing rotated files
         for (i in MAX_FILES - 1 downTo 1) {
-            val src = File(logDir, "$LOG_FILE_NAME.$i")
-            val dst = File(logDir, "$LOG_FILE_NAME.${i + 1}")
+            val src = File(logDir, "$activeLogFileName.$i")
+            val dst = File(logDir, "$activeLogFileName.${i + 1}")
             if (src.exists()) src.renameTo(dst)
         }
         // Rotate current
-        logFile.renameTo(File(logDir, "$LOG_FILE_NAME.1"))
-        logFile = File(logDir, LOG_FILE_NAME)
+        logFile.renameTo(File(logDir, "$activeLogFileName.1"))
+        logFile = File(logDir, activeLogFileName)
     }
 
     private fun timestamp(): String = dateFormat.format(Date())

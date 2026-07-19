@@ -19,6 +19,25 @@ import kotlinx.serialization.builtins.ListSerializer
 private val Context.historyDataStore: DataStore<Preferences> by preferencesDataStore(name = "history_store_v2")
 
 @Serializable
+data class PlaybackTrackPreference(
+    val id: String? = null,
+    val label: String? = null,
+    val language: String? = null,
+)
+
+@Serializable
+data class PlaybackContext(
+    val audioTrack: PlaybackTrackPreference? = null,
+    val subtitleTrack: PlaybackTrackPreference? = null,
+    val subtitlesDisabled: Boolean = false,
+    val externalSubtitleUrl: String? = null,
+    val playbackSpeed: Float? = null,
+    val videoScalingMode: String? = null,
+    val videoQualityMaxHeight: Int? = null,
+    val subtitleDelayMs: Long? = null,
+)
+
+@Serializable
 data class PlaybackHistoryItem(
     val id: String, // Stable, index-independent key (PlayerLauncher.historyId)
     // The exact PlaylistPayload (items + start_index + visual_metadata) the phone sent.
@@ -30,13 +49,22 @@ data class PlaybackHistoryItem(
     val position: Long,   // TV-side progress (not part of the phone payload)
     val duration: Long,   // TV-side progress
     val timestamp: Long = System.currentTimeMillis(),
-    // Remote poster/backdrop URL from the payload's visual_metadata (null for browser-
-    // detected videos with no metadata — the card falls back to a play glyph).
+    // Remote poster/backdrop URL or a private captured-frame file URL.
     val thumbnailUrl: String? = null,
-    val isFavorite: Boolean = false
+    // Changes only when a captured frame replaces the thumbnail. The Library uses this as
+    // its image-cache key so rewriting the same private JPEG path becomes visible at once.
+    val thumbnailRevision: Long = 0L,
+    val isFavorite: Boolean = false,
+    // TV-side choices made after the cast began. Nullable keeps history written by older
+    // versions readable and lets current global player/rendering settings remain authoritative.
+    val playbackContext: PlaybackContext? = null,
 )
 
+internal fun historyDurationForSave(duration: Long, existingDuration: Long?): Long =
+    duration.takeIf { it > 0L } ?: existingDuration ?: 0L
+
 class HistoryStore(private val context: Context) {
+    private val thumbnailStore by lazy { HistoryThumbnailStore(context) }
 
     companion object {
         private val PLAYBACK_HISTORY = stringPreferencesKey("playback_history")
@@ -59,7 +87,8 @@ class HistoryStore(private val context: Context) {
         title: String?,
         position: Long,
         duration: Long,
-        thumbnailUrl: String? = null
+        thumbnailUrl: String? = null,
+        playbackContext: PlaybackContext? = null,
     ) {
         if (url.isBlank() || payloadJson.isBlank()) return
 
@@ -78,6 +107,10 @@ class HistoryStore(private val context: Context) {
             // periodic position-only save), and keep the existing favorite flag.
             val existingItem = currentList.find { it.id == id }
             val finalThumbnailUrl = thumbnailUrl ?: existingItem?.thumbnailUrl
+            // Landing is recorded before the renderer knows its duration. Preserve the known
+            // duration so immediately backing out of a resumed item does not temporarily move
+            // it out of Continue Watching.
+            val finalDuration = historyDurationForSave(duration, existingItem?.duration)
 
             val newItem = PlaybackHistoryItem(
                 id = id,
@@ -85,10 +118,12 @@ class HistoryStore(private val context: Context) {
                 url = url,
                 title = title,
                 position = position,
-                duration = duration,
+                duration = finalDuration,
                 timestamp = System.currentTimeMillis(),
                 thumbnailUrl = finalThumbnailUrl,
-                isFavorite = existingItem?.isFavorite ?: false
+                thumbnailRevision = existingItem?.thumbnailRevision ?: 0L,
+                isFavorite = existingItem?.isFavorite ?: false,
+                playbackContext = playbackContext ?: existingItem?.playbackContext,
             )
 
             // Remove existing item with same ID to update it (move to top)
@@ -110,6 +145,7 @@ class HistoryStore(private val context: Context) {
     }
     
     suspend fun removeItem(id: String) {
+        var removed = false
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
@@ -119,15 +155,18 @@ class HistoryStore(private val context: Context) {
             }
 
             if (currentList.removeAll { it.id == id }) {
+                 removed = true
                  prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),
                     currentList
                 )
             }
         }
+        if (removed) thumbnailStore.remove(id)
     }
     
     suspend fun clearHistory() {
+        val removedIds = mutableListOf<String>()
         context.historyDataStore.edit { prefs ->
             val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
             val currentList = try {
@@ -137,6 +176,9 @@ class HistoryStore(private val context: Context) {
             }
 
             val favoritesOnly = currentList.filter { it.isFavorite }
+            removedIds += currentList.asSequence()
+                .filterNot(PlaybackHistoryItem::isFavorite)
+                .map(PlaybackHistoryItem::id)
 
             if (favoritesOnly.isEmpty()) {
                 prefs.remove(PLAYBACK_HISTORY)
@@ -144,6 +186,29 @@ class HistoryStore(private val context: Context) {
                 prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),
                     favoritesOnly
+                )
+            }
+        }
+        thumbnailStore.removeAll(removedIds)
+    }
+
+    suspend fun updateThumbnail(id: String, thumbnailUrl: String) {
+        context.historyDataStore.edit { prefs ->
+            val currentJson = prefs[PLAYBACK_HISTORY] ?: "[]"
+            val currentList = try {
+                protocolJson.decodeFromString<List<PlaybackHistoryItem>>(currentJson).toMutableList()
+            } catch (e: Exception) {
+                mutableListOf()
+            }
+            val index = currentList.indexOfFirst { it.id == id }
+            if (index >= 0) {
+                currentList[index] = currentList[index].copy(
+                    thumbnailUrl = thumbnailUrl,
+                    thumbnailRevision = System.currentTimeMillis(),
+                )
+                prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
+                    ListSerializer(PlaybackHistoryItem.serializer()),
+                    currentList,
                 )
             }
         }
@@ -161,12 +226,9 @@ class HistoryStore(private val context: Context) {
             val index = currentList.indexOfFirst { it.id == id }
             if (index != -1) {
                 val item = currentList[index]
-                if (item.isFavorite) {
-                    // Unfavoriting an item completely deletes it
-                    currentList.removeAt(index)
-                } else {
-                    currentList[index] = item.copy(isFavorite = true)
-                }
+                // Favorite is an independent Library attribute. Removing the flag must not
+                // delete playback history or make an item disappear from Recent.
+                currentList[index] = item.copy(isFavorite = !item.isFavorite)
 
                 prefs[PLAYBACK_HISTORY] = protocolJson.encodeToString(
                     ListSerializer(PlaybackHistoryItem.serializer()),

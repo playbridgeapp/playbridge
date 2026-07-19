@@ -190,7 +190,7 @@ is not part of the canonical sender contract.
 | `status` | Playback state/position changes; duration is `0` when unknown/live |
 | `playlist_status` | Queue replacement, append, index change, reconnect, or clear |
 | `tracks` | Audio/subtitle track list or selection changes |
-| `player_settings` | Speed, scaling, boost, subtitle offset, or engine changes |
+| `player_settings` | Speed, adaptive quality ceiling, scaling, boost, subtitle offset, engine, and live capability changes |
 | `user_scripts` / `user_agents` | Response to Android browser administration queries |
 | `pong` | Response to application-level `ping` |
 

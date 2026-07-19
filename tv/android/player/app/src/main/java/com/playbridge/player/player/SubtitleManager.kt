@@ -1,14 +1,13 @@
 package com.playbridge.player.player
 
 import android.util.Log
+import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import okhttp3.Request
-import java.io.IOException
 import java.util.Collections
 
 class SubtitleManager(
@@ -38,7 +37,7 @@ class SubtitleManager(
     }
 
     fun loadSubtitle(url: String, headers: Map<String, String>? = null) {
-        Log.i(TAG, "Loading subtitle from: $url")
+        Log.i(TAG, "Loading subtitle from: ${redactUrlForLog(url)}")
         subtitleJob?.cancel()
         syncJob?.cancel()
         lastCueText = null
@@ -47,9 +46,9 @@ class SubtitleManager(
 
         subtitleJob = coroutineScope.launch(Dispatchers.IO) {
             try {
-                val bytes = downloadUrlBytes(url, headers)
-                val content = SubtitleParser.decode(bytes)
-                val isVtt = url.substringBefore('#').endsWith(".vtt", true) || content.startsWith("WEBVTT")
+                val downloaded = ExternalSubtitleLoader.download(url, headers)
+                val content = SubtitleParser.decode(downloaded.bytes)
+                val isVtt = downloaded.format == ExternalSubtitleFormat.WEBVTT
                 val parsed = SubtitleParser.parse(content, isVtt)
 
                 cues.addAll(parsed.map { Cue(it.startMs, it.endMs, it.text) })
@@ -95,28 +94,6 @@ class SubtitleManager(
                 lastCueText = null
                 onCueChanged(null)
             }
-        }
-    }
-
-    private fun downloadUrlBytes(urlString: String, headers: Map<String, String>? = null): ByteArray {
-        val sniffer = ContentSniffer()
-        val client = sniffer.getOkHttpClient(allowLocalSelfSigned = sniffer.isLocalUrl(urlString))
-        val requestBuilder = Request.Builder()
-            .url(urlString)
-            .header("User-Agent", "Mozilla/5.0")
-            
-        headers?.forEach { (key, value) ->
-            // Prevent overriding the URL host if a custom Host header is passed maliciously
-            if (!key.equals("Host", ignoreCase = true)) {
-                requestBuilder.header(key, value)
-            }
-        }
-            
-        val request = requestBuilder.build()
-
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Unexpected HTTP code: " + response.code)
-            return response.body?.bytes() ?: ByteArray(0)
         }
     }
 

@@ -57,6 +57,7 @@ class BrowserActivity : ComponentActivity() {
     private var engine: SystemWebViewEngine? = null
     private var canGoBack = false
     private var currentUrl: String? = null
+    private var explicitlyClosing = false
 
     // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
     private var isDragging = false
@@ -200,7 +201,7 @@ class BrowserActivity : ComponentActivity() {
             } else if (engine?.canGoBack() == true) {
                 engine?.goBack()
             } else {
-                finish()
+                closeBrowser()
             }
         }
 
@@ -256,7 +257,7 @@ class BrowserActivity : ComponentActivity() {
         // Forward the controller's playback status to the phone (drives its scrubber).
         // Same "status" message the native player emits, so the phone parses it as-is.
         engine?.onVideoStatus = { json ->
-            com.playbridge.player.server.ServerService.broadcastStatus(json)
+            com.playbridge.player.server.ServerService.broadcastStatus(this, json)
         }
 
         // Custom overlay support controlled by user scripts
@@ -833,12 +834,12 @@ class BrowserActivity : ComponentActivity() {
                 if (engine?.canGoBack() == true) {
                     engine?.goBack()
                 } else {
-                    finish()
+                    closeBrowser()
                 }
             }
             "home" -> {
                 // Home always exits the browser.
-                finish()
+                closeBrowser()
             }
         }
     }
@@ -970,6 +971,11 @@ class BrowserActivity : ComponentActivity() {
         }
     }
 
+    private fun closeBrowser() {
+        explicitlyClosing = true
+        finish()
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
@@ -998,17 +1004,18 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        engine?.resumeAfterBackground()
         // Claim the server context for the browser whenever we're foregrounded — so a
         // context_query reports "browser" regardless of how this activity was launched,
         // and we reclaim it after returning from a player launched on top of us.
-        com.playbridge.player.server.ServerService.notifyContextBrowser()
+        com.playbridge.player.server.ServerService.notifyContextBrowser(this)
     }
 
     override fun onStop() {
-        super.onStop()
         if (!isFinishing && !isChangingConfigurations) {
-            finish()
+            engine?.pauseForBackground()
         }
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -1021,10 +1028,12 @@ class BrowserActivity : ComponentActivity() {
         // Reset ServerService.activeContext so PairingScreen can open again after a
         // browser session. Same contract as the external Gecko APK uses.
         try {
-            val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
-                setPackage("com.playbridge.player")
+            if (explicitlyClosing || isFinishing) {
+                val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
+                    setPackage("com.playbridge.player")
+                }
+                sendBroadcast(idleIntent, "com.playbridge.permission.CONTEXT_IDLE")
             }
-            sendBroadcast(idleIntent, "com.playbridge.permission.CONTEXT_IDLE")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to send ACTION_CONTEXT_IDLE: ${e.message}")
         }

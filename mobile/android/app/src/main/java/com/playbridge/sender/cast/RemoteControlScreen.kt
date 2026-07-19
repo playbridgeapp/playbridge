@@ -108,7 +108,15 @@ data class TvPlayerSettings(
     val scaling: String = "Fit",
     val audioBoost: Boolean = false,
     val subtitleOffsetMs: Long = 0L,
-    val engine: String = ""
+    val engine: String = "",
+    val qualityMaxHeight: Int = 0,
+    val currentVideoHeight: Int = 0,
+    val isLive: Boolean = false,
+    val isSeekable: Boolean = true,
+    val speedAvailable: Boolean = true,
+    val scalingAvailable: Boolean = true,
+    val audioBoostAvailable: Boolean = true,
+    val qualityAvailable: Boolean = false,
 )
 
 /** A subtitle search result the user can add to the TV. */
@@ -143,6 +151,7 @@ fun RemoteControlScreen(
     mediaTitle: String? = null,
     episodes: List<PlaylistEpisode> = emptyList(),
     currentEpisodeIndex: Int = 0,
+    videoTracks: List<MediaTrack> = emptyList(),
     audioTracks: List<MediaTrack> = emptyList(),
     subtitleTracks: List<MediaTrack> = emptyList(),
     playerSettings: TvPlayerSettings = TvPlayerSettings(),
@@ -150,6 +159,7 @@ fun RemoteControlScreen(
     onJumpToEpisode: (Int) -> Unit = {},
     onSelectAudio: (String) -> Unit = {},
     onSelectSubtitle: (String) -> Unit = {},
+    onSetVideoQuality: (Int) -> Unit = {},
     onSetSpeed: (Float) -> Unit = {},
     onSetScaling: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
@@ -330,6 +340,8 @@ fun RemoteControlScreen(
     if (showSettingsSheet) {
         PlayerSettingsSheet(
             settings = playerSettings,
+            videoTracks = videoTracks,
+            onSetVideoQuality = onSetVideoQuality,
             onSetSpeed = onSetSpeed,
             onSetScaling = onSetScaling,
             onToggleAudioBoost = onToggleAudioBoost,
@@ -1443,6 +1455,8 @@ private fun formatTime(ms: Long): String {
 @Composable
 private fun PlayerSettingsSheet(
     settings: TvPlayerSettings,
+    videoTracks: List<MediaTrack>,
+    onSetVideoQuality: (Int) -> Unit,
     onSetSpeed: (Float) -> Unit,
     onSetScaling: (String) -> Unit,
     onToggleAudioBoost: () -> Unit,
@@ -1458,16 +1472,26 @@ private fun PlayerSettingsSheet(
         ) {
             Text("Player settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
-            SettingRow("Speed") {
+            if (settings.qualityAvailable && videoTracks.count { it.id != "auto" } > 1) {
+                SettingRow("Quality") {
+                    ChipGroup(
+                        options = videoTracks.map { track -> track.name to track.id },
+                        selectedKey = if (settings.qualityMaxHeight == 0) "auto" else "max:${settings.qualityMaxHeight}",
+                        onSelect = { id -> onSetVideoQuality(id.removePrefix("max:").toIntOrNull() ?: 0) },
+                    )
+                }
+            }
+
+            if (settings.speedAvailable) SettingRow("Speed") {
                 ChipGroup(
-                    options = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f).map { (if (it == 1.0f) "1x" else "${it}x") to it.toString() },
+                    options = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f).map { (if (it == 1.0f) "1x" else "${it}x") to it.toString() },
                     selectedKey = settings.speed.toString(),
                     onSelect = { it.toFloatOrNull()?.let(onSetSpeed) }
                 )
             }
 
-            SettingRow("Scaling") {
-                ChipGroup(options = listOf("Fit" to "Fit", "Fill" to "Fill", "Zoom" to "Zoom"), selectedKey = settings.scaling, onSelect = onSetScaling)
+            if (settings.scalingAvailable) SettingRow("Scaling") {
+                ChipGroup(options = listOf("Fit" to "Fit", "Crop to fill" to "Zoom", "Stretch" to "Fill"), selectedKey = settings.scaling, onSelect = onSetScaling)
             }
 
             SettingRow("Subtitle offset") {
@@ -1478,7 +1502,7 @@ private fun PlayerSettingsSheet(
                 }
             }
 
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (settings.audioBoostAvailable) Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Audio boost", style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
                 Switch(checked = settings.audioBoost, onCheckedChange = { onToggleAudioBoost() })
             }

@@ -179,21 +179,17 @@
         </activity>
 
         <activity
-            android:name=".player.ExoPlayerActivity"
+            android:name=".player.PlayerHostActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
-            <intent-filter>
-                <action android:name="com.playbridge.player.ACTION_PLAY" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
 
         <activity
             android:name=".browser.BrowserActivity"
             android:exported="false"
             android:launchMode="singleTask"
+            android:process=":web"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <intent-filter>
@@ -202,12 +198,10 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".player.MpvPlayerActivity"
+        <service
+            android:name=".player.MpvRendererService"
             android:exported="false"
-            android:launchMode="singleTop"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
-            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
+            android:process=":mpv" />
 
         <activity
             android:name=".preplay.PrePlayActivity"
@@ -220,6 +214,16 @@
             android:name=".server.ServerService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice|mediaPlayback" />
+
+        <service
+            android:name=".player.ExoRendererService"
+            android:exported="false"
+            android:process=":exo" />
+
+        <provider
+            android:name=".server.PlayerProcessBridgeProvider"
+            android:authorities="${applicationId}.player-process-bridge"
+            android:exported="false" />
 
         <receiver
             android:name=".BootReceiver"
