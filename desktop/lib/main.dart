@@ -18,6 +18,7 @@ import 'favorites_screen.dart';
 import 'history_screen.dart';
 import 'history_store.dart';
 import 'keyboard_shortcuts_sheet.dart';
+import 'media_kit_initializer.dart';
 import 'media_session_bridge.dart';
 import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
@@ -66,7 +67,7 @@ Future<void> main(List<String> args) async {
   final instanceCoordinator = instanceResult.coordinator!;
 
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+  ensurePlayBridgeMediaKitInitialized();
   await windowManager.ensureInitialized();
 
   // Diagnostics: opt-in persistent logging (off by default). Tee debugPrint into the
@@ -1802,6 +1803,12 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         ),
                       const Spacer(),
                       if (p.engineType == EngineType.mpvInternal) ...[
+                        if (Platform.isLinux)
+                          _VideoOutputMenuButton(
+                            player: p,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
+                          ),
                         _AudioMenuButton(
                           player: p,
                           onOpened: widget.onMenuOpened,
@@ -2114,6 +2121,51 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
       } catch (_) {}
     }
     return false;
+  }
+}
+
+// ─── Audio track menu ─────────────────────────────────────────────────────────
+
+class _VideoOutputMenuButton extends StatelessWidget {
+  const _VideoOutputMenuButton({
+    required this.player,
+    required this.onOpened,
+    required this.onClosed,
+  });
+
+  final PlayerController player;
+  final VoidCallback onOpened;
+  final VoidCallback onClosed;
+
+  @override
+  Widget build(BuildContext context) {
+    final hardware = player.hardwareVideoOutput;
+    return PopupMenuButton<bool>(
+      tooltip: 'Video renderer',
+      enabled: !player.videoOutputChanging,
+      icon: Icon(
+        hardware ? Icons.memory : Icons.developer_board,
+        color: hardware ? Colors.tealAccent : null,
+      ),
+      onOpened: onOpened,
+      onCanceled: onClosed,
+      onSelected: (value) {
+        onClosed();
+        unawaited(player.setHardwareVideoOutput(value));
+      },
+      itemBuilder: (context) => [
+        CheckedPopupMenuItem<bool>(
+          value: false,
+          checked: !hardware,
+          child: const Text('Software renderer'),
+        ),
+        CheckedPopupMenuItem<bool>(
+          value: true,
+          checked: hardware,
+          child: const Text('Hardware renderer'),
+        ),
+      ],
+    );
   }
 }
 

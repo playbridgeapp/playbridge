@@ -65,6 +65,7 @@ class PairingStore {
   static const _kStillWatchingThresholdMin = 'pb.still_watching_threshold_min';
   static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
   static const _kReceiverPort = 'pb.receiver_port';
+  static const _kHardwareVideoOutput = 'pb.hardware_video_output';
 
   static const int defaultReceiverPort = 8765;
 
@@ -136,6 +137,15 @@ class PairingStore {
 
   Future<void> setPreselectHlsQuality(bool value) =>
       _prefs.setBool(_kPreselectHlsQuality, value);
+
+  /// Whether media_kit presents video through its GPU-backed texture path.
+  /// Linux defaults to software because some Flutter/EGL combinations render
+  /// the hardware texture as a solid blue frame.
+  bool get hardwareVideoOutput =>
+      _prefs.getBool(_kHardwareVideoOutput) ?? !Platform.isLinux;
+
+  Future<void> setHardwareVideoOutput(bool value) =>
+      _prefs.setBool(_kHardwareVideoOutput, value);
 
   StreamProxyMode get streamProxyMode {
     final index = _prefs.getInt(_kStreamProxyMode) ?? StreamProxyMode.off.index;
