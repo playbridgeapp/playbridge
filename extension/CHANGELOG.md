@@ -2,6 +2,12 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] — 2026-07-19
+
+### Changed
+- **Chrome Web Store Packaging**: Production Chrome uploads now remove the development-only manifest `key` field, while unpacked development builds retain the stable ID configuration.
+- **Store Readiness**: Added Chrome Web Store publishing guidance and screenshots for the listing workflow.
+
 ## [0.6.0] — 2026-07-15
 
 ### Added
