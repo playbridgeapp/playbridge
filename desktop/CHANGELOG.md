@@ -2,6 +2,15 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.1+29] — 2026-07-19
+
+### Added
+- **Linux Playback Stabilization**: Added media-kit initialization and playback lifecycle handling to improve Linux rendering, tray behavior, pairing persistence, and player recovery.
+- **Chrome Store Native Host Support**: Updated the bundled native-messaging host registration and documentation for Chrome Web Store extension installs.
+
+### Fixed
+- **Proxy Authentication**: Require explicit non-default proxy passwords and keep local proxy authentication behavior consistent across Desktop and standalone proxy deployments.
+
 ## [0.8.0+28] — 2026-07-15
 
 ### Added
