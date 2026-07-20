@@ -17,11 +17,12 @@ pub enum ReceiverProtocol {
     Dlna,
     Roku,
     Dial,
+    GoogleCast,
 }
 
 impl ReceiverProtocol {
-    pub const DEFAULTS: [Self; 3] = [Self::PlayBridge, Self::Dlna, Self::Roku];
-    pub const ALL: [Self; 4] = [Self::PlayBridge, Self::Dlna, Self::Roku, Self::Dial];
+    pub const DEFAULTS: [Self; 4] = [Self::PlayBridge, Self::Dlna, Self::Roku, Self::GoogleCast];
+    pub const ALL: [Self; 5] = [Self::PlayBridge, Self::Dlna, Self::Roku, Self::Dial, Self::GoogleCast];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -29,6 +30,7 @@ impl ReceiverProtocol {
             Self::Dlna => "dlna",
             Self::Roku => "roku",
             Self::Dial => "dial",
+            Self::GoogleCast => "google_cast",
         }
     }
 }
@@ -59,6 +61,7 @@ impl FromStr for ReceiverProtocol {
             "dlna" => Ok(Self::Dlna),
             "roku" => Ok(Self::Roku),
             "dial" => Ok(Self::Dial),
+            "google_cast" | "googlecast" | "chromecast" => Ok(Self::GoogleCast),
             _ => Err(ParseReceiverProtocolError(value.to_owned())),
         }
     }
@@ -172,6 +175,13 @@ async fn run_discovery(
         tasks.spawn(async move { discover_playbridge(timeout, events, cancellation).await });
     }
 
+    if config.protocols.contains(&ReceiverProtocol::GoogleCast) {
+        let events = events.clone();
+        let cancellation = cancellation.clone();
+        let timeout = config.timeout;
+        tasks.spawn(async move { discover_google_cast(timeout, events, cancellation).await });
+    }
+
     let wants_dlna = config.protocols.contains(&ReceiverProtocol::Dlna);
     let wants_roku = config.protocols.contains(&ReceiverProtocol::Roku);
     let wants_generic_dial = config.protocols.contains(&ReceiverProtocol::Dial);
@@ -233,6 +243,62 @@ async fn discover_playbridge(
         DiscoveryEvent::Finished(ReceiverProtocol::PlayBridge),
     )
     .await;
+}
+
+async fn discover_google_cast(
+    timeout: Duration,
+    events: mpsc::Sender<DiscoveryEvent>,
+    cancellation: CancellationToken,
+) {
+    send(
+        &events,
+        DiscoveryEvent::Started(ReceiverProtocol::GoogleCast),
+    )
+    .await;
+    let (found_sender, mut found_receiver) = mpsc::unbounded_channel();
+    let search = native_discovery::discover_google_cast_incremental(timeout, found_sender);
+    tokio::pin!(search);
+    loop {
+        tokio::select! {
+            _ = cancellation.cancelled() => break,
+            receiver = found_receiver.recv() => {
+                if let Some(receiver) = receiver {
+                    send(&events, DiscoveryEvent::Found(google_cast_receiver(receiver))).await;
+                }
+            }
+            result = &mut search => {
+                if let Err(failure) = result {
+                    report_error(&events, ReceiverProtocol::GoogleCast, failure).await;
+                }
+                while let Ok(receiver) = found_receiver.try_recv() {
+                    send(&events, DiscoveryEvent::Found(google_cast_receiver(receiver))).await;
+                }
+                break;
+            }
+        }
+    }
+    send(
+        &events,
+        DiscoveryEvent::Finished(ReceiverProtocol::GoogleCast),
+    )
+    .await;
+}
+
+fn google_cast_receiver(receiver: native_discovery::GoogleCastReceiver) -> Receiver {
+    let id = receiver
+        .uuid
+        .clone()
+        .unwrap_or_else(|| format!("{}:{}", receiver.name, receiver.port));
+    Receiver {
+        id: ReceiverId(format!("google_cast:{id}")),
+        protocol: ReceiverProtocol::GoogleCast,
+        name: receiver.name,
+        addresses: receiver.addresses,
+        port: Some(receiver.port),
+        wss_port: None,
+        location: None,
+        uuid: receiver.uuid,
+    }
 }
 
 fn playbridge_receiver(receiver: native_discovery::PlayBridgeReceiver) -> Receiver {
@@ -508,7 +574,8 @@ mod tests {
         assert_eq!(ReceiverProtocol::PlayBridge.as_str(), "playbridge");
         assert_eq!("native".parse(), Ok(ReceiverProtocol::PlayBridge));
         assert_eq!("DLNA".parse(), Ok(ReceiverProtocol::Dlna));
-        assert!("googlecast".parse::<ReceiverProtocol>().is_err());
+        assert_eq!("googlecast".parse(), Ok(ReceiverProtocol::GoogleCast));
+        assert!("unknown".parse::<ReceiverProtocol>().is_err());
     }
 
     #[test]

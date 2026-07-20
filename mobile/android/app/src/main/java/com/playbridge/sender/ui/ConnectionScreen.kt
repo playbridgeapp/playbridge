@@ -703,14 +703,20 @@ fun TvDeviceRow(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        if (device.connectDevice.isDlna) {
+                        val badgeText = when {
+                            device.connectDevice.isDlna -> "DLNA"
+                            device.connectDevice.isRoku -> "Roku"
+                            device.connectDevice.isGoogleCast -> "Google Cast"
+                            else -> null
+                        }
+                        if (badgeText != null) {
                             Surface(
                                 color = MaterialTheme.colorScheme.tertiaryContainer,
                                 contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                                 shape = RoundedCornerShape(4.dp)
                             ) {
                                 Text(
-                                    text = "DLNA",
+                                    text = badgeText,
                                     style = MaterialTheme.typography.labelSmall,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )

@@ -391,7 +391,7 @@ fun DeviceConnectionSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    listOf("All", "PlayBridge", "DLNA", "Roku").forEach { proto ->
+                    listOf("All", "PlayBridge", "DLNA", "Roku", "Google Cast").forEach { proto ->
                         FilterChip(
                             selected = selectedProtocolFilter == proto,
                             onClick = { selectedProtocolFilter = proto },
@@ -402,9 +402,10 @@ fun DeviceConnectionSheet(
 
                 val filtered = unified.filter { u ->
                     when (selectedProtocolFilter) {
-                        "PlayBridge" -> !u.connectDevice.isDlna && !u.connectDevice.isRoku
+                        "PlayBridge" -> !u.connectDevice.isDlna && !u.connectDevice.isRoku && !u.connectDevice.isGoogleCast
                         "DLNA" -> u.connectDevice.isDlna
                         "Roku" -> u.connectDevice.isRoku
+                        "Google Cast" -> u.connectDevice.isGoogleCast
                         else -> true
                     }
                 }

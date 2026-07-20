@@ -9,6 +9,16 @@ use tokio::{sync::mpsc, time};
 use crate::{CastError, Result};
 
 pub const SERVICE_TYPE: &str = "_playbridge._tcp.local.";
+pub const GOOGLE_CAST_SERVICE_TYPE: &str = "_googlecast._tcp.local.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GoogleCastReceiver {
+    pub name: String,
+    pub uuid: Option<String>,
+    pub addresses: Vec<String>,
+    pub port: u16,
+    pub model: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayBridgeReceiver {
@@ -115,6 +125,85 @@ pub async fn discover_incremental(
     let _ = daemon.stop_browse(SERVICE_TYPE);
     let _ = daemon.shutdown();
     Ok(())
+}
+
+/// Browses Google Cast services and sends each new or changed resolution immediately.
+pub async fn discover_google_cast_incremental(
+    timeout: Duration,
+    events: mpsc::UnboundedSender<GoogleCastReceiver>,
+) -> Result<()> {
+    let daemon = ServiceDaemon::new().map_err(mdns_error)?;
+    let receiver = daemon.browse(GOOGLE_CAST_SERVICE_TYPE).map_err(mdns_error)?;
+    let deadline = Instant::now() + timeout;
+    let mut found = HashMap::<String, GoogleCastReceiver>::new();
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match time::timeout(remaining, receiver.recv_async()).await {
+            Ok(Ok(ServiceEvent::ServiceResolved(info))) => {
+                if let Some(device) = parse_google_cast_service(&info) {
+                    let key = device
+                        .uuid
+                        .clone()
+                        .unwrap_or_else(|| format!("{}:{}", device.name, device.port));
+                    if found.get(&key) != Some(&device) {
+                        found.insert(key, device.clone());
+                        let _ = events.send(device);
+                    }
+                }
+            }
+            Ok(Ok(ServiceEvent::ServiceRemoved(_, fullname))) => {
+                found.retain(|_, device| !fullname.starts_with(&device.name));
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                let _ = daemon.stop_browse(GOOGLE_CAST_SERVICE_TYPE);
+                let _ = daemon.shutdown();
+                return Err(mdns_error(error));
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = daemon.stop_browse(GOOGLE_CAST_SERVICE_TYPE);
+    let _ = daemon.shutdown();
+    Ok(())
+}
+
+fn parse_google_cast_service(info: &ResolvedService) -> Option<GoogleCastReceiver> {
+    let mut addresses: Vec<_> = info
+        .get_addresses()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    if addresses.iter().any(|address| !is_loopback(address)) {
+        addresses.retain(|address| !is_loopback(address));
+    }
+    addresses.sort_by_key(|ip| (ip.contains(':'), ip.clone()));
+    if addresses.is_empty() {
+        return None;
+    }
+    let friendly_name = info
+        .get_property_val_str("fn")
+        .map(str::trim)
+        .filter(|val| !val.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            info.get_fullname()
+                .strip_suffix(GOOGLE_CAST_SERVICE_TYPE)
+                .unwrap_or(info.get_fullname())
+                .trim_end_matches('.')
+                .replace("\\032", " ")
+        });
+    Some(GoogleCastReceiver {
+        name: friendly_name,
+        uuid: non_empty_property(info, "id"),
+        addresses,
+        port: info.get_port(),
+        model: non_empty_property(info, "md"),
+    })
 }
 
 fn receiver_key(device: &PlayBridgeReceiver) -> String {

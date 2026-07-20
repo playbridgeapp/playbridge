@@ -21,6 +21,7 @@ pub enum Protocol {
     Dlna,
     Roku,
     Dial,
+    GoogleCast,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
@@ -138,6 +139,7 @@ impl From<Protocol> for ReceiverProtocol {
             Protocol::Dlna => Self::Dlna,
             Protocol::Roku => Self::Roku,
             Protocol::Dial => Self::Dial,
+            Protocol::GoogleCast => Self::GoogleCast,
         }
     }
 }
@@ -149,6 +151,7 @@ impl From<ReceiverProtocol> for Protocol {
             ReceiverProtocol::Dlna => Self::Dlna,
             ReceiverProtocol::Roku => Self::Roku,
             ReceiverProtocol::Dial => Self::Dial,
+            ReceiverProtocol::GoogleCast => Self::GoogleCast,
         }
     }
 }
@@ -197,6 +200,7 @@ fn protocols_from_mask(mask: u32) -> Vec<Protocol> {
         (2, Protocol::Dlna),
         (4, Protocol::Roku),
         (8, Protocol::Dial),
+        (16, Protocol::GoogleCast),
     ]
     .into_iter()
     .filter_map(|(bit, protocol)| (mask & bit != 0).then_some(protocol))
@@ -204,7 +208,7 @@ fn protocols_from_mask(mask: u32) -> Vec<Protocol> {
 }
 
 /// Starts a discovery scanner for Dart/other C consumers. Bitmask values are
-/// PlayBridge=1, DLNA=2, Roku=4, generic DIAL=8.
+/// PlayBridge=1, DLNA=2, Roku=4, generic DIAL=8, GoogleCast=16.
 #[unsafe(no_mangle)]
 pub extern "C" fn pb_discovery_start(protocol_mask: u32, timeout_ms: u64) -> *mut DiscoveryScanner {
     let protocols = protocols_from_mask(protocol_mask);

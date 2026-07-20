@@ -24,6 +24,7 @@ class NsdHelper(context: Context) {
         PLAYBRIDGE,
         DLNA,
         ROKU,
+        GOOGLE_CAST,
     }
 
     data class DiscoveredDevice(
@@ -41,6 +42,7 @@ class NsdHelper(context: Context) {
     ) {
         val isDlna: Boolean get() = protocol == TvProtocol.DLNA
         val isRoku: Boolean get() = protocol == TvProtocol.ROKU
+        val isGoogleCast: Boolean get() = protocol == TvProtocol.GOOGLE_CAST
     }
 
     // Discovery is refcounted by owner so independent clients (the UI scan window and the

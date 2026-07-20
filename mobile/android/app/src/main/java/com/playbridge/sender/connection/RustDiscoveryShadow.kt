@@ -35,11 +35,12 @@ internal data class RustDiscoverySummary(
     val playBridgeDevices: Int,
     val dlnaDevices: Int,
     val rokuDevices: Int,
+    val googleCastDevices: Int,
     val errors: Int,
 )
 
 /**
- * Runs Rust discovery (mDNS + DLNA SSDP + Roku ECP) using native Rust cast-core engine.
+ * Runs Rust discovery (mDNS + DLNA SSDP + Roku ECP + Google Cast mDNS) using native Rust cast-core engine.
  * Emits discovered devices via [discoveredDevices] StateFlow.
  */
 internal class RustDiscoveryShadow(context: Context) {
@@ -61,7 +62,7 @@ internal class RustDiscoveryShadow(context: Context) {
         val multicastLock = acquireMulticastLock()
         val handle = try {
             RustDiscoveryNative.start(
-                PROTOCOL_PLAYBRIDGE or PROTOCOL_DLNA or PROTOCOL_ROKU,
+                PROTOCOL_PLAYBRIDGE or PROTOCOL_DLNA or PROTOCOL_ROKU or PROTOCOL_GOOGLE_CAST,
                 timeoutMs
             )
         } catch (error: LinkageError) {
@@ -115,6 +116,7 @@ internal class RustDiscoveryShadow(context: Context) {
                             playBridgeDevices = receivers["PlayBridge"]?.size ?: 0,
                             dlnaDevices = receivers["Dlna"]?.size ?: 0,
                             rokuDevices = receivers["Roku"]?.size ?: 0,
+                            googleCastDevices = receivers["GoogleCast"]?.size ?: 0,
                             errors = errors,
                         )
                     )
@@ -126,16 +128,25 @@ internal class RustDiscoveryShadow(context: Context) {
     }
 
     fun stop() {
-        val handle = activeHandle.get()
-        if (handle != 0L) runCatching { RustDiscoveryNative.cancel(handle) }
         worker?.cancel()
         worker = null
+        val handle = activeHandle.getAndSet(0L)
+        if (handle != 0L) {
+            try {
+                RustDiscoveryNative.cancel(handle)
+                RustDiscoveryNative.free(handle)
+            } catch (error: LinkageError) {
+                Log.w(TAG, "Rust discovery cleanup failed: ${error.javaClass.simpleName}")
+            }
+        }
     }
 
     private fun parseDiscoveredDevice(receiver: JSONObject): NsdHelper.DiscoveredDevice? {
-        val name = receiver.optString("name").ifEmpty { "TV Device" }
+        val name = receiver.optString("name").ifEmpty { "TV Receiver" }
         val addresses = receiver.optJSONArray("addresses")
-        val ip = if (addresses != null && addresses.length() > 0) addresses.optString(0) else return null
+        val ip = if (addresses != null && addresses.length() > 0) addresses.getString(0) else ""
+        if (ip.isEmpty()) return null
+
         val port = receiver.optInt("port", 0)
         val wssPort = if (receiver.has("wss_port") && !receiver.isNull("wss_port")) receiver.optInt("wss_port") else null
         val location = receiver.optString("location").takeIf { it.isNotEmpty() }
@@ -145,12 +156,13 @@ internal class RustDiscoveryShadow(context: Context) {
         val protocol = when (protoStr) {
             "Dlna" -> NsdHelper.TvProtocol.DLNA
             "Roku" -> NsdHelper.TvProtocol.ROKU
+            "GoogleCast" -> NsdHelper.TvProtocol.GOOGLE_CAST
             else -> NsdHelper.TvProtocol.PLAYBRIDGE
         }
 
         return NsdHelper.DiscoveredDevice(
             ip = ip,
-            port = if (protocol == NsdHelper.TvProtocol.ROKU && port == 0) 8060 else port,
+            port = if (protocol == NsdHelper.TvProtocol.ROKU && port == 0) 8060 else if (protocol == NsdHelper.TvProtocol.GOOGLE_CAST && port == 0) 8009 else port,
             name = name,
             uuid = uuid,
             wssPort = wssPort,
@@ -178,6 +190,7 @@ internal class RustDiscoveryShadow(context: Context) {
         const val PROTOCOL_PLAYBRIDGE = 1
         const val PROTOCOL_DLNA = 2
         const val PROTOCOL_ROKU = 4
+        const val PROTOCOL_GOOGLE_CAST = 16
         const val EVENT_WAIT_MS = 250L
         const val FINISH_GRACE_MS = 1_000L
         const val MULTICAST_LOCK_TAG = "playbridge:rust-discovery"
