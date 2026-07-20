@@ -1,0 +1,3 @@
+[workspace]
+members = ["cast-cli", "cast-core", "cast-core-ffi"]
+resolver = "3"

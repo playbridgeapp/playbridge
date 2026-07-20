@@ -49,6 +49,8 @@ class SettingsRepository(
          * Casting always keeps the link regardless of this toggle.
          */
         val KEEP_TV_CONNECTION_IN_BACKGROUND = booleanPreferencesKey("keep_tv_connection_in_background")
+        /** Run the Rust receiver discovery engine beside Kotlin discovery for count-only comparison. */
+        val RUST_DISCOVERY_SHADOW_MODE = booleanPreferencesKey("rust_discovery_shadow_mode")
     }
 
     // 2. Flow definitions for reactive Compose collectors
@@ -87,6 +89,8 @@ class SettingsRepository(
      */
     val keepTvConnectionInBackground: Flow<Boolean> =
         dataStore.data.catch { handleException(it) }.map { it[Keys.KEEP_TV_CONNECTION_IN_BACKGROUND] ?: false }
+    val rustDiscoveryShadowMode: Flow<Boolean> =
+        dataStore.data.catch { handleException(it) }.map { it[Keys.RUST_DISCOVERY_SHADOW_MODE] ?: false }
 
     // 3. Mutator methods
     suspend fun setAutoSwitchToRemote(value: Boolean) = write { it[Keys.AUTO_SWITCH_TO_REMOTE] = value }
@@ -110,6 +114,8 @@ class SettingsRepository(
     suspend fun setEnableLocalScrapers(value: Boolean) = write { it[Keys.ENABLE_LOCAL_SCRAPERS] = value }
     suspend fun setKeepTvConnectionInBackground(value: Boolean) =
         write { it[Keys.KEEP_TV_CONNECTION_IN_BACKGROUND] = value }
+    suspend fun setRustDiscoveryShadowMode(value: Boolean) =
+        write { it[Keys.RUST_DISCOVERY_SHADOW_MODE] = value }
 
     /** Append a new saved custom user agent. */
     suspend fun addCustomUserAgent(agent: CustomUserAgent) = write { prefs ->

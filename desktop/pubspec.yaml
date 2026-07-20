@@ -34,6 +34,11 @@ dependencies:
   playbridge_stream_proxy:
     path: ../stream-proxy-dart
 
+  # Shared Rust discovery and casting protocols. Imported by sender features as
+  # they migrate; adding the package does not start background discovery.
+  playbridge_cast_core:
+    path: ../packages/playbridge_cast_core_dart
+
   # mDNS service publishing (_playbridge._tcp.) + persistent pairing
   bonsoir: ^5.1.10
   shared_preferences: ^2.3.3

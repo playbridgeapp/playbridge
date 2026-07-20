@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'bridge_paths.dart';
 import 'extension_request_debug_log.dart';
 import 'player_controller.dart';
+import 'tv_discovery.dart';
 import 'tv_sender_controller.dart';
 
 /// Local IPC endpoint the browser extension reaches **via the native-messaging
@@ -332,7 +333,10 @@ class ExtensionBridge {
           {
             'uuid': d.uuid,
             'name': d.name,
-            'paired': _sender.pairedTvs.any((p) => p.uuid == d.uuid),
+            'protocol': d.protocol.name,
+            'connectable': _sender.canConnectTo(d),
+            'paired': d.protocol == TvProtocol.playBridge &&
+                _sender.pairedTvs.any((p) => p.uuid == d.uuid),
           },
       ],
     };

@@ -24,11 +24,12 @@ class TvSenderController extends ChangeNotifier {
     required PairingStore identity,
     required TvConnectionStore store,
   })  : _identity = identity,
-        _store = store;
+        _store = store,
+        _discovery = TvDiscoveryBrowser();
 
   final PairingStore _identity;
   final TvConnectionStore _store;
-  final TvDiscoveryBrowser _discovery = TvDiscoveryBrowser();
+  final TvDiscoveryBrowser _discovery;
   final TvSenderClient _client = TvSenderClient();
   final LocalFileServer _fileServer = LocalFileServer();
 
@@ -90,6 +91,9 @@ class TvSenderController extends ChangeNotifier {
   /// TV → desktop messages (status / playlist_status / tracks / context).
   Stream<String> get messages => _client.messages;
 
+  bool canConnectTo(DiscoveredTv tv) =>
+      tv.protocol == TvProtocol.playBridge && tv.port != null;
+
   Future<void> start() async {
     _devSub = _discovery.devices.listen((d) {
       _discoveredRaw = d;
@@ -115,11 +119,17 @@ class TvSenderController extends ChangeNotifier {
   /// paired; otherwise runs the SAS pairing handshake (the user enters the
   /// 6-digit code shown on the TV).
   Future<void> connectToDiscovered(DiscoveredTv tv) async {
+    if (!canConnectTo(tv)) {
+      debugPrint(
+        '[tv-sender] ${tv.protocol.label} playback transport is not enabled yet',
+      );
+      return;
+    }
     _pending = tv;
     final known = _store.byUuid(tv.uuid);
     await _client.connect(
       host: tv.host,
-      port: tv.port,
+      port: tv.port!,
       wssPort: tv.wssPort,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
@@ -134,15 +144,17 @@ class TvSenderController extends ChangeNotifier {
     final fresh = _discoveredByUuid(tv.uuid);
     final target = DiscoveredTv(
       uuid: tv.uuid,
+      protocol: TvProtocol.playBridge,
       name: tv.name,
       host: fresh?.host ?? tv.host,
       port: fresh?.port ?? tv.port,
       wssPort: fresh?.wssPort ?? tv.wssPort,
+      location: null,
     );
     _pending = target;
     await _client.connect(
       host: target.host,
-      port: target.port,
+      port: target.port!,
       wssPort: target.wssPort,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
@@ -392,7 +404,7 @@ class TvSenderController extends ChangeNotifier {
       uuid: p.uuid,
       name: p.name,
       host: p.host,
-      port: p.port,
+      port: p.port!,
       wssPort: p.wssPort,
       token: creds.token,
       certFingerprint: creds.certFingerprint,

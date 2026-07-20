@@ -100,6 +100,15 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
+set(PLAYBRIDGE_CAST_CORE_LIBRARY
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/cast_core/linux/libplaybridge_cast_core_ffi.so")
+if(EXISTS "${PLAYBRIDGE_CAST_CORE_LIBRARY}")
+  install(FILES "${PLAYBRIDGE_CAST_CORE_LIBRARY}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+else()
+  message(WARNING "PlayBridge Cast Core library is missing; run rust/build-desktop.sh on Linux")
+endif()
+
 foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
   install(FILES "${bundled_library}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"

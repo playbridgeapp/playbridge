@@ -11,6 +11,7 @@ import androidx.lifecycle.viewModelScope
 import com.playbridge.sender.data.history.DatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import com.playbridge.sender.data.history.CommandHistoryEntity
+import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
@@ -41,7 +42,8 @@ class ConnectionViewModel(
     private val connectionStore: ConnectionStore = ConnectionStore(application),
     private val nsdHelper: NsdHelper = NsdHelper(application),
     private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
-    val castSessionManager: CastSessionManager
+    val castSessionManager: CastSessionManager,
+    private val settingsRepository: SettingsRepository,
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
@@ -141,6 +143,8 @@ class ConnectionViewModel(
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
     private var scanTimeoutJob: Job? = null
+    private val rustDiscoveryShadow = RustDiscoveryShadow(application)
+    @Volatile private var rustDiscoveryShadowEnabled = false
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
@@ -174,6 +178,13 @@ class ConnectionViewModel(
     }
 
     init {
+        viewModelScope.launch {
+            settingsRepository.rustDiscoveryShadowMode.collect { enabled ->
+                rustDiscoveryShadowEnabled = enabled
+                if (!enabled) rustDiscoveryShadow.stop()
+            }
+        }
+
         // Handle Auto-connection
         viewModelScope.launch {
             tvDevice.combine(connectionState) { device, state ->
@@ -481,6 +492,18 @@ class ConnectionViewModel(
         scanTimeoutJob?.cancel()
         nsdHelper.startDiscovery()
         dlnaDiscovery.start(viewModelScope)
+        if (rustDiscoveryShadowEnabled) {
+            rustDiscoveryShadow.start(viewModelScope, SCAN_WINDOW_MS) { summary ->
+                val kotlinDevices = discoveredDevices.value
+                Log.i(
+                    TAG,
+                    "Discovery comparison: Rust native=${summary.playBridgeDevices}, " +
+                        "DLNA=${summary.dlnaDevices}, errors=${summary.errors}; " +
+                        "Kotlin native=${kotlinDevices.count { !it.isDlna }}, " +
+                        "DLNA=${kotlinDevices.count { it.isDlna }}",
+                )
+            }
+        }
         _isScanning.value = true
         scanTimeoutJob = viewModelScope.launch {
             delay(SCAN_WINDOW_MS)
@@ -496,6 +519,7 @@ class ConnectionViewModel(
         scanTimeoutJob = null
         nsdHelper.stopDiscovery()
         dlnaDiscovery.stop()
+        rustDiscoveryShadow.stop()
         _isScanning.value = false
     }
 
@@ -503,6 +527,7 @@ class ConnectionViewModel(
         super.onCleared()
         nsdHelper.stopDiscovery()
         dlnaDiscovery.stop()
+        rustDiscoveryShadow.stop()
         // While a cast session is active, CastSessionManager + CastSessionService own the
         // socket's lifetime — episode queueing must survive this ViewModel (screen-off /
         // activity death). Otherwise close the socket as before. Never destroy(): the

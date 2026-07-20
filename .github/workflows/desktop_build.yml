@@ -5,6 +5,8 @@ on:
     branches: [ "main" ]
     paths:
       - 'desktop/**'
+      - 'packages/playbridge_cast_core_dart/**'
+      - 'rust/**'
       - 'protocol/**'
       - '.github/workflows/desktop_build.yml'
       - '.gitmodules'
@@ -51,6 +53,12 @@ jobs:
         channel: stable
         cache: true
 
+    - name: Set up Rust
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-pc-windows-msvc
+
     - name: Install dependencies
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter pub get
@@ -59,6 +67,11 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       shell: bash
       run: bash scripts/build_host.sh
+
+    - name: Build Rust Cast Core
+      if: steps.check_tag.outputs.skipped == 'false'
+      shell: bash
+      run: bash ../rust/build-desktop.sh
 
     - name: Build Windows
       if: steps.check_tag.outputs.skipped == 'false'
@@ -85,6 +98,8 @@ jobs:
       run: |
         Compress-Archive -Path "build\windows\x64\runner\Release\*" `
           -DestinationPath "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip"
+        Compress-Archive -Path "native\cast_core\windows\playbridge-cast.exe" `
+          -DestinationPath "playbridge-cast-cli-windows-${{ steps.version.outputs.version }}.zip"
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -95,6 +110,8 @@ jobs:
       shell: bash
       run: |
         aws s3 cp "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip" \
+          s3://${{ secrets.R2_BUCKET }}/desktop-release/
+        aws s3 cp "playbridge-cast-cli-windows-${{ steps.version.outputs.version }}.zip" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   build-linux:
@@ -149,6 +166,12 @@ jobs:
         channel: stable
         cache: true
 
+    - name: Set up Rust
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: x86_64-unknown-linux-gnu
+
     - name: Install dependencies
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter pub get
@@ -157,6 +180,10 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       shell: bash
       run: bash scripts/build_host.sh
+
+    - name: Build Rust Cast Core
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: ../rust/build-desktop.sh
 
     - name: Build Linux
       if: steps.check_tag.outputs.skipped == 'false'
@@ -167,6 +194,8 @@ jobs:
       run: |
         tar -czf "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
           -C build/linux/x64/release bundle
+        tar -czf "playbridge-cast-cli-linux-${{ steps.version.outputs.version }}.tar.gz" \
+          -C native/cast_core/linux playbridge-cast
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -176,6 +205,8 @@ jobs:
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
         aws s3 cp "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
+          s3://${{ secrets.R2_BUCKET }}/desktop-release/
+        aws s3 cp "playbridge-cast-cli-linux-${{ steps.version.outputs.version }}.tar.gz" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   build-macos:
@@ -216,6 +247,12 @@ jobs:
         channel: stable
         cache: true
 
+    - name: Set up Rust
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: aarch64-apple-darwin,x86_64-apple-darwin
+
     - name: Install dependencies
       if: steps.check_tag.outputs.skipped == 'false'
       run: flutter pub get
@@ -224,6 +261,10 @@ jobs:
       if: steps.check_tag.outputs.skipped == 'false'
       shell: bash
       run: bash scripts/build_host.sh
+
+    - name: Build Rust Cast Core
+      if: steps.check_tag.outputs.skipped == 'false'
+      run: ../rust/build-desktop.sh
 
     - name: Build macOS
       if: steps.check_tag.outputs.skipped == 'false'
@@ -235,6 +276,9 @@ jobs:
         cd build/macos/Build/Products/Release
         zip -ry "$GITHUB_WORKSPACE/desktop/playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
           playbridge_desktop.app
+        cd "$GITHUB_WORKSPACE/desktop/native/cast_core/macos"
+        zip -y "$GITHUB_WORKSPACE/desktop/playbridge-cast-cli-macos-${{ steps.version.outputs.version }}.zip" \
+          playbridge-cast
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -244,6 +288,8 @@ jobs:
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
         aws s3 cp "playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
+          s3://${{ secrets.R2_BUCKET }}/desktop-release/
+        aws s3 cp "playbridge-cast-cli-macos-${{ steps.version.outputs.version }}.zip" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   release:
@@ -297,6 +343,8 @@ jobs:
           | Windows 10+ | `playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip` — extract and run `playbridge_desktop.exe` |
           | Linux | `playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz` — extract and run `bundle/playbridge_desktop` |
           | macOS 12+ | `playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip` — extract and right-click → Open (unsigned) |
+
+          Cross-platform discovery CLI archives are also attached as `playbridge-cast-cli-*`.
 
           **Linux:** requires `libmpv2` (`sudo apt install libmpv2` or `sudo dnf install mpv-libs`).
 

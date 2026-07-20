@@ -1,0 +1,134 @@
+package com.playbridge.sender.connection
+
+import android.content.Context
+import android.net.wifi.WifiManager
+import android.os.SystemClock
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicLong
+
+/** Minimal JNI surface; avoids shipping JNA solely for the Rust experiment. */
+internal object RustDiscoveryNative {
+    init {
+        System.loadLibrary("playbridge_cast_core_ffi")
+    }
+
+    external fun start(protocolMask: Int, timeoutMs: Long): Long
+    external fun nextEvent(handle: Long, waitMs: Long): String?
+    external fun cancel(handle: Long)
+    external fun free(handle: Long)
+}
+
+internal data class RustDiscoverySummary(
+    val playBridgeDevices: Int,
+    val dlnaDevices: Int,
+    val errors: Int,
+)
+
+/**
+ * Runs Rust discovery beside the authoritative Kotlin engines. Results never enter UI state and
+ * logs contain counts only: receiver names, addresses and identifiers are deliberately omitted.
+ */
+internal class RustDiscoveryShadow(context: Context) {
+    private val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
+    private var worker: Job? = null
+    private val activeHandle = AtomicLong(0L)
+    private var nativeUnavailableLogged = false
+
+    fun start(
+        scope: CoroutineScope,
+        timeoutMs: Long,
+        onFinished: (RustDiscoverySummary) -> Unit,
+    ) {
+        stop()
+        val multicastLock = acquireMulticastLock()
+        val handle = try {
+            RustDiscoveryNative.start(PROTOCOL_PLAYBRIDGE or PROTOCOL_DLNA, timeoutMs)
+        } catch (error: LinkageError) {
+            releaseMulticastLock(multicastLock)
+            if (!nativeUnavailableLogged) {
+                Log.w(TAG, "Rust discovery unavailable: ${error.javaClass.simpleName}")
+                nativeUnavailableLogged = true
+            }
+            return
+        }
+        if (handle == 0L) {
+            releaseMulticastLock(multicastLock)
+            Log.w(TAG, "Rust discovery worker could not start")
+            return
+        }
+        activeHandle.set(handle)
+        worker = scope.launch(Dispatchers.IO) {
+            val receivers = mutableMapOf<String, MutableSet<String>>()
+            var errors = 0
+            val deadline = SystemClock.elapsedRealtime() + timeoutMs + FINISH_GRACE_MS
+            try {
+                while (isActive && SystemClock.elapsedRealtime() < deadline) {
+                    val event = RustDiscoveryNative.nextEvent(handle, EVENT_WAIT_MS) ?: continue
+                    val json = JSONObject(event)
+                    when (json.optString("event")) {
+                        "found", "updated" -> {
+                            val receiver = json.optJSONObject("receiver") ?: continue
+                            val protocol = receiver.optString("protocol")
+                            val id = receiver.optString("id")
+                            if (id.isNotEmpty()) receivers.getOrPut(protocol) { mutableSetOf() }.add(id)
+                        }
+                        "error" -> errors++
+                    }
+                }
+            } catch (error: LinkageError) {
+                Log.w(TAG, "Rust discovery stopped: ${error.javaClass.simpleName}")
+            } finally {
+                try {
+                    RustDiscoveryNative.cancel(handle)
+                    RustDiscoveryNative.free(handle)
+                    activeHandle.compareAndSet(handle, 0L)
+                    onFinished(
+                        RustDiscoverySummary(
+                            playBridgeDevices = receivers["PlayBridge"]?.size ?: 0,
+                            dlnaDevices = receivers["Dlna"]?.size ?: 0,
+                            errors = errors,
+                        )
+                    )
+                } finally {
+                    releaseMulticastLock(multicastLock)
+                }
+            }
+        }
+    }
+
+    fun stop() {
+        val handle = activeHandle.get()
+        if (handle != 0L) runCatching { RustDiscoveryNative.cancel(handle) }
+        worker?.cancel()
+        worker = null
+    }
+
+    private fun acquireMulticastLock(): WifiManager.MulticastLock? = try {
+        wifiManager?.createMulticastLock(MULTICAST_LOCK_TAG)?.apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    } catch (error: RuntimeException) {
+        Log.w(TAG, "Could not acquire multicast lock: ${error.javaClass.simpleName}")
+        null
+    }
+
+    private fun releaseMulticastLock(lock: WifiManager.MulticastLock?) {
+        if (lock?.isHeld == true) runCatching { lock.release() }
+    }
+
+    private companion object {
+        const val TAG = "RustDiscoveryShadow"
+        const val PROTOCOL_PLAYBRIDGE = 1
+        const val PROTOCOL_DLNA = 2
+        const val EVENT_WAIT_MS = 250L
+        const val FINISH_GRACE_MS = 1_000L
+        const val MULTICAST_LOCK_TAG = "playbridge:rust-discovery"
+    }
+}

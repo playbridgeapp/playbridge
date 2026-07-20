@@ -91,7 +91,10 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     final paired = controller.pairedTvs;
     // Paired TVs not currently visible on the network (so the user can still
     // reconnect / forget them).
-    final discoveredUuids = discovered.map((d) => d.uuid).toSet();
+    final discoveredUuids = discovered
+        .where((device) => device.protocol == TvProtocol.playBridge)
+        .map((device) => device.uuid)
+        .toSet();
     final offlinePaired =
         paired.where((p) => !discoveredUuids.contains(p.uuid)).toList();
 
@@ -104,7 +107,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Cast from this computer to a PlayBridge TV.',
+          'Discover PlayBridge, DLNA, and Roku receivers on your network.',
           style: TextStyle(
               fontSize: 13, color: Colors.white.withValues(alpha: 0.6)),
         ),
@@ -197,7 +200,9 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         else
           ...discovered.map((tv) => _DiscoveredRow(
                 tv: tv,
-                paired: controller.pairedTvs.any((p) => p.uuid == tv.uuid),
+                paired: tv.protocol == TvProtocol.playBridge &&
+                    controller.pairedTvs.any((p) => p.uuid == tv.uuid),
+                connectable: controller.canConnectTo(tv),
                 busy: _isBusy(controller.state),
                 onTap: () => controller.connectToDiscovered(tv),
                 onForget: () => controller.forget(tv.uuid),
@@ -469,6 +474,7 @@ class _DiscoveredRow extends StatelessWidget {
   const _DiscoveredRow({
     required this.tv,
     required this.paired,
+    required this.connectable,
     required this.busy,
     required this.onTap,
     required this.onForget,
@@ -476,6 +482,7 @@ class _DiscoveredRow extends StatelessWidget {
 
   final DiscoveredTv tv;
   final bool paired;
+  final bool connectable;
   final bool busy;
   final VoidCallback onTap;
   final VoidCallback onForget;
@@ -483,31 +490,42 @@ class _DiscoveredRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final secure = tv.wssPort != null;
+    final connectionLabel = switch (tv.protocol) {
+      TvProtocol.playBridge => secure ? 'encrypted' : 'insecure',
+      TvProtocol.dlna => 'playback support next',
+      TvProtocol.roku => 'playback support next',
+    };
+    final subtitleColor = switch (tv.protocol) {
+      TvProtocol.playBridge => secure ? Colors.greenAccent : Colors.amberAccent,
+      TvProtocol.dlna || TvProtocol.roku => Colors.white54,
+    };
     return _Row(
-      leadingIcon: Icons.tv,
+      leadingIcon: tv.protocol == TvProtocol.roku ? Icons.live_tv : Icons.tv,
       title: tv.name,
-      subtitle: '${tv.host}${secure ? '  ·  encrypted' : '  ·  insecure'}',
-      subtitleColor: secure ? Colors.greenAccent : Colors.amberAccent,
-      trailing: paired
-          ? Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FilledButton(
+      subtitle: '${tv.protocol.label}  ·  ${tv.host}  ·  $connectionLabel',
+      subtitleColor: subtitleColor,
+      trailing: !connectable
+          ? const FilledButton(onPressed: null, child: Text('Unavailable'))
+          : paired
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    FilledButton(
+                      onPressed: busy ? null : onTap,
+                      child: const Text('Connect'),
+                    ),
+                    IconButton(
+                      tooltip: 'Forget',
+                      iconSize: 18,
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: onForget,
+                    ),
+                  ],
+                )
+              : FilledButton(
                   onPressed: busy ? null : onTap,
-                  child: const Text('Connect'),
+                  child: const Text('Pair'),
                 ),
-                IconButton(
-                  tooltip: 'Forget',
-                  iconSize: 18,
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: onForget,
-                ),
-              ],
-            )
-          : FilledButton(
-              onPressed: busy ? null : onTap,
-              child: const Text('Pair'),
-            ),
     );
   }
 }

@@ -210,7 +210,8 @@ val appModule = module {
             connectionStore = get(),
             nsdHelper = get(),
             commandHistoryDb = get(),
-            castSessionManager = get()
+            castSessionManager = get(),
+            settingsRepository = get(),
         )
     }
 

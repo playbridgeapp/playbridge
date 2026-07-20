@@ -213,6 +213,32 @@ fun TVSettingsScreen(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            Text("Experimental", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+
+            val rustDiscoveryShadowMode by settingsRepository.rustDiscoveryShadowMode
+                .collectAsState(initial = false)
+            ListItem(
+                headlineContent = { Text("Compare Rust discovery") },
+                supportingContent = {
+                    Text(
+                        "Run the new receiver discovery engine only while the device picker is scanning. " +
+                            "It records anonymous device counts and does not change visible devices."
+                    )
+                },
+                trailingContent = {
+                    Switch(
+                        checked = rustDiscoveryShadowMode,
+                        onCheckedChange = {
+                            scope.launch { settingsRepository.setRustDiscoveryShadowMode(it) }
+                        }
+                    )
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.padding(horizontal = 0.dp)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text("Diagnostics", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
 
             if (!isTvAvailable) {

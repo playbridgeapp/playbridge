@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.tasks.Exec
 
 
 plugins {
@@ -213,4 +214,11 @@ kotlin {
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
         freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3ExpressiveApi")
     }
+}
+
+tasks.register<Exec>("buildRustCastCore") {
+    group = "build"
+    description = "Build and package PlayBridge Cast Core for all supported Android ABIs"
+    workingDir(rootProject.projectDir)
+    commandLine("sh", "../../rust/build-android.sh")
 }
