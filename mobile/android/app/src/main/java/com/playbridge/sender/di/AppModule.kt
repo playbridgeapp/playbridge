@@ -132,7 +132,6 @@ val appModule = module {
             connectionCoordinator = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
             connectionStore = get(),
-            nsdHelper = get(),
             settingsRepository = get(),
         )
     }
@@ -208,7 +207,6 @@ val appModule = module {
             application = androidApplication(),
             webSocketClient = get(),
             connectionStore = get(),
-            nsdHelper = get(),
             commandHistoryDb = get(),
             castSessionManager = get(),
             settingsRepository = get(),

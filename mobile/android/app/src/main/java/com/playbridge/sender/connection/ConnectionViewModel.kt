@@ -40,7 +40,6 @@ class ConnectionViewModel(
     application: Application,
     val webSocketClient: WebSocketClient = WebSocketClient(),
     private val connectionStore: ConnectionStore = ConnectionStore(application),
-    private val nsdHelper: NsdHelper = NsdHelper(application),
     private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
     val castSessionManager: CastSessionManager,
     private val settingsRepository: SettingsRepository,
@@ -61,46 +60,22 @@ class ConnectionViewModel(
     private val dlnaDiscovery = DlnaDiscovery(application, dlnaHttp)
     private val rustDiscoveryShadow = RustDiscoveryShadow(application)
 
-    // Native (Rust + NSD mDNS) + DLNA (SSDP) + Roku (SSDP) discovery merged into one list for the UI.
-    val discoveredDevices: StateFlow<List<TvDevice>> = combine(
-        nsdHelper.discoveredDevices,
-        dlnaDiscovery.renderers,
-        rustDiscoveryShadow.discoveredDevices,
-    ) { native, renderers, rust ->
-        val list = mutableListOf<TvDevice>()
-        rust.forEach { r ->
-            list.add(
-                TvDevice(
-                    ip = r.ip,
-                    port = r.port,
-                    name = r.name,
-                    token = "",
-                    uuid = r.uuid,
-                    wssPort = r.wssPort,
-                    logsPort = r.logsPort,
-                    isDlna = r.isDlna,
-                    isRoku = r.isRoku,
-                    controlUrl = r.location,
-                )
-            )
-        }
-        val nativeTv = native.map {
+    // Rust core is the 100% primary discovery engine for PlayBridge, DLNA, and Roku.
+    val discoveredDevices: StateFlow<List<TvDevice>> = rustDiscoveryShadow.discoveredDevices.map { list ->
+        list.map { r ->
             TvDevice(
-                ip = it.ip,
-                port = it.port,
-                name = it.name,
+                ip = r.ip,
+                port = r.port,
+                name = r.name,
                 token = "",
-                uuid = it.uuid,
-                wssPort = it.wssPort,
-                logsPort = it.logsPort,
+                uuid = r.uuid,
+                wssPort = r.wssPort,
+                logsPort = r.logsPort,
+                isDlna = r.isDlna,
+                isRoku = r.isRoku,
+                controlUrl = r.location,
             )
         }
-        ConnectionMerge.mergeDiscovered(nativeTv, renderers.map { it.toDlnaTvDevice() }).forEach { dev ->
-            if (list.none { (it.uuid.isNotEmpty() && it.uuid == dev.uuid) || (it.ip == dev.ip && it.port == dev.port) }) {
-                list.add(dev)
-            }
-        }
-        list
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private fun DeviceDescription.Renderer.toDlnaTvDevice(): TvDevice {
@@ -525,8 +500,6 @@ class ConnectionViewModel(
      */
     fun startDiscovery() {
         scanTimeoutJob?.cancel()
-        nsdHelper.startDiscovery()
-        dlnaDiscovery.start(viewModelScope)
         rustDiscoveryShadow.start(viewModelScope, SCAN_WINDOW_MS) { summary ->
             Log.i(
                 TAG,
@@ -546,16 +519,12 @@ class ConnectionViewModel(
     fun stopDiscovery() {
         scanTimeoutJob?.cancel()
         scanTimeoutJob = null
-        nsdHelper.stopDiscovery()
-        dlnaDiscovery.stop()
         rustDiscoveryShadow.stop()
         _isScanning.value = false
     }
 
     override fun onCleared() {
         super.onCleared()
-        nsdHelper.stopDiscovery()
-        dlnaDiscovery.stop()
         rustDiscoveryShadow.stop()
         // While a cast session is active, CastSessionManager + CastSessionService own the
         // socket's lifetime — episode queueing must survive this ViewModel (screen-off /

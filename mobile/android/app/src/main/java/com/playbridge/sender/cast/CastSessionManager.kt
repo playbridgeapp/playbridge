@@ -53,7 +53,6 @@ class CastSessionManager(
     private val connectionCoordinator: ConnectionCoordinator,
     private val scope: CoroutineScope,
     private val connectionStore: com.playbridge.sender.connection.ConnectionStore,
-    private val nsdHelper: com.playbridge.sender.connection.NsdHelper,
     private val settingsRepository: SettingsRepository,
 ) {
     private val TAG = "CastSessionManager"
@@ -307,10 +306,11 @@ class CastSessionManager(
                 val saved = runCatching { connectionStore.tvDevice.first() }.getOrNull()
                     ?: return@collectLatest
                 if (saved.uuid.isEmpty()) return@collectLatest
-                nsdHelper.startDiscovery(com.playbridge.sender.connection.NsdHelper.OWNER_RECONNECT)
+                val rustDiscovery = com.playbridge.sender.connection.RustDiscoveryShadow(context)
+                rustDiscovery.start(scope, 15000L)
                 try {
                     var current: TvDevice = saved
-                    nsdHelper.discoveredDevices.collect { devices ->
+                    rustDiscovery.discoveredDevices.collect { devices ->
                         val found = devices.find { it.uuid == current.uuid } ?: return@collect
                         val healed = current.copy(
                             ip = found.ip,
@@ -334,7 +334,7 @@ class CastSessionManager(
                         }
                     }
                 } finally {
-                    nsdHelper.stopDiscovery(com.playbridge.sender.connection.NsdHelper.OWNER_RECONNECT)
+                    rustDiscovery.stop()
                 }
             }
         }
