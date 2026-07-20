@@ -59,12 +59,31 @@ class ConnectionViewModel(
         .readTimeout(6, TimeUnit.SECONDS)
         .build()
     private val dlnaDiscovery = DlnaDiscovery(application, dlnaHttp)
+    private val rustDiscoveryShadow = RustDiscoveryShadow(application)
 
-    // Native (mDNS) + DLNA (SSDP) discovery merged into one list for the UI.
+    // Native (Rust + NSD mDNS) + DLNA (SSDP) + Roku (SSDP) discovery merged into one list for the UI.
     val discoveredDevices: StateFlow<List<TvDevice>> = combine(
         nsdHelper.discoveredDevices,
         dlnaDiscovery.renderers,
-    ) { native, renderers ->
+        rustDiscoveryShadow.discoveredDevices,
+    ) { native, renderers, rust ->
+        val list = mutableListOf<TvDevice>()
+        rust.forEach { r ->
+            list.add(
+                TvDevice(
+                    ip = r.ip,
+                    port = r.port,
+                    name = r.name,
+                    token = "",
+                    uuid = r.uuid,
+                    wssPort = r.wssPort,
+                    logsPort = r.logsPort,
+                    isDlna = r.isDlna,
+                    isRoku = r.isRoku,
+                    controlUrl = r.location,
+                )
+            )
+        }
         val nativeTv = native.map {
             TvDevice(
                 ip = it.ip,
@@ -76,7 +95,12 @@ class ConnectionViewModel(
                 logsPort = it.logsPort,
             )
         }
-        ConnectionMerge.mergeDiscovered(nativeTv, renderers.map { it.toDlnaTvDevice() })
+        ConnectionMerge.mergeDiscovered(nativeTv, renderers.map { it.toDlnaTvDevice() }).forEach { dev ->
+            if (list.none { (it.uuid.isNotEmpty() && it.uuid == dev.uuid) || (it.ip == dev.ip && it.port == dev.port) }) {
+                list.add(dev)
+            }
+        }
+        list
     }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     private fun DeviceDescription.Renderer.toDlnaTvDevice(): TvDevice {
@@ -143,7 +167,6 @@ class ConnectionViewModel(
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
     private var scanTimeoutJob: Job? = null
-    private val rustDiscoveryShadow = RustDiscoveryShadow(application)
     @Volatile private var rustDiscoveryShadowEnabled = false
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
@@ -370,6 +393,18 @@ class ConnectionViewModel(
 
     fun clearDlnaTarget() = castSessionManager.clearDlnaTarget()
 
+    /** Select a Roku device as the active cast target. */
+    fun selectRokuTarget(device: TvDevice) {
+        castSessionManager.selectRokuTarget(device)
+        viewModelScope.launch {
+            connectionStore.addToHistory(device)
+        }
+    }
+
+    fun clearRokuTarget() = castSessionManager.clearRokuTarget()
+
+    fun rokuKeypress(key: String) = castSessionManager.rokuKeypress(key)
+
     /** Cast a media item to the active DLNA target. No-op if none selected. */
     fun playOnDlna(media: MediaItem) = castSessionManager.playOnDlna(media)
 
@@ -492,17 +527,11 @@ class ConnectionViewModel(
         scanTimeoutJob?.cancel()
         nsdHelper.startDiscovery()
         dlnaDiscovery.start(viewModelScope)
-        if (rustDiscoveryShadowEnabled) {
-            rustDiscoveryShadow.start(viewModelScope, SCAN_WINDOW_MS) { summary ->
-                val kotlinDevices = discoveredDevices.value
-                Log.i(
-                    TAG,
-                    "Discovery comparison: Rust native=${summary.playBridgeDevices}, " +
-                        "DLNA=${summary.dlnaDevices}, errors=${summary.errors}; " +
-                        "Kotlin native=${kotlinDevices.count { !it.isDlna }}, " +
-                        "DLNA=${kotlinDevices.count { it.isDlna }}",
-                )
-            }
+        rustDiscoveryShadow.start(viewModelScope, SCAN_WINDOW_MS) { summary ->
+            Log.i(
+                TAG,
+                "Rust discovery finished: PlayBridge=${summary.playBridgeDevices}, DLNA=${summary.dlnaDevices}, Roku=${summary.rokuDevices}, errors=${summary.errors}"
+            )
         }
         _isScanning.value = true
         scanTimeoutJob = viewModelScope.launch {

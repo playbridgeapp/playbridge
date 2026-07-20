@@ -28,6 +28,7 @@ data class TvDevice(
     // DLNA/UPnP renderer discovered via SSDP (not the native WS receiver). When true,
     // [controlUrl] is the AVTransport SOAP endpoint and there is no token/pairing.
     val isDlna: Boolean = false,
+    val isRoku: Boolean = false,
     val controlUrl: String? = null,
     val lastConnected: Long = System.currentTimeMillis()
 )

@@ -5,6 +5,7 @@ import android.util.Log
 import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.sender.cast.roku.RokuCastTarget
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.data.settings.SettingsRepository
@@ -165,16 +166,37 @@ class CastSessionManager(
 
     // --- Native target (exists while the WS session is authenticated) ---
     private val _nativeTarget = MutableStateFlow<NativeCastTarget?>(null)
+    private val _rokuCast = MutableStateFlow<RokuCastTarget?>(null)
+    val activeRokuTarget: StateFlow<TvDevice?> = _rokuCast.map { it?.device }
+        .stateIn(scope, SharingStarted.Eagerly, null)
 
     /**
-     * The transport behind "Cast": the selected DLNA renderer if any, else the connected
+     * The transport behind "Cast": the selected DLNA or Roku renderer if any, else the connected
      * native receiver, else null. UI gates features on [CastTarget.capabilities].
      */
     val activeTarget: StateFlow<CastTarget?> =
-        combine(_dlnaCast, _nativeTarget) { dlna, native -> dlna ?: native }
+        combine(_dlnaCast, _rokuCast, _nativeTarget) { dlna, roku, native -> dlna ?: roku ?: native }
             .stateIn(scope, SharingStarted.Eagerly, null)
 
     val isDlnaActive: Boolean get() = _dlnaCast.value != null
+    val isRokuActive: Boolean get() = _rokuCast.value != null
+
+    fun selectRokuTarget(device: TvDevice) {
+        _dlnaCast.value?.release()
+        _dlnaCast.value = null
+        _rokuCast.value?.release()
+        val target = RokuCastTarget(device, scope)
+        _rokuCast.value = target
+    }
+
+    fun clearRokuTarget() {
+        _rokuCast.value?.release()
+        _rokuCast.value = null
+    }
+
+    fun rokuKeypress(key: String) {
+        _rokuCast.value?.sendKeypress(key)
+    }
 
     /**
      * True while a cast session should keep the process alive (drives the FGS).

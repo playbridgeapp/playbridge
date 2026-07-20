@@ -382,13 +382,41 @@ fun DeviceConnectionSheet(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
             } else {
-                unified.forEach { device ->
+                var selectedProtocolFilter by remember { mutableStateOf("All") }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    listOf("All", "PlayBridge", "DLNA", "Roku").forEach { proto ->
+                        FilterChip(
+                            selected = selectedProtocolFilter == proto,
+                            onClick = { selectedProtocolFilter = proto },
+                            label = { Text(proto) }
+                        )
+                    }
+                }
+
+                val filtered = unified.filter { u ->
+                    when (selectedProtocolFilter) {
+                        "PlayBridge" -> !u.connectDevice.isDlna && !u.connectDevice.isRoku
+                        "DLNA" -> u.connectDevice.isDlna
+                        "Roku" -> u.connectDevice.isRoku
+                        else -> true
+                    }
+                }
+
+                filtered.forEach { device ->
                     TvDeviceRow(
                         device = device,
                         onClick = {
                             if (device.connectDevice.isDlna) {
-                                // selectDlnaTarget also sets the authoritative Dlna route.
                                 viewModel.selectDlnaTarget(device.connectDevice)
+                            } else if (device.connectDevice.isRoku) {
+                                viewModel.selectRokuTarget(device.connectDevice)
                             } else {
                                 viewModel.selectNativeRoute()
                                 connectKnownOrPair(

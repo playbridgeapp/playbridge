@@ -52,7 +52,7 @@ interface CastTarget {
     fun release()
 }
 
-enum class TargetKind { NATIVE, DLNA }
+enum class TargetKind { NATIVE, DLNA, ROKU }
 
 enum class Capability {
     /** Set a new media URI. */

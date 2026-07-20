@@ -20,6 +20,12 @@ class NsdHelper(context: Context) {
 
     private val foundServices = mutableMapOf<String, NsdServiceInfo>()
 
+    enum class TvProtocol {
+        PLAYBRIDGE,
+        DLNA,
+        ROKU,
+    }
+
     data class DiscoveredDevice(
         val ip: String,
         val port: Int,
@@ -30,7 +36,12 @@ class NsdHelper(context: Context) {
         val wssPort: Int? = null,
         // Optional HTTP diagnostics port advertised via the logs_port TXT attribute.
         val logsPort: Int? = null,
-    )
+        val protocol: TvProtocol = TvProtocol.PLAYBRIDGE,
+        val location: String? = null,
+    ) {
+        val isDlna: Boolean get() = protocol == TvProtocol.DLNA
+        val isRoku: Boolean get() = protocol == TvProtocol.ROKU
+    }
 
     // Discovery is refcounted by owner so independent clients (the UI scan window and the
     // reconnect supervisor's background scan) can start/stop without stomping each other:
