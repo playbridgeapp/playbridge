@@ -10,12 +10,12 @@ import 'protocol.dart';
 import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
-import 'tv_sender_client.dart';
+import 'tv_transport.dart';
 
 /// Orchestrates the desktop's **sender** role: LAN discovery, the paired-TV
-/// store, and the pinned `wss://` client. Connect to a discovered TV (first-time
-/// pairing) or reconnect a known one by token; persists the credentials the TV
-/// issues. A `ChangeNotifier` so the UI/tray can bind directly.
+/// store, and multi-protocol receiver transport clients (`wss://`, DLNA, Roku).
+/// Connect to a discovered TV (first-time pairing) or reconnect a known one by token;
+/// persists the credentials the TV issues. A `ChangeNotifier` so the UI/tray can bind directly.
 ///
 /// Device identity (deviceId / deviceName) is reused from the existing receiver
 /// [PairingStore] — the desktop is one device whether sending or receiving.
@@ -23,15 +23,18 @@ class TvSenderController extends ChangeNotifier {
   TvSenderController({
     required PairingStore identity,
     required TvConnectionStore store,
+    TvTransport? transport,
   })  : _identity = identity,
         _store = store,
-        _discovery = TvDiscoveryBrowser();
+        _discovery = TvDiscoveryBrowser(),
+        _transport = transport ?? PlayBridgeTransport();
 
   final PairingStore _identity;
   final TvConnectionStore _store;
   final TvDiscoveryBrowser _discovery;
-  final TvSenderClient _client = TvSenderClient();
   final LocalFileServer _fileServer = LocalFileServer();
+
+  TvTransport _transport;
 
   StreamSubscription<List<DiscoveredTv>>? _devSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
@@ -89,31 +92,58 @@ class TvSenderController extends ChangeNotifier {
   bool get isCasting => _castingTitle != null || _castPlaylist.isNotEmpty;
 
   /// TV → desktop messages (status / playlist_status / tracks / context).
-  Stream<String> get messages => _client.messages;
+  Stream<String> get messages => _transport.messages;
 
-  bool canConnectTo(DiscoveredTv tv) =>
-      tv.protocol == TvProtocol.playBridge && tv.port != null;
+  /// Active transport protocol.
+  TvProtocol get activeProtocol => _transport.protocol;
+
+  bool canConnectTo(DiscoveredTv tv) {
+    switch (tv.protocol) {
+      case TvProtocol.playBridge:
+        return tv.port != null;
+      case TvProtocol.dlna:
+        return tv.location != null && tv.location!.isNotEmpty;
+      case TvProtocol.roku:
+        return tv.host.isNotEmpty;
+    }
+  }
 
   Future<void> start() async {
     _devSub = _discovery.devices.listen((d) {
       _discoveredRaw = d;
       notifyListeners();
     });
-    _stateSub = _client.state.listen(_onState);
-    _credSub = _client.credentials.listen(_onCredentials);
-    _msgSub = _client.messages.listen(_onTvMessage);
-    _sasSub = _client.sasCode.listen((sas) {
-      _currentSas = sas;
-      notifyListeners();
-    });
+    _bindTransportSubscriptions();
     await _discovery.start();
   }
 
-  bool submitSasCode(String code) => _client.submitSasCode(code);
+  void _bindTransportSubscriptions() {
+    _stateSub?.cancel();
+    _credSub?.cancel();
+    _msgSub?.cancel();
+    _sasSub?.cancel();
+
+    _stateSub = _transport.state.listen(_onState);
+    _credSub = _transport.credentials.listen(_onCredentials);
+    _msgSub = _transport.messages.listen(_onTvMessage);
+    _sasSub = _transport.sasCode.listen((sas) {
+      _currentSas = sas;
+      notifyListeners();
+    });
+  }
+
+  void _ensureTransportFor(TvProtocol protocol) {
+    if (_transport.protocol == protocol) return;
+    unawaited(_transport.dispose());
+    _transport = TvTransportFactory.create(protocol);
+    _bindTransportSubscriptions();
+  }
+
+  bool submitSasCode(String code) => _transport.submitSasCode(code);
 
   /// SAS retry hint surfaced to the pairing UI.
-  int get sasAttemptsLeft => _client.sasAttemptsLeft;
-  bool get lastSasWrong => _client.lastSasWrong;
+  int get sasAttemptsLeft => _transport.sasAttemptsLeft;
+  bool get lastSasWrong => _transport.lastSasWrong;
 
   /// Connect to a TV found via discovery. Reconnects silently when already
   /// paired; otherwise runs the SAS pairing handshake (the user enters the
@@ -126,11 +156,10 @@ class TvSenderController extends ChangeNotifier {
       return;
     }
     _pending = tv;
+    _ensureTransportFor(tv.protocol);
     final known = _store.byUuid(tv.uuid);
-    await _client.connect(
-      host: tv.host,
-      port: tv.port!,
-      wssPort: tv.wssPort,
+    await _transport.connect(
+      tv: tv,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
       token: known?.token,
@@ -152,10 +181,9 @@ class TvSenderController extends ChangeNotifier {
       location: null,
     );
     _pending = target;
-    await _client.connect(
-      host: target.host,
-      port: target.port!,
-      wssPort: target.wssPort,
+    _ensureTransportFor(target.protocol);
+    await _transport.connect(
+      tv: target,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
       token: tv.token,
@@ -163,10 +191,10 @@ class TvSenderController extends ChangeNotifier {
     );
   }
 
-  Future<void> disconnect() => _client.disconnect();
+  Future<void> disconnect() => _transport.disconnect();
 
   Future<void> forget(String uuid) async {
-    if (_activeTv?.uuid == uuid) await _client.disconnect();
+    if (_activeTv?.uuid == uuid) await _transport.disconnect();
     await _store.forget(uuid);
     if (_activeTv?.uuid == uuid) _activeTv = null;
     notifyListeners();
@@ -176,7 +204,7 @@ class TvSenderController extends ChangeNotifier {
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
   bool castVideo(PlayPayload video) {
-    final ok = _client.send(senderSingleVideoCommandJson(video));
+    final ok = _transport.castVideo(video);
     if (ok) {
       _castingTitle =
           video.hasTitle() && video.title.isNotEmpty ? video.title : null;
@@ -186,7 +214,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   bool castPlaylist(PlaylistPayload playlist) =>
-      _client.send(senderPlaylistCommandJson(playlist));
+      _transport.castPlaylist(playlist);
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth) and a [title].
@@ -219,14 +247,13 @@ class TvSenderController extends ChangeNotifier {
     return castVideo(payload);
   }
 
-  bool queueAdd(PlayPayload item) => _client.send(senderQueueAddJson(item));
+  bool queueAdd(PlayPayload item) => _transport.queueAdd(item);
 
-  bool playlistJump(int index) => _client.send(senderPlaylistJumpJson(index));
+  bool playlistJump(int index) => _transport.playlistJump(index);
 
-  bool sendControl(String command) =>
-      _client.send(senderControlCommandJson(command));
+  bool sendControl(String command) => _transport.sendControl(command);
 
-  bool sendContextQuery() => _client.send(senderContextQueryJson());
+  bool sendContextQuery() => _transport.sendContextQuery();
 
   // Transport for the active cast (command strings match the TV's InputHandler).
   bool playPause() => sendControl('toggle');
@@ -375,10 +402,21 @@ class TvSenderController extends ChangeNotifier {
       case SenderConnectionState.connected:
         final p = _pending;
         if (p != null) {
-          _activeTv = _store.byUuid(p.uuid);
-          // Refresh volatile fields (host may have changed between sessions).
-          _store.markConnected(p.uuid,
-              host: p.host, port: p.port, wssPort: p.wssPort);
+          _activeTv = _store.byUuid(p.uuid) ??
+              TvRecord(
+                uuid: p.uuid,
+                name: p.name,
+                host: p.host,
+                port: p.port ?? 0,
+                wssPort: p.wssPort,
+                token: '',
+                certFingerprint: '',
+                lastConnected: DateTime.now(),
+              );
+          if (_transport.protocol == TvProtocol.playBridge) {
+            _store.markConnected(p.uuid,
+                host: p.host, port: p.port, wssPort: p.wssPort);
+          }
         }
         break;
       case SenderConnectionState.disconnected:
@@ -404,7 +442,7 @@ class TvSenderController extends ChangeNotifier {
       uuid: p.uuid,
       name: p.name,
       host: p.host,
-      port: p.port!,
+      port: p.port ?? 0,
       wssPort: p.wssPort,
       token: creds.token,
       certFingerprint: creds.certFingerprint,
@@ -483,7 +521,7 @@ class TvSenderController extends ChangeNotifier {
     _msgSub?.cancel();
     _sasSub?.cancel();
     _discovery.dispose();
-    _client.dispose();
+    _transport.dispose();
     _fileServer.stop();
     super.dispose();
   }
