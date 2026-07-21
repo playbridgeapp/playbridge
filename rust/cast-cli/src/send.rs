@@ -1,5 +1,6 @@
 use std::{
     io::{self, Write},
+    path::PathBuf,
     sync::mpsc,
     time::Duration,
 };
@@ -18,14 +19,37 @@ use playbridge_cast_core::{
 };
 
 use crate::credentials::PlaybridgeCredentials;
+use crate::http_server::LocalMediaServer;
 use crate::preferred::PreferredDevice;
 
 pub async fn run_send(media_target: String) -> Result<(), String> {
     println!("Media Target: {media_target}");
 
+    // Resolve local file vs remote URL
+    let resolved_path = if media_target.starts_with("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            let mut path = PathBuf::from(home);
+            path.push(&media_target[2..]);
+            path
+        } else {
+            PathBuf::from(&media_target)
+        }
+    } else {
+        PathBuf::from(&media_target)
+    };
+
+    let (media_url, _server_handle) = if resolved_path.exists() && resolved_path.is_file() {
+        println!("Starting local HTTP media server for {:?}...", resolved_path.file_name().unwrap_or_default());
+        let (server, handle) = LocalMediaServer::start(resolved_path).await?;
+        println!("Local HTTP server running at {}\n", server.url);
+        (server.url, Some(handle))
+    } else {
+        (media_target.clone(), None)
+    };
+
     // 1. Check if preferred device is configured
     if let Some(pref) = PreferredDevice::load() {
-        println!("\nPreferred device found: \"{}\" ({}) - {}", pref.name, pref.protocol, pref.address);
+        println!("Preferred device found: \"{}\" ({}) - {}", pref.name, pref.protocol, pref.address);
         println!("Auto-sending in 3 seconds... Press [Enter] to choose another device.");
 
         let (tx, rx) = mpsc::channel();
@@ -48,7 +72,7 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         println!();
 
         if !cancelled {
-            let target_url = media_target.clone();
+            let target_url = media_url.clone();
             let result = match pref.protocol.to_lowercase().as_str() {
                 "playbridge" | "native" => {
                     let wss_port = pref.wss_port.or(pref.port).unwrap_or(8765);
@@ -60,7 +84,12 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
                 }
             };
             match result {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    if _server_handle.is_some() {
+                        wait_for_server_exit(&media_url).await;
+                    }
+                    return Ok(());
+                }
                 Err(err) => {
                     println!("Failed to cast to preferred device: {err}");
                     println!("Falling back to network discovery...\n");
@@ -94,17 +123,45 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         }
     }
 
-    match protocol_str.to_lowercase().as_str() {
+    let result = match protocol_str.to_lowercase().as_str() {
         "playbridge" | "native" => {
             let wss_port = target.wss_port.or(target.port).unwrap_or(8765);
             let uuid = target.uuid.clone().unwrap_or_else(|| target.id.0.clone());
-            cast_to_playbridge(&address, wss_port, &target.name, &uuid, &media_target).await
+            cast_to_playbridge(&address, wss_port, &target.name, &uuid, &media_url).await
         }
         _ => {
             println!("Connecting to \"{}\" ({}:{})...", target.name, address, target.port.unwrap_or(8009));
-            cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_target, &target.name).await
+            cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_url, &target.name).await
         }
+    };
+
+    if result.is_ok() && _server_handle.is_some() {
+        wait_for_server_exit(&media_url).await;
     }
+
+    result
+}
+
+async fn wait_for_server_exit(media_url: &str) {
+    println!("\nStreaming media at {}", media_url);
+    println!("Press [Enter] or Ctrl+C to stop streaming and exit.");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        let _ = io::stdin().read_line(&mut line);
+        let _ = tx.send(());
+    });
+
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = async {
+            loop {
+                if rx.try_recv().is_ok() { break; }
+                sleep(Duration::from_millis(100)).await;
+            }
+        } => {}
+    }
+    println!("Stopped streaming.");
 }
 
 async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String> {
@@ -136,6 +193,12 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
                     }
                     KeyCode::Char('p') | KeyCode::Char('P') if !receivers.is_empty() => {
                         break Ok((receivers[selection].clone(), true));
+                    }
+                    KeyCode::Char('r') | KeyCode::Char('R') => {
+                        receivers.clear();
+                        selection = 0;
+                        stream = DiscoveryStream::start(DiscoveryConfig::default());
+                        let _ = redraw(&receivers, selection, &mut rendered_lines);
                     }
                     KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                         break Err("Selection cancelled".into());
@@ -211,7 +274,7 @@ fn redraw(receivers: &[Receiver], selection: usize, rendered_lines: &mut usize) 
 
     let _ = write!(
         stdout,
-        "\r\n[↑/↓] Navigate  [Enter] Cast  [P] Cast & save as preferred  [Q] Cancel\r\n"
+        "\r\n[↑/↓] Navigate  [Enter] Cast  [P] Preferred  [R] Rescan  [Q] Cancel\r\n"
     );
     lines += 2;
 

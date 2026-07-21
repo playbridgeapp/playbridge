@@ -72,6 +72,7 @@ enum JsonLine<'a> {
 }
 
 mod credentials;
+mod http_server;
 mod preferred;
 mod send;
 
