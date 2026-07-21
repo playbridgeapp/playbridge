@@ -11,6 +11,7 @@ pub struct PreferredDevice {
     pub protocol: String,
     pub address: String,
     pub port: Option<u16>,
+    pub wss_port: Option<u16>,
     pub location: Option<String>,
 }
 

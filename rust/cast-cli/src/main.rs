@@ -71,6 +71,7 @@ enum JsonLine<'a> {
     },
 }
 
+mod credentials;
 mod preferred;
 mod send;
 
@@ -99,7 +100,7 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
         return Ok(());
     }
     let Some(command) = arguments.first() else {
-        return Err("missing command. Usage: playbridge-cast [send|discover|preferred]".into());
+        return Err("missing command or media target. Usage: playbridge <filename|URL> or playbridge [send|cast|discover|preferred]".into());
     };
 
     match command.as_str() {
@@ -142,7 +143,10 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
             }
             Ok(())
         }
-        _ => Err(format!("unsupported command: {command}")),
+        target => {
+            // Default to sending the media target directly
+            run_send(target.to_string()).await
+        }
     }
 }
 
@@ -307,12 +311,14 @@ fn json_line(event: &DiscoveryEvent) -> JsonLine<'_> {
 }
 
 fn usage() -> &'static str {
-    r#"PlayBridge Cast CLI
+    r#"PlayBridge CLI
 
 Usage:
-  playbridge-cast send <filename|URL>    Interactively cast a file/URL with auto-send to preferred device
-  playbridge-cast discover [options]     Discover receivers on your local network
-  playbridge-cast preferred [clear]      View or clear the saved preferred device
+  playbridge <filename|URL>              Interactively cast a file/URL with auto-send
+  playbridge send <filename|URL>         Explicit send command
+  playbridge cast <filename|URL>         Explicit cast command
+  playbridge discover [options]          Discover receivers on your local network
+  playbridge preferred [clear]           View or clear the saved preferred device
 
 Discover Options:
   -p, --protocol <names>  playbridge, native, dlna, roku, dial, googlecast, or all

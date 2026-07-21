@@ -7,7 +7,7 @@ license = "AGPL-3.0-or-later"
 description = "Cross-platform command-line client for PlayBridge Cast Core"
 
 [[bin]]
-name = "playbridge-cast"
+name = "playbridge"
 path = "src/main.rs"
 
 [dependencies]
@@ -17,3 +17,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 urlencoding = "2.1"
+crossterm = "0.28"

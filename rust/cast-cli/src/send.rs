@@ -3,6 +3,10 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+use crossterm::{
+    cursor, event::{self, Event, KeyCode},
+    execute, terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
+};
 use tokio::time::sleep;
 
 use playbridge_cast_core::{
@@ -11,9 +15,12 @@ use playbridge_cast_core::{
         RequestIdGenerator,
     },
     discovery::{DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver},
+    playbridge::{PairingSession, ReceiverFrame, SenderFrame},
+    secure_ws::SecureWebSocket,
     upnp::Renderer,
 };
 
+use crate::credentials::PlaybridgeCredentials;
 use crate::preferred::PreferredDevice;
 
 pub async fn run_send(media_target: String) -> Result<(), String> {
@@ -44,9 +51,18 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         println!();
 
         if !cancelled {
-            println!("Connecting to preferred device \"{}\" ({}:{})...", pref.name, pref.address, pref.port.unwrap_or(8009));
             let target_url = media_target.clone();
-            match cast_to_target(&pref.protocol, &pref.address, pref.port, pref.location.as_deref(), &target_url, &pref.name).await {
+            let result = match pref.protocol.to_lowercase().as_str() {
+                "playbridge" | "native" => {
+                    let wss_port = pref.wss_port.or(pref.port).unwrap_or(8765);
+                    cast_to_playbridge(&pref.address, wss_port, &pref.name, &pref.uuid, &target_url).await
+                }
+                _ => {
+                    println!("Connecting to preferred device \"{}\" ({}:{})...", pref.name, pref.address, pref.port.unwrap_or(8009));
+                    cast_to_target(&pref.protocol, &pref.address, pref.port, pref.location.as_deref(), &target_url, &pref.name).await
+                }
+            };
+            match result {
                 Ok(()) => return Ok(()),
                 Err(err) => {
                     println!("Failed to cast to preferred device: {err}");
@@ -83,33 +99,8 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         return Err("No cast receivers found on the network.".into());
     }
 
-    // 3. User selection prompt
-    println!("\nDiscovered Devices:");
-    for (idx, r) in receivers.iter().enumerate() {
-        println!("  [{}] {} ({}) - {}", idx + 1, r.name, r.protocol, r.addresses.join(", "));
-    }
-    println!("\nOptions:");
-    println!("  Enter number [1..{}] to cast", receivers.len());
-    println!("  Type 'p <num>' to save as preferred & cast (e.g., 'p 1')");
-
-    print!("\nSelection: ");
-    let _ = io::stdout().flush();
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).map_err(|e| e.to_string())?;
-    let input = input.trim();
-
-    let (selected_idx, make_preferred) = if input.starts_with("p ") || input.starts_with("P ") {
-        let idx: usize = input[2..].trim().parse().map_err(|_| "Invalid device index")?;
-        (idx, true)
-    } else {
-        let idx: usize = input.parse().map_err(|_| "Invalid device index")?;
-        (idx, false)
-    };
-
-    if selected_idx == 0 || selected_idx > receivers.len() {
-        return Err(format!("Selection must be between 1 and {}", receivers.len()));
-    }
+    // 3. Interactive device selection
+    let (selected_idx, make_preferred) = interactive_device_select(&receivers)?;
 
     let target = &receivers[selected_idx - 1];
     let address = target.addresses.first().cloned().unwrap_or_default();
@@ -122,6 +113,7 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
             protocol: protocol_str.clone(),
             address: address.clone(),
             port: target.port,
+            wss_port: target.wss_port,
             location: target.location.clone(),
         };
         if let Err(e) = pref.save() {
@@ -131,8 +123,97 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         }
     }
 
-    println!("Connecting to \"{}\" ({}:{})...", target.name, address, target.port.unwrap_or(8009));
-    cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_target, &target.name).await
+    match protocol_str.to_lowercase().as_str() {
+        "playbridge" | "native" => {
+            let wss_port = target.wss_port.or(target.port).unwrap_or(8765);
+            let uuid = target.uuid.clone().unwrap_or_else(|| target.id.0.clone());
+            cast_to_playbridge(&address, wss_port, &target.name, &uuid, &media_target).await
+        }
+        _ => {
+            println!("Connecting to \"{}\" ({}:{})...", target.name, address, target.port.unwrap_or(8009));
+            cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_target, &target.name).await
+        }
+    }
+}
+
+fn interactive_device_select(receivers: &[Receiver]) -> Result<(usize, bool), String> {
+    let count = receivers.len();
+    if count == 0 {
+        return Err("No devices to select from".into());
+    }
+
+    enable_raw_mode().map_err(|e| e.to_string())?;
+
+    let mut selection = 0usize;
+
+    let render = |sel: usize| -> Result<(), String> {
+        let _ = execute!(
+            io::stdout(),
+            cursor::MoveUp((count + 3) as u16),
+            Clear(ClearType::FromCursorDown),
+        );
+        println!("\nDiscovered Devices:");
+        for (idx, r) in receivers.iter().enumerate() {
+            println!(
+                "  {} {} ({}) - {}",
+                if idx == sel { ">" } else { " " },
+                r.name,
+                r.protocol,
+                r.addresses.join(", ")
+            );
+        }
+        println!();
+        print!(
+            "[↑/↓] Navigate  [Enter] Cast  \
+             [P] Cast & save as preferred  [Q] Cancel"
+        );
+        let _ = io::stdout().flush();
+        Ok(())
+    };
+
+    let _ = render(selection);
+
+    let result = loop {
+        let evt = event::read().map_err(|e| e.to_string())?;
+        match evt {
+            Event::Key(event::KeyEvent { code, .. }) => match code {
+                KeyCode::Up if selection > 0 => {
+                    selection -= 1;
+                    let _ = render(selection);
+                }
+                KeyCode::Down if selection < count - 1 => {
+                    selection += 1;
+                    let _ = render(selection);
+                }
+                KeyCode::Up | KeyCode::Down => {}
+                KeyCode::Enter => {
+                    let _ = disable_raw_mode();
+                    println!();
+                    break Ok((selection + 1, false));
+                }
+                KeyCode::Char('p') | KeyCode::Char('P') => {
+                    let _ = disable_raw_mode();
+                    println!();
+                    break Ok((selection + 1, true));
+                }
+                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                    let _ = disable_raw_mode();
+                    println!();
+                    break Err("Selection cancelled".into());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    };
+
+    let _ = execute!(
+        io::stdout(),
+        cursor::MoveUp((count + 3) as u16),
+        Clear(ClearType::FromCursorDown),
+    );
+
+    result
 }
 
 async fn cast_to_target(
@@ -189,11 +270,152 @@ async fn cast_to_target(
             }
         }
         "playbridge" | "native" => {
-            let target_port = port.unwrap_or(8765);
-            println!("Connecting to PlayBridge TV receiver at {}:{}...", address, target_port);
-            println!("Sent PlayBridge cast payload for \"{}\"!", media_url);
-            Ok(())
+            Err("PlayBridge devices must be cast via cast_to_playbridge (internal routing error)".into())
         }
         _ => Err(format!("Unsupported target protocol: {protocol}")),
     }
+}
+
+async fn cast_to_playbridge(
+    address: &str,
+    wss_port: u16,
+    device_name: &str,
+    device_uuid: &str,
+    media_url: &str,
+) -> Result<(), String> {
+    let endpoint = format!("wss://{address}:{wss_port}");
+
+    // Try stored credentials first
+    if let Some(creds) = PlaybridgeCredentials::load(device_uuid) {
+        println!("Using stored credentials for \"{}\"...", device_name);
+        let mut socket = SecureWebSocket::connect_pinned(&endpoint, &creds.cert_fingerprint)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        socket
+            .send(&SenderFrame::Auth {
+                token: creds.token.clone(),
+            })
+            .await
+            .map_err(|e| e.to_string())?;
+
+        loop {
+            match socket.receive().await.map_err(|e| e.to_string())? {
+                Some(ReceiverFrame::AuthResponse {
+                    success: true, ..
+                }) => {
+                    println!("Authenticated with \"{}\"!", device_name);
+                    break;
+                }
+                Some(ReceiverFrame::AuthResponse {
+                    success: false, ..
+                }) => return Err("Authentication failed".into()),
+                Some(_) => {}
+                None => return Err("Receiver closed connection during auth".into()),
+            }
+        }
+
+        send_playlist(&mut socket, media_url, device_name).await?;
+        socket.close().await.map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    // No stored credentials — full pairing flow
+    println!(
+        "No stored credentials for \"{}\". Starting pairing...",
+        device_name
+    );
+    let mut socket = SecureWebSocket::connect_for_pairing(&endpoint)
+        .await
+        .map_err(|e| e.to_string())?;
+    let served_pin = socket.served_spki_pin().to_owned();
+
+    let (mut pairing, commit) =
+        PairingSession::start(device_name.to_owned(), device_uuid.to_owned())
+            .map_err(|e| e.to_string())?;
+
+    socket.send(&commit).await.map_err(|e| e.to_string())?;
+    println!("Pairing commit sent. Waiting for receiver challenge...");
+
+    while let Some(frame) = socket.receive().await.map_err(|e| e.to_string())? {
+        match frame {
+            ReceiverFrame::PairingChallenge {
+                tv_eph_pub,
+                nonce_t,
+            } => {
+                let (sas, reveal) = pairing
+                    .accept_challenge(&tv_eph_pub, &nonce_t)
+                    .map_err(|e| e.to_string())?;
+                socket.send(&reveal).await.map_err(|e| e.to_string())?;
+                println!("Challenge accepted.");
+
+                print!("Enter the 6-digit code shown on \"{}\": ", device_name);
+                io::stdout().flush().map_err(|e| e.to_string())?;
+                let mut entered = String::new();
+                io::stdin()
+                    .read_line(&mut entered)
+                    .map_err(|e| e.to_string())?;
+                let confirmation = pairing
+                    .confirmation(entered.trim(), &sas)
+                    .map_err(|e| e.to_string())?;
+                socket
+                    .send(&confirmation)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                println!("Confirmation sent. Waiting for receiver approval...");
+            }
+            ReceiverFrame::PairingApproved { nonce, ciphertext } => {
+                let bundle = pairing
+                    .decrypt_credentials(&nonce, &ciphertext, Some(&served_pin))
+                    .map_err(|e| e.to_string())?;
+                println!(
+                    "Pairing succeeded! Players: {:?}, Browsers: {:?}",
+                    bundle.players, bundle.browsers
+                );
+
+                let creds = PlaybridgeCredentials {
+                    token: bundle.token.clone(),
+                    cert_fingerprint: bundle
+                        .cert_fingerprint
+                        .unwrap_or_else(|| served_pin.clone()),
+                    players: bundle.players.clone(),
+                    browsers: bundle.browsers.clone(),
+                };
+                if let Err(e) = creds.save(device_uuid) {
+                    println!("Warning: failed to save credentials: {e}");
+                } else {
+                    println!("Credentials saved for future casts.");
+                }
+
+                send_playlist(&mut socket, media_url, device_name).await?;
+                socket.close().await.map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+            ReceiverFrame::PairingDenied => {
+                return Err("Pairing was denied by the receiver".into());
+            }
+            _ => {}
+        }
+    }
+
+    Err("Receiver closed connection before pairing completed".into())
+}
+
+async fn send_playlist(
+    socket: &mut SecureWebSocket,
+    media_url: &str,
+    device_name: &str,
+) -> Result<(), String> {
+    let cmd = SenderFrame::Command {
+        action: "playlist".into(),
+        payload: Some(serde_json::json!({
+            "items": [{
+                "url": media_url,
+                "title": device_name,
+            }]
+        })),
+    };
+    socket.send(&cmd).await.map_err(|e| e.to_string())?;
+    println!("Sent playlist command to \"{}\"!", device_name);
+    Ok(())
 }
