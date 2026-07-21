@@ -162,9 +162,17 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
         }
     };
 
+    let mut stdout = io::stdout();
+    if rendered_lines > 0 {
+        let _ = execute!(
+            stdout,
+            cursor::MoveToColumn(0),
+            cursor::MoveUp(rendered_lines as u16),
+            Clear(ClearType::FromCursorDown),
+        );
+    }
     let _ = disable_raw_mode();
-    print!("\r\n");
-    let _ = io::stdout().flush();
+    let _ = stdout.flush();
     result
 }
 
@@ -180,18 +188,18 @@ fn redraw(receivers: &[Receiver], selection: usize, rendered_lines: &mut usize) 
     }
 
     let mut lines = 0usize;
-    let _ = write!(stdout, "\r\nDiscovered Devices (scanning...):\r\n");
-    lines += 2;
+    let _ = write!(stdout, "Discovered Devices (scanning...):\r\n");
+    lines += 1;
 
     if receivers.is_empty() {
-        let _ = write!(stdout, "\r  (Searching for devices on LAN...)\r\n");
+        let _ = write!(stdout, "  (Searching for devices on LAN...)\r\n");
         lines += 1;
     } else {
         for (idx, r) in receivers.iter().enumerate() {
             let prefix = if idx == selection { ">" } else { " " };
             let _ = write!(
                 stdout,
-                "\r  {} {} ({}) - {}\r\n",
+                "  {} {} ({}) - {}\r\n",
                 prefix,
                 r.name,
                 r.protocol,
@@ -203,7 +211,7 @@ fn redraw(receivers: &[Receiver], selection: usize, rendered_lines: &mut usize) 
 
     let _ = write!(
         stdout,
-        "\r\n\r[↑/↓] Navigate  [Enter] Cast  [P] Cast & save as preferred  [Q] Cancel\r\n"
+        "\r\n[↑/↓] Navigate  [Enter] Cast  [P] Cast & save as preferred  [Q] Cancel\r\n"
     );
     lines += 2;
 

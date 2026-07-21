@@ -328,7 +328,7 @@ impl CastChannel {
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
             .with_no_client_auth();
-        crypto.alpn_protocols = vec![b"http/1.1".to_vec()];
+        crypto.alpn_protocols.clear();
 
         let connector = TlsConnector::from(Arc::new(crypto));
         let server_name = ServerName::try_from("chromecast")
