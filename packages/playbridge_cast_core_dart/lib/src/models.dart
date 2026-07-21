@@ -4,7 +4,8 @@ enum ReceiverProtocol {
   playBridge(1),
   dlna(2),
   roku(4),
-  dial(8);
+  dial(8),
+  googleCast(16);
 
   const ReceiverProtocol(this.mask);
   final int mask;
@@ -14,6 +15,7 @@ enum ReceiverProtocol {
         'Dlna' => ReceiverProtocol.dlna,
         'Roku' => ReceiverProtocol.roku,
         'Dial' => ReceiverProtocol.dial,
+        'GoogleCast' => ReceiverProtocol.googleCast,
         _ => throw FormatException('Unknown receiver protocol: $value'),
       };
 }

@@ -492,12 +492,11 @@ class _DiscoveredRow extends StatelessWidget {
     final secure = tv.wssPort != null;
     final connectionLabel = switch (tv.protocol) {
       TvProtocol.playBridge => secure ? 'encrypted' : 'insecure',
-      TvProtocol.dlna => 'playback support next',
-      TvProtocol.roku => 'playback support next',
+      TvProtocol.dlna || TvProtocol.roku || TvProtocol.googleCast => 'playback support next',
     };
     final subtitleColor = switch (tv.protocol) {
       TvProtocol.playBridge => secure ? Colors.greenAccent : Colors.amberAccent,
-      TvProtocol.dlna || TvProtocol.roku => Colors.white54,
+      TvProtocol.dlna || TvProtocol.roku || TvProtocol.googleCast => Colors.white54,
     };
     return _Row(
       leadingIcon: tv.protocol == TvProtocol.roku ? Icons.live_tv : Icons.tv,

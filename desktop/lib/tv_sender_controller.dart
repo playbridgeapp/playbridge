@@ -104,6 +104,7 @@ class TvSenderController extends ChangeNotifier {
       case TvProtocol.dlna:
         return tv.location != null && tv.location!.isNotEmpty;
       case TvProtocol.roku:
+      case TvProtocol.googleCast:
         return tv.host.isNotEmpty;
     }
   }

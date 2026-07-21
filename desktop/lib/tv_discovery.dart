@@ -7,7 +7,8 @@ import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 enum TvProtocol {
   playBridge('PlayBridge'),
   dlna('DLNA'),
-  roku('Roku');
+  roku('Roku'),
+  googleCast('Google Cast');
 
   const TvProtocol(this.label);
   final String label;
@@ -138,6 +139,7 @@ class TvDiscoveryBrowser {
           ReceiverProtocol.playBridge,
           ReceiverProtocol.dlna,
           ReceiverProtocol.roku,
+          ReceiverProtocol.googleCast,
         },
         timeout: _scanTimeout,
       );
@@ -257,6 +259,7 @@ class TvDiscoveryBrowser {
       ReceiverProtocol.playBridge => TvProtocol.playBridge,
       ReceiverProtocol.dlna => TvProtocol.dlna,
       ReceiverProtocol.roku => TvProtocol.roku,
+      ReceiverProtocol.googleCast => TvProtocol.googleCast,
       ReceiverProtocol.dial => null,
     };
     if (protocol == null || receiver.addresses.isEmpty) return null;

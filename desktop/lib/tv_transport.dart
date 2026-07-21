@@ -559,6 +559,71 @@ class RokuTransport extends TvTransport {
   }
 }
 
+class GoogleCastTransport extends TvTransport {
+  final _state = StreamController<SenderConnectionState>.broadcast();
+  final _messages = StreamController<String>.broadcast();
+  final _credentials = StreamController<TvCredentials>.broadcast();
+  SenderConnectionState _current = SenderConnectionState.disconnected;
+
+  @override
+  TvProtocol get protocol => TvProtocol.googleCast;
+
+  @override
+  Stream<SenderConnectionState> get state => _state.stream;
+
+  @override
+  SenderConnectionState get currentState => _current;
+
+  @override
+  Stream<String> get messages => _messages.stream;
+
+  @override
+  Stream<TvCredentials> get credentials => _credentials.stream;
+
+  @override
+  bool get supportsPairing => false;
+
+  @override
+  Future<void> connect({
+    required DiscoveredTv tv,
+    required String deviceName,
+    required String deviceUUID,
+    String? token,
+    String? expectedPin,
+  }) async {
+    _current = SenderConnectionState.connected;
+    _state.add(_current);
+  }
+
+  @override
+  Future<void> disconnect() async {
+    _current = SenderConnectionState.disconnected;
+    _state.add(_current);
+  }
+
+  @override
+  bool castVideo(PlayPayload video) => false;
+
+  @override
+  bool castPlaylist(PlaylistPayload playlist) => false;
+
+  @override
+  bool sendControl(String command) => false;
+
+  @override
+  bool playlistJump(int index) => false;
+
+  @override
+  bool queueAdd(PlayPayload item) => false;
+
+  @override
+  Future<void> dispose() async {
+    await _state.close();
+    await _messages.close();
+    await _credentials.close();
+  }
+}
+
 /// Factory to instantiate appropriate transport for a receiver protocol.
 abstract class TvTransportFactory {
   static TvTransport create(TvProtocol protocol) {
@@ -569,6 +634,8 @@ abstract class TvTransportFactory {
         return DlnaTransport();
       case TvProtocol.roku:
         return RokuTransport();
+      case TvProtocol.googleCast:
+        return GoogleCastTransport();
     }
   }
 }
