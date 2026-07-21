@@ -1,10 +1,11 @@
 # PlayBridge
 
 <p align="center">
+  [![Discord](https://img.shields.io/discord/4U6WPSdSa9?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/4U6WPSdSa9)
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha">
   <img src="https://img.shields.io/badge/license-GPLv3-blue" alt="License: GPLv3">
   <a href="https://github.com/playbridgeapp/playbridge/releases"><img src="https://img.shields.io/github/v/release/playbridgeapp/playbridge?label=latest%20release" alt="Latest release"></a>
-  <a href="https://ko-fi.com/playbridgeapp"><img src="https://img.shields.io/badge/Ko--fi-Support%20us-F16061?logo=ko-fi&logoColor=white" alt="Support us on Ko-fi"></a>
+  <a href="https://ko-fi.com/playbridgeapp"><img src="https://img.shields.io/badge/Ko--fi-Support%20us-F16061?logo=ko-fi&logoColor=white" alt="Support me on Ko-fi"></a>
 </p>
 
 <p align="center">
