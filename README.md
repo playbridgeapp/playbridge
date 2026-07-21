@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha">
   <img src="https://img.shields.io/badge/license-GPLv3-blue" alt="License: GPLv3">
   <a href="https://github.com/playbridgeapp/playbridge/releases"><img src="https://img.shields.io/github/v/release/playbridgeapp/playbridge?label=latest%20release" alt="Latest release"></a>
-  <a href="https://discord.gg/4U6WPSdSa9"><img src="https://img.shields.io/discord/online-members/4U6WPSdSa9?logo=discord&logoColor=white&label=Discord&color=5865F2" alt="Discord Community"></a>
+  <a href="https://discord.gg/4U6WPSdSa9"><img src="https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white" alt="Discord Community"></a>
   <a href="https://ko-fi.com/playbridgeapp"><img src="https://img.shields.io/badge/Ko--fi-Support%20us-F16061?logo=ko-fi&logoColor=white" alt="Support me on Ko-fi"></a>
 </p>
 
