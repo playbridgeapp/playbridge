@@ -76,7 +76,7 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
             let result = match pref.protocol.to_lowercase().as_str() {
                 "playbridge" | "native" => {
                     let wss_port = pref.wss_port.or(pref.port).unwrap_or(8765);
-                    cast_to_playbridge(&pref.address, wss_port, &pref.name, &pref.uuid, &target_url).await
+                    cast_to_playbridge(&pref.address, wss_port, &pref.name, &pref.uuid, &target_url).await.map(|_| None)
                 }
                 _ => {
                     println!("Connecting to preferred device \"{}\" ({}:{})...", pref.name, pref.address, pref.port.unwrap_or(8009));
@@ -84,10 +84,8 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
                 }
             };
             match result {
-                Ok(()) => {
-                    if _server_handle.is_some() {
-                        wait_for_server_exit(&media_url).await;
-                    }
+                Ok(channel_opt) => {
+                    wait_for_server_exit(&media_url, channel_opt, _server_handle.is_some()).await;
                     return Ok(());
                 }
                 Err(err) => {
@@ -123,45 +121,57 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         }
     }
 
-    let result = match protocol_str.to_lowercase().as_str() {
+    let (result, channel_opt) = match protocol_str.to_lowercase().as_str() {
         "playbridge" | "native" => {
             let wss_port = target.wss_port.or(target.port).unwrap_or(8765);
             let uuid = target.uuid.clone().unwrap_or_else(|| target.id.0.clone());
-            cast_to_playbridge(&address, wss_port, &target.name, &uuid, &media_url).await
+            (cast_to_playbridge(&address, wss_port, &target.name, &uuid, &media_url).await.map(|_| ()), None)
         }
         _ => {
             println!("Connecting to \"{}\" ({}:{})...", target.name, address, target.port.unwrap_or(8009));
-            cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_url, &target.name).await
+            match cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_url, &target.name).await {
+                Ok(ch) => (Ok(()), ch),
+                Err(e) => (Err(e), None),
+            }
         }
     };
 
-    if result.is_ok() && _server_handle.is_some() {
-        wait_for_server_exit(&media_url).await;
+    if result.is_ok() {
+        wait_for_server_exit(&media_url, channel_opt, _server_handle.is_some()).await;
     }
 
     result
 }
 
-async fn wait_for_server_exit(media_url: &str) {
-    println!("\nStreaming media at {}", media_url);
-    println!("Press [Enter] or Ctrl+C to stop streaming and exit.");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut line = String::new();
-        let _ = io::stdin().read_line(&mut line);
-        let _ = tx.send(());
-    });
+async fn wait_for_server_exit(media_url: &str, mut cast_channel: Option<castv2::CastChannel>, is_local_server: bool) {
+    if is_local_server || cast_channel.is_some() {
+        println!("\nStreaming media at {}", media_url);
+        println!("Press [Enter] or Ctrl+C to stop streaming and exit.");
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = io::stdin().read_line(&mut line);
+            let _ = tx.send(());
+        });
 
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {}
-        _ = async {
-            loop {
-                if rx.try_recv().is_ok() { break; }
-                sleep(Duration::from_millis(100)).await;
+        let mut last_ping = tokio::time::Instant::now();
+        loop {
+            if rx.try_recv().is_ok() { break; }
+
+            if let Some(channel) = cast_channel.as_mut() {
+                if last_ping.elapsed() >= Duration::from_secs(5) {
+                    let _ = castv2::send_heartbeat_ping(channel).await;
+                    last_ping = tokio::time::Instant::now();
+                }
             }
-        } => {}
+
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => { break; }
+                _ = sleep(Duration::from_millis(100)) => {}
+            }
+        }
+        println!("Stopped streaming.");
     }
-    println!("Stopped streaming.");
 }
 
 async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String> {
@@ -290,14 +300,14 @@ async fn cast_to_target(
     location: Option<&str>,
     media_url: &str,
     device_name: &str,
-) -> Result<(), String> {
+) -> Result<Option<castv2::CastChannel>, String> {
     match protocol.to_lowercase().as_str() {
         "google_cast" | "googlecast" | "chromecast" => {
             let target_port = port.unwrap_or(8009);
             println!("Connecting TLS CastV2 channel to Google Cast device at {}:{}...", address, target_port);
-            castv2::cast_media(address, target_port, media_url, Some(device_name)).await?;
+            let channel = castv2::cast_media_session(address, target_port, media_url, Some(device_name)).await?;
             println!("Successfully sent media cast request to \"{}\"!", device_name);
-            Ok(())
+            Ok(Some(channel))
         }
         "dlna" => {
             let loc = location.ok_or_else(|| "DLNA location description missing".to_string())?;
@@ -307,7 +317,7 @@ async fn cast_to_target(
             renderer.set_media_uri(media_url, "").await.map_err(|e| e.to_string())?;
             renderer.play().await.map_err(|e| e.to_string())?;
             println!("Successfully started DLNA playback on \"{}\"!", device_name);
-            Ok(())
+            Ok(None)
         }
         "roku" => {
             let target_port = port.unwrap_or(8060);
@@ -317,7 +327,7 @@ async fn cast_to_target(
             let resp = client.post(&roku_url).send().await.map_err(|e| e.to_string())?;
             if resp.status().is_success() {
                 println!("Successfully launched media on Roku \"{}\"!", device_name);
-                Ok(())
+                Ok(None)
             } else {
                 Err(format!("Roku returned HTTP {}", resp.status()))
             }

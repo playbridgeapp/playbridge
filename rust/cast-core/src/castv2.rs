@@ -330,12 +330,27 @@ impl CastChannel {
     }
 }
 
+pub async fn send_heartbeat_ping(channel: &mut CastChannel) -> Result<(), String> {
+    let ping = CastMessage::new(RECEIVER_ID, NS_HEARTBEAT, json!({ "type": "PING" }).to_string());
+    channel.send_message(&ping).await
+}
+
 pub async fn cast_media(
     address: &str,
     port: u16,
     media_url: &str,
     title: Option<&str>,
 ) -> Result<(), String> {
+    let _ = cast_media_session(address, port, media_url, title).await?;
+    Ok(())
+}
+
+pub async fn cast_media_session(
+    address: &str,
+    port: u16,
+    media_url: &str,
+    title: Option<&str>,
+) -> Result<CastChannel, String> {
     let mut channel = CastChannel::connect(address, port).await?;
     let req_gen = RequestIdGenerator::new();
 
@@ -343,51 +358,85 @@ pub async fn cast_media(
     let conn_msg = CastMessage::new(RECEIVER_ID, NS_CONNECTION, build_connect_payload());
     channel.send_message(&conn_msg).await?;
 
-    // 2. Launch Default Media Receiver app (CC1AD845)
-    let launch_req_id = req_gen.next();
-    let launch_msg = CastMessage::new(
-        RECEIVER_ID,
-        NS_RECEIVER,
-        build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, launch_req_id),
-    );
-    channel.send_message(&launch_msg).await?;
+    // 2. Query RECEIVER_STATUS to see if app is already running
+    let status_req_id = req_gen.next();
+    let get_status_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
+        "type": "GET_STATUS",
+        "requestId": status_req_id,
+    }).to_string());
+    channel.send_message(&get_status_msg).await?;
 
-    // 3. Read RECEIVER_STATUS to get transportId
-    let mut destination_id = RECEIVER_ID.to_string();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-
-    while tokio::time::Instant::now() < deadline {
-        let msg = match tokio::time::timeout(std::time::Duration::from_secs(2), channel.read_message()).await {
-            Ok(Ok(m)) => m,
-            _ => continue,
-        };
-
-        if msg.namespace == NS_RECEIVER {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
-                if v["type"] == "RECEIVER_STATUS" {
-                    if let Some(apps) = v["status"]["applications"].as_array() {
-                        for app in apps {
-                            if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
-                                if let Some(tid) = app["transportId"].as_str() {
-                                    destination_id = tid.to_string();
-                                    break;
+    let mut destination_id = String::new();
+    let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < read_deadline {
+        if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_millis(500), channel.read_message()).await {
+            if msg.namespace == NS_RECEIVER {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                    if v["type"] == "RECEIVER_STATUS" {
+                        if let Some(apps) = v["status"]["applications"].as_array() {
+                            for app in apps {
+                                if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
+                                    if let Some(tid) = app["transportId"].as_str() {
+                                        destination_id = tid.to_string();
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            if destination_id != RECEIVER_ID {
+            if !destination_id.is_empty() {
                 break;
             }
         }
+    }
+
+    // 3. If app not running, LAUNCH it
+    if destination_id.is_empty() {
+        let launch_req_id = req_gen.next();
+        let launch_msg = CastMessage::new(
+            RECEIVER_ID,
+            NS_RECEIVER,
+            build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, launch_req_id),
+        );
+        channel.send_message(&launch_msg).await?;
+
+        let launch_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while tokio::time::Instant::now() < launch_deadline {
+            if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_secs(1), channel.read_message()).await {
+                if msg.namespace == NS_RECEIVER {
+                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                        if v["type"] == "RECEIVER_STATUS" {
+                            if let Some(apps) = v["status"]["applications"].as_array() {
+                                for app in apps {
+                                    if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
+                                        if let Some(tid) = app["transportId"].as_str() {
+                                            destination_id = tid.to_string();
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if !destination_id.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if destination_id.is_empty() {
+        destination_id = RECEIVER_ID.to_string();
     }
 
     // 4. Connect to target transportId
     let app_conn_msg = CastMessage::new(&destination_id, NS_CONNECTION, build_connect_payload());
     channel.send_message(&app_conn_msg).await?;
 
-    // 5. Send LOAD message to target transportId
+    // 5. Send LOAD payload to target transportId
     let load_req_id = req_gen.next();
     let load_payload = build_load_payload(
         media_url,
@@ -400,7 +449,7 @@ pub async fn cast_media(
     let load_msg = CastMessage::new(&destination_id, NS_MEDIA, load_payload);
     channel.send_message(&load_msg).await?;
 
-    Ok(())
+    Ok(channel)
 }
 
 #[cfg(test)]
