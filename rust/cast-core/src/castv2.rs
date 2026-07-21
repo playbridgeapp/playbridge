@@ -4,17 +4,11 @@
 //! This module provides a lightweight, pure Rust implementation of the CastV2 wire protocol
 //! and JSON payload commands (CONNECT, LAUNCH, LOAD, PLAY, PAUSED, SEEK, STOP, SET_VOLUME).
 
-use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::{
-    atomic::{AtomicU32, Ordering},
-    Arc,
-};
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
 
 pub const DEFAULT_MEDIA_RECEIVER_APP_ID: &str = "CC1AD845";
 
@@ -274,74 +268,26 @@ pub fn build_volume_payload(level: f32, request_id: u32) -> String {
 // TLS CastV2 Channel & Cast Media Flow
 // -----------------------------------------------------------------------
 
-#[derive(Debug)]
-struct NoCertVerifier;
-
-impl ServerCertVerifier for NoCertVerifier {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        vec![
-            rustls::SignatureScheme::RSA_PKCS1_SHA256,
-            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA1,
-            rustls::SignatureScheme::ECDSA_SHA1_Legacy,
-            rustls::SignatureScheme::ED25519,
-        ]
-    }
-}
-
 pub struct CastChannel {
-    stream: tokio_rustls::client::TlsStream<TcpStream>,
+    stream: tokio_native_tls::TlsStream<TcpStream>,
 }
 
 impl CastChannel {
     pub async fn connect(address: &str, port: u16) -> Result<Self, String> {
-        let mut crypto = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
-            .with_no_client_auth();
-        crypto.alpn_protocols.clear();
+        let builder = native_tls::TlsConnector::builder()
+            .danger_accept_invalid_certs(true)
+            .danger_accept_invalid_hostnames(true)
+            .build()
+            .map_err(|e| format!("Failed to build native TLS connector: {e}"))?;
 
-        let connector = TlsConnector::from(Arc::new(crypto));
-        let server_name = ServerName::try_from("chromecast")
-            .map_err(|e| format!("Invalid server name: {e}"))?
-            .to_owned();
-
+        let connector = tokio_native_tls::TlsConnector::from(builder);
         let addr = format!("{address}:{port}");
         let tcp = TcpStream::connect(&addr)
             .await
             .map_err(|e| format!("Failed to connect TCP to {addr}: {e}"))?;
 
         let tls = connector
-            .connect(server_name, tcp)
+            .connect(address, tcp)
             .await
             .map_err(|e| format!("TLS handshake with Chromecast failed: {e}"))?;
 

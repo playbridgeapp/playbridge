@@ -36,6 +36,8 @@ x509-parser = "0.18"
 zeroize = { version = "1", features = ["derive"] }
 rustls = "0.23"
 tokio-rustls = "0.26"
+native-tls = "0.2"
+tokio-native-tls = "0.3"
 
 [dev-dependencies]
 wiremock = "0.6"
