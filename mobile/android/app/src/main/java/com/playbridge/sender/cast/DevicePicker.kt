@@ -418,6 +418,8 @@ fun DeviceConnectionSheet(
                                 viewModel.selectDlnaTarget(device.connectDevice)
                             } else if (device.connectDevice.isRoku) {
                                 viewModel.selectRokuTarget(device.connectDevice)
+                            } else if (device.connectDevice.isGoogleCast) {
+                                viewModel.selectGoogleCastTarget(device.connectDevice)
                             } else {
                                 viewModel.selectNativeRoute()
                                 connectKnownOrPair(

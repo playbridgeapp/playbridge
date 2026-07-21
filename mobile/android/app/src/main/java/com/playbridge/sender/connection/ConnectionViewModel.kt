@@ -15,6 +15,7 @@ import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
+import com.playbridge.sender.cast.TargetKind
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.dlna.DeviceDescription
 import com.playbridge.sender.cast.dlna.DlnaDiscovery
@@ -73,6 +74,7 @@ class ConnectionViewModel(
                 logsPort = r.logsPort,
                 isDlna = r.isDlna,
                 isRoku = r.isRoku,
+                isGoogleCast = r.isGoogleCast,
                 controlUrl = r.location,
             )
         }
@@ -380,6 +382,16 @@ class ConnectionViewModel(
 
     fun rokuKeypress(key: String) = castSessionManager.rokuKeypress(key)
 
+    /** Select a Google Cast (Chromecast) device as the active cast target. */
+    fun selectGoogleCastTarget(device: TvDevice) {
+        castSessionManager.selectGoogleCastTarget(device)
+        viewModelScope.launch {
+            connectionStore.addToHistory(device)
+        }
+    }
+
+    fun clearGoogleCastTarget() = castSessionManager.clearGoogleCastTarget()
+
     /** Cast a media item to the active DLNA target. No-op if none selected. */
     fun playOnDlna(media: MediaItem) = castSessionManager.playOnDlna(media)
 
@@ -394,10 +406,14 @@ class ConnectionViewModel(
      * the TV can fetch it). Returns false if no target is available.
      */
     fun castLocalFile(uriString: String, mime: String?, title: String?, durationMs: Long = 0L): Boolean {
+        val media = MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs)
         if (castSessionManager.isDlnaActive) {
-            castSessionManager.playOnDlna(
-                MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs)
-            )
+            castSessionManager.playOnDlna(media)
+            return true
+        }
+        val gcTarget = castSessionManager.activeTarget.value
+        if (gcTarget != null && gcTarget.kind == TargetKind.GOOGLE_CAST) {
+            viewModelScope.launch { runCatching { gcTarget.load(media) } }
             return true
         }
         if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
@@ -428,10 +444,14 @@ class ConnectionViewModel(
         title: String? = null,
         mime: String? = null,
     ): Boolean {
+        val media = MediaItem(url = url, headers = headers, mimeType = mime, title = title)
         if (castSessionManager.isDlnaActive) {
-            castSessionManager.playOnDlna(
-                MediaItem(url = url, headers = headers, mimeType = mime, title = title)
-            )
+            castSessionManager.playOnDlna(media)
+            return true
+        }
+        val gcTarget = castSessionManager.activeTarget.value
+        if (gcTarget != null && gcTarget.kind == TargetKind.GOOGLE_CAST) {
+            viewModelScope.launch { runCatching { gcTarget.load(media) } }
             return true
         }
         if (connectionState.value is WebSocketClient.ConnectionState.Connected) {

@@ -5,6 +5,7 @@
 //! concepts so a later production crate can expose them through multiple FFI
 //! frontends.
 
+pub mod castv2;
 pub mod dial;
 pub mod discovery;
 pub mod hls;

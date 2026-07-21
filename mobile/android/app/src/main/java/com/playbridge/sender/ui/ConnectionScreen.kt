@@ -435,6 +435,20 @@ fun ConnectionScreen(
                                                 "Selected ${device.connectDevice.name} — cast a video to play here"
                                             )
                                         }
+                                    } else if (device.connectDevice.isRoku) {
+                                        viewModel.selectRokuTarget(device.connectDevice)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                "Selected ${device.connectDevice.name} — cast a video to play here"
+                                            )
+                                        }
+                                    } else if (device.connectDevice.isGoogleCast) {
+                                        viewModel.selectGoogleCastTarget(device.connectDevice)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                "Selected ${device.connectDevice.name} — cast a video to play here"
+                                            )
+                                        }
                                     } else {
                                         onDeviceSelected(
                                             device.connectDevice.ip,
@@ -518,6 +532,20 @@ fun ConnectionScreen(
                                 onClick = {
                                     if (device.connectDevice.isDlna) {
                                         viewModel.selectDlnaTarget(device.connectDevice)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                "Selected ${device.connectDevice.name} — cast a video to play here"
+                                            )
+                                        }
+                                    } else if (device.connectDevice.isRoku) {
+                                        viewModel.selectRokuTarget(device.connectDevice)
+                                        coroutineScope.launch {
+                                            snackbarHostState.showSnackbar(
+                                                "Selected ${device.connectDevice.name} — cast a video to play here"
+                                            )
+                                        }
+                                    } else if (device.connectDevice.isGoogleCast) {
+                                        viewModel.selectGoogleCastTarget(device.connectDevice)
                                         coroutineScope.launch {
                                             snackbarHostState.showSnackbar(
                                                 "Selected ${device.connectDevice.name} — cast a video to play here"
@@ -684,7 +712,7 @@ fun TvDeviceRow(
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = if (device.connectDevice.isDlna) Icons.Default.Cast else Icons.Default.Tv,
+                    imageVector = if (device.connectDevice.isDlna || device.connectDevice.isGoogleCast) Icons.Default.Cast else Icons.Default.Tv,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
