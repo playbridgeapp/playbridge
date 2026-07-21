@@ -71,6 +71,12 @@ enum JsonLine<'a> {
     },
 }
 
+mod preferred;
+mod send;
+
+use preferred::PreferredDevice;
+use send::run_send;
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(env::args().skip(1).collect()).await {
@@ -93,20 +99,51 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
         return Ok(());
     }
     let Some(command) = arguments.first() else {
-        return Err("missing command".into());
+        return Err("missing command. Usage: playbridge-cast [send|discover|preferred]".into());
     };
-    if command != "discover" {
-        return Err(format!("unsupported command: {command}"));
+
+    match command.as_str() {
+        "send" | "cast" => {
+            let Some(target) = arguments.get(1) else {
+                return Err("missing media file or URL to send".into());
+            };
+            run_send(target.clone()).await
+        }
+        "discover" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!("{}", usage());
+                return Ok(());
+            }
+            let args = parse_discover_args(&arguments[1..])?;
+            discover(args).await
+        }
+        "preferred" => {
+            if let Some(sub) = arguments.get(1) {
+                if sub == "clear" {
+                    PreferredDevice::clear()?;
+                    println!("Cleared preferred device configuration.");
+                    return Ok(());
+                }
+            }
+            if let Some(pref) = PreferredDevice::load() {
+                println!("Preferred Device Configuration:");
+                println!("  Name:     {}", pref.name);
+                println!("  Protocol: {}", pref.protocol);
+                println!("  Address:  {}", pref.address);
+                if let Some(port) = pref.port {
+                    println!("  Port:     {}", port);
+                }
+                println!("  UUID:     {}", pref.uuid);
+            } else {
+                println!("No preferred device configured.");
+            }
+            Ok(())
+        }
+        _ => Err(format!("unsupported command: {command}")),
     }
-    if arguments[1..]
-        .iter()
-        .any(|value| value == "--help" || value == "-h")
-    {
-        println!("{}", usage());
-        return Ok(());
-    }
-    let args = parse_discover_args(&arguments[1..])?;
-    discover(args).await
 }
 
 fn parse_discover_args(arguments: &[String]) -> Result<DiscoverArgs, String> {
@@ -273,9 +310,11 @@ fn usage() -> &'static str {
     r#"PlayBridge Cast CLI
 
 Usage:
-  playbridge-cast discover [options]
+  playbridge-cast send <filename|URL>    Interactively cast a file/URL with auto-send to preferred device
+  playbridge-cast discover [options]     Discover receivers on your local network
+  playbridge-cast preferred [clear]      View or clear the saved preferred device
 
-Options:
+Discover Options:
   -p, --protocol <names>  playbridge, native, dlna, roku, dial, googlecast, or all
                          Repeat the option or use comma-separated names
   -t, --timeout <seconds> Bounded scan duration (1-300, default 5)
