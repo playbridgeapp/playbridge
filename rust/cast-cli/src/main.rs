@@ -276,7 +276,7 @@ Usage:
   playbridge-cast discover [options]
 
 Options:
-  -p, --protocol <names>  playbridge, native, dlna, roku, dial, or all
+  -p, --protocol <names>  playbridge, native, dlna, roku, dial, googlecast, or all
                          Repeat the option or use comma-separated names
   -t, --timeout <seconds> Bounded scan duration (1-300, default 5)
       --json              Print one final JSON report
@@ -304,7 +304,7 @@ mod tests {
         let one = parse_discover_args(&strings(&["-p", "roku"])).unwrap();
         assert_eq!(one.protocols, HashSet::from([ReceiverProtocol::Roku]));
 
-        let multiple = parse_discover_args(&strings(&["-p", "native,dlna", "-p", "roku"])).unwrap();
+        let multiple = parse_discover_args(&strings(&["-p", "native,dlna", "-p", "roku,googlecast"])).unwrap();
         assert_eq!(
             multiple.protocols,
             HashSet::from(ReceiverProtocol::DEFAULTS)
