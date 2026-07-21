@@ -36,6 +36,7 @@ final class CastCoreLibrary {
       ReceiverProtocol.playBridge,
       ReceiverProtocol.dlna,
       ReceiverProtocol.roku,
+      ReceiverProtocol.googleCast,
     },
     Duration timeout = const Duration(seconds: 15),
     Duration pollInterval = const Duration(milliseconds: 50),

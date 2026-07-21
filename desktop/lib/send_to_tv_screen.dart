@@ -107,7 +107,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Discover PlayBridge, DLNA, and Roku receivers on your network.',
+          'Discover PlayBridge, DLNA, Roku, and Google Cast receivers on your network.',
           style: TextStyle(
               fontSize: 13, color: Colors.white.withValues(alpha: 0.6)),
         ),

@@ -115,10 +115,10 @@ internal class RustDiscoveryShadow(context: Context) {
                     }
                     onFinished?.invoke(
                         RustDiscoverySummary(
-                            playBridgeDevices = receivers["PlayBridge"]?.size ?: 0,
-                            dlnaDevices = receivers["Dlna"]?.size ?: 0,
-                            rokuDevices = receivers["Roku"]?.size ?: 0,
-                            googleCastDevices = receivers["GoogleCast"]?.size ?: 0,
+                            playBridgeDevices = receivers["PlayBridge"]?.size ?: receivers["playbridge"]?.size ?: 0,
+                            dlnaDevices = receivers["Dlna"]?.size ?: receivers["dlna"]?.size ?: 0,
+                            rokuDevices = receivers["Roku"]?.size ?: receivers["roku"]?.size ?: 0,
+                            googleCastDevices = receivers["GoogleCast"]?.size ?: receivers["google_cast"]?.size ?: 0,
                             errors = errors,
                         )
                     )
@@ -154,10 +154,10 @@ internal class RustDiscoveryShadow(context: Context) {
         val uuid = receiver.optString("uuid").ifEmpty { receiver.optString("id") }
 
         val protoStr = receiver.optString("protocol")
-        val protocol = when (protoStr) {
-            "Dlna" -> NsdHelper.TvProtocol.DLNA
-            "Roku" -> NsdHelper.TvProtocol.ROKU
-            "GoogleCast" -> NsdHelper.TvProtocol.GOOGLE_CAST
+        val protocol = when (protoStr.lowercase(java.util.Locale.ROOT)) {
+            "dlna" -> NsdHelper.TvProtocol.DLNA
+            "roku" -> NsdHelper.TvProtocol.ROKU
+            "googlecast", "google_cast" -> NsdHelper.TvProtocol.GOOGLE_CAST
             else -> NsdHelper.TvProtocol.PLAYBRIDGE
         }
 
