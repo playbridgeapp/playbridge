@@ -74,35 +74,9 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         }
     }
 
-    // 2. Discovery loop
-    println!("Scanning for receivers on your network (5s timeout)...");
-    let mut stream = DiscoveryStream::start(DiscoveryConfig::default());
-    let mut receivers = Vec::<Receiver>::new();
+    // 2. Continuous live discovery and interactive menu
+    let (target, make_preferred) = live_discovery_interactive_select().await?;
 
-    let scan_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while tokio::time::Instant::now() < scan_deadline {
-        tokio::select! {
-            event = stream.next() => match event {
-                Some(DiscoveryEvent::Found(receiver)) | Some(DiscoveryEvent::Updated(receiver)) => {
-                    if !receivers.iter().any(|r| r.id == receiver.id) {
-                        println!("  [{}] {} ({}) - {}", receivers.len() + 1, receiver.name, receiver.protocol, receiver.addresses.join(", "));
-                        receivers.push(receiver);
-                    }
-                }
-                _ => {}
-            },
-            _ = sleep(Duration::from_millis(100)) => {}
-        }
-    }
-
-    if receivers.is_empty() {
-        return Err("No cast receivers found on the network.".into());
-    }
-
-    // 3. Interactive device selection
-    let (selected_idx, make_preferred) = interactive_device_select(&receivers)?;
-
-    let target = &receivers[selected_idx - 1];
     let address = target.addresses.first().cloned().unwrap_or_default();
     let protocol_str = target.protocol.as_str().to_string();
 
@@ -136,32 +110,88 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
     }
 }
 
-fn interactive_device_select(receivers: &[Receiver]) -> Result<(usize, bool), String> {
-    let count = receivers.len();
-    if count == 0 {
-        return Err("No devices to select from".into());
-    }
-
-    // Print initial blank lines so MoveUp can move back up predictably
-    for _ in 0..(count + 4) {
-        println!();
-    }
+async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String> {
+    let mut stream = DiscoveryStream::start(DiscoveryConfig::default());
+    let mut receivers = Vec::<Receiver>::new();
+    let mut selection = 0usize;
+    let mut rendered_lines = 0usize;
 
     enable_raw_mode().map_err(|e| e.to_string())?;
 
-    let mut selection = 0usize;
+    // Initial render
+    let _ = redraw(&receivers, selection, &mut rendered_lines);
 
-    let render = |sel: usize| -> Result<(), String> {
-        let mut stdout = io::stdout();
+    let result = loop {
+        // Handle input events
+        if event::poll(Duration::from_millis(50)).map_err(|e| e.to_string())? {
+            if let Event::Key(key_event) = event::read().map_err(|e| e.to_string())? {
+                match key_event.code {
+                    KeyCode::Up if selection > 0 => {
+                        selection -= 1;
+                        let _ = redraw(&receivers, selection, &mut rendered_lines);
+                    }
+                    KeyCode::Down if !receivers.is_empty() && selection + 1 < receivers.len() => {
+                        selection += 1;
+                        let _ = redraw(&receivers, selection, &mut rendered_lines);
+                    }
+                    KeyCode::Enter if !receivers.is_empty() => {
+                        break Ok((receivers[selection].clone(), false));
+                    }
+                    KeyCode::Char('p') | KeyCode::Char('P') if !receivers.is_empty() => {
+                        break Ok((receivers[selection].clone(), true));
+                    }
+                    KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                        break Err("Selection cancelled".into());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Poll discovery stream for new or updated receivers
+        tokio::select! {
+            event = stream.next() => match event {
+                Some(DiscoveryEvent::Found(receiver)) | Some(DiscoveryEvent::Updated(receiver)) => {
+                    if let Some(existing) = receivers.iter_mut().find(|r| r.id == receiver.id) {
+                        *existing = receiver;
+                    } else {
+                        receivers.push(receiver);
+                    }
+                    let _ = redraw(&receivers, selection, &mut rendered_lines);
+                }
+                _ => {}
+            },
+            _ = sleep(Duration::from_millis(50)) => {}
+        }
+    };
+
+    let _ = disable_raw_mode();
+    print!("\r\n");
+    let _ = io::stdout().flush();
+    result
+}
+
+fn redraw(receivers: &[Receiver], selection: usize, rendered_lines: &mut usize) -> Result<(), String> {
+    let mut stdout = io::stdout();
+    if *rendered_lines > 0 {
         let _ = execute!(
             stdout,
             cursor::MoveToColumn(0),
-            cursor::MoveUp((count + 4) as u16),
+            cursor::MoveUp(*rendered_lines as u16),
             Clear(ClearType::FromCursorDown),
         );
-        let _ = write!(stdout, "\r\nDiscovered Devices:\r\n");
+    }
+
+    let mut lines = 0usize;
+    let _ = write!(stdout, "\r\nDiscovered Devices (scanning...):\r\n");
+    lines += 2;
+
+    if receivers.is_empty() {
+        let _ = write!(stdout, "\r  (Searching for devices on LAN...)\r\n");
+        lines += 1;
+    } else {
         for (idx, r) in receivers.iter().enumerate() {
-            let prefix = if idx == sel { ">" } else { " " };
+            let prefix = if idx == selection { ">" } else { " " };
             let _ = write!(
                 stdout,
                 "\r  {} {} ({}) - {}\r\n",
@@ -170,56 +200,19 @@ fn interactive_device_select(receivers: &[Receiver]) -> Result<(usize, bool), St
                 r.protocol,
                 r.addresses.join(", ")
             );
+            lines += 1;
         }
-        let _ = write!(
-            stdout,
-            "\r\n\r[↑/↓] Navigate  [Enter] Cast  [P] Cast & save as preferred  [Q] Cancel\r\n"
-        );
-        let _ = stdout.flush();
-        Ok(())
-    };
+    }
 
-    let _ = render(selection);
+    let _ = write!(
+        stdout,
+        "\r\n\r[↑/↓] Navigate  [Enter] Cast  [P] Cast & save as preferred  [Q] Cancel\r\n"
+    );
+    lines += 2;
 
-    let result = loop {
-        let evt = event::read().map_err(|e| e.to_string())?;
-        match evt {
-            Event::Key(event::KeyEvent { code, .. }) => match code {
-                KeyCode::Up if selection > 0 => {
-                    selection -= 1;
-                    let _ = render(selection);
-                }
-                KeyCode::Down if selection < count - 1 => {
-                    selection += 1;
-                    let _ = render(selection);
-                }
-                KeyCode::Up | KeyCode::Down => {}
-                KeyCode::Enter => {
-                    let _ = disable_raw_mode();
-                    print!("\r\n");
-                    let _ = io::stdout().flush();
-                    break Ok((selection + 1, false));
-                }
-                KeyCode::Char('p') | KeyCode::Char('P') => {
-                    let _ = disable_raw_mode();
-                    print!("\r\n");
-                    let _ = io::stdout().flush();
-                    break Ok((selection + 1, true));
-                }
-                KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
-                    let _ = disable_raw_mode();
-                    print!("\r\n");
-                    let _ = io::stdout().flush();
-                    break Err("Selection cancelled".into());
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-    };
-
-    let _ = disable_raw_mode();
-    result
+    let _ = stdout.flush();
+    *rendered_lines = lines;
+    Ok(())
 }
 
 async fn cast_to_target(
