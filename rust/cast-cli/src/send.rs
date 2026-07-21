@@ -142,32 +142,40 @@ fn interactive_device_select(receivers: &[Receiver]) -> Result<(usize, bool), St
         return Err("No devices to select from".into());
     }
 
+    // Print initial blank lines so MoveUp can move back up predictably
+    for _ in 0..(count + 4) {
+        println!();
+    }
+
     enable_raw_mode().map_err(|e| e.to_string())?;
 
     let mut selection = 0usize;
 
     let render = |sel: usize| -> Result<(), String> {
+        let mut stdout = io::stdout();
         let _ = execute!(
-            io::stdout(),
-            cursor::MoveUp((count + 3) as u16),
+            stdout,
+            cursor::MoveToColumn(0),
+            cursor::MoveUp((count + 4) as u16),
             Clear(ClearType::FromCursorDown),
         );
-        println!("\nDiscovered Devices:");
+        let _ = write!(stdout, "\r\nDiscovered Devices:\r\n");
         for (idx, r) in receivers.iter().enumerate() {
-            println!(
-                "  {} {} ({}) - {}",
-                if idx == sel { ">" } else { " " },
+            let prefix = if idx == sel { ">" } else { " " };
+            let _ = write!(
+                stdout,
+                "\r  {} {} ({}) - {}\r\n",
+                prefix,
                 r.name,
                 r.protocol,
                 r.addresses.join(", ")
             );
         }
-        println!();
-        print!(
-            "[↑/↓] Navigate  [Enter] Cast  \
-             [P] Cast & save as preferred  [Q] Cancel"
+        let _ = write!(
+            stdout,
+            "\r\n\r[↑/↓] Navigate  [Enter] Cast  [P] Cast & save as preferred  [Q] Cancel\r\n"
         );
-        let _ = io::stdout().flush();
+        let _ = stdout.flush();
         Ok(())
     };
 
@@ -188,17 +196,20 @@ fn interactive_device_select(receivers: &[Receiver]) -> Result<(usize, bool), St
                 KeyCode::Up | KeyCode::Down => {}
                 KeyCode::Enter => {
                     let _ = disable_raw_mode();
-                    println!();
+                    print!("\r\n");
+                    let _ = io::stdout().flush();
                     break Ok((selection + 1, false));
                 }
                 KeyCode::Char('p') | KeyCode::Char('P') => {
                     let _ = disable_raw_mode();
-                    println!();
+                    print!("\r\n");
+                    let _ = io::stdout().flush();
                     break Ok((selection + 1, true));
                 }
                 KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                     let _ = disable_raw_mode();
-                    println!();
+                    print!("\r\n");
+                    let _ = io::stdout().flush();
                     break Err("Selection cancelled".into());
                 }
                 _ => {}
@@ -207,12 +218,7 @@ fn interactive_device_select(receivers: &[Receiver]) -> Result<(usize, bool), St
         }
     };
 
-    let _ = execute!(
-        io::stdout(),
-        cursor::MoveUp((count + 3) as u16),
-        Clear(ClearType::FromCursorDown),
-    );
-
+    let _ = disable_raw_mode();
     result
 }
 
