@@ -108,9 +108,11 @@ internal class RustDiscoveryShadow(context: Context) {
                 Log.w(TAG, "Rust discovery stopped: ${error.javaClass.simpleName}")
             } finally {
                 try {
-                    RustDiscoveryNative.cancel(handle)
-                    RustDiscoveryNative.free(handle)
-                    activeHandle.compareAndSet(handle, 0L)
+                    val currentHandle = activeHandle.getAndSet(0L)
+                    if (currentHandle != 0L) {
+                        RustDiscoveryNative.cancel(currentHandle)
+                        RustDiscoveryNative.free(currentHandle)
+                    }
                     onFinished?.invoke(
                         RustDiscoverySummary(
                             playBridgeDevices = receivers["PlayBridge"]?.size ?: 0,
@@ -130,11 +132,10 @@ internal class RustDiscoveryShadow(context: Context) {
     fun stop() {
         worker?.cancel()
         worker = null
-        val handle = activeHandle.getAndSet(0L)
+        val handle = activeHandle.get()
         if (handle != 0L) {
             try {
                 RustDiscoveryNative.cancel(handle)
-                RustDiscoveryNative.free(handle)
             } catch (error: LinkageError) {
                 Log.w(TAG, "Rust discovery cleanup failed: ${error.javaClass.simpleName}")
             }

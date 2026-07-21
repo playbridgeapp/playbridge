@@ -300,7 +300,10 @@ mod android_jni {
         protocol_mask: jint,
         timeout_ms: jlong,
     ) -> jlong {
-        pb_discovery_start(protocol_mask as u32, timeout_ms.max(0) as u64) as jlong
+        std::panic::catch_unwind(|| {
+            pb_discovery_start(protocol_mask as u32, timeout_ms.max(0) as u64) as jlong
+        })
+        .unwrap_or(0)
     }
 
     #[unsafe(no_mangle)]
@@ -312,12 +315,23 @@ mod android_jni {
         handle: jlong,
         wait_ms: jlong,
     ) -> JString<'local> {
-        let Some(scanner) = (unsafe { (handle as *const DiscoveryScanner).as_ref() }) else {
-            return JString::default();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if handle == 0 {
+                return None;
+            }
+            let Some(scanner) = (unsafe { (handle as *const DiscoveryScanner).as_ref() }) else {
+                return None;
+            };
+            scanner
+                .next_event(wait_ms.max(0) as u64)
+                .and_then(|event| serde_json::to_string(&event).ok())
+        }));
+
+        let json = match result {
+            Ok(json_opt) => json_opt,
+            Err(_) => None,
         };
-        let json = scanner
-            .next_event(wait_ms.max(0) as u64)
-            .and_then(|event| serde_json::to_string(&event).ok());
+
         unowned_env
             .with_env(|env| match json {
                 Some(json) => env.new_string(json),
@@ -332,7 +346,11 @@ mod android_jni {
         _class: JClass,
         handle: jlong,
     ) {
-        unsafe { pb_discovery_cancel(handle as *const DiscoveryScanner) };
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_discovery_cancel(handle as *const DiscoveryScanner) };
+            }
+        });
     }
 
     #[unsafe(no_mangle)]
@@ -341,7 +359,11 @@ mod android_jni {
         _class: JClass,
         handle: jlong,
     ) {
-        unsafe { pb_discovery_free(handle as *const DiscoveryScanner) };
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_discovery_free(handle as *const DiscoveryScanner) };
+            }
+        });
     }
 }
 
