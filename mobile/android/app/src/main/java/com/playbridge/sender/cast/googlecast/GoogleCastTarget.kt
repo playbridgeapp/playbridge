@@ -192,6 +192,7 @@ class GoogleCastTarget(
                     client.pong()
                 } catch (e: Exception) {
                     Log.w(TAG, "Heartbeat failed: ${e.message}")
+                    client.close()
                     break
                 }
             }

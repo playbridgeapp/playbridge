@@ -59,6 +59,10 @@ class CastV2Client {
     @Volatile var transportId: String? = null
         private set
 
+    /** The session ID of the launched media receiver session. */
+    @Volatile var sessionId: String? = null
+        private set
+
     /** The media session ID of the currently loaded media. */
     @Volatile var mediaSessionId: Int = 0
         private set
@@ -93,46 +97,117 @@ class CastV2Client {
         Log.d(TAG, "Connected to $host:$port")
     }
 
-    /** Launch the Default Media Receiver app (or attach if already running). */
+    /** Launch the Default Media Receiver app (or attach/reuse if already running). */
     fun launchApp(appId: String = DEFAULT_MEDIA_RECEIVER_APP_ID): Boolean {
-        val id = nextRequestId()
+        val reqId = nextRequestId()
+        // 1. Send GET_STATUS
         sendMessage(RECEIVER_ID, NS_RECEIVER, JSONObject().apply {
-            put("type", "LAUNCH")
-            put("appId", appId)
-            put("requestId", id)
+            put("type", "GET_STATUS")
+            put("requestId", reqId)
         })
-        // Wait for RECEIVER_STATUS with the app's transportId
-        val deadline = System.currentTimeMillis() + 15_000
-        while (System.currentTimeMillis() < deadline) {
+
+        var destId = ""
+        var sessId = ""
+        var isActiveApp = false
+
+        // Wait up to 2 seconds for status
+        val statusDeadline = System.currentTimeMillis() + 2_000
+        while (System.currentTimeMillis() < statusDeadline) {
             val msg = readMessage() ?: continue
+            handleHeartbeat(msg)
             if (msg.namespace == NS_RECEIVER) {
                 val json = JSONObject(msg.payload)
                 if (json.optString("type") == "RECEIVER_STATUS") {
-                    val apps = json.optJSONObject("status")?.optJSONArray("applications")
+                    val statusObj = json.optJSONObject("status")
+                    val apps = statusObj?.optJSONArray("applications")
                     if (apps != null && apps.length() > 0) {
-                        val app = apps.getJSONObject(0)
-                        transportId = app.optString("transportId")
-                        Log.d(TAG, "App launched, transportId=$transportId")
-                        // Connect to the media session transport
-                        transportId?.let { tid ->
-                            sendMessage(tid, NS_CONNECTION, JSONObject().apply {
-                                put("type", "CONNECT")
-                            })
+                        for (i in 0 until apps.length()) {
+                            val app = apps.getJSONObject(i)
+                            val sid = app.optString("sessionId")
+                            if (sid.isNotEmpty()) {
+                                sessId = sid
+                            }
+                            if (app.optString("appId") == appId) {
+                                val tid = app.optString("transportId")
+                                if (tid.isNotEmpty()) {
+                                    destId = tid
+                                }
+                                val isIdle = app.optBoolean("isIdleScreen", false)
+                                if (destId.isNotEmpty() && !isIdle) {
+                                    isActiveApp = true
+                                }
+                            }
                         }
-                        return true
+                    }
+                    if (sessId.isNotEmpty() || isActiveApp) {
+                        break
                     }
                 }
             }
-            // Auto-respond to heartbeats while waiting
-            if (msg.namespace == NS_HEARTBEAT) {
+        }
+
+        if (isActiveApp && destId.isNotEmpty()) {
+            transportId = destId
+            sessionId = sessId
+            Log.d(TAG, "Reusing active application transportId=$destId sessionId=$sessId")
+            // Connect to the media session transport
+            sendMessage(destId, NS_CONNECTION, JSONObject().apply {
+                put("type", "CONNECT")
+            })
+            return true
+        }
+
+        // Otherwise launch it
+        // Stop lingering stale session if any
+        if (sessId.isNotEmpty()) {
+            sendMessage(RECEIVER_ID, NS_RECEIVER, JSONObject().apply {
+                put("type", "STOP")
+                put("sessionId", sessId)
+                put("requestId", nextRequestId())
+            })
+            try { Thread.sleep(300) } catch (e: InterruptedException) {}
+        }
+
+        // Launch
+        sendMessage(RECEIVER_ID, NS_RECEIVER, JSONObject().apply {
+            put("type", "LAUNCH")
+            put("appId", appId)
+            put("requestId", nextRequestId())
+        })
+
+        transportId = null
+        sessionId = null
+        val launchDeadline = System.currentTimeMillis() + 10_000
+        while (System.currentTimeMillis() < launchDeadline) {
+            val msg = readMessage() ?: continue
+            handleHeartbeat(msg)
+            if (msg.namespace == NS_RECEIVER) {
                 val json = JSONObject(msg.payload)
-                if (json.optString("type") == "PING") {
-                    sendMessage(msg.sourceId, NS_HEARTBEAT, JSONObject().apply {
-                        put("type", "PONG")
-                    })
+                if (json.optString("type") == "RECEIVER_STATUS") {
+                    val statusObj = json.optJSONObject("status")
+                    val apps = statusObj?.optJSONArray("applications")
+                    if (apps != null && apps.length() > 0) {
+                        for (i in 0 until apps.length()) {
+                            val app = apps.getJSONObject(i)
+                            if (app.optString("appId") == appId) {
+                                val tid = app.optString("transportId")
+                                val sid = app.optString("sessionId")
+                                if (tid.isNotEmpty()) {
+                                    transportId = tid
+                                    sessionId = sid
+                                    Log.d(TAG, "Launched application transportId=$tid sessionId=$sid")
+                                    sendMessage(tid, NS_CONNECTION, JSONObject().apply {
+                                        put("type", "CONNECT")
+                                    })
+                                    return true
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
+
         return false
     }
 
@@ -172,6 +247,7 @@ class CastV2Client {
             put("media", media)
             put("autoplay", true)
             put("currentTime", startSeconds)
+            sessionId?.let { put("sessionId", it) }
             put("requestId", id)
         })
 
@@ -318,7 +394,20 @@ class CastV2Client {
         return null
     }
 
+    fun stopSession() {
+        val sessId = sessionId ?: return
+        sendMessage(RECEIVER_ID, NS_RECEIVER, JSONObject().apply {
+            put("type", "STOP")
+            put("sessionId", sessId)
+            put("requestId", nextRequestId())
+        })
+        sessionId = null
+    }
+
     fun disconnect() {
+        runCatching {
+            stopSession()
+        }
         runCatching {
             sendMessage(RECEIVER_ID, NS_CONNECTION, JSONObject().apply {
                 put("type", "CLOSE")
@@ -335,6 +424,7 @@ class CastV2Client {
         input = null
         output = null
         transportId = null
+        sessionId = null
         mediaSessionId = 0
     }
 
