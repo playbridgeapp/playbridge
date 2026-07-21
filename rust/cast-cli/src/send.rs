@@ -10,10 +10,7 @@ use crossterm::{
 use tokio::time::sleep;
 
 use playbridge_cast_core::{
-    castv2::{
-        self, CastMessage, DEFAULT_MEDIA_RECEIVER_APP_ID, NS_CONNECTION, NS_MEDIA, NS_RECEIVER,
-        RequestIdGenerator,
-    },
+    castv2,
     discovery::{DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver},
     playbridge::{PairingSession, ReceiverFrame, SenderFrame},
     secure_ws::SecureWebSocket,
@@ -225,23 +222,9 @@ async fn cast_to_target(
 ) -> Result<(), String> {
     match protocol.to_lowercase().as_str() {
         "google_cast" | "googlecast" | "chromecast" => {
-            let req_gen = RequestIdGenerator::new();
-            println!("Preparing Google Cast payload for \"{}\"...", device_name);
-            let launch_payload = castv2::build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, req_gen.next());
-            let load_payload = castv2::build_load_payload(media_url, Some("video/mp4"), Some(device_name), None, 0.0, req_gen.next());
-            
             let target_port = port.unwrap_or(8009);
-            println!("Sending CastV2 frames to {}:{}...", address, target_port);
-            
-            // Build Cast Messages
-            let msg_conn = CastMessage::new("receiver-0", NS_CONNECTION, castv2::build_connect_payload());
-            let msg_launch = CastMessage::new("receiver-0", NS_RECEIVER, launch_payload);
-            let msg_load = CastMessage::new("receiver-0", NS_MEDIA, load_payload);
-
-            let _ = msg_conn.encode();
-            let _ = msg_launch.encode();
-            let _ = msg_load.encode();
-
+            println!("Connecting TLS CastV2 channel to Google Cast device at {}:{}...", address, target_port);
+            castv2::cast_media(address, target_port, media_url, Some(device_name)).await?;
             println!("Successfully sent media cast request to \"{}\"!", device_name);
             Ok(())
         }

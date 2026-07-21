@@ -4,9 +4,17 @@
 //! This module provides a lightweight, pure Rust implementation of the CastV2 wire protocol
 //! and JSON payload commands (CONNECT, LAUNCH, LOAD, PLAY, PAUSED, SEEK, STOP, SET_VOLUME).
 
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{
+    atomic::{AtomicU32, Ordering},
+    Arc,
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio_rustls::TlsConnector;
 
 pub const DEFAULT_MEDIA_RECEIVER_APP_ID: &str = "CC1AD845";
 
@@ -260,6 +268,193 @@ pub fn build_volume_payload(level: f32, request_id: u32) -> String {
         "requestId": request_id,
     })
     .to_string()
+}
+
+// -----------------------------------------------------------------------
+// TLS CastV2 Channel & Cast Media Flow
+// -----------------------------------------------------------------------
+
+#[derive(Debug)]
+struct NoCertVerifier;
+
+impl ServerCertVerifier for NoCertVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        vec![
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA1,
+            rustls::SignatureScheme::ECDSA_SHA1_Legacy,
+            rustls::SignatureScheme::ED25519,
+        ]
+    }
+}
+
+pub struct CastChannel {
+    stream: tokio_rustls::client::TlsStream<TcpStream>,
+}
+
+impl CastChannel {
+    pub async fn connect(address: &str, port: u16) -> Result<Self, String> {
+        let mut crypto = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoCertVerifier))
+            .with_no_client_auth();
+        crypto.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+        let connector = TlsConnector::from(Arc::new(crypto));
+        let server_name = ServerName::try_from("chromecast")
+            .map_err(|e| format!("Invalid server name: {e}"))?
+            .to_owned();
+
+        let addr = format!("{address}:{port}");
+        let tcp = TcpStream::connect(&addr)
+            .await
+            .map_err(|e| format!("Failed to connect TCP to {addr}: {e}"))?;
+
+        let tls = connector
+            .connect(server_name, tcp)
+            .await
+            .map_err(|e| format!("TLS handshake with Chromecast failed: {e}"))?;
+
+        Ok(Self { stream: tls })
+    }
+
+    pub async fn send_message(&mut self, msg: &CastMessage) -> Result<(), String> {
+        let payload = msg.encode();
+        let len = payload.len() as u32;
+        let mut packet = Vec::with_capacity(4 + payload.len());
+        packet.extend_from_slice(&len.to_be_bytes());
+        packet.extend_from_slice(&payload);
+
+        self.stream
+            .write_all(&packet)
+            .await
+            .map_err(|e| format!("Failed to write CastMessage: {e}"))?;
+        self.stream
+            .flush()
+            .await
+            .map_err(|e| format!("Failed to flush CastMessage stream: {e}"))?;
+        Ok(())
+    }
+
+    pub async fn read_message(&mut self) -> Result<CastMessage, String> {
+        let mut len_bytes = [0u8; 4];
+        self.stream
+            .read_exact(&mut len_bytes)
+            .await
+            .map_err(|e| format!("Failed to read frame length header: {e}"))?;
+
+        let len = u32::from_be_bytes(len_bytes) as usize;
+        let mut buf = vec![0u8; len];
+        self.stream
+            .read_exact(&mut buf)
+            .await
+            .map_err(|e| format!("Failed to read frame body: {e}"))?;
+
+        CastMessage::decode(&buf).ok_or_else(|| "Failed to decode CastMessage protobuf".to_string())
+    }
+}
+
+pub async fn cast_media(
+    address: &str,
+    port: u16,
+    media_url: &str,
+    title: Option<&str>,
+) -> Result<(), String> {
+    let mut channel = CastChannel::connect(address, port).await?;
+    let req_gen = RequestIdGenerator::new();
+
+    // 1. Send CONNECT to receiver-0
+    let conn_msg = CastMessage::new(RECEIVER_ID, NS_CONNECTION, build_connect_payload());
+    channel.send_message(&conn_msg).await?;
+
+    // 2. Launch Default Media Receiver app (CC1AD845)
+    let launch_req_id = req_gen.next();
+    let launch_msg = CastMessage::new(
+        RECEIVER_ID,
+        NS_RECEIVER,
+        build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, launch_req_id),
+    );
+    channel.send_message(&launch_msg).await?;
+
+    // 3. Read RECEIVER_STATUS to get transportId
+    let mut destination_id = RECEIVER_ID.to_string();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+
+    while tokio::time::Instant::now() < deadline {
+        let msg = match tokio::time::timeout(std::time::Duration::from_secs(2), channel.read_message()).await {
+            Ok(Ok(m)) => m,
+            _ => continue,
+        };
+
+        if msg.namespace == NS_RECEIVER {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                if v["type"] == "RECEIVER_STATUS" {
+                    if let Some(apps) = v["status"]["applications"].as_array() {
+                        for app in apps {
+                            if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
+                                if let Some(tid) = app["transportId"].as_str() {
+                                    destination_id = tid.to_string();
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if destination_id != RECEIVER_ID {
+                break;
+            }
+        }
+    }
+
+    // 4. Connect to target transportId
+    let app_conn_msg = CastMessage::new(&destination_id, NS_CONNECTION, build_connect_payload());
+    channel.send_message(&app_conn_msg).await?;
+
+    // 5. Send LOAD message to target transportId
+    let load_req_id = req_gen.next();
+    let load_payload = build_load_payload(
+        media_url,
+        Some("video/mp4"),
+        title,
+        None,
+        0.0,
+        load_req_id,
+    );
+    let load_msg = CastMessage::new(&destination_id, NS_MEDIA, load_payload);
+    channel.send_message(&load_msg).await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

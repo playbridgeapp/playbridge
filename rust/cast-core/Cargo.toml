@@ -35,6 +35,7 @@ x25519-dalek = { version = "3", features = ["getrandom", "static_secrets"] }
 x509-parser = "0.18"
 zeroize = { version = "1", features = ["derive"] }
 rustls = "0.23"
+tokio-rustls = "0.26"
 
 [dev-dependencies]
 wiremock = "0.6"
