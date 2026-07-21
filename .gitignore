@@ -134,3 +134,6 @@ desktop/tool/
 
 # Local stream proxy Compose configuration
 stream-proxy-dart/docker-compose.yml
+
+# Root Cargo workspace build output
+/target/
