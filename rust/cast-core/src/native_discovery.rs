@@ -57,7 +57,7 @@ impl PlayBridgeReceiver {
 
 /// Browses the native PlayBridge service for a bounded foreground scan window.
 pub async fn discover(timeout: Duration) -> Result<Vec<PlayBridgeReceiver>> {
-    let (sender, mut receiver) = mpsc::unbounded_channel();
+    let (sender, mut receiver) = mpsc::channel(64);
     let worker = discover_incremental(timeout, sender);
     tokio::pin!(worker);
     let mut found = HashMap::<String, PlayBridgeReceiver>::new();
@@ -88,7 +88,7 @@ pub async fn discover(timeout: Duration) -> Result<Vec<PlayBridgeReceiver>> {
 /// Browses PlayBridge services and sends each new or changed resolution immediately.
 pub async fn discover_incremental(
     timeout: Duration,
-    events: mpsc::UnboundedSender<PlayBridgeReceiver>,
+    events: mpsc::Sender<PlayBridgeReceiver>,
 ) -> Result<()> {
     let daemon = ServiceDaemon::new().map_err(mdns_error)?;
     let receiver = daemon.browse(SERVICE_TYPE).map_err(mdns_error)?;
@@ -106,7 +106,7 @@ pub async fn discover_incremental(
                     let key = receiver_key(&device);
                     if found.get(&key) != Some(&device) {
                         found.insert(key, device.clone());
-                        let _ = events.send(device);
+                        let _ = events.send(device).await;
                     }
                 }
             }
@@ -130,10 +130,12 @@ pub async fn discover_incremental(
 /// Browses Google Cast services and sends each new or changed resolution immediately.
 pub async fn discover_google_cast_incremental(
     timeout: Duration,
-    events: mpsc::UnboundedSender<GoogleCastReceiver>,
+    events: mpsc::Sender<GoogleCastReceiver>,
 ) -> Result<()> {
     let daemon = ServiceDaemon::new().map_err(mdns_error)?;
-    let receiver = daemon.browse(GOOGLE_CAST_SERVICE_TYPE).map_err(mdns_error)?;
+    let receiver = daemon
+        .browse(GOOGLE_CAST_SERVICE_TYPE)
+        .map_err(mdns_error)?;
     let deadline = Instant::now() + timeout;
     let mut found = HashMap::<String, GoogleCastReceiver>::new();
 
@@ -151,7 +153,7 @@ pub async fn discover_google_cast_incremental(
                         .unwrap_or_else(|| format!("{}:{}", device.name, device.port));
                     if found.get(&key) != Some(&device) {
                         found.insert(key, device.clone());
-                        let _ = events.send(device);
+                        let _ = events.send(device).await;
                     }
                 }
             }

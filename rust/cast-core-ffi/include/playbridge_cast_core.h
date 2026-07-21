@@ -9,7 +9,7 @@ extern "C" {
 
 typedef struct DiscoveryScanner DiscoveryScanner;
 
-/* Protocol mask: PlayBridge=1, DLNA=2, Roku=4, generic DIAL=8. */
+/* Protocol mask: PlayBridge=1, DLNA=2, Roku=4, generic DIAL=8, Google Cast=16. */
 DiscoveryScanner *pb_discovery_start(uint32_t protocol_mask, uint64_t timeout_ms);
 char *pb_discovery_next_json(const DiscoveryScanner *scanner, uint64_t wait_ms);
 void pb_discovery_cancel(const DiscoveryScanner *scanner);

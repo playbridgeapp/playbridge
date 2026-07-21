@@ -1,15 +1,16 @@
 # PlayBridge Cast Core
 
 This Rust crate owns the portable parts of PlayBridge receiver discovery,
-protocol negotiation, and casting. It is not linked into a shipping
-application yet; native bindings and application migration remain separate.
+protocol negotiation, and casting. Android and Desktop already consume its
+discovery bindings; applications can use the Rust `ReceiverSession` API for
+playback and control while platform code owns lifecycle and UI.
 
 It currently proves:
 
-- one UDP socket can issue multiple SSDP searches and deduplicate DLNA and
-  DIAL responses;
+- one UDP socket can issue bounded DLNA, Roku ECP, and DIAL searches;
 - `rupnp` can load a renderer description and execute AVTransport actions;
-- Roku's DIAL application lifecycle can use the same discovered device data;
+- Roku ECP discovery, media launch, status, and remote-key controls;
+- a unified `ReceiverSession` API for PlayBridge, DLNA, Roku, and Google Cast;
 - `m3u8-rs` can classify HLS playlists while PlayBridge retains its own proxy
   URL-rewriting and duration policy.
 - `mdns-sd` can resolve `_playbridge._tcp.local.` receivers and preserve UUID,
@@ -41,10 +42,8 @@ A known receiver can be checked without sending credentials:
 cargo run --example check_pin -- wss://receiver.local:8765/ sha256/<base64-pin>
 ```
 
-DIAL is intentionally reported as a generic protocol during SSDP discovery:
-Chromecast and Roku devices can both answer that search. Product code must fetch
-the device description and classify the manufacturer/model before presenting a
-Roku badge or choosing a receiver application.
+Roku discovery uses the official `roku:ecp` SSDP target. DIAL remains a separate
+generic provider for receiver applications that explicitly support it.
 
 The core WSS transport extracts the active certificate's SPKI pin. First-time
 pairing binds protected credentials to it; reconnects verify a saved pin before

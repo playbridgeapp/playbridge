@@ -1,11 +1,13 @@
+use crossterm::{
+    cursor,
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+};
 use std::{
     io::{self, Write},
     path::PathBuf,
     time::Duration,
-};
-use crossterm::{
-    cursor, event::{self, Event, KeyCode},
-    execute, terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
 use tokio::time::sleep;
 
@@ -14,6 +16,7 @@ use playbridge_cast_core::{
     discovery::{DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver},
     playbridge::{PairingSession, ReceiverFrame, SenderFrame},
     secure_ws::SecureWebSocket,
+    session::{MediaRequest, PlaybackState, ReceiverSession},
     upnp::Renderer,
 };
 
@@ -21,14 +24,30 @@ use crate::credentials::PlaybridgeCredentials;
 use crate::http_server::LocalMediaServer;
 use crate::preferred::PreferredDevice;
 
+struct RawModeGuard;
+
+impl RawModeGuard {
+    fn enable() -> Result<Self, String> {
+        enable_raw_mode().map_err(|error| error.to_string())?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+    }
+}
+
+#[allow(clippy::collapsible_if)]
 pub async fn run_send(media_target: String) -> Result<(), String> {
     println!("Media Target: {media_target}");
 
     // Resolve local file vs remote URL
-    let resolved_path = if media_target.starts_with("~/") {
+    let resolved_path = if let Some(relative) = media_target.strip_prefix("~/") {
         if let Some(home) = std::env::var_os("HOME") {
             let mut path = PathBuf::from(home);
-            path.push(&media_target[2..]);
+            path.push(relative);
             path
         } else {
             PathBuf::from(&media_target)
@@ -38,7 +57,10 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
     };
 
     let (media_url, _server_handle) = if resolved_path.exists() && resolved_path.is_file() {
-        println!("Starting local HTTP media server for {:?}...", resolved_path.file_name().unwrap_or_default());
+        println!(
+            "Starting local HTTP media server for {:?}...",
+            resolved_path.file_name().unwrap_or_default()
+        );
         let (server, handle) = LocalMediaServer::start(resolved_path).await?;
         println!("Local HTTP server running at {}\n", server.url);
         (server.url, Some(handle))
@@ -48,16 +70,20 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
 
     // 1. Check if preferred device is configured
     if let Some(pref) = PreferredDevice::load() {
-        println!("Preferred device found: \"{}\" ({}) - {}", pref.name, pref.protocol, pref.address);
+        println!(
+            "Preferred device found: \"{}\" ({}) - {}",
+            pref.name, pref.protocol, pref.address
+        );
         println!("Auto-sending in 3 seconds... Press any key to choose another device.");
 
         let mut cancelled = false;
-        let _ = enable_raw_mode();
+        let raw_mode = RawModeGuard::enable().ok();
         let start_time = tokio::time::Instant::now();
         let timeout_duration = Duration::from_secs(3);
 
         while start_time.elapsed() < timeout_duration {
-            let remaining = (timeout_duration.as_secs_f64() - start_time.elapsed().as_secs_f64()).ceil() as u32;
+            let remaining =
+                (timeout_duration.as_secs_f64() - start_time.elapsed().as_secs_f64()).ceil() as u32;
             print!("\rCountdown: {remaining}s... ");
             let _ = io::stdout().flush();
             if event::poll(Duration::from_millis(100)).unwrap_or(false) {
@@ -67,7 +93,7 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
                 }
             }
         }
-        let _ = disable_raw_mode();
+        drop(raw_mode);
         println!();
 
         if !cancelled {
@@ -75,14 +101,35 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
             let result = match pref.protocol.to_lowercase().as_str() {
                 "playbridge" | "native" => {
                     let wss_port = pref.wss_port.or(pref.port).unwrap_or(8765);
-                    match cast_to_playbridge(&pref.address, wss_port, &pref.name, &pref.uuid, &target_url).await {
-                        Ok(ws) => Ok(Some(TargetControl::Playbridge(ws))),
+                    match cast_to_playbridge(
+                        &pref.address,
+                        wss_port,
+                        &pref.name,
+                        &pref.uuid,
+                        &target_url,
+                    )
+                    .await
+                    {
+                        Ok(ws) => Ok(Some(TargetControl::Playbridge(Box::new(ws)))),
                         Err(e) => Err(e),
                     }
                 }
                 _ => {
-                    println!("Connecting to preferred device \"{}\" ({}:{})...", pref.name, pref.address, pref.port.unwrap_or(8009));
-                    cast_to_target(&pref.protocol, &pref.address, pref.port, pref.location.as_deref(), &target_url, &pref.name).await
+                    println!(
+                        "Connecting to preferred device \"{}\" ({}:{})...",
+                        pref.name,
+                        pref.address,
+                        pref.port.unwrap_or(8009)
+                    );
+                    cast_to_target(
+                        &pref.protocol,
+                        &pref.address,
+                        pref.port,
+                        pref.location.as_deref(),
+                        &target_url,
+                        &pref.name,
+                    )
+                    .await
                 }
             };
             match result {
@@ -103,7 +150,11 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
     // 2. Continuous live discovery and interactive menu
     let (target, make_preferred) = live_discovery_interactive_select().await?;
 
-    let address = target.addresses.iter().find(|a| a.contains('.')).cloned()
+    let address = target
+        .addresses
+        .iter()
+        .find(|a| a.contains('.'))
+        .cloned()
         .unwrap_or_else(|| target.addresses.first().cloned().unwrap_or_default());
     let protocol_str = target.protocol.as_str().to_string();
 
@@ -129,13 +180,27 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
             let wss_port = target.wss_port.or(target.port).unwrap_or(8765);
             let uuid = target.uuid.clone().unwrap_or_else(|| target.id.0.clone());
             match cast_to_playbridge(&address, wss_port, &target.name, &uuid, &media_url).await {
-                Ok(ws) => (Ok(()), Some(TargetControl::Playbridge(ws))),
+                Ok(ws) => (Ok(()), Some(TargetControl::Playbridge(Box::new(ws)))),
                 Err(e) => (Err(e), None),
             }
         }
         _ => {
-            println!("Connecting to \"{}\" ({}:{})...", target.name, address, target.port.unwrap_or(8009));
-            match cast_to_target(&protocol_str, &address, target.port, target.location.as_deref(), &media_url, &target.name).await {
+            println!(
+                "Connecting to \"{}\" ({}:{})...",
+                target.name,
+                address,
+                target.port.unwrap_or(8009)
+            );
+            match cast_to_target(
+                &protocol_str,
+                &address,
+                target.port,
+                target.location.as_deref(),
+                &media_url,
+                &target.name,
+            )
+            .await
+            {
                 Ok(ch) => (Ok(()), ch),
                 Err(e) => (Err(e), None),
             }
@@ -157,7 +222,8 @@ enum TargetControl {
         media_session_id: i64,
     },
     Dlna(Renderer),
-    Playbridge(SecureWebSocket),
+    Playbridge(Box<SecureWebSocket>),
+    Roku(ReceiverSession),
 }
 
 fn format_time(secs: f64) -> String {
@@ -207,6 +273,7 @@ fn parse_dlna_time(time_str: &str) -> Option<f64> {
     }
 }
 
+#[allow(clippy::collapsible_if)]
 async fn wait_for_server_exit(
     media_url: &str,
     mut target_control: Option<TargetControl>,
@@ -242,12 +309,18 @@ async fn wait_for_server_exit(
                 println!("  [Right] / [D] : Seek Forward (+10s)");
                 println!("  [Q] / [Ctrl+C]: Stop Playback & Exit\n");
             }
+            Some(TargetControl::Roku(_)) => {
+                println!("  [Space] / [P] : Pause / Resume");
+                println!("  [Left]  / [A] : Rewind");
+                println!("  [Right] / [D] : Fast Forward");
+                println!("  [Q] / [Ctrl+C]: Stop Playback & Exit\n");
+            }
             None => {
                 println!("  [Q] / [Ctrl+C]: Stop Local Server & Exit\n");
             }
         }
 
-        let _ = enable_raw_mode();
+        let _raw_mode = RawModeGuard::enable().ok();
         let mut is_paused = false;
         let mut is_looping = false;
         let mut volume_level: f32 = 0.5;
@@ -269,16 +342,25 @@ async fn wait_for_server_exit(
             }
 
             // Heartbeat ping & status read for Google Cast
-            if let Some(TargetControl::Cast { ref mut channel, ref destination_id, ref mut media_session_id, .. }) = target_control {
+            if let Some(TargetControl::Cast {
+                ref mut channel,
+                ref destination_id,
+                ref mut media_session_id,
+                ..
+            }) = target_control
+            {
                 if last_ping.elapsed() >= Duration::from_secs(3) {
                     let _ = castv2::send_heartbeat_ping(channel).await;
                     let _ = castv2::send_get_media_status(channel, destination_id).await;
                     last_ping = tokio::time::Instant::now();
                 }
 
-                if let Ok(Ok(msg)) = tokio::time::timeout(Duration::from_millis(40), channel.read_message()).await {
+                if let Ok(Ok(msg)) =
+                    tokio::time::timeout(Duration::from_millis(40), channel.read_message()).await
+                {
                     if msg.namespace == castv2::NS_MEDIA {
-                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8)
+                        {
                             if let Some(status) = v["status"].as_array().and_then(|a| a.first()) {
                                 if let Some(new_msid) = status["mediaSessionId"].as_i64() {
                                     *media_session_id = new_msid;
@@ -294,6 +376,10 @@ async fn wait_for_server_exit(
                                 }
                             }
                         }
+                    } else if msg.namespace == castv2::NS_HEARTBEAT {
+                        if let Err(error) = channel.handle_heartbeat(&msg).await {
+                            print!("\r\x1b[K[Google Cast heartbeat failed: {error}]");
+                        }
                     }
                 }
             }
@@ -306,8 +392,13 @@ async fn wait_for_server_exit(
                 }
 
                 // Continuously drain incoming WebSocket frames and extract position/duration
-                while let Ok(Ok(Some(frame))) = tokio::time::timeout(Duration::from_millis(5), socket.receive()).await {
-                    if let ReceiverFrame::Status { position, duration, .. } = frame {
+                while let Ok(Ok(Some(frame))) =
+                    tokio::time::timeout(Duration::from_millis(5), socket.receive()).await
+                {
+                    if let ReceiverFrame::Status {
+                        position, duration, ..
+                    } = frame
+                    {
                         if position > 0 {
                             current_pos_secs = position as f64 / 1000.0;
                         }
@@ -321,17 +412,40 @@ async fn wait_for_server_exit(
             // Position & duration reader for DLNA
             if let Some(TargetControl::Dlna(ref renderer)) = target_control {
                 if last_ping.elapsed() >= Duration::from_secs(2) {
+                    if let Ok(info) = renderer.transport_info().await
+                        && let Some(state) = info.get("CurrentTransportState")
+                    {
+                        is_paused = matches!(state.as_str(), "PAUSED_PLAYBACK" | "STOPPED");
+                    }
                     if let Ok(info) = renderer.position_info().await {
                         if let Some(rel) = info.get("RelTime").and_then(|s| parse_dlna_time(s)) {
                             if rel > 0.0 {
                                 current_pos_secs = rel;
                             }
                         }
-                        if let Some(dur) = info.get("TrackDuration").and_then(|s| parse_dlna_time(s)) {
+                        if let Some(dur) =
+                            info.get("TrackDuration").and_then(|s| parse_dlna_time(s))
+                        {
                             if dur > 0.0 {
                                 duration_secs = dur;
                             }
                         }
+                    }
+                    last_ping = tokio::time::Instant::now();
+                }
+            }
+
+            if let Some(TargetControl::Roku(ref mut session)) = target_control {
+                if last_ping.elapsed() >= Duration::from_secs(2) {
+                    match session.status().await {
+                        Ok(status) => {
+                            current_pos_secs = status.position_seconds;
+                            duration_secs = status.duration_seconds;
+                            if status.state != PlaybackState::Unknown {
+                                is_paused = status.state == PlaybackState::Paused;
+                            }
+                        }
+                        Err(error) => print!("\r\x1b[K[Roku status failed: {error}]"),
                     }
                     last_ping = tokio::time::Instant::now();
                 }
@@ -344,32 +458,73 @@ async fn wait_for_server_exit(
                         KeyCode::Char(' ') | KeyCode::Char('p') | KeyCode::Char('P') => {
                             is_paused = !is_paused;
                             match target_control {
-                                Some(TargetControl::Cast { ref mut channel, ref destination_id, media_session_id, .. }) => {
-                                    if is_paused {
-                                        let _ = castv2::send_pause(channel, destination_id, media_session_id).await;
-                                        print!("\r\x1b[K[State: PAUSED]");
+                                Some(TargetControl::Cast {
+                                    ref mut channel,
+                                    ref destination_id,
+                                    media_session_id,
+                                    ..
+                                }) => {
+                                    let result = if is_paused {
+                                        castv2::send_pause(
+                                            channel,
+                                            destination_id,
+                                            media_session_id,
+                                        )
+                                        .await
                                     } else {
-                                        let _ = castv2::send_play(channel, destination_id, media_session_id).await;
-                                        print!("\r\x1b[K[State: PLAYING]");
+                                        castv2::send_play(channel, destination_id, media_session_id)
+                                            .await
+                                    };
+                                    if let Err(error) = result {
+                                        is_paused = !is_paused;
+                                        print!("\r\x1b[K[Google Cast control failed: {error}]");
+                                    } else {
+                                        print!(
+                                            "\r\x1b[K[State: {}]",
+                                            if is_paused { "PAUSED" } else { "PLAYING" }
+                                        );
                                     }
                                 }
                                 Some(TargetControl::Dlna(ref renderer)) => {
-                                    if is_paused {
-                                        let _ = renderer.pause().await;
-                                        print!("\r\x1b[K[State: PAUSED]");
+                                    let result = if is_paused {
+                                        renderer.pause().await
                                     } else {
-                                        let _ = renderer.play().await;
-                                        print!("\r\x1b[K[State: PLAYING]");
+                                        renderer.play().await
+                                    };
+                                    if let Err(error) = result {
+                                        is_paused = !is_paused;
+                                        print!("\r\x1b[K[DLNA control failed: {error}]");
+                                    } else {
+                                        print!(
+                                            "\r\x1b[K[State: {}]",
+                                            if is_paused { "PAUSED" } else { "PLAYING" }
+                                        );
+                                    }
+                                }
+                                Some(TargetControl::Roku(ref mut session)) => {
+                                    let result = if is_paused {
+                                        session.pause().await
+                                    } else {
+                                        session.play().await
+                                    };
+                                    if let Err(error) = result {
+                                        is_paused = !is_paused;
+                                        print!("\r\x1b[K[Roku control failed: {error}]");
                                     }
                                 }
                                 Some(TargetControl::Playbridge(ref mut socket)) => {
                                     let command_str = if is_paused { "pause" } else { "play" };
                                     let cmd = SenderFrame::Command {
                                         action: "control".into(),
-                                        payload: Some(serde_json::json!({ "command": command_str })),
+                                        payload: Some(
+                                            serde_json::json!({ "command": command_str }),
+                                        ),
                                     };
                                     let _ = socket.send(&cmd).await;
-                                    print!("\r\x1b[K[State: {}]", if is_paused { "PAUSED" } else { "PLAYING" });
+                                    print!(
+                                        "\r\x1b[K[State: {}]",
+                                        if is_paused { "PAUSED" } else { "PLAYING" }
+                                    );
                                 }
                                 None => {}
                             }
@@ -378,22 +533,50 @@ async fn wait_for_server_exit(
                         KeyCode::Left | KeyCode::Char('a') | KeyCode::Char('A') => {
                             current_pos_secs = (current_pos_secs - 10.0).max(0.0);
                             match target_control {
-                                Some(TargetControl::Cast { ref mut channel, ref destination_id, media_session_id, .. }) => {
-                                    let _ = castv2::send_seek(channel, destination_id, media_session_id, current_pos_secs).await;
-                                    print!("\r\x1b[K[Seek -10s -> {:.0}s]", current_pos_secs);
+                                Some(TargetControl::Cast {
+                                    ref mut channel,
+                                    ref destination_id,
+                                    media_session_id,
+                                    ..
+                                }) => {
+                                    match castv2::send_seek(
+                                        channel,
+                                        destination_id,
+                                        media_session_id,
+                                        current_pos_secs,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => print!(
+                                            "\r\x1b[K[Seek -10s -> {:.0}s]",
+                                            current_pos_secs
+                                        ),
+                                        Err(error) => {
+                                            print!("\r\x1b[K[Google Cast seek failed: {error}]")
+                                        }
+                                    }
                                 }
                                 Some(TargetControl::Dlna(ref renderer)) => {
                                     let hrs = (current_pos_secs / 3600.0) as u32;
                                     let mins = ((current_pos_secs % 3600.0) / 60.0) as u32;
                                     let secs = (current_pos_secs % 60.0) as u32;
                                     let rel_time = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
-                                    let _ = renderer.seek(&rel_time).await;
-                                    print!("\r\x1b[K[Seek -10s -> {}]", rel_time);
+                                    match renderer.seek(&rel_time).await {
+                                        Ok(()) => print!("\r\x1b[K[Seek -10s -> {}]", rel_time),
+                                        Err(error) => print!("\r\x1b[K[DLNA seek failed: {error}]"),
+                                    }
+                                }
+                                Some(TargetControl::Roku(ref mut session)) => {
+                                    if let Err(error) = session.relative_seek(false).await {
+                                        print!("\r\x1b[K[Roku rewind failed: {error}]");
+                                    }
                                 }
                                 Some(TargetControl::Playbridge(ref mut socket)) => {
                                     let cmd = SenderFrame::Command {
                                         action: "control".into(),
-                                        payload: Some(serde_json::json!({ "command": "seek_back" })),
+                                        payload: Some(
+                                            serde_json::json!({ "command": "seek_back" }),
+                                        ),
                                     };
                                     let _ = socket.send(&cmd).await;
                                     print!("\r\x1b[K[Seek -10s]");
@@ -405,22 +588,50 @@ async fn wait_for_server_exit(
                         KeyCode::Right | KeyCode::Char('d') | KeyCode::Char('D') => {
                             current_pos_secs += 10.0;
                             match target_control {
-                                Some(TargetControl::Cast { ref mut channel, ref destination_id, media_session_id, .. }) => {
-                                    let _ = castv2::send_seek(channel, destination_id, media_session_id, current_pos_secs).await;
-                                    print!("\r\x1b[K[Seek +10s -> {:.0}s]", current_pos_secs);
+                                Some(TargetControl::Cast {
+                                    ref mut channel,
+                                    ref destination_id,
+                                    media_session_id,
+                                    ..
+                                }) => {
+                                    match castv2::send_seek(
+                                        channel,
+                                        destination_id,
+                                        media_session_id,
+                                        current_pos_secs,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => print!(
+                                            "\r\x1b[K[Seek +10s -> {:.0}s]",
+                                            current_pos_secs
+                                        ),
+                                        Err(error) => {
+                                            print!("\r\x1b[K[Google Cast seek failed: {error}]")
+                                        }
+                                    }
                                 }
                                 Some(TargetControl::Dlna(ref renderer)) => {
                                     let hrs = (current_pos_secs / 3600.0) as u32;
                                     let mins = ((current_pos_secs % 3600.0) / 60.0) as u32;
                                     let secs = (current_pos_secs % 60.0) as u32;
                                     let rel_time = format!("{:02}:{:02}:{:02}", hrs, mins, secs);
-                                    let _ = renderer.seek(&rel_time).await;
-                                    print!("\r\x1b[K[Seek +10s -> {}]", rel_time);
+                                    match renderer.seek(&rel_time).await {
+                                        Ok(()) => print!("\r\x1b[K[Seek +10s -> {}]", rel_time),
+                                        Err(error) => print!("\r\x1b[K[DLNA seek failed: {error}]"),
+                                    }
+                                }
+                                Some(TargetControl::Roku(ref mut session)) => {
+                                    if let Err(error) = session.relative_seek(true).await {
+                                        print!("\r\x1b[K[Roku fast-forward failed: {error}]");
+                                    }
                                 }
                                 Some(TargetControl::Playbridge(ref mut socket)) => {
                                     let cmd = SenderFrame::Command {
                                         action: "control".into(),
-                                        payload: Some(serde_json::json!({ "command": "seek_forward" })),
+                                        payload: Some(
+                                            serde_json::json!({ "command": "seek_forward" }),
+                                        ),
                                     };
                                     let _ = socket.send(&cmd).await;
                                     print!("\r\x1b[K[Seek +10s]");
@@ -429,10 +640,15 @@ async fn wait_for_server_exit(
                             }
                             let _ = io::stdout().flush();
                         }
-                        KeyCode::Up | KeyCode::Char('w') | KeyCode::Char('W') | KeyCode::Char('+') => {
+                        KeyCode::Up
+                        | KeyCode::Char('w')
+                        | KeyCode::Char('W')
+                        | KeyCode::Char('+') => {
                             volume_level = (volume_level + 0.05).min(1.0);
                             match target_control {
-                                Some(TargetControl::Cast { ref mut channel, .. }) => {
+                                Some(TargetControl::Cast {
+                                    ref mut channel, ..
+                                }) => {
                                     let _ = castv2::send_volume(channel, volume_level).await;
                                     print!("\r\x1b[K[Volume: {:.0}%]", volume_level * 100.0);
                                 }
@@ -448,10 +664,15 @@ async fn wait_for_server_exit(
                             }
                             let _ = io::stdout().flush();
                         }
-                        KeyCode::Down | KeyCode::Char('s') | KeyCode::Char('S') | KeyCode::Char('-') => {
+                        KeyCode::Down
+                        | KeyCode::Char('s')
+                        | KeyCode::Char('S')
+                        | KeyCode::Char('-') => {
                             volume_level = (volume_level - 0.05).max(0.0);
                             match target_control {
-                                Some(TargetControl::Cast { ref mut channel, .. }) => {
+                                Some(TargetControl::Cast {
+                                    ref mut channel, ..
+                                }) => {
                                     let _ = castv2::send_volume(channel, volume_level).await;
                                     print!("\r\x1b[K[Volume: {:.0}%]", volume_level * 100.0);
                                 }
@@ -468,7 +689,8 @@ async fn wait_for_server_exit(
                             let _ = io::stdout().flush();
                         }
                         KeyCode::Char('m') | KeyCode::Char('M') => {
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 let cmd = SenderFrame::Command {
                                     action: "remote".into(),
                                     payload: Some(serde_json::json!({ "key": "mute" })),
@@ -479,11 +701,14 @@ async fn wait_for_server_exit(
                             }
                         }
                         KeyCode::Char('l') | KeyCode::Char('L') => {
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 is_looping = !is_looping;
                                 let cmd = SenderFrame::Command {
                                     action: "control".into(),
-                                    payload: Some(serde_json::json!({ "command": if is_looping { "loop_on" } else { "loop_off" } })),
+                                    payload: Some(
+                                        serde_json::json!({ "command": if is_looping { "loop_on" } else { "loop_off" } }),
+                                    ),
                                 };
                                 let _ = socket.send(&cmd).await;
                                 print!("\r\x1b[K[Loop: {}]", if is_looping { "ON" } else { "OFF" });
@@ -491,7 +716,8 @@ async fn wait_for_server_exit(
                             }
                         }
                         KeyCode::Char('b') | KeyCode::Char('B') => {
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 let cmd = SenderFrame::Command {
                                     action: "control".into(),
                                     payload: Some(serde_json::json!({ "command": "audio_boost" })),
@@ -503,7 +729,8 @@ async fn wait_for_server_exit(
                         }
                         KeyCode::Char('1') => {
                             current_speed = "1.0x";
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 let cmd = SenderFrame::Command {
                                     action: "control".into(),
                                     payload: Some(serde_json::json!({ "command": "speed:1.0" })),
@@ -513,7 +740,8 @@ async fn wait_for_server_exit(
                         }
                         KeyCode::Char('2') => {
                             current_speed = "1.25x";
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 let cmd = SenderFrame::Command {
                                     action: "control".into(),
                                     payload: Some(serde_json::json!({ "command": "speed:1.25" })),
@@ -523,7 +751,8 @@ async fn wait_for_server_exit(
                         }
                         KeyCode::Char('3') => {
                             current_speed = "1.5x";
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 let cmd = SenderFrame::Command {
                                     action: "control".into(),
                                     payload: Some(serde_json::json!({ "command": "speed:1.5" })),
@@ -533,7 +762,8 @@ async fn wait_for_server_exit(
                         }
                         KeyCode::Char('4') => {
                             current_speed = "2.0x";
-                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control {
+                            if let Some(TargetControl::Playbridge(ref mut socket)) = target_control
+                            {
                                 let cmd = SenderFrame::Command {
                                     action: "control".into(),
                                     payload: Some(serde_json::json!({ "command": "speed:2.0" })),
@@ -544,7 +774,11 @@ async fn wait_for_server_exit(
                         KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                             break;
                         }
-                        KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                        KeyCode::Char('c')
+                            if key
+                                .modifiers
+                                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+                        {
                             break;
                         }
                         _ => {}
@@ -570,7 +804,12 @@ async fn wait_for_server_exit(
 
         // Cleanup on exit
         match target_control {
-            Some(TargetControl::Cast { ref mut channel, ref destination_id, ref session_id, media_session_id }) => {
+            Some(TargetControl::Cast {
+                ref mut channel,
+                ref destination_id,
+                ref session_id,
+                media_session_id,
+            }) => {
                 let _ = castv2::send_stop_media(channel, destination_id, media_session_id).await;
                 if !session_id.is_empty() {
                     let _ = castv2::send_stop_session(channel, session_id).await;
@@ -585,23 +824,28 @@ async fn wait_for_server_exit(
                     payload: Some(serde_json::json!({ "command": "stop" })),
                 };
                 let _ = socket.send(&cmd).await;
-                let _ = socket.close().await;
+                let _ = (*socket).close().await;
+            }
+            Some(TargetControl::Roku(mut session)) => {
+                if let Err(error) = session.stop().await {
+                    eprintln!("\nwarning: failed to stop Roku playback: {error}");
+                }
             }
             None => {}
         }
 
-        let _ = disable_raw_mode();
         println!("\nStopped streaming.");
     }
 }
 
+#[allow(clippy::collapsible_if)]
 async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String> {
     let mut stream = DiscoveryStream::start(DiscoveryConfig::default());
     let mut receivers = Vec::<Receiver>::new();
     let mut selection = 0usize;
     let mut rendered_lines = 0usize;
 
-    enable_raw_mode().map_err(|e| e.to_string())?;
+    let raw_mode = RawModeGuard::enable()?;
 
     // Initial render
     let _ = redraw(&receivers, selection, &mut rendered_lines);
@@ -665,12 +909,16 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
             Clear(ClearType::FromCursorDown),
         );
     }
-    let _ = disable_raw_mode();
+    drop(raw_mode);
     let _ = stdout.flush();
     result
 }
 
-fn redraw(receivers: &[Receiver], selection: usize, rendered_lines: &mut usize) -> Result<(), String> {
+fn redraw(
+    receivers: &[Receiver],
+    selection: usize,
+    rendered_lines: &mut usize,
+) -> Result<(), String> {
     let mut stdout = io::stdout();
     if *rendered_lines > 0 {
         let _ = execute!(
@@ -725,9 +973,21 @@ async fn cast_to_target(
     match protocol.to_lowercase().as_str() {
         "google_cast" | "googlecast" | "chromecast" => {
             let target_port = port.unwrap_or(8009);
-            println!("Connecting TLS CastV2 channel to Google Cast device at {}:{}...", address, target_port);
-            let details = castv2::cast_media_session_with_details(address, target_port, media_url, Some(device_name)).await?;
-            println!("Successfully sent media cast request to \"{}\"!", device_name);
+            println!(
+                "Connecting TLS CastV2 channel to Google Cast device at {}:{}...",
+                address, target_port
+            );
+            let details = castv2::cast_media_session_with_details(
+                address,
+                target_port,
+                media_url,
+                Some(device_name),
+            )
+            .await?;
+            println!(
+                "Successfully sent media cast request to \"{}\"!",
+                device_name
+            );
             Ok(Some(TargetControl::Cast {
                 channel: details.channel,
                 destination_id: details.transport_id,
@@ -740,27 +1000,32 @@ async fn cast_to_target(
             println!("Loading UPnP DLNA Renderer at {}...", loc);
             let renderer = Renderer::load(loc).await.map_err(|e| e.to_string())?;
             println!("Setting AVTransport URI to {}...", media_url);
-            renderer.set_media_uri(media_url, "").await.map_err(|e| e.to_string())?;
+            renderer
+                .set_media_uri(media_url, "")
+                .await
+                .map_err(|e| e.to_string())?;
             renderer.play().await.map_err(|e| e.to_string())?;
             println!("Successfully started DLNA playback on \"{}\"!", device_name);
             Ok(Some(TargetControl::Dlna(renderer)))
         }
         "roku" => {
             let target_port = port.unwrap_or(8060);
-            println!("Sending ECP launchMedia command to Roku at {}:{}...", address, target_port);
-            let client = reqwest::Client::new();
-            let roku_url = format!("http://{address}:{target_port}/launch/15701?contentId={}&mediaType=video", urlencoding::encode(media_url));
-            let resp = client.post(&roku_url).send().await.map_err(|e| e.to_string())?;
-            if resp.status().is_success() {
-                println!("Successfully launched media on Roku \"{}\"!", device_name);
-                Ok(None)
-            } else {
-                Err(format!("Roku returned HTTP {}", resp.status()))
-            }
+            println!("Sending media to Roku at {}:{}...", address, target_port);
+            let mut session = ReceiverSession::connect_roku(address, target_port)
+                .map_err(|error| error.to_string())?;
+            let mut media = MediaRequest::new(media_url);
+            media.title = Some(device_name.to_owned());
+            session
+                .load(&media)
+                .await
+                .map_err(|error| error.to_string())?;
+            println!("Successfully launched media on Roku \"{}\"!", device_name);
+            Ok(Some(TargetControl::Roku(session)))
         }
-        "playbridge" | "native" => {
-            Err("PlayBridge devices must be cast via cast_to_playbridge (internal routing error)".into())
-        }
+        "playbridge" | "native" => Err(
+            "PlayBridge devices must be cast via cast_to_playbridge (internal routing error)"
+                .into(),
+        ),
         _ => Err(format!("Unsupported target protocol: {protocol}")),
     }
 }
@@ -790,15 +1055,13 @@ async fn cast_to_playbridge(
 
         loop {
             match socket.receive().await.map_err(|e| e.to_string())? {
-                Some(ReceiverFrame::AuthResponse {
-                    success: true, ..
-                }) => {
+                Some(ReceiverFrame::AuthResponse { success: true, .. }) => {
                     println!("Authenticated with \"{}\"!", device_name);
                     break;
                 }
-                Some(ReceiverFrame::AuthResponse {
-                    success: false, ..
-                }) => return Err("Authentication failed".into()),
+                Some(ReceiverFrame::AuthResponse { success: false, .. }) => {
+                    return Err("Authentication failed".into());
+                }
                 Some(_) => {}
                 None => return Err("Receiver closed connection during auth".into()),
             }

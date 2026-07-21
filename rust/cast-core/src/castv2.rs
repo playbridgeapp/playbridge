@@ -10,6 +10,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const MAX_CAST_MESSAGE_SIZE: usize = 1024 * 1024;
+static CONTROL_REQUEST_ID: AtomicU32 = AtomicU32::new(10_000);
+
+fn next_control_request_id() -> u32 {
+    CONTROL_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 pub const DEFAULT_MEDIA_RECEIVER_APP_ID: &str = "CC1AD845";
 
 pub const NS_CONNECTION: &str = "urn:x-cast:com.google.cast.tp.connection";
@@ -30,7 +38,11 @@ pub struct CastMessage {
 }
 
 impl CastMessage {
-    pub fn new(destination_id: impl Into<String>, namespace: impl Into<String>, payload: impl Into<String>) -> Self {
+    pub fn new(
+        destination_id: impl Into<String>,
+        namespace: impl Into<String>,
+        payload: impl Into<String>,
+    ) -> Self {
         Self {
             source_id: SENDER_ID.to_string(),
             destination_id: destination_id.into(),
@@ -91,9 +103,12 @@ impl CastMessage {
                     // Length-delimited string
                     let (len, np) = decode_varint(bytes, pos)?;
                     pos = np;
-                    let end = (pos + len as usize).min(bytes.len());
+                    let end = pos.checked_add(len as usize)?;
+                    if end > bytes.len() {
+                        return None;
+                    }
                     let str_val = std::str::from_utf8(&bytes[pos..end]).ok()?.to_string();
-                    pos += len as usize;
+                    pos = end;
 
                     match field_number {
                         2 => source_id = str_val,
@@ -144,7 +159,7 @@ impl Default for RequestIdGenerator {
 // -----------------------------------------------------------------------
 
 fn encode_varint_field(buf: &mut Vec<u8>, field: u32, val: u32) {
-    encode_varint(buf, (field << 3) | 0);
+    encode_varint(buf, field << 3);
     encode_varint(buf, val);
 }
 
@@ -206,10 +221,33 @@ pub fn build_load_payload(
     request_id: u32,
     session_id: Option<&str>,
 ) -> String {
+    build_load_payload_with_stream_type(
+        content_url,
+        content_type,
+        "BUFFERED",
+        title,
+        art_url,
+        start_seconds,
+        request_id,
+        session_id,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn build_load_payload_with_stream_type(
+    content_url: &str,
+    content_type: Option<&str>,
+    stream_type: &str,
+    title: Option<&str>,
+    art_url: Option<&str>,
+    start_seconds: f64,
+    request_id: u32,
+    session_id: Option<&str>,
+) -> String {
     let mut media = json!({
         "contentId": content_url,
         "contentUrl": content_url,
-        "streamType": "BUFFERED",
+        "streamType": stream_type,
     });
 
     if let Some(ct) = content_type {
@@ -241,7 +279,11 @@ pub fn build_load_payload(
 }
 
 /// Build JSON payload for PLAY, PAUSE, STOP media commands.
-pub fn build_media_command_payload(command: &str, media_session_id: u32, request_id: u32) -> String {
+pub fn build_media_command_payload(
+    command: &str,
+    media_session_id: u32,
+    request_id: u32,
+) -> String {
     json!({
         "type": command,
         "mediaSessionId": media_session_id,
@@ -289,13 +331,14 @@ impl CastChannel {
 
         let connector = tokio_native_tls::TlsConnector::from(builder);
         let addr = format!("{address}:{port}");
-        let tcp = TcpStream::connect(&addr)
+        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr))
             .await
+            .map_err(|_| format!("Timed out connecting to Chromecast at {addr}"))?
             .map_err(|e| format!("Failed to connect TCP to {addr}: {e}"))?;
 
-        let tls = connector
-            .connect(address, tcp)
+        let tls = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(address, tcp))
             .await
+            .map_err(|_| format!("TLS handshake with Chromecast at {addr} timed out"))?
             .map_err(|e| format!("TLS handshake with Chromecast failed: {e}"))?;
 
         Ok(Self { stream: tls })
@@ -327,6 +370,9 @@ impl CastChannel {
             .map_err(|e| format!("Failed to read frame length header: {e}"))?;
 
         let len = u32::from_be_bytes(len_bytes) as usize;
+        if len == 0 || len > MAX_CAST_MESSAGE_SIZE {
+            return Err(format!("Invalid CastV2 frame length: {len}"));
+        }
         let mut buf = vec![0u8; len];
         self.stream
             .read_exact(&mut buf)
@@ -335,14 +381,37 @@ impl CastChannel {
 
         CastMessage::decode(&buf).ok_or_else(|| "Failed to decode CastMessage protobuf".to_string())
     }
+
+    /// Responds to receiver heartbeat pings. Returns true when the message was handled.
+    pub async fn handle_heartbeat(&mut self, message: &CastMessage) -> Result<bool, String> {
+        if message.namespace != NS_HEARTBEAT {
+            return Ok(false);
+        }
+        let payload: serde_json::Value = serde_json::from_str(&message.payload_utf8)
+            .map_err(|error| format!("Invalid CastV2 heartbeat payload: {error}"))?;
+        if payload["type"] == "PING" {
+            let pong = CastMessage::new(
+                &message.source_id,
+                NS_HEARTBEAT,
+                json!({ "type": "PONG" }).to_string(),
+            );
+            self.send_message(&pong).await?;
+        }
+        Ok(true)
+    }
 }
 
 pub async fn send_stop_session(channel: &mut CastChannel, session_id: &str) -> Result<(), String> {
-    let stop_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
-        "type": "STOP",
-        "sessionId": session_id,
-        "requestId": 9999,
-    }).to_string());
+    let stop_msg = CastMessage::new(
+        RECEIVER_ID,
+        NS_RECEIVER,
+        json!({
+            "type": "STOP",
+            "sessionId": session_id,
+            "requestId": next_control_request_id(),
+        })
+        .to_string(),
+    );
     channel.send_message(&stop_msg).await
 }
 
@@ -357,7 +426,7 @@ pub async fn send_stop_media(
         json!({
             "type": "STOP",
             "mediaSessionId": media_session_id,
-            "requestId": 104,
+            "requestId": next_control_request_id(),
         })
         .to_string(),
     );
@@ -375,7 +444,7 @@ pub async fn send_pause(
         json!({
             "type": "PAUSE",
             "mediaSessionId": media_session_id,
-            "requestId": 100,
+            "requestId": next_control_request_id(),
         })
         .to_string(),
     );
@@ -393,7 +462,7 @@ pub async fn send_play(
         json!({
             "type": "PLAY",
             "mediaSessionId": media_session_id,
-            "requestId": 101,
+            "requestId": next_control_request_id(),
         })
         .to_string(),
     );
@@ -413,24 +482,21 @@ pub async fn send_seek(
             "type": "SEEK",
             "mediaSessionId": media_session_id,
             "currentTime": current_time_secs,
-            "requestId": 102,
+            "requestId": next_control_request_id(),
         })
         .to_string(),
     );
     channel.send_message(&msg).await
 }
 
-pub async fn send_volume(
-    channel: &mut CastChannel,
-    level: f32,
-) -> Result<(), String> {
+pub async fn send_volume(channel: &mut CastChannel, level: f32) -> Result<(), String> {
     let msg = CastMessage::new(
         RECEIVER_ID,
         NS_RECEIVER,
         json!({
             "type": "SET_VOLUME",
             "volume": { "level": level.clamp(0.0, 1.0) },
-            "requestId": 103,
+            "requestId": next_control_request_id(),
         })
         .to_string(),
     );
@@ -446,7 +512,7 @@ pub async fn send_get_media_status(
         NS_MEDIA,
         json!({
             "type": "GET_STATUS",
-            "requestId": 99,
+            "requestId": next_control_request_id(),
         })
         .to_string(),
     );
@@ -454,7 +520,11 @@ pub async fn send_get_media_status(
 }
 
 pub async fn send_heartbeat_ping(channel: &mut CastChannel) -> Result<(), String> {
-    let ping = CastMessage::new(RECEIVER_ID, NS_HEARTBEAT, json!({ "type": "PING" }).to_string());
+    let ping = CastMessage::new(
+        RECEIVER_ID,
+        NS_HEARTBEAT,
+        json!({ "type": "PING" }).to_string(),
+    );
     channel.send_message(&ping).await
 }
 
@@ -490,7 +560,14 @@ pub async fn cast_media_session(
     media_url: &str,
     title: Option<&str>,
 ) -> Result<CastChannel, String> {
-    let details = cast_media_session_with_strategy(address, port, media_url, title, SessionLaunchStrategy::ForceRelaunch).await?;
+    let details = cast_media_session_with_strategy(
+        address,
+        port,
+        media_url,
+        title,
+        SessionLaunchStrategy::ForceRelaunch,
+    )
+    .await?;
     Ok(details.channel)
 }
 
@@ -500,9 +577,17 @@ pub async fn cast_media_session_with_details(
     media_url: &str,
     title: Option<&str>,
 ) -> Result<CastSessionDetails, String> {
-    cast_media_session_with_strategy(address, port, media_url, title, SessionLaunchStrategy::ForceRelaunch).await
+    cast_media_session_with_strategy(
+        address,
+        port,
+        media_url,
+        title,
+        SessionLaunchStrategy::ForceRelaunch,
+    )
+    .await
 }
 
+#[allow(clippy::collapsible_if)]
 pub async fn cast_media_session_with_strategy(
     address: &str,
     port: u16,
@@ -519,10 +604,15 @@ pub async fn cast_media_session_with_strategy(
 
     // 2. Query RECEIVER_STATUS to check for active vs stale sessions
     let status_req_id = req_gen.next();
-    let get_status_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
-        "type": "GET_STATUS",
-        "requestId": status_req_id,
-    }).to_string());
+    let get_status_msg = CastMessage::new(
+        RECEIVER_ID,
+        NS_RECEIVER,
+        json!({
+            "type": "GET_STATUS",
+            "requestId": status_req_id,
+        })
+        .to_string(),
+    );
     let _ = channel.send_message(&get_status_msg).await;
 
     let mut destination_id = String::new();
@@ -531,16 +621,21 @@ pub async fn cast_media_session_with_strategy(
 
     let status_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < status_deadline {
-        if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_millis(400), channel.read_message()).await {
+        if let Ok(Ok(msg)) = tokio::time::timeout(
+            std::time::Duration::from_millis(400),
+            channel.read_message(),
+        )
+        .await
+        {
             if msg.namespace == NS_RECEIVER {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
                     if v["type"] == "RECEIVER_STATUS" {
                         if let Some(apps) = v["status"]["applications"].as_array() {
                             for app in apps {
-                                if let Some(sid) = app["sessionId"].as_str() {
-                                    session_id = sid.to_string();
-                                }
                                 if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
+                                    if let Some(sid) = app["sessionId"].as_str() {
+                                        session_id = sid.to_string();
+                                    }
                                     if let Some(tid) = app["transportId"].as_str() {
                                         destination_id = tid.to_string();
                                     }
@@ -561,15 +656,23 @@ pub async fn cast_media_session_with_strategy(
     }
 
     if strategy == SessionLaunchStrategy::ReuseOrLaunch && is_active_app {
-        println!("Reusing active Default Media Receiver app (transportId: {}, sessionId: {}).", destination_id, session_id);
+        println!(
+            "Reusing active Default Media Receiver app (transportId: {}, sessionId: {}).",
+            destination_id, session_id
+        );
     } else {
         // Stop lingering stale session if any
         if !session_id.is_empty() {
-            let stop_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
-                "type": "STOP",
-                "sessionId": session_id,
-                "requestId": req_gen.next(),
-            }).to_string());
+            let stop_msg = CastMessage::new(
+                RECEIVER_ID,
+                NS_RECEIVER,
+                json!({
+                    "type": "STOP",
+                    "sessionId": session_id,
+                    "requestId": req_gen.next(),
+                })
+                .to_string(),
+            );
             let _ = channel.send_message(&stop_msg).await;
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
         }
@@ -587,7 +690,10 @@ pub async fn cast_media_session_with_strategy(
         session_id.clear();
         let launch_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         while tokio::time::Instant::now() < launch_deadline {
-            if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_secs(1), channel.read_message()).await {
+            if let Ok(Ok(msg)) =
+                tokio::time::timeout(std::time::Duration::from_secs(1), channel.read_message())
+                    .await
+            {
                 if msg.namespace == NS_RECEIVER {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
                         if v["type"] == "RECEIVER_STATUS" {
@@ -617,7 +723,10 @@ pub async fn cast_media_session_with_strategy(
             return Err("Failed to launch Default Media Receiver app on Chromecast (no transportId returned)".into());
         }
 
-        println!("Launched Default Media Receiver app (transportId: {}, sessionId: {}).", destination_id, session_id);
+        println!(
+            "Launched Default Media Receiver app (transportId: {}, sessionId: {}).",
+            destination_id, session_id
+        );
     }
 
     // 4. Connect to target transportId
@@ -629,35 +738,58 @@ pub async fn cast_media_session_with_strategy(
 
     // 5. Send LOAD payload to target transportId
     let load_req_id = req_gen.next();
-    let load_payload = build_load_payload(
+    let (content_type, stream_type) = media_format(media_url);
+    let load_payload = build_load_payload_with_stream_type(
         media_url,
-        Some("video/mp4"),
+        Some(content_type),
+        stream_type,
         title,
         None,
         0.0,
         load_req_id,
-        if session_id.is_empty() { None } else { Some(&session_id) },
+        if session_id.is_empty() {
+            None
+        } else {
+            Some(&session_id)
+        },
     );
     let load_msg = CastMessage::new(&destination_id, NS_MEDIA, load_payload);
     channel.send_message(&load_msg).await?;
 
     println!("Sent LOAD request. Waiting for receiver response...");
 
-    let mut media_session_id: i64 = 1;
+    let mut media_session_id = None;
     let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     while tokio::time::Instant::now() < read_deadline {
-        if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_millis(500), channel.read_message()).await {
+        if let Ok(Ok(msg)) = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            channel.read_message(),
+        )
+        .await
+        {
             if msg.namespace == NS_MEDIA {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                    if matches!(v["type"].as_str(), Some("LOAD_FAILED" | "INVALID_REQUEST")) {
+                        return Err(format!(
+                            "Chromecast rejected LOAD request: {}",
+                            v["reason"].as_str().unwrap_or("unknown reason")
+                        ));
+                    }
                     if let Some(status) = v["status"].as_array().and_then(|a| a.first()) {
                         if let Some(msid) = status["mediaSessionId"].as_i64() {
-                            media_session_id = msid;
+                            media_session_id = Some(msid);
+                            break;
                         }
                     }
                 }
+            } else if msg.namespace == NS_HEARTBEAT {
+                channel.handle_heartbeat(&msg).await?;
             }
         }
     }
+
+    let media_session_id = media_session_id
+        .ok_or_else(|| "Chromecast did not confirm the LOAD request".to_string())?;
 
     Ok(CastSessionDetails {
         channel,
@@ -665,6 +797,29 @@ pub async fn cast_media_session_with_strategy(
         session_id,
         media_session_id,
     })
+}
+
+pub fn media_format(media_url: &str) -> (&'static str, &'static str) {
+    let path = media_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(media_url)
+        .to_ascii_lowercase();
+    if path.ends_with(".m3u8") {
+        ("application/x-mpegURL", "LIVE")
+    } else if path.ends_with(".webm") {
+        ("video/webm", "BUFFERED")
+    } else if path.ends_with(".mkv") {
+        ("video/x-matroska", "BUFFERED")
+    } else if path.ends_with(".ts") {
+        ("video/mp2t", "LIVE")
+    } else if path.ends_with(".mp3") {
+        ("audio/mpeg", "BUFFERED")
+    } else if path.ends_with(".m4a") {
+        ("audio/mp4", "BUFFERED")
+    } else {
+        ("video/mp4", "BUFFERED")
+    }
 }
 
 #[cfg(test)]
@@ -685,6 +840,14 @@ mod tests {
     }
 
     #[test]
+    fn rejects_truncated_length_delimited_fields() {
+        let mut encoded =
+            CastMessage::new("receiver-0", NS_CONNECTION, r#"{"type":"CONNECT"}"#).encode();
+        encoded.pop();
+        assert!(CastMessage::decode(&encoded).is_none());
+    }
+
+    #[test]
     fn test_request_id_generator() {
         let id_gen = RequestIdGenerator::new();
         assert_eq!(id_gen.next(), 1);
@@ -696,5 +859,17 @@ mod tests {
         let payload = build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, 42);
         assert!(payload.contains("CC1AD845"));
         assert!(payload.contains("42"));
+    }
+
+    #[test]
+    fn infers_common_media_formats() {
+        assert_eq!(
+            media_format("https://example.test/live.m3u8?token=x"),
+            ("application/x-mpegURL", "LIVE")
+        );
+        assert_eq!(
+            media_format("https://example.test/movie.mkv"),
+            ("video/x-matroska", "BUFFERED")
+        );
     }
 }

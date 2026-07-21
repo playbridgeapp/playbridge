@@ -19,7 +19,7 @@ hmac = "0.12"
 http = "1"
 m3u8-rs = "6"
 mdns-sd = { version = "0.20", default-features = false, features = ["async"] }
-reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
 rupnp = { version = "3", default-features = false, features = ["tokio"] }
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }

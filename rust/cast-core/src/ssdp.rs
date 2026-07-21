@@ -11,11 +11,13 @@ use crate::Result;
 pub const MEDIA_RENDERER: &str = "urn:schemas-upnp-org:device:MediaRenderer:1";
 pub const AV_TRANSPORT: &str = "urn:schemas-upnp-org:service:AVTransport:1";
 pub const DIAL_SERVICE: &str = "urn:dial-multiscreen-org:service:dial:1";
+pub const ROKU_ECP: &str = "roku:ecp";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DiscoveryProtocol {
     Dlna,
     Dial,
+    Roku,
 }
 
 impl DiscoveryProtocol {
@@ -23,6 +25,7 @@ impl DiscoveryProtocol {
         match self {
             Self::Dlna => &[MEDIA_RENDERER, AV_TRANSPORT],
             Self::Dial => &[DIAL_SERVICE],
+            Self::Roku => &[ROKU_ECP],
         }
     }
 }
@@ -63,16 +66,16 @@ pub struct DiscoverySession;
 
 impl DiscoverySession {
     pub async fn search(config: &DiscoveryConfig) -> Result<Vec<DiscoveryHit>> {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let (sender, mut receiver) = mpsc::channel(64);
         let worker = Self::search_incremental(config, sender);
         tokio::pin!(worker);
-        let mut hits = HashMap::<String, DiscoveryHit>::new();
+        let mut hits = HashMap::<(DiscoveryProtocol, String), DiscoveryHit>::new();
         loop {
             tokio::select! {
                 item = receiver.recv() => {
                     match item {
                         Some(item) => {
-                            hits.insert(item.location.clone(), item);
+                            hits.insert((item.protocol, item.location.clone()), item);
                         }
                         None => {
                             (&mut worker).await?;
@@ -83,7 +86,7 @@ impl DiscoverySession {
                 result = &mut worker => {
                     result?;
                     while let Ok(item) = receiver.try_recv() {
-                        hits.insert(item.location.clone(), item);
+                        hits.insert((item.protocol, item.location.clone()), item);
                     }
                     return Ok(hits.into_values().collect());
                 }
@@ -94,7 +97,7 @@ impl DiscoverySession {
     /// Sends each newly discovered location while the SSDP receive window is open.
     pub async fn search_incremental(
         config: &DiscoveryConfig,
-        events: mpsc::UnboundedSender<DiscoveryHit>,
+        events: mpsc::Sender<DiscoveryHit>,
     ) -> Result<()> {
         let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
         socket.set_multicast_ttl_v4(config.ttl)?;
@@ -110,7 +113,7 @@ impl DiscoverySession {
 
         let deadline = Instant::now() + config.timeout;
         let mut buffer = [0_u8; 8192];
-        let mut hits = HashMap::<String, DiscoveryHit>::new();
+        let mut hits = HashMap::<(DiscoveryProtocol, String), DiscoveryHit>::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -121,17 +124,10 @@ impl DiscoverySession {
                 break;
             };
             if let Some(hit) = parse_response(&buffer[..length], source) {
-                let location = hit.location.clone();
-                let should_emit = match hits.get(&location) {
-                    None => true,
-                    Some(saved) => {
-                        saved.protocol != DiscoveryProtocol::Dial
-                            && hit.protocol == DiscoveryProtocol::Dial
-                    }
-                };
-                if should_emit {
-                    hits.insert(location, hit.clone());
-                    let _ = events.send(hit);
+                let key = (hit.protocol, hit.location.clone());
+                if let std::collections::hash_map::Entry::Vacant(entry) = hits.entry(key) {
+                    entry.insert(hit.clone());
+                    let _ = events.send(hit).await;
                 }
             }
         }
@@ -172,6 +168,11 @@ fn parse_response(bytes: &[u8], source: SocketAddr) -> Option<DiscoveryHit> {
     let search_target = headers.get("st").cloned();
     let protocol = if search_target
         .as_deref()
+        .is_some_and(|target| target.eq_ignore_ascii_case(ROKU_ECP))
+    {
+        DiscoveryProtocol::Roku
+    } else if search_target
+        .as_deref()
         .is_some_and(|target| target.eq_ignore_ascii_case(DIAL_SERVICE))
         || headers
             .get("application-url")
@@ -211,6 +212,13 @@ mod tests {
             DiscoveryProtocol::Dlna,
         ]);
         assert_eq!(found, vec![MEDIA_RENDERER, AV_TRANSPORT, DIAL_SERVICE]);
+    }
+
+    #[test]
+    fn parses_official_roku_ecp_search_response() {
+        let packet = b"HTTP/1.1 200 OK\r\nLOCATION: http://192.0.2.2:8060/\r\nST: roku:ecp\r\nUSN: uuid:roku-1\r\n\r\n";
+        let hit = parse_response(packet, "192.0.2.2:1900".parse().unwrap()).unwrap();
+        assert_eq!(hit.protocol, DiscoveryProtocol::Roku);
     }
 
     #[test]

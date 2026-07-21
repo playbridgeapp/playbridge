@@ -5,7 +5,7 @@ independent of Android, Apple, Flutter, and desktop UI lifecycles.
 
 ## Crates
 
-- `cast-core`: discovery, DLNA, Roku/DIAL, PlayBridge protocol and secure WebSocket logic.
+- `cast-core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
 - `cast-core-ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart and CLI consumers.
 - `cast-cli`: cross-platform bounded discovery CLI built directly on `cast-core`.
 
@@ -52,6 +52,7 @@ Protocol mask values are stable:
 - DLNA: `2`
 - Roku: `4`
 - DIAL: `8`
+- Google Cast: `16`
 
 The reusable Dart wrapper lives in `../packages/playbridge_cast_core_dart`. Build
 the native library for the current desktop OS with `./build-desktop.sh`. The
@@ -60,14 +61,14 @@ Desktop CI jobs and packaged by Flutter's platform build files.
 
 ## Desktop CLI
 
-`build-desktop.sh` also writes `playbridge-cast` (`playbridge-cast.exe` on
+`build-desktop.sh` also writes `playbridge` (`playbridge.exe` on
 Windows) beside the FFI library. It can scan one protocol, several selected
 protocols, or the normal automatic set without starting a background service:
 
 ```sh
-playbridge-cast discover --protocol playbridge --timeout 5
-playbridge-cast discover --protocol dlna,roku --json
-playbridge-cast discover --protocol all --json-lines
+playbridge discover --protocol playbridge --timeout 5
+playbridge discover --protocol dlna,roku --json
+playbridge discover --protocol all --json-lines
 ```
 
 `--json` emits one deduplicated report after the scan. `--json-lines` streams
@@ -83,8 +84,5 @@ cd mobile/android
 ./gradlew :app:buildRustCastCore
 ```
 
-The native engine is gated by **TV settings → Experimental → Compare Rust
-discovery** and defaults to off. When enabled it runs only during an existing
-15-second device-picker scan. Kotlin discovery remains authoritative; the shadow
-worker logs only aggregate protocol counts and never receiver names, addresses, or
-identifiers.
+The phone uses Rust as its primary PlayBridge, DLNA, and Roku discovery engine;
+Android retains the platform lifecycle, multicast lock, and UI integration.

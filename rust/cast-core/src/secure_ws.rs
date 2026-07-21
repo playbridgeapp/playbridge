@@ -22,6 +22,8 @@ use crate::{
     playbridge::{ReceiverFrame, SenderFrame, decode_receiver_text, encode_text},
 };
 
+const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 pub struct SecureWebSocket {
     socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     served_spki_pin: String,
@@ -53,13 +55,17 @@ impl SecureWebSocket {
             .with_custom_certificate_verifier(verifier)
             .with_no_client_auth();
         let request = endpoint.into_client_request().map_err(protocol_error)?;
-        let (socket, _) = connect_async_tls_with_config(
-            request,
-            None,
-            false,
-            Some(Connector::Rustls(Arc::new(config))),
+        let (socket, _) = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            connect_async_tls_with_config(
+                request,
+                None,
+                false,
+                Some(Connector::Rustls(Arc::new(config))),
+            ),
         )
         .await
+        .map_err(|_| CastError::Protocol("PlayBridge WebSocket connection timed out".into()))?
         .map_err(protocol_error)?;
         let served_spki_pin = active_spki_pin(socket.get_ref())?;
         if let Some(expected) = expected_spki_pin

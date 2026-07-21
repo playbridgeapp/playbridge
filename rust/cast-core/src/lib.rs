@@ -11,7 +11,9 @@ pub mod discovery;
 pub mod hls;
 pub mod native_discovery;
 pub mod playbridge;
+pub mod roku;
 pub mod secure_ws;
+pub mod session;
 pub mod ssdp;
 pub mod upnp;
 

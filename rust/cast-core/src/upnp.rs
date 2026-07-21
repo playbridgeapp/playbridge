@@ -5,6 +5,7 @@ use rupnp::{Device, ssdp::URN};
 use crate::{CastError, Result};
 
 const AV_TRANSPORT: URN = URN::service("schemas-upnp-org", "AVTransport", 1);
+const UPNP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
 #[derive(Debug)]
 pub struct Renderer {
@@ -14,7 +15,9 @@ pub struct Renderer {
 impl Renderer {
     pub async fn load(location: &str) -> Result<Self> {
         let uri = location.parse()?;
-        let device = Device::from_url(uri).await?;
+        let device = tokio::time::timeout(UPNP_TIMEOUT, Device::from_url(uri))
+            .await
+            .map_err(|_| CastError::Protocol("UPnP device description timed out".into()))??;
         if device.find_service(&AV_TRANSPORT).is_none() {
             return Err(CastError::MissingField("AVTransport service"));
         }
@@ -79,7 +82,12 @@ impl Renderer {
             .device
             .find_service(&AV_TRANSPORT)
             .ok_or(CastError::MissingField("AVTransport service"))?;
-        Ok(service.action(self.device.url(), name, arguments).await?)
+        Ok(tokio::time::timeout(
+            UPNP_TIMEOUT,
+            service.action(self.device.url(), name, arguments),
+        )
+        .await
+        .map_err(|_| CastError::Protocol(format!("UPnP {name} action timed out")))??)
     }
 }
 

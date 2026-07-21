@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{
-    fs,
-    path::PathBuf,
-};
+use std::{fs, path::PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferredDevice {
@@ -17,8 +14,7 @@ pub struct PreferredDevice {
 
 impl PreferredDevice {
     pub fn config_path() -> Option<PathBuf> {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))?;
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
         let mut path = PathBuf::from(home);
         path.push(".config");
         path.push("playbridge");
@@ -43,10 +39,10 @@ impl PreferredDevice {
     }
 
     pub fn clear() -> Result<(), String> {
-        if let Some(path) = Self::config_path() {
-            if path.exists() {
-                fs::remove_file(path).map_err(|e| e.to_string())?;
-            }
+        if let Some(path) = Self::config_path()
+            && path.exists()
+        {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
         }
         Ok(())
     }

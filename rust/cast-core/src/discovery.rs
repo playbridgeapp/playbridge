@@ -22,7 +22,13 @@ pub enum ReceiverProtocol {
 
 impl ReceiverProtocol {
     pub const DEFAULTS: [Self; 4] = [Self::PlayBridge, Self::Dlna, Self::Roku, Self::GoogleCast];
-    pub const ALL: [Self; 5] = [Self::PlayBridge, Self::Dlna, Self::Roku, Self::Dial, Self::GoogleCast];
+    pub const ALL: [Self; 5] = [
+        Self::PlayBridge,
+        Self::Dlna,
+        Self::Roku,
+        Self::Dial,
+        Self::GoogleCast,
+    ];
 
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -122,7 +128,7 @@ impl DiscoveryConfig {
         }
     }
 
-    /// Creates the normal automatic scan: PlayBridge, DLNA, and Roku.
+    /// Creates the normal automatic scan: PlayBridge, DLNA, Roku, and Google Cast.
     pub fn automatic(timeout: Duration) -> Self {
         Self::selected(ReceiverProtocol::DEFAULTS, timeout)
     }
@@ -185,8 +191,8 @@ async fn run_discovery(
     let wants_dlna = config.protocols.contains(&ReceiverProtocol::Dlna);
     let wants_roku = config.protocols.contains(&ReceiverProtocol::Roku);
     let wants_generic_dial = config.protocols.contains(&ReceiverProtocol::Dial);
-    let wants_dial = wants_roku || wants_generic_dial;
-    if wants_dlna || wants_dial {
+    let wants_dial = wants_generic_dial;
+    if wants_dlna || wants_roku || wants_dial {
         let events = events.clone();
         let cancellation = cancellation.clone();
         let timeout = config.timeout;
@@ -216,7 +222,7 @@ async fn discover_playbridge(
         DiscoveryEvent::Started(ReceiverProtocol::PlayBridge),
     )
     .await;
-    let (found_sender, mut found_receiver) = mpsc::unbounded_channel();
+    let (found_sender, mut found_receiver) = mpsc::channel(64);
     let search = native_discovery::discover_incremental(timeout, found_sender);
     tokio::pin!(search);
     loop {
@@ -255,7 +261,7 @@ async fn discover_google_cast(
         DiscoveryEvent::Started(ReceiverProtocol::GoogleCast),
     )
     .await;
-    let (found_sender, mut found_receiver) = mpsc::unbounded_channel();
+    let (found_sender, mut found_receiver) = mpsc::channel(64);
     let search = native_discovery::discover_google_cast_incremental(timeout, found_sender);
     tokio::pin!(search);
     loop {
@@ -340,10 +346,10 @@ async fn discover_ssdp(
     if wants_generic_dial {
         send(&events, DiscoveryEvent::Started(ReceiverProtocol::Dial)).await;
     }
-    let wants_dial = wants_roku || wants_generic_dial;
     let protocols = [
         wants_dlna.then_some(DiscoveryProtocol::Dlna),
-        wants_dial.then_some(DiscoveryProtocol::Dial),
+        wants_roku.then_some(DiscoveryProtocol::Roku),
+        wants_generic_dial.then_some(DiscoveryProtocol::Dial),
     ]
     .into_iter()
     .flatten()
@@ -369,7 +375,7 @@ async fn discover_ssdp(
             return;
         }
     };
-    let (hit_sender, mut hit_receiver) = mpsc::unbounded_channel();
+    let (hit_sender, mut hit_receiver) = mpsc::channel(64);
     let search = DiscoverySession::search_incremental(&ssdp_config, hit_sender);
     tokio::pin!(search);
     let emitter = SsdpEmitter {
@@ -380,6 +386,7 @@ async fn discover_ssdp(
         http: &http,
         events: &events,
         cancellation: &cancellation,
+        deadline: tokio::time::Instant::now() + timeout,
     };
     loop {
         tokio::select! {
@@ -427,6 +434,7 @@ struct SsdpEmitter<'a> {
     http: &'a Client,
     events: &'a mpsc::Sender<DiscoveryEvent>,
     cancellation: &'a CancellationToken,
+    deadline: tokio::time::Instant,
 }
 
 impl SsdpEmitter<'_> {
@@ -434,6 +442,13 @@ impl SsdpEmitter<'_> {
         if self.cancellation.is_cancelled() {
             return;
         }
+        let remaining = self
+            .deadline
+            .saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return;
+        }
+        let enrich_timeout = self.enrich_timeout.min(remaining);
         let stable = hit
             .unique_service_name
             .as_deref()
@@ -454,7 +469,7 @@ impl SsdpEmitter<'_> {
                 send(self.events, DiscoveryEvent::Found(receiver.clone())).await;
                 let loaded = tokio::select! {
                     _ = self.cancellation.cancelled() => return,
-                    result = tokio::time::timeout(self.enrich_timeout, Renderer::load(&hit.location)) => result.ok().and_then(Result::ok),
+                    result = tokio::time::timeout(enrich_timeout, Renderer::load(&hit.location)) => result.ok().and_then(Result::ok),
                 };
                 if let Some(renderer) = loaded {
                     let name = renderer.friendly_name();
@@ -470,29 +485,61 @@ impl SsdpEmitter<'_> {
                     }
                 }
             }
-            DiscoveryProtocol::Dial if self.wants_roku || self.wants_generic_dial => {
+            DiscoveryProtocol::Roku if self.wants_roku => {
+                let port = url::Url::parse(&hit.location)
+                    .ok()
+                    .and_then(|url| url.port_or_known_default())
+                    .or(Some(crate::roku::DEFAULT_ECP_PORT));
+                let receiver = Receiver {
+                    id: ReceiverId(format!("roku:{stable}")),
+                    protocol: ReceiverProtocol::Roku,
+                    name: "Roku".into(),
+                    addresses: vec![hit.source.ip().to_string()],
+                    port,
+                    wss_port: None,
+                    location: Some(hit.location),
+                    uuid: hit.unique_service_name,
+                };
+                send(self.events, DiscoveryEvent::Found(receiver.clone())).await;
+                let client = crate::roku::RokuClient::new(
+                    &hit.source.ip().to_string(),
+                    port.unwrap_or(crate::roku::DEFAULT_ECP_PORT),
+                    enrich_timeout,
+                );
+                let name = match client {
+                    Ok(client) => tokio::select! {
+                        _ = self.cancellation.cancelled() => return,
+                        result = tokio::time::timeout(enrich_timeout, client.device_name()) => result.ok().and_then(Result::ok),
+                    },
+                    Err(_) => None,
+                };
+                if let Some(name) = name
+                    && name != receiver.name
+                {
+                    send(
+                        self.events,
+                        DiscoveryEvent::Updated(Receiver { name, ..receiver }),
+                    )
+                    .await;
+                }
+            }
+            DiscoveryProtocol::Dial if self.wants_generic_dial => {
                 let described = tokio::select! {
                     _ = self.cancellation.cancelled() => return,
-                    result = tokio::time::timeout(self.enrich_timeout, DialDevice::fetch(&hit.location, self.http)) => result,
+                    result = tokio::time::timeout(enrich_timeout, DialDevice::fetch(&hit.location, self.http)) => result,
                 };
                 match described {
                     Err(_) => {
-                        let protocol = if self.wants_roku {
-                            ReceiverProtocol::Roku
-                        } else {
-                            ReceiverProtocol::Dial
-                        };
-                        report_error(self.events, protocol, "DIAL description timed out").await;
+                        report_error(
+                            self.events,
+                            ReceiverProtocol::Dial,
+                            "DIAL description timed out",
+                        )
+                        .await;
                     }
                     Ok(Ok(device)) => {
-                        let protocol = if device.is_roku() {
-                            ReceiverProtocol::Roku
-                        } else {
-                            ReceiverProtocol::Dial
-                        };
-                        if (protocol == ReceiverProtocol::Roku && self.wants_roku)
-                            || (protocol == ReceiverProtocol::Dial && self.wants_generic_dial)
-                        {
+                        let protocol = ReceiverProtocol::Dial;
+                        if self.wants_generic_dial {
                             send(
                                 self.events,
                                 DiscoveryEvent::Found(Receiver {
@@ -513,12 +560,7 @@ impl SsdpEmitter<'_> {
                         }
                     }
                     Ok(Err(failure)) => {
-                        let protocol = if self.wants_roku {
-                            ReceiverProtocol::Roku
-                        } else {
-                            ReceiverProtocol::Dial
-                        };
-                        report_error(self.events, protocol, failure).await;
+                        report_error(self.events, ReceiverProtocol::Dial, failure).await;
                     }
                 }
             }

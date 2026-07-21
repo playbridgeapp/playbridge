@@ -123,12 +123,12 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
             discover(args).await
         }
         "preferred" => {
-            if let Some(sub) = arguments.get(1) {
-                if sub == "clear" {
-                    PreferredDevice::clear()?;
-                    println!("Cleared preferred device configuration.");
-                    return Ok(());
-                }
+            if let Some(sub) = arguments.get(1)
+                && sub == "clear"
+            {
+                PreferredDevice::clear()?;
+                println!("Cleared preferred device configuration.");
+                return Ok(());
             }
             if let Some(pref) = PreferredDevice::load() {
                 println!("Preferred Device Configuration:");
@@ -350,7 +350,8 @@ mod tests {
         let one = parse_discover_args(&strings(&["-p", "roku"])).unwrap();
         assert_eq!(one.protocols, HashSet::from([ReceiverProtocol::Roku]));
 
-        let multiple = parse_discover_args(&strings(&["-p", "native,dlna", "-p", "roku,googlecast"])).unwrap();
+        let multiple =
+            parse_discover_args(&strings(&["-p", "native,dlna", "-p", "roku,googlecast"])).unwrap();
         assert_eq!(
             multiple.protocols,
             HashSet::from(ReceiverProtocol::DEFAULTS)
