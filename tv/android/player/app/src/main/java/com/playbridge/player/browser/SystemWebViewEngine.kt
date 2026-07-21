@@ -655,7 +655,7 @@ class SystemWebViewEngine(
                 displayZoomControls = false
                 setSupportZoom(true)
                 mediaPlaybackRequiresUserGesture = false
-                allowFileAccess = true
+                allowFileAccess = false
                 allowContentAccess = true
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
