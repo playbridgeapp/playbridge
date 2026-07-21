@@ -6,7 +6,10 @@ on:
     paths:
       - 'desktop/**'
       - 'packages/playbridge_cast_core_dart/**'
-      - 'rust/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'cast/**'
+      - 'cli/**'
       - 'protocol/**'
       - '.github/workflows/desktop_build.yml'
       - '.gitmodules'
@@ -71,7 +74,7 @@ jobs:
     - name: Build Rust Cast Core
       if: steps.check_tag.outputs.skipped == 'false'
       shell: bash
-      run: bash ../rust/build-desktop.sh
+      run: bash ../cast/build-desktop.sh
 
     - name: Build Windows
       if: steps.check_tag.outputs.skipped == 'false'
@@ -183,7 +186,7 @@ jobs:
 
     - name: Build Rust Cast Core
       if: steps.check_tag.outputs.skipped == 'false'
-      run: ../rust/build-desktop.sh
+      run: ../cast/build-desktop.sh
 
     - name: Build Linux
       if: steps.check_tag.outputs.skipped == 'false'
@@ -264,7 +267,7 @@ jobs:
 
     - name: Build Rust Cast Core
       if: steps.check_tag.outputs.skipped == 'false'
-      run: ../rust/build-desktop.sh
+      run: ../cast/build-desktop.sh
 
     - name: Build macOS
       if: steps.check_tag.outputs.skipped == 'false'

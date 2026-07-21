@@ -36,7 +36,10 @@ jobs:
             relevant:
               - 'desktop/**'
               - 'packages/playbridge_cast_core_dart/**'
-              - 'rust/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'cast/**'
+              - 'cli/**'
               - 'protocol/**'
               - '.gitmodules'
               - '.github/workflows/desktop_pr.yml'
@@ -96,15 +99,15 @@ jobs:
 
       - name: Verify Rust formatting
         if: steps.filter.outputs.relevant == 'true'
-        working-directory: ./rust
+        working-directory: .
         run: cargo fmt --all -- --check
 
       - name: Test Rust workspace
         if: steps.filter.outputs.relevant == 'true'
-        working-directory: ./rust
+        working-directory: .
         run: cargo test --workspace --all-targets
 
       - name: Lint Rust workspace
         if: steps.filter.outputs.relevant == 'true'
-        working-directory: ./rust
+        working-directory: .
         run: cargo clippy --workspace --all-targets -- -D warnings

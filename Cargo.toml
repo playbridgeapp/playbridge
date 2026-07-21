@@ -1,0 +1,4 @@
+[workspace]
+members = ["cli", "cast/core", "cast/ffi"]
+exclude = ["inspirations/mediaflow-proxy-light"]
+resolver = "3"

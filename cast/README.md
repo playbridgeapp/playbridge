@@ -1,13 +1,13 @@
-# PlayBridge Cast Core
+# PlayBridge Cast
 
 This workspace contains the reusable receiver protocol core. It is intentionally
 independent of Android, Apple, Flutter, and desktop UI lifecycles.
 
 ## Crates
 
-- `cast-core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
-- `cast-core-ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart and CLI consumers.
-- `cast-cli`: cross-platform bounded discovery CLI built directly on `cast-core`.
+- `core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
+- `ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart consumers.
+- `../cli`: cross-platform CLI built directly on `core`.
 
 Discovery is caller-owned and time-boxed. A caller chooses one or more protocols,
 reads events, and cancels or drops the scanner when its screen or command ends. The
@@ -22,16 +22,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Regenerate platform bindings
 
-Install the UniFFI CLI at the same version as `cast-core-ffi`, build the host
+Install the UniFFI CLI at the same version as `ffi`, build the host
 dynamic library, then generate both façades:
 
 ```sh
 cargo build -p playbridge-cast-core-ffi
 uniffi-bindgen generate --language kotlin \
-  --out-dir bindings/kotlin \
+  --out-dir cast/bindings/kotlin \
   target/debug/libplaybridge_cast_core_ffi.dylib
 uniffi-bindgen generate --language swift \
-  --out-dir bindings/swift \
+  --out-dir cast/bindings/swift \
   target/debug/libplaybridge_cast_core_ffi.dylib
 ```
 
@@ -41,7 +41,7 @@ with the matching static or dynamic library for each Apple target.
 
 ## C ABI
 
-`cast-core-ffi/include/playbridge_cast_core.h` is the stable surface intended for
+`cast/ffi/include/playbridge_cast_core.h` is the stable surface intended for
 Dart FFI and other languages that do not need generated bindings. Discovery events
 are UTF-8 JSON. Strings returned by `pb_discovery_next_json` must be released with
 `pb_string_free`; scanner handles must be cancelled and released.
@@ -55,13 +55,13 @@ Protocol mask values are stable:
 - Google Cast: `16`
 
 The reusable Dart wrapper lives in `../packages/playbridge_cast_core_dart`. Build
-the native library for the current desktop OS with `./build-desktop.sh`. The
+the native library for the current desktop OS with `cast/build-desktop.sh`. The
 macOS build is universal; Linux and Windows builds are produced by their native
 Desktop CI jobs and packaged by Flutter's platform build files.
 
 ## Desktop CLI
 
-`build-desktop.sh` also writes `playbridge` (`playbridge.exe` on
+`cast/build-desktop.sh` also writes `playbridge` (`playbridge.exe` on
 Windows) beside the FFI library. It can scan one protocol, several selected
 protocols, or the normal automatic set without starting a background service:
 

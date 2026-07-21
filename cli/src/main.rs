@@ -72,10 +72,12 @@ enum JsonLine<'a> {
 }
 
 mod credentials;
+mod google_cast;
 mod http_server;
 mod preferred;
 mod send;
 
+use google_cast::run_google_cast;
 use preferred::PreferredDevice;
 use send::run_send;
 
@@ -122,6 +124,7 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
             let args = parse_discover_args(&arguments[1..])?;
             discover(args).await
         }
+        "google-cast" | "googlecast" => run_google_cast(&arguments[1..]).await,
         "preferred" => {
             if let Some(sub) = arguments.get(1)
                 && sub == "clear"
@@ -319,6 +322,7 @@ Usage:
   playbridge send <filename|URL>         Explicit send command
   playbridge cast <filename|URL>         Explicit cast command
   playbridge discover [options]          Discover receivers on your local network
+  playbridge google-cast status [options] Connect to Cast and query status only
   playbridge preferred [clear]           View or clear the saved preferred device
 
 Discover Options:
@@ -327,6 +331,11 @@ Discover Options:
   -t, --timeout <seconds> Bounded scan duration (1-300, default 5)
       --json              Print one final JSON report
       --json-lines        Stream one JSON event per line
+Google Cast Status Options:
+      --device <name>     Select a discovered Google Cast receiver
+      --address <address> Connect directly instead of discovering
+      --port <port>       CastV2 port (default 8009)
+      --json              Print the receiver status as JSON
   -h, --help              Show this help"#
 }
 

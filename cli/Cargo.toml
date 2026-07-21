@@ -11,7 +11,7 @@ name = "playbridge"
 path = "src/main.rs"
 
 [dependencies]
-playbridge-cast-core = { path = "../cast-core" }
+playbridge-cast-core = { path = "../cast/core" }
 getrandom = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

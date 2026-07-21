@@ -220,5 +220,5 @@ tasks.register<Exec>("buildRustCastCore") {
     group = "build"
     description = "Build and package PlayBridge Cast Core for all supported Android ABIs"
     workingDir(rootProject.projectDir)
-    commandLine("sh", "../../rust/build-android.sh")
+    commandLine("sh", "../../cast/build-android.sh")
 }

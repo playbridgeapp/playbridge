@@ -1,7 +1,7 @@
 # Cast Core desktop libraries
 
-Run `../rust/build-desktop.sh` from the repository root (or
-`rust/build-desktop.sh` directly) on each target operating system. The script
+Run `cast/build-desktop.sh` from the repository root on each target operating
+system. The script
 places release libraries here:
 
 - `macos/libplaybridge_cast_core_ffi.dylib` (universal arm64 + x86_64)

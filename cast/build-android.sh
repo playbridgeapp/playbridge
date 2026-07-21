@@ -42,17 +42,16 @@ build_target() {
         "CC_$(printf '%s' "$rust_target" | tr '-' '_')=$linker" \
         "AR_$(printf '%s' "$rust_target" | tr '-' '_')=$toolchain/llvm-ar" \
         cargo build \
-            --manifest-path "$script_dir/Cargo.toml" \
+            --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
             --release \
             --target "$rust_target"
 
     mkdir -p "$output_dir/$android_abi"
-    cp "$script_dir/target/$rust_target/release/libplaybridge_cast_core_ffi.so" \
+    cp "$repo_dir/target/$rust_target/release/libplaybridge_cast_core_ffi.so" \
         "$output_dir/$android_abi/libplaybridge_cast_core_ffi.so"
     "$toolchain/llvm-strip" "$output_dir/$android_abi/libplaybridge_cast_core_ffi.so"
 }
 
 build_target aarch64-linux-android aarch64-linux-android arm64-v8a
 build_target armv7-linux-androideabi armv7a-linux-androideabi armeabi-v7a
-

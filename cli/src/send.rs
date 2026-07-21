@@ -2,7 +2,10 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode},
     execute,
-    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use std::{
     io::{self, Write},
@@ -46,8 +49,14 @@ struct PickerTerminalGuard {
 impl PickerTerminalGuard {
     fn enable() -> Result<Self, String> {
         let raw_mode = RawModeGuard::enable()?;
-        execute!(io::stdout(), cursor::SavePosition, cursor::Hide)
-            .map_err(|error| error.to_string())?;
+        execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            cursor::MoveTo(0, 0),
+            Clear(ClearType::All),
+            cursor::Hide,
+        )
+        .map_err(|error| error.to_string())?;
         Ok(Self {
             _raw_mode: raw_mode,
         })
@@ -56,12 +65,7 @@ impl PickerTerminalGuard {
 
 impl Drop for PickerTerminalGuard {
     fn drop(&mut self) {
-        let _ = execute!(
-            io::stdout(),
-            cursor::RestorePosition,
-            Clear(ClearType::FromCursorDown),
-            cursor::Show,
-        );
+        let _ = execute!(io::stdout(), cursor::Show, LeaveAlternateScreen,);
     }
 }
 
@@ -924,12 +928,8 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
 
 fn redraw(receivers: &[Receiver], selection: usize) -> Result<(), String> {
     let mut stdout = io::stdout();
-    execute!(
-        stdout,
-        cursor::RestorePosition,
-        Clear(ClearType::FromCursorDown),
-    )
-    .map_err(|error| error.to_string())?;
+    execute!(stdout, cursor::MoveTo(0, 0), Clear(ClearType::All),)
+        .map_err(|error| error.to_string())?;
 
     write!(stdout, "Discovered Devices (scanning...):\r\n").map_err(|error| error.to_string())?;
 

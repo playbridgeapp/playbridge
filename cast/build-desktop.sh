@@ -15,48 +15,48 @@ case "$(uname -s)" in
     Darwin)
         add_target aarch64-apple-darwin
         add_target x86_64-apple-darwin
-        cargo build --manifest-path "$script_dir/Cargo.toml" \
+        cargo build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
             --target aarch64-apple-darwin
-        cargo build --manifest-path "$script_dir/Cargo.toml" \
+        cargo build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
             --target x86_64-apple-darwin
         mkdir -p "$output_root/macos"
         lipo -create \
-            "$script_dir/target/aarch64-apple-darwin/release/libplaybridge_cast_core_ffi.dylib" \
-            "$script_dir/target/x86_64-apple-darwin/release/libplaybridge_cast_core_ffi.dylib" \
+            "$repo_dir/target/aarch64-apple-darwin/release/libplaybridge_cast_core_ffi.dylib" \
+            "$repo_dir/target/x86_64-apple-darwin/release/libplaybridge_cast_core_ffi.dylib" \
             -output "$output_root/macos/libplaybridge_cast_core_ffi.dylib"
         install_name_tool -id "@rpath/libplaybridge_cast_core_ffi.dylib" \
             "$output_root/macos/libplaybridge_cast_core_ffi.dylib"
         lipo -create \
-            "$script_dir/target/aarch64-apple-darwin/release/playbridge" \
-            "$script_dir/target/x86_64-apple-darwin/release/playbridge" \
+            "$repo_dir/target/aarch64-apple-darwin/release/playbridge" \
+            "$repo_dir/target/x86_64-apple-darwin/release/playbridge" \
             -output "$output_root/macos/playbridge"
         strip -x "$output_root/macos/libplaybridge_cast_core_ffi.dylib"
         strip -x "$output_root/macos/playbridge"
         ;;
     Linux)
         add_target x86_64-unknown-linux-gnu
-        cargo build --manifest-path "$script_dir/Cargo.toml" \
+        cargo build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
             --target x86_64-unknown-linux-gnu
         mkdir -p "$output_root/linux"
-        cp "$script_dir/target/x86_64-unknown-linux-gnu/release/libplaybridge_cast_core_ffi.so" \
+        cp "$repo_dir/target/x86_64-unknown-linux-gnu/release/libplaybridge_cast_core_ffi.so" \
             "$output_root/linux/libplaybridge_cast_core_ffi.so"
-        cp "$script_dir/target/x86_64-unknown-linux-gnu/release/playbridge" \
+        cp "$repo_dir/target/x86_64-unknown-linux-gnu/release/playbridge" \
             "$output_root/linux/playbridge"
         strip "$output_root/linux/libplaybridge_cast_core_ffi.so"
         strip "$output_root/linux/playbridge"
         ;;
     MINGW*|MSYS*|CYGWIN*)
         add_target x86_64-pc-windows-msvc
-        cargo build --manifest-path "$script_dir/Cargo.toml" \
+        cargo build --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
             --target x86_64-pc-windows-msvc
         mkdir -p "$output_root/windows"
-        cp "$script_dir/target/x86_64-pc-windows-msvc/release/playbridge_cast_core_ffi.dll" \
+        cp "$repo_dir/target/x86_64-pc-windows-msvc/release/playbridge_cast_core_ffi.dll" \
             "$output_root/windows/playbridge_cast_core_ffi.dll"
-        cp "$script_dir/target/x86_64-pc-windows-msvc/release/playbridge.exe" \
+        cp "$repo_dir/target/x86_64-pc-windows-msvc/release/playbridge.exe" \
             "$output_root/windows/playbridge.exe"
         ;;
     *)
