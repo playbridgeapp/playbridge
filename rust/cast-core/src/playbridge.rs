@@ -67,6 +67,15 @@ pub enum ReceiverFrame {
         #[serde(default)]
         browsers: Vec<String>,
     },
+    #[serde(rename = "status")]
+    Status {
+        #[serde(default)]
+        position: u64,
+        #[serde(default)]
+        duration: u64,
+        #[serde(default)]
+        title: Option<String>,
+    },
     #[serde(other)]
     Unknown,
 }

@@ -17,4 +17,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time"] }
 urlencoding = "2.1"
+tower-http = { version = "0.6", features = ["fs", "cors"] }
+axum = "0.8"
 crossterm = "0.28"

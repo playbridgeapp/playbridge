@@ -204,9 +204,11 @@ pub fn build_load_payload(
     art_url: Option<&str>,
     start_seconds: f64,
     request_id: u32,
+    session_id: Option<&str>,
 ) -> String {
     let mut media = json!({
         "contentId": content_url,
+        "contentUrl": content_url,
         "streamType": "BUFFERED",
     });
 
@@ -214,7 +216,7 @@ pub fn build_load_payload(
         media["contentType"] = json!(ct);
     }
 
-    let mut metadata = json!({ "type": 0 });
+    let mut metadata = json!({ "metadataType": 1 });
     if let Some(t) = title {
         metadata["title"] = json!(t);
     }
@@ -223,14 +225,19 @@ pub fn build_load_payload(
     }
     media["metadata"] = metadata;
 
-    json!({
+    let mut load_obj = json!({
         "type": "LOAD",
         "media": media,
         "autoplay": true,
         "currentTime": start_seconds,
         "requestId": request_id,
-    })
-    .to_string()
+    });
+
+    if let Some(sid) = session_id {
+        load_obj["sessionId"] = json!(sid);
+    }
+
+    load_obj.to_string()
 }
 
 /// Build JSON payload for PLAY, PAUSE, STOP media commands.
@@ -330,9 +337,141 @@ impl CastChannel {
     }
 }
 
+pub async fn send_stop_session(channel: &mut CastChannel, session_id: &str) -> Result<(), String> {
+    let stop_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
+        "type": "STOP",
+        "sessionId": session_id,
+        "requestId": 9999,
+    }).to_string());
+    channel.send_message(&stop_msg).await
+}
+
+pub async fn send_stop_media(
+    channel: &mut CastChannel,
+    destination_id: &str,
+    media_session_id: i64,
+) -> Result<(), String> {
+    let msg = CastMessage::new(
+        destination_id,
+        NS_MEDIA,
+        json!({
+            "type": "STOP",
+            "mediaSessionId": media_session_id,
+            "requestId": 104,
+        })
+        .to_string(),
+    );
+    channel.send_message(&msg).await
+}
+
+pub async fn send_pause(
+    channel: &mut CastChannel,
+    destination_id: &str,
+    media_session_id: i64,
+) -> Result<(), String> {
+    let msg = CastMessage::new(
+        destination_id,
+        NS_MEDIA,
+        json!({
+            "type": "PAUSE",
+            "mediaSessionId": media_session_id,
+            "requestId": 100,
+        })
+        .to_string(),
+    );
+    channel.send_message(&msg).await
+}
+
+pub async fn send_play(
+    channel: &mut CastChannel,
+    destination_id: &str,
+    media_session_id: i64,
+) -> Result<(), String> {
+    let msg = CastMessage::new(
+        destination_id,
+        NS_MEDIA,
+        json!({
+            "type": "PLAY",
+            "mediaSessionId": media_session_id,
+            "requestId": 101,
+        })
+        .to_string(),
+    );
+    channel.send_message(&msg).await
+}
+
+pub async fn send_seek(
+    channel: &mut CastChannel,
+    destination_id: &str,
+    media_session_id: i64,
+    current_time_secs: f64,
+) -> Result<(), String> {
+    let msg = CastMessage::new(
+        destination_id,
+        NS_MEDIA,
+        json!({
+            "type": "SEEK",
+            "mediaSessionId": media_session_id,
+            "currentTime": current_time_secs,
+            "requestId": 102,
+        })
+        .to_string(),
+    );
+    channel.send_message(&msg).await
+}
+
+pub async fn send_volume(
+    channel: &mut CastChannel,
+    level: f32,
+) -> Result<(), String> {
+    let msg = CastMessage::new(
+        RECEIVER_ID,
+        NS_RECEIVER,
+        json!({
+            "type": "SET_VOLUME",
+            "volume": { "level": level.clamp(0.0, 1.0) },
+            "requestId": 103,
+        })
+        .to_string(),
+    );
+    channel.send_message(&msg).await
+}
+
+pub async fn send_get_media_status(
+    channel: &mut CastChannel,
+    destination_id: &str,
+) -> Result<(), String> {
+    let msg = CastMessage::new(
+        destination_id,
+        NS_MEDIA,
+        json!({
+            "type": "GET_STATUS",
+            "requestId": 99,
+        })
+        .to_string(),
+    );
+    channel.send_message(&msg).await
+}
+
 pub async fn send_heartbeat_ping(channel: &mut CastChannel) -> Result<(), String> {
     let ping = CastMessage::new(RECEIVER_ID, NS_HEARTBEAT, json!({ "type": "PING" }).to_string());
     channel.send_message(&ping).await
+}
+
+pub struct CastSessionDetails {
+    pub channel: CastChannel,
+    pub transport_id: String,
+    pub session_id: String,
+    pub media_session_id: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SessionLaunchStrategy {
+    /// Always tear down lingering sessions and launch a fresh receiver app (ideal for one-shot CLI commands).
+    #[default]
+    ForceRelaunch,
+    /// Reuse active session if running; otherwise launch new session (ideal for GUI apps with persistent media servers).
+    ReuseOrLaunch,
 }
 
 pub async fn cast_media(
@@ -351,6 +490,26 @@ pub async fn cast_media_session(
     media_url: &str,
     title: Option<&str>,
 ) -> Result<CastChannel, String> {
+    let details = cast_media_session_with_strategy(address, port, media_url, title, SessionLaunchStrategy::ForceRelaunch).await?;
+    Ok(details.channel)
+}
+
+pub async fn cast_media_session_with_details(
+    address: &str,
+    port: u16,
+    media_url: &str,
+    title: Option<&str>,
+) -> Result<CastSessionDetails, String> {
+    cast_media_session_with_strategy(address, port, media_url, title, SessionLaunchStrategy::ForceRelaunch).await
+}
+
+pub async fn cast_media_session_with_strategy(
+    address: &str,
+    port: u16,
+    media_url: &str,
+    title: Option<&str>,
+    strategy: SessionLaunchStrategy,
+) -> Result<CastSessionDetails, String> {
     let mut channel = CastChannel::connect(address, port).await?;
     let req_gen = RequestIdGenerator::new();
 
@@ -358,42 +517,64 @@ pub async fn cast_media_session(
     let conn_msg = CastMessage::new(RECEIVER_ID, NS_CONNECTION, build_connect_payload());
     channel.send_message(&conn_msg).await?;
 
-    // 2. Query RECEIVER_STATUS to see if app is already running
+    // 2. Query RECEIVER_STATUS to check for active vs stale sessions
     let status_req_id = req_gen.next();
     let get_status_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
         "type": "GET_STATUS",
         "requestId": status_req_id,
     }).to_string());
-    channel.send_message(&get_status_msg).await?;
+    let _ = channel.send_message(&get_status_msg).await;
 
     let mut destination_id = String::new();
-    let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-    while tokio::time::Instant::now() < read_deadline {
-        if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_millis(500), channel.read_message()).await {
+    let mut session_id = String::new();
+    let mut is_active_app = false;
+
+    let status_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < status_deadline {
+        if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_millis(400), channel.read_message()).await {
             if msg.namespace == NS_RECEIVER {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
                     if v["type"] == "RECEIVER_STATUS" {
                         if let Some(apps) = v["status"]["applications"].as_array() {
                             for app in apps {
+                                if let Some(sid) = app["sessionId"].as_str() {
+                                    session_id = sid.to_string();
+                                }
                                 if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
                                     if let Some(tid) = app["transportId"].as_str() {
                                         destination_id = tid.to_string();
-                                        break;
+                                    }
+                                    let is_idle = app["isIdleScreen"].as_bool().unwrap_or(false);
+                                    if !destination_id.is_empty() && !is_idle {
+                                        is_active_app = true;
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
-            if !destination_id.is_empty() {
-                break;
+                if !session_id.is_empty() || is_active_app {
+                    break;
+                }
             }
         }
     }
 
-    // 3. If app not running, LAUNCH it
-    if destination_id.is_empty() {
+    if strategy == SessionLaunchStrategy::ReuseOrLaunch && is_active_app {
+        println!("Reusing active Default Media Receiver app (transportId: {}, sessionId: {}).", destination_id, session_id);
+    } else {
+        // Stop lingering stale session if any
+        if !session_id.is_empty() {
+            let stop_msg = CastMessage::new(RECEIVER_ID, NS_RECEIVER, json!({
+                "type": "STOP",
+                "sessionId": session_id,
+                "requestId": req_gen.next(),
+            }).to_string());
+            let _ = channel.send_message(&stop_msg).await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        }
+
+        // Send LAUNCH for Default Media Receiver (CC1AD845)
         let launch_req_id = req_gen.next();
         let launch_msg = CastMessage::new(
             RECEIVER_ID,
@@ -402,6 +583,8 @@ pub async fn cast_media_session(
         );
         channel.send_message(&launch_msg).await?;
 
+        destination_id.clear();
+        session_id.clear();
         let launch_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         while tokio::time::Instant::now() < launch_deadline {
             if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_secs(1), channel.read_message()).await {
@@ -413,8 +596,11 @@ pub async fn cast_media_session(
                                     if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
                                         if let Some(tid) = app["transportId"].as_str() {
                                             destination_id = tid.to_string();
-                                            break;
                                         }
+                                        if let Some(sid) = app["sessionId"].as_str() {
+                                            session_id = sid.to_string();
+                                        }
+                                        break;
                                     }
                                 }
                             }
@@ -426,15 +612,20 @@ pub async fn cast_media_session(
                 }
             }
         }
-    }
 
-    if destination_id.is_empty() {
-        destination_id = RECEIVER_ID.to_string();
+        if destination_id.is_empty() {
+            return Err("Failed to launch Default Media Receiver app on Chromecast (no transportId returned)".into());
+        }
+
+        println!("Launched Default Media Receiver app (transportId: {}, sessionId: {}).", destination_id, session_id);
     }
 
     // 4. Connect to target transportId
     let app_conn_msg = CastMessage::new(&destination_id, NS_CONNECTION, build_connect_payload());
     channel.send_message(&app_conn_msg).await?;
+
+    // Wait 400ms for receiver app HTML5 runtime
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
 
     // 5. Send LOAD payload to target transportId
     let load_req_id = req_gen.next();
@@ -445,11 +636,35 @@ pub async fn cast_media_session(
         None,
         0.0,
         load_req_id,
+        if session_id.is_empty() { None } else { Some(&session_id) },
     );
     let load_msg = CastMessage::new(&destination_id, NS_MEDIA, load_payload);
     channel.send_message(&load_msg).await?;
 
-    Ok(channel)
+    println!("Sent LOAD request. Waiting for receiver response...");
+
+    let mut media_session_id: i64 = 1;
+    let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    while tokio::time::Instant::now() < read_deadline {
+        if let Ok(Ok(msg)) = tokio::time::timeout(std::time::Duration::from_millis(500), channel.read_message()).await {
+            if msg.namespace == NS_MEDIA {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                    if let Some(status) = v["status"].as_array().and_then(|a| a.first()) {
+                        if let Some(msid) = status["mediaSessionId"].as_i64() {
+                            media_session_id = msid;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(CastSessionDetails {
+        channel,
+        transport_id: destination_id,
+        session_id,
+        media_session_id,
+    })
 }
 
 #[cfg(test)]
