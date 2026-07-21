@@ -75,6 +75,10 @@ class CastSessionManager(
         data object NativeTv : Route
         /** Cast to a third-party DLNA renderer. */
         data class Dlna(val deviceId: String, val name: String) : Route
+        /** Cast to a Google Cast (Chromecast) device. */
+        data class GoogleCast(val deviceId: String, val name: String) : Route
+        /** Cast to a Roku device. */
+        data class Roku(val deviceId: String, val name: String) : Route
     }
 
     private val routePrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
@@ -194,11 +198,21 @@ class CastSessionManager(
         _rokuCast.value?.release()
         val target = RokuCastTarget(device, scope)
         _rokuCast.value = target
+        webSocketClient.disconnect()
+        stopReconnectSupervisor()
+        _route.value = Route.Roku(device.uuid, device.name)
+        routePrefs.edit().putBoolean("watch_on_tv", true).apply()
     }
 
     fun clearRokuTarget() {
         _rokuCast.value?.release()
         _rokuCast.value = null
+        if (_route.value is Route.Roku) {
+            _route.value = when (routePrefs.getString(ROUTE_KEY, "this")) {
+                "native" -> Route.NativeTv
+                else -> Route.ThisDevice
+            }
+        }
     }
 
     fun rokuKeypress(key: String) {
@@ -213,11 +227,21 @@ class CastSessionManager(
         _googleCastCast.value?.release()
         val target = GoogleCastTarget(device, scope, context)
         _googleCastCast.value = target
+        webSocketClient.disconnect()
+        stopReconnectSupervisor()
+        _route.value = Route.GoogleCast(device.uuid, device.name)
+        routePrefs.edit().putBoolean("watch_on_tv", true).apply()
     }
 
     fun clearGoogleCastTarget() {
         _googleCastCast.value?.release()
         _googleCastCast.value = null
+        if (_route.value is Route.GoogleCast) {
+            _route.value = when (routePrefs.getString(ROUTE_KEY, "this")) {
+                "native" -> Route.NativeTv
+                else -> Route.ThisDevice
+            }
+        }
     }
 
     /**
@@ -243,11 +267,11 @@ class CastSessionManager(
             state is WebSocketClient.ConnectionState.Connecting
         // Any live native socket — casting or idle-linked. Route.ThisDevice only means
         // "prefer local play", not "hide the link"; Disconnect closes the socket.
-        val nativeLive = connectedOrConnecting && route !is Route.Dlna
+        val nativeLive = connectedOrConnecting && route !is Route.Dlna && route !is Route.GoogleCast && route !is Route.Roku
         val nativeReconnecting = route is Route.NativeTv && reconnecting
         // Keep FGS across a drop while we still think content is on the TV.
-        val nativeStickyPlaying = ctx == "player" && route !is Route.Dlna
-        dlna != null || nativeLive || nativeReconnecting || nativeStickyPlaying
+        val nativeStickyPlaying = ctx == "player" && route !is Route.Dlna && route !is Route.GoogleCast && route !is Route.Roku
+        dlna != null || _googleCastCast.value != null || _rokuCast.value != null || nativeLive || nativeReconnecting || nativeStickyPlaying
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**

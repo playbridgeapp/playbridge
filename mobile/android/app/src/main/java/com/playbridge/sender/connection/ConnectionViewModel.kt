@@ -135,6 +135,8 @@ class ConnectionViewModel(
 
     // --- DLNA cast target (owned by CastSessionManager so a cast survives this VM) ---
     val activeDlnaTarget: StateFlow<TvDevice?> = castSessionManager.activeDlnaTarget
+    val activeGoogleCastTarget: StateFlow<TvDevice?> = castSessionManager.activeGoogleCastTarget
+    val activeRokuTarget: StateFlow<TvDevice?> = castSessionManager.activeRokuTarget
     val dlnaStatus: StateFlow<PlaybackStatus?> = castSessionManager.dlnaStatus
     val dlnaMediaTitle: StateFlow<String?> = castSessionManager.dlnaMediaTitle
 
