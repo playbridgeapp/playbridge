@@ -13,7 +13,7 @@ use tokio::time::sleep;
 
 use playbridge_cast_core::{
     castv2,
-    discovery::{DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver},
+    discovery::{DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver, ReceiverProtocol},
     playbridge::{PairingSession, ReceiverFrame, SenderFrame},
     secure_ws::SecureWebSocket,
     session::{MediaRequest, PlaybackState, ReceiverSession},
@@ -36,6 +36,32 @@ impl RawModeGuard {
 impl Drop for RawModeGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
+    }
+}
+
+struct PickerTerminalGuard {
+    _raw_mode: RawModeGuard,
+}
+
+impl PickerTerminalGuard {
+    fn enable() -> Result<Self, String> {
+        let raw_mode = RawModeGuard::enable()?;
+        execute!(io::stdout(), cursor::SavePosition, cursor::Hide)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            _raw_mode: raw_mode,
+        })
+    }
+}
+
+impl Drop for PickerTerminalGuard {
+    fn drop(&mut self) {
+        let _ = execute!(
+            io::stdout(),
+            cursor::RestorePosition,
+            Clear(ClearType::FromCursorDown),
+            cursor::Show,
+        );
     }
 }
 
@@ -843,25 +869,24 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
     let mut stream = DiscoveryStream::start(DiscoveryConfig::default());
     let mut receivers = Vec::<Receiver>::new();
     let mut selection = 0usize;
-    let mut rendered_lines = 0usize;
 
-    let raw_mode = RawModeGuard::enable()?;
+    let _terminal = PickerTerminalGuard::enable()?;
 
     // Initial render
-    let _ = redraw(&receivers, selection, &mut rendered_lines);
+    redraw(&receivers, selection)?;
 
-    let result = loop {
+    loop {
         // Handle input events
         if event::poll(Duration::from_millis(50)).map_err(|e| e.to_string())? {
             if let Event::Key(key_event) = event::read().map_err(|e| e.to_string())? {
                 match key_event.code {
                     KeyCode::Up if selection > 0 => {
                         selection -= 1;
-                        let _ = redraw(&receivers, selection, &mut rendered_lines);
+                        redraw(&receivers, selection)?;
                     }
                     KeyCode::Down if !receivers.is_empty() && selection + 1 < receivers.len() => {
                         selection += 1;
-                        let _ = redraw(&receivers, selection, &mut rendered_lines);
+                        redraw(&receivers, selection)?;
                     }
                     KeyCode::Enter if !receivers.is_empty() => {
                         break Ok((receivers[selection].clone(), false));
@@ -873,7 +898,7 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
                         receivers.clear();
                         selection = 0;
                         stream = DiscoveryStream::start(DiscoveryConfig::default());
-                        let _ = redraw(&receivers, selection, &mut rendered_lines);
+                        redraw(&receivers, selection)?;
                     }
                     KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
                         break Err("Selection cancelled".into());
@@ -887,79 +912,111 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
         tokio::select! {
             event = stream.next() => match event {
                 Some(DiscoveryEvent::Found(receiver)) | Some(DiscoveryEvent::Updated(receiver)) => {
-                    if let Some(existing) = receivers.iter_mut().find(|r| r.id == receiver.id) {
-                        *existing = receiver;
-                    } else {
-                        receivers.push(receiver);
-                    }
-                    let _ = redraw(&receivers, selection, &mut rendered_lines);
+                    upsert_receiver(&mut receivers, receiver, &mut selection);
+                    redraw(&receivers, selection)?;
                 }
                 _ => {}
             },
             _ = sleep(Duration::from_millis(50)) => {}
         }
-    };
-
-    let mut stdout = io::stdout();
-    if rendered_lines > 0 {
-        let _ = execute!(
-            stdout,
-            cursor::MoveToColumn(0),
-            cursor::MoveUp(rendered_lines as u16),
-            Clear(ClearType::FromCursorDown),
-        );
     }
-    drop(raw_mode);
-    let _ = stdout.flush();
-    result
 }
 
-fn redraw(
-    receivers: &[Receiver],
-    selection: usize,
-    rendered_lines: &mut usize,
-) -> Result<(), String> {
+fn redraw(receivers: &[Receiver], selection: usize) -> Result<(), String> {
     let mut stdout = io::stdout();
-    if *rendered_lines > 0 {
-        let _ = execute!(
-            stdout,
-            cursor::MoveToColumn(0),
-            cursor::MoveUp(*rendered_lines as u16),
-            Clear(ClearType::FromCursorDown),
-        );
-    }
+    execute!(
+        stdout,
+        cursor::RestorePosition,
+        Clear(ClearType::FromCursorDown),
+    )
+    .map_err(|error| error.to_string())?;
 
-    let mut lines = 0usize;
-    let _ = write!(stdout, "Discovered Devices (scanning...):\r\n");
-    lines += 1;
+    write!(stdout, "Discovered Devices (scanning...):\r\n").map_err(|error| error.to_string())?;
 
     if receivers.is_empty() {
-        let _ = write!(stdout, "  (Searching for devices on LAN...)\r\n");
-        lines += 1;
+        write!(stdout, "  (Searching for devices on LAN...)\r\n")
+            .map_err(|error| error.to_string())?;
     } else {
+        let mut current_protocol = None;
         for (idx, r) in receivers.iter().enumerate() {
+            if current_protocol != Some(r.protocol) {
+                current_protocol = Some(r.protocol);
+                write!(stdout, "\r\n{}\r\n", protocol_label(r.protocol))
+                    .map_err(|error| error.to_string())?;
+            }
             let prefix = if idx == selection { ">" } else { " " };
-            let _ = write!(
+            write!(
                 stdout,
-                "  {} {} ({}) - {}\r\n",
+                "  {} {} - {}\r\n",
                 prefix,
                 r.name,
-                r.protocol,
-                r.addresses.join(", ")
-            );
-            lines += 1;
+                address_summary(r),
+            )
+            .map_err(|error| error.to_string())?;
         }
     }
 
-    let _ = write!(
+    write!(
         stdout,
         "\r\n[↑/↓] Navigate  [Enter] Cast  [P] Preferred  [R] Rescan  [Q] Cancel\r\n"
-    );
-    lines += 2;
+    )
+    .map_err(|error| error.to_string())?;
 
-    let _ = stdout.flush();
-    *rendered_lines = lines;
-    Ok(())
+    stdout.flush().map_err(|error| error.to_string())
+}
+
+fn upsert_receiver(receivers: &mut Vec<Receiver>, receiver: Receiver, selection: &mut usize) {
+    let selected_id = receivers.get(*selection).map(|item| item.id.clone());
+    if let Some(existing) = receivers.iter_mut().find(|item| item.id == receiver.id) {
+        *existing = receiver;
+    } else {
+        receivers.push(receiver);
+    }
+    receivers.sort_by(|left, right| {
+        protocol_rank(left.protocol)
+            .cmp(&protocol_rank(right.protocol))
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.id.0.cmp(&right.id.0))
+    });
+    *selection = selected_id
+        .and_then(|id| receivers.iter().position(|item| item.id == id))
+        .unwrap_or_else(|| (*selection).min(receivers.len().saturating_sub(1)));
+}
+
+const fn protocol_rank(protocol: ReceiverProtocol) -> u8 {
+    match protocol {
+        ReceiverProtocol::PlayBridge => 0,
+        ReceiverProtocol::Dlna => 1,
+        ReceiverProtocol::Roku => 2,
+        ReceiverProtocol::GoogleCast => 3,
+        ReceiverProtocol::Dial => 4,
+    }
+}
+
+const fn protocol_label(protocol: ReceiverProtocol) -> &'static str {
+    match protocol {
+        ReceiverProtocol::PlayBridge => "PlayBridge",
+        ReceiverProtocol::Dlna => "DLNA",
+        ReceiverProtocol::Roku => "Roku",
+        ReceiverProtocol::GoogleCast => "Google Cast",
+        ReceiverProtocol::Dial => "DIAL",
+    }
+}
+
+fn address_summary(receiver: &Receiver) -> String {
+    let address = receiver
+        .addresses
+        .iter()
+        .find(|address| address.contains('.'))
+        .or_else(|| receiver.addresses.first())
+        .map(String::as_str)
+        .unwrap_or("address unavailable");
+    let additional = receiver.addresses.len().saturating_sub(1);
+    if additional == 0 {
+        address.to_owned()
+    } else {
+        format!("{address} (+{additional} more)")
+    }
 }
 
 async fn cast_to_target(
@@ -1168,4 +1225,74 @@ async fn send_playlist(
     socket.send(&cmd).await.map_err(|e| e.to_string())?;
     println!("Sent playlist command to \"{}\"!", device_name);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use playbridge_cast_core::discovery::ReceiverId;
+
+    fn receiver(id: &str, protocol: ReceiverProtocol, name: &str, addresses: &[&str]) -> Receiver {
+        Receiver {
+            id: ReceiverId(id.to_owned()),
+            protocol,
+            name: name.to_owned(),
+            addresses: addresses
+                .iter()
+                .map(|address| (*address).to_owned())
+                .collect(),
+            port: None,
+            wss_port: None,
+            location: None,
+            uuid: None,
+        }
+    }
+
+    #[test]
+    fn groups_receivers_without_moving_the_selected_device() {
+        let mut receivers = vec![receiver(
+            "dlna:bedroom",
+            ReceiverProtocol::Dlna,
+            "Bedroom TV",
+            &["192.168.1.34"],
+        )];
+        let mut selection = 0;
+
+        upsert_receiver(
+            &mut receivers,
+            receiver(
+                "playbridge:desktop",
+                ReceiverProtocol::PlayBridge,
+                "Desktop",
+                &["192.168.1.32"],
+            ),
+            &mut selection,
+        );
+        upsert_receiver(
+            &mut receivers,
+            receiver(
+                "google_cast:speaker",
+                ReceiverProtocol::GoogleCast,
+                "Bedroom Speaker",
+                &["192.168.1.17"],
+            ),
+            &mut selection,
+        );
+
+        assert_eq!(receivers[0].protocol, ReceiverProtocol::PlayBridge);
+        assert_eq!(receivers[1].protocol, ReceiverProtocol::Dlna);
+        assert_eq!(receivers[2].protocol, ReceiverProtocol::GoogleCast);
+        assert_eq!(receivers[selection].id.0, "dlna:bedroom");
+    }
+
+    #[test]
+    fn address_summary_prefers_ipv4_and_compacts_alternatives() {
+        let receiver = receiver(
+            "playbridge:desktop",
+            ReceiverProtocol::PlayBridge,
+            "Desktop",
+            &["fe80::1%en0", "192.168.1.32", "fdeb::2"],
+        );
+        assert_eq!(address_summary(&receiver), "192.168.1.32 (+2 more)");
+    }
 }
