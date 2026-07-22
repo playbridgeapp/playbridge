@@ -360,7 +360,11 @@ async fn discover_ssdp(
         ..SsdpConfig::default()
     };
     let enrich_timeout = timeout.min(Duration::from_secs(3));
-    let http = match Client::builder().timeout(enrich_timeout).build() {
+    let http = match Client::builder()
+        .timeout(enrich_timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
         Ok(client) => client,
         Err(failure) => {
             if wants_dlna {

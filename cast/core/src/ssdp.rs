@@ -164,7 +164,16 @@ fn parse_response(bytes: &[u8], source: SocketAddr) -> Option<DiscoveryHit> {
     });
     let headers: HashMap<_, _> = headers.collect();
     let location = headers.get("location")?.to_owned();
-    url::Url::parse(&location).ok()?;
+    let location_url = url::Url::parse(&location).ok()?;
+    if location_url.scheme() != "http"
+        || location_url.host().and_then(|host| match host {
+            url::Host::Ipv4(address) => Some(std::net::IpAddr::V4(address)),
+            url::Host::Ipv6(address) => Some(std::net::IpAddr::V6(address)),
+            url::Host::Domain(_) => None,
+        }) != Some(source.ip())
+    {
+        return None;
+    }
     let search_target = headers.get("st").cloned();
     let protocol = if search_target
         .as_deref()
@@ -226,5 +235,31 @@ mod tests {
         let source = "192.0.2.1:1900".parse().unwrap();
         assert!(parse_response(b"HTTP/1.1 200 OK\r\nST: foo\r\n\r\n", source).is_none());
         assert!(parse_response(b"HTTP/1.1 200 OK\r\nLOCATION: nope\r\n\r\n", source).is_none());
+    }
+
+    #[test]
+    fn rejects_locations_not_owned_by_the_ssdp_responder() {
+        let source = "192.0.2.1:1900".parse().unwrap();
+        assert!(
+            parse_response(
+                b"HTTP/1.1 200 OK\r\nLOCATION: http://127.0.0.1/admin\r\n\r\n",
+                source,
+            )
+            .is_none()
+        );
+        assert!(
+            parse_response(
+                b"HTTP/1.1 200 OK\r\nLOCATION: http://receiver.example/device.xml\r\n\r\n",
+                source,
+            )
+            .is_none()
+        );
+        assert!(
+            parse_response(
+                b"HTTP/1.1 200 OK\r\nLOCATION: https://192.0.2.1/device.xml\r\n\r\n",
+                source,
+            )
+            .is_none()
+        );
     }
 }

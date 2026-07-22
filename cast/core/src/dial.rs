@@ -1,3 +1,4 @@
+use futures_util::StreamExt;
 use reqwest::{Client, StatusCode, header::HeaderMap};
 use roxmltree::Document;
 use url::Url;
@@ -36,7 +37,7 @@ impl DialDevice {
             .get("application-url")
             .and_then(|value| value.to_str().ok())
             .and_then(|value| Url::parse(location).ok()?.join(value).ok());
-        let xml = response.text().await?;
+        let xml = response_text_limited(response, "DIAL device description").await?;
         let document = Document::parse(&xml)
             .map_err(|error| CastError::Protocol(format!("invalid DIAL description: {error}")))?;
         let field = |name: &str| {
@@ -137,7 +138,35 @@ async fn checked_text(response: reqwest::Response, operation: &'static str) -> R
             status: response.status(),
         });
     }
-    Ok(response.text().await?)
+    response_text_limited(response, operation).await
+}
+
+async fn response_text_limited(
+    response: reqwest::Response,
+    operation: &'static str,
+) -> Result<String> {
+    const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
+    {
+        return Err(CastError::Protocol(format!(
+            "{operation} response is too large"
+        )));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+            return Err(CastError::Protocol(format!(
+                "{operation} response is too large"
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| CastError::Protocol(format!("invalid {operation} encoding: {error}")))
 }
 
 #[cfg(test)]
@@ -213,5 +242,20 @@ mod tests {
                 .contains("running")
         );
         client.stop("PlayBridge").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_dial_descriptions() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/device.xml"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 256 * 1024 + 1]))
+            .mount(&server)
+            .await;
+
+        let error = DialDevice::fetch(&format!("{}/device.xml", server.uri()), &Client::new())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("response is too large"));
     }
 }
