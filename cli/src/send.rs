@@ -1094,7 +1094,7 @@ async fn cast_to_playbridge(
     device_uuid: &str,
     media_url: &str,
 ) -> Result<SecureWebSocket, String> {
-    let endpoint = format!("wss://{address}:{wss_port}");
+    let endpoint = playbridge_cast_core::net::wss_endpoint(address, wss_port);
 
     // Try stored credentials first
     if let Some(creds) = PlaybridgeCredentials::load(device_uuid) {

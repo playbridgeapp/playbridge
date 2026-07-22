@@ -46,12 +46,7 @@ impl PlayBridgeReceiver {
     }
 
     pub fn websocket_url(&self, address: &str) -> String {
-        let host = if address.starts_with('[') || !address.contains(':') {
-            address.to_owned()
-        } else {
-            format!("[{}]", address.replace('%', "%25"))
-        };
-        format!("wss://{host}:{}/", self.preferred_port())
+        crate::net::wss_endpoint(address, self.preferred_port())
     }
 }
 

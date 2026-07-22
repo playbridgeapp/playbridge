@@ -63,12 +63,15 @@ pub async fn run_google_cast(arguments: &[String]) -> Result<(), String> {
         if remaining.is_zero() {
             return Err("Google Cast receiver did not return status before the timeout".into());
         }
-        let message = tokio::time::timeout(
+        let message = match tokio::time::timeout(
             remaining.min(Duration::from_millis(750)),
             channel.read_message(),
         )
         .await
-        .map_err(|_| "Google Cast status request timed out".to_owned())??;
+        {
+            Ok(result) => result?,
+            Err(_) => continue,
+        };
         if message.namespace == NS_HEARTBEAT {
             channel.handle_heartbeat(&message).await?;
             continue;

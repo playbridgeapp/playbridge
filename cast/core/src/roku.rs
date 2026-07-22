@@ -23,7 +23,10 @@ pub struct RokuClient {
 
 impl RokuClient {
     pub fn new(address: &str, port: u16, timeout: Duration) -> Result<Self> {
-        let base_url = Url::parse(&format!("http://{address}:{port}/"))?;
+        let base_url = Url::parse(&format!(
+            "http://{}:{port}/",
+            crate::net::host_for_url(address)
+        ))?;
         let http = Client::builder().timeout(timeout).build()?;
         Ok(Self { http, base_url })
     }
@@ -187,6 +190,15 @@ fn video_format(url: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_ipv6_base_urls() {
+        let global = RokuClient::new("2001:db8::1", DEFAULT_ECP_PORT, Duration::from_secs(1));
+        assert_eq!(
+            global.unwrap().base_url.as_str(),
+            "http://[2001:db8::1]:8060/"
+        );
+    }
 
     #[test]
     fn parses_roku_player_status_units() {

@@ -10,6 +10,7 @@ pub mod dial;
 pub mod discovery;
 pub mod hls;
 pub mod native_discovery;
+pub mod net;
 pub mod playbridge;
 pub mod roku;
 pub mod secure_ws;

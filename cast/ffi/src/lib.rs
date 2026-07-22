@@ -3,7 +3,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc,
+        mpsc::{self, SyncSender, TrySendError},
     },
     time::Duration,
 };
@@ -73,10 +73,13 @@ impl DiscoveryScanner {
                 let runtime = match tokio::runtime::Runtime::new() {
                     Ok(runtime) => runtime,
                     Err(error) => {
-                        let _ = sender.send(ReceiverEvent::Error {
-                            protocol: Protocol::PlayBridge,
-                            message: error.to_string(),
-                        });
+                        let _ = forward_event(
+                            &sender,
+                            ReceiverEvent::Error {
+                                protocol: Protocol::PlayBridge,
+                                message: error.to_string(),
+                            },
+                        );
                         return;
                     }
                 };
@@ -93,7 +96,7 @@ impl DiscoveryScanner {
                             }
                             event = stream.next() => match event {
                                 Some(event) => {
-                                    if sender.send(event.into()).is_err() {
+                                    if !forward_event(&sender, event.into()) {
                                         stream.cancel();
                                         break;
                                     }
@@ -123,6 +126,13 @@ impl DiscoveryScanner {
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
+    }
+}
+
+fn forward_event(sender: &SyncSender<ReceiverEvent>, event: ReceiverEvent) -> bool {
+    match sender.try_send(event) {
+        Ok(()) | Err(TrySendError::Full(_)) => true,
+        Err(TrySendError::Disconnected(_)) => false,
     }
 }
 
@@ -412,5 +422,27 @@ mod tests {
         let scanner = DiscoveryScanner::new(Vec::new(), 30_000).unwrap();
         scanner.cancel();
         assert!(scanner.next_event(200).is_none());
+    }
+
+    #[test]
+    fn full_event_queue_drops_events_without_blocking_the_worker() {
+        let (sender, _receiver) = mpsc::sync_channel(1);
+        let event = ReceiverEvent::Started {
+            protocol: Protocol::Dlna,
+        };
+        assert!(forward_event(&sender, event.clone()));
+        assert!(forward_event(&sender, event));
+    }
+
+    #[test]
+    fn disconnected_event_queue_stops_the_worker() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        assert!(!forward_event(
+            &sender,
+            ReceiverEvent::Started {
+                protocol: Protocol::Dlna,
+            }
+        ));
     }
 }

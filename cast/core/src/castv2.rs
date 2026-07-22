@@ -330,7 +330,7 @@ impl CastChannel {
             .map_err(|e| format!("Failed to build native TLS connector: {e}"))?;
 
         let connector = tokio_native_tls::TlsConnector::from(builder);
-        let addr = format!("{address}:{port}");
+        let addr = crate::net::socket_endpoint(address, port);
         let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr))
             .await
             .map_err(|_| format!("Timed out connecting to Chromecast at {addr}"))?
@@ -627,6 +627,10 @@ pub async fn cast_media_session_with_strategy(
         )
         .await
         {
+            if msg.namespace == NS_HEARTBEAT {
+                channel.handle_heartbeat(&msg).await?;
+                continue;
+            }
             if msg.namespace == NS_RECEIVER {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
                     if v["type"] == "RECEIVER_STATUS" {
@@ -694,6 +698,10 @@ pub async fn cast_media_session_with_strategy(
                 tokio::time::timeout(std::time::Duration::from_secs(1), channel.read_message())
                     .await
             {
+                if msg.namespace == NS_HEARTBEAT {
+                    channel.handle_heartbeat(&msg).await?;
+                    continue;
+                }
                 if msg.namespace == NS_RECEIVER {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
                         if v["type"] == "RECEIVER_STATUS" {
