@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  stream-proxy-rust:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ghcr.io/playbridgeapp/playbridge-stream-proxy:latest
+    container_name: stream-proxy-rust
+    ports:
+      - "8888:8888"
+    environment:
+      - PORT=8888
+      - ADDRESS=0.0.0.0
+      - API_PASSWORD=playbridge_token
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8888/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s

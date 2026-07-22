@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlayBridge Stream Proxy (Rust) — MediaFlow & Stateful Link Builder</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 24px; }
+  h1 { font-size: 1.4rem; margin-bottom: 16px; color: #58a6ff; }
+  label { display: block; font-size: 0.85rem; color: #8b949e; margin-bottom: 4px; }
+  input, textarea { width: 100%; background: #161b22; border: 1px solid #30363d; color: #c9d1d9; border-radius: 6px; padding: 10px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.85rem; }
+  textarea { min-height: 160px; resize: vertical; }
+  input:focus, textarea:focus { outline: none; border-color: #58a6ff; }
+  .row { margin-bottom: 12px; }
+  .row-inline { display: flex; gap: 12px; margin-bottom: 12px; }
+  .row-inline > div { flex: 1; }
+  button { background: #238636; color: #fff; border: none; border-radius: 6px; padding: 10px 20px; font-size: 0.9rem; cursor: pointer; }
+  button:hover { background: #2ea043; }
+  button.secondary { background: #30363d; }
+  button.secondary:hover { background: #484f58; }
+  .output-box { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 12px; margin-top: 8px; word-break: break-all; font-size: 0.8rem; line-height: 1.5; min-height: 44px; color: #7ee787; position: relative; }
+  .output-box .copy-btn { position: absolute; top: 8px; right: 8px; background: #30363d; border: none; color: #c9d1d9; padding: 4px 10px; border-radius: 4px; font-size: 0.75rem; cursor: pointer; }
+  .output-box .copy-btn:hover { background: #484f58; }
+  .error { color: #f85149; }
+  video { width: 100%; max-height: 70vh; background: #000; border-radius: 6px; margin-top: 12px; }
+  .section { margin-bottom: 20px; }
+  .section-title { font-size: 0.95rem; color: #c9d1d9; margin-bottom: 8px; font-weight: 600; }
+  .hint { font-size: 0.75rem; color: #484f58; margin-top: 4px; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .copy-label { color: #8b949e; font-size: 0.8rem; margin-top: 14px; }
+  #playerSection { display: none; }
+  .tag { display: inline-block; background: #1f6feb22; color: #58a6ff; border: 1px solid #1f6feb44; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem; margin-right: 4px; }
+  .tag.secure { background: #23863622; color: #7ee787; border-color: #23863644; }
+  .tag.aes { background: #a371f722; color: #d2a8ff; border-color: #a371f744; }
+  .parsed-headers { margin-top: 8px; }
+  .parsed-headers .hdr { display: inline-block; background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 2px 8px; font-size: 0.7rem; margin: 2px; }
+  .parsed-headers .hdr .k { color: #79c0ff; }
+  .parsed-headers .hdr .v { color: #a5d6ff; }
+</style>
+</head>
+<body>
+
+<h1>🔒 PlayBridge Stream Proxy — MediaFlow & Stateful Link Builder</h1>
+
+<div class="section">
+  <div class="section-title">Proxy Server Configuration</div>
+  <div class="row-inline">
+    <div>
+      <label for="proxyHost">Host</label>
+      <input id="proxyHost" value="127.0.0.1">
+    </div>
+    <div>
+      <label for="proxyPort">Port</label>
+      <input id="proxyPort" value="8888">
+    </div>
+    <div>
+      <label for="proxyPassword">Password (Token)</label>
+      <input id="proxyPassword" value="" placeholder="Optional API password">
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">Paste cURL Command</div>
+  <label for="curlInput">Copy from browser DevTools → Network → Copy as cURL</label>
+  <textarea id="curlInput" placeholder="curl 'https://example.com/stream.m3u8' \
+  -H 'User-Agent: Mozilla/5.0' \
+  -H 'Referer: https://example.com/' \
+  -H 'Authorization: Bearer secret_debrid_token'"></textarea>
+  <div class="hint">Headers and stream URLs are protected via Stateful Memory Sessions or AES-256 MediaFlow Tokens. Unencrypted base64 URLs are disabled.</div>
+  <div class="btn-row">
+    <button onclick="buildProxyUrl()">Generate Secure Proxy URLs</button>
+    <button class="secondary" onclick="clearAll()">Clear</button>
+  </div>
+</div>
+
+<div class="section" id="resultSection" style="display:none">
+  <div class="section-title">1. Stateful Proxy URL <span class="tag secure">🔒 Stored in RAM</span></div>
+  <div class="output-box" id="proxyUrlOutput">
+    <button class="copy-btn" onclick="copyText(currentProxyUrl, this)">Copy Stateful URL</button>
+    <span id="proxyUrlText"></span>
+  </div>
+
+  <div class="section-title" style="margin-top:16px;">2. MediaFlow AES-256 Encrypted URL <span class="tag aes">🔐 Encrypted Token</span></div>
+  <div class="output-box" id="encryptedUrlOutput">
+    <button class="copy-btn" onclick="copyText(currentEncryptedUrl, this)">Copy Encrypted URL</button>
+    <span id="encryptedUrlText"></span>
+  </div>
+
+  <div class="parsed-headers" id="parsedHeaders"></div>
+
+  <div class="btn-row" style="margin-top:14px">
+    <button onclick="playInPage('stateful')">▶ Play Stateful Stream</button>
+    <button class="secondary" onclick="playInPage('encrypted')">▶ Play Encrypted Stream</button>
+    <button class="secondary" onclick="openInBrowser()">Open Stateful URL in Browser</button>
+  </div>
+
+  <div class="copy-label">Copy Terminal Command (Stateful)</div>
+  <div class="btn-row">
+    <button class="secondary" onclick="copyFor('curl', this)">Copy curl</button>
+    <button class="secondary" onclick="copyFor('mpv', this)">Copy mpv</button>
+    <button class="secondary" onclick="copyFor('vlc', this)">Copy VLC</button>
+    <button class="secondary" onclick="copyFor('ffplay', this)">Copy ffplay</button>
+  </div>
+</div>
+
+<div class="section" id="playerSection">
+  <div class="section-title">Player <span id="hlsBadge" style="font-size:0.7rem; font-weight:400;"></span> <span id="dashBadge" style="font-size:0.7rem; font-weight:400;"></span></div>
+  <video id="videoPlayer" controls crossorigin="anonymous"></video>
+  <div class="hint" id="playerHint"></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script src="https://cdn.jsdelivr.net/npm/dashjs@latest/dist/dash.all.min.js"></script>
+<script>
+let currentProxyUrl = '';
+let currentEncryptedUrl = '';
+let currentOriginalUrl = '';
+let currentHeaders = {};
+let hlsInstance = null;
+let dashPlayer = null;
+const STORAGE_KEY = 'pb-proxy-rust-demo-state-v2';
+
+(function initHostPort() {
+  if (window.location.hostname) {
+    document.getElementById('proxyHost').value = window.location.hostname;
+  }
+  if (window.location.port) {
+    document.getElementById('proxyPort').value = window.location.port;
+  }
+})();
+
+function parseCurl(curlStr) {
+  const lines = curlStr.trim().replace(/\\\s*\n/g, ' ').trim();
+  const urlMatch = lines.match(/curl\s+(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  if (!urlMatch) return null;
+  const url = urlMatch[1] || urlMatch[2] || urlMatch[3];
+
+  const headers = {};
+  const headerRegex = /-H\s+(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+  let m;
+  while ((m = headerRegex.exec(lines)) !== null) {
+    const hdr = m[1] || m[2] || m[3];
+    const colonIdx = hdr.indexOf(':');
+    if (colonIdx > 0) {
+      const key = hdr.substring(0, colonIdx).trim();
+      const val = hdr.substring(colonIdx + 1).trim();
+      if (key && val) headers[key] = val;
+    }
+  }
+
+  return { url, headers };
+}
+
+async function fnRegisterProxy(url, headers, host, port, password) {
+  const queryStr = password ? `?token=${encodeURIComponent(password)}` : '';
+  const registerEndpoint = `http://${host}:${port}/register${queryStr}`;
+
+  const reqHeaders = { 'Content-Type': 'application/json' };
+  if (password) {
+    reqHeaders['Authorization'] = `Bearer ${password}`;
+  }
+
+  const response = await fetch(registerEndpoint, {
+    method: 'POST',
+    headers: reqHeaders,
+    body: JSON.stringify({ url, headers })
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Registration failed (${response.status}): ${errText}`);
+  }
+
+  return await response.json();
+}
+
+async function buildProxyUrl() {
+  const curlStr = document.getElementById('curlInput').value;
+  if (!curlStr.trim()) {
+    showError('Paste a cURL command first.');
+    return;
+  }
+
+  const parsed = parseCurl(curlStr);
+  if (!parsed) {
+    showError('Could not parse cURL command. Make sure it starts with "curl".');
+    return;
+  }
+
+  currentOriginalUrl = parsed.url;
+  currentHeaders = parsed.headers;
+
+  const host = document.getElementById('proxyHost').value.trim() || '127.0.0.1';
+  const port = document.getElementById('proxyPort').value.trim() || '8888';
+  const password = document.getElementById('proxyPassword').value.trim();
+
+  try {
+    const res = await fnRegisterProxy(parsed.url, parsed.headers, host, port, password);
+    currentProxyUrl = res.proxy_url;
+    currentEncryptedUrl = res.encrypted_url;
+
+    document.getElementById('proxyUrlText').textContent = currentProxyUrl;
+    document.getElementById('encryptedUrlText').textContent = currentEncryptedUrl;
+    document.getElementById('resultSection').style.display = 'block';
+
+    renderParsedHeaders(parsed.headers);
+    saveDraft();
+    clearError();
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+function renderParsedHeaders(headers) {
+  const hdrDiv = document.getElementById('parsedHeaders');
+  let hdrHtml = `<span class="tag secure">🔒 Stateful Session</span> <span class="tag aes">🔐 MediaFlow AES-256</span> <span class="tag">${Object.keys(headers).length} headers registered</span> `;
+  for (const [k, v] of Object.entries(headers)) {
+    const shortV = v.length > 40 ? v.substring(0, 40) + '…' : v;
+    hdrHtml += `<span class="hdr"><span class="k">${esc(k)}</span>: <span class="v">${esc(shortV)}</span></span> `;
+  }
+  hdrDiv.innerHTML = hdrHtml;
+}
+
+function playInPage(mode = 'stateful') {
+  const targetUrl = mode === 'encrypted' ? currentEncryptedUrl : currentProxyUrl;
+  const video = document.getElementById('videoPlayer');
+  const section = document.getElementById('playerSection');
+  section.style.display = 'block';
+
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  if (dashPlayer) { dashPlayer.destroy(); dashPlayer = null; }
+
+  const isHls = targetUrl.includes('.m3u8') || currentOriginalUrl.includes('.m3u8');
+  const isDash = targetUrl.includes('.mpd') || currentOriginalUrl.includes('.mpd') || currentOriginalUrl.includes('manifest/dash');
+
+  if (isHls && Hls.isSupported()) {
+    hlsInstance = new Hls({ enableWorker: true, lowLatencyMode: true });
+    hlsInstance.loadSource(targetUrl);
+    hlsInstance.attachMedia(video);
+    hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+    hlsInstance.on(Hls.Events.ERROR, (_, data) => {
+      document.getElementById('playerHint').textContent = `HLS error: ${data.type} — ${data.details}`;
+      if (data.fatal) hlsInstance.destroy();
+    });
+    document.getElementById('playerHint').textContent = `Streaming (${mode}): ${currentOriginalUrl}`;
+  } else if (isHls && video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = targetUrl;
+    video.play().catch(() => {});
+    document.getElementById('playerHint').textContent = `Streaming HLS (native): ${currentOriginalUrl}`;
+  } else if (isDash && typeof dashjs !== 'undefined') {
+    dashPlayer = dashjs.MediaPlayer().create();
+    dashPlayer.initialize(video, targetUrl, true);
+    document.getElementById('playerHint').textContent = `Streaming DASH via dash.js: ${currentOriginalUrl}`;
+  } else {
+    video.src = targetUrl;
+    video.play().catch(() => {});
+    document.getElementById('playerHint').textContent = `Streaming: ${currentOriginalUrl}`;
+  }
+
+  section.scrollIntoView({ behavior: 'smooth' });
+}
+
+function openInBrowser() {
+  window.open(currentProxyUrl, '_blank');
+}
+
+function shellQuote(value) {
+  return "'" + value.replace(/'/g, "'\"'\"'") + "'";
+}
+
+function copyFor(destination, button) {
+  copyText(`${destination} ${shellQuote(currentProxyUrl)}`, button);
+}
+
+async function writeClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error('Clipboard copy was rejected by the browser');
+}
+
+async function copyText(text, button) {
+  if (!text) return;
+  const originalLabel = button.textContent;
+  try {
+    await writeClipboard(text);
+    button.textContent = 'Copied!';
+  } catch (_) {
+    button.textContent = 'Copy failed';
+  }
+  setTimeout(() => button.textContent = originalLabel, 1500);
+}
+
+function saveDraft() {
+  const state = {
+    proxyHost: document.getElementById('proxyHost').value,
+    proxyPort: document.getElementById('proxyPort').value,
+    proxyPassword: document.getElementById('proxyPassword').value,
+    curlInput: document.getElementById('curlInput').value,
+    currentProxyUrl,
+    currentEncryptedUrl,
+    currentOriginalUrl,
+    currentHeaders,
+  };
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch (_) {}
+}
+
+function restoreDraft() {
+  let state;
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (!saved) return;
+    state = JSON.parse(saved);
+  } catch (_) {
+    return;
+  }
+
+  if (!state || typeof state !== 'object') return;
+
+  for (const id of ['proxyHost', 'proxyPort', 'proxyPassword', 'curlInput']) {
+    if (typeof state[id] === 'string' && state[id]) {
+      document.getElementById(id).value = state[id];
+    }
+  }
+
+  currentProxyUrl = typeof state.currentProxyUrl === 'string' ? state.currentProxyUrl : '';
+  currentEncryptedUrl = typeof state.currentEncryptedUrl === 'string' ? state.currentEncryptedUrl : '';
+  currentOriginalUrl = typeof state.currentOriginalUrl === 'string' ? state.currentOriginalUrl : '';
+  currentHeaders = state.currentHeaders && typeof state.currentHeaders === 'object' ? state.currentHeaders : {};
+
+  if (currentProxyUrl) {
+    document.getElementById('proxyUrlText').textContent = currentProxyUrl;
+    document.getElementById('encryptedUrlText').textContent = currentEncryptedUrl;
+    document.getElementById('resultSection').style.display = 'block';
+    renderParsedHeaders(currentHeaders);
+  }
+}
+
+function clearAll() {
+  if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+  if (dashPlayer) { dashPlayer.destroy(); dashPlayer = null; }
+  document.getElementById('curlInput').value = '';
+  document.getElementById('resultSection').style.display = 'none';
+  document.getElementById('playerSection').style.display = 'none';
+  document.getElementById('videoPlayer').src = '';
+  currentProxyUrl = '';
+  currentEncryptedUrl = '';
+  currentOriginalUrl = '';
+  currentHeaders = {};
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch (_) {}
+}
+
+function showError(msg) {
+  const el = document.getElementById('proxyUrlText');
+  el.textContent = msg;
+  el.classList.add('error');
+  document.getElementById('resultSection').style.display = 'block';
+}
+
+function clearError() {
+  const el = document.getElementById('proxyUrlText');
+  el.classList.remove('error');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+(function() {
+  const badge = document.getElementById('hlsBadge');
+  const video = document.createElement('video');
+  const nativeHls = video.canPlayType('application/vnd.apple.mpegurl');
+  if (nativeHls) {
+    badge.innerHTML = '<span class="tag">HLS: native (Safari)</span>';
+  } else if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+    badge.innerHTML = '<span class="tag">HLS: hls.js</span>';
+  } else {
+    badge.innerHTML = '<span class="tag" style="color:#f85149; border-color:#f8514944; background:#f8514922;">HLS: not supported</span>';
+  }
+
+  const dashBadge = document.getElementById('dashBadge');
+  if (typeof dashjs !== 'undefined') {
+    dashBadge.innerHTML = '<span class="tag">DASH: dash.js</span>';
+  } else {
+    dashBadge.innerHTML = '<span class="tag" style="color:#f85149; border-color:#f8514944; background:#f8514922;">DASH: not supported</span>';
+  }
+})();
+
+restoreDraft();
+for (const id of ['proxyHost', 'proxyPort', 'proxyPassword', 'curlInput']) {
+  document.getElementById(id).addEventListener('input', saveDraft);
+}
+</script>
+
+</body>
+</html>
