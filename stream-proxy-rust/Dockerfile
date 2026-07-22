@@ -3,10 +3,10 @@ FROM rust:1.82-alpine AS builder
 RUN apk add --no-cache musl-dev ffmpeg-dev pkgconfig
 
 WORKDIR /usr/src/app
-COPY Cargo.toml Cargo.lock ./
-COPY stream-proxy-rust ./stream-proxy-rust
 
-RUN cargo build --release -p stream-proxy-rust
+COPY . .
+
+RUN cargo build --release --bin stream-proxy-rust
 
 FROM alpine:latest
 

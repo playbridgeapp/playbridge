@@ -15,40 +15,37 @@ permissions:
 
 jobs:
   check:
-    name: stream-proxy
+    name: stream-proxy-rust
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
-        working-directory: ./stream-proxy-dart
+        working-directory: ./stream-proxy-rust
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
             relevant:
-              - 'stream-proxy-dart/**'
+              - 'stream-proxy-rust/**'
               - '.github/workflows/stream_proxy_pr.yml'
 
       - uses: actions/checkout@v4
         if: steps.filter.outputs.relevant == 'true'
 
-      - uses: dart-lang/setup-dart@v1
+      - name: Install Rust Toolchain
         if: steps.filter.outputs.relevant == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        if: steps.filter.outputs.relevant == 'true'
+        uses: Swatinem/rust-cache@v2
         with:
-          sdk: stable
+          workspaces: ./stream-proxy-rust
 
-      - name: Install dependencies
+      - name: Run cargo test
         if: steps.filter.outputs.relevant == 'true'
-        run: dart pub get
-
-      - name: Verify formatting
-        if: steps.filter.outputs.relevant == 'true'
-        run: dart format --output=none --set-exit-if-changed .
-
-      - name: Analyze project source
-        if: steps.filter.outputs.relevant == 'true'
-        run: dart analyze --fatal-infos
+        run: cargo test
 
       - name: Set up Docker Buildx
         if: steps.filter.outputs.relevant == 'true'
@@ -58,6 +55,6 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         uses: docker/build-push-action@v6
         with:
-          context: ./stream-proxy-dart
-          file: ./stream-proxy-dart/Dockerfile
+          context: ./stream-proxy-rust
+          file: ./stream-proxy-rust/Dockerfile
           push: false
