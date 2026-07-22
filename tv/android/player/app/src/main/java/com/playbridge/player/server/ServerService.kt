@@ -196,8 +196,7 @@ class ServerService : Service() {
             startForeground(
                 NOTIFICATION_ID,
                 createNotification(),
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             )
         } else {
             startForeground(NOTIFICATION_ID, createNotification())
@@ -877,13 +876,13 @@ class ServerService : Service() {
      * Launches an activity from the background (e.g. when the app is not in the foreground).
      *
      * Strategy:
-     * 1. startActivity() — works because we have a `mediaPlayback` foreground service, which
-     *    qualifies for the Android 10+ background-launch exemption.
+     * 1. startActivity() — while a phone is connected, [OverlayWindowHelper] keeps a tiny
+     *    application-overlay window visible so Android permits the background activity launch.
      * 2. fullScreenIntent notification — belt-and-suspenders fallback for strict OEMs that
      *    ignore the exemption. Android pops this as an overlay over whatever is on screen.
      */
     private fun launchActivityFromBackground(intent: Intent, description: String) {
-        // Attempt 1: direct startActivity (requires mediaPlayback foreground service type)
+        // Attempt 1: direct startActivity using the visible-overlay BAL exemption.
         try {
             startActivity(intent)
             FileLogger.i(TAG, "startActivity succeeded for: $description")

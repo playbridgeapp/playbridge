@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.10.1] — 2026-07-22 (versionCode 225)
+
+### Fixed
+- **Android 15 Boot Compatibility**: Kept the boot-started receiver server limited to the `connectedDevice` foreground-service type, preventing restricted `mediaPlayback` startup from `BOOT_COMPLETED` while preserving automatic discovery and background casting.
+
 ## Player [0.10.0] — 2026-07-19 (versionCode 224)
 
 ### Added
