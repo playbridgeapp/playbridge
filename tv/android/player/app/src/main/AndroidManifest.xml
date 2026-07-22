@@ -12,7 +12,6 @@
     <!-- Foreground service permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Allows showing a tiny invisible overlay window while phone is connected so that
          startActivity() from the background service is not blocked by Android 14+ BAL rules -->
@@ -213,7 +212,7 @@
         <service
             android:name=".server.ServerService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice|mediaPlayback" />
+            android:foregroundServiceType="connectedDevice" />
 
         <service
             android:name=".player.ExoRendererService"
