@@ -81,7 +81,10 @@ pub fn create_router(config: Config) -> Result<(Router, String, u16), String> {
         .route("/s/*path", get(stateful_proxy_handler))
         .route("/proxy/*path", get(encrypted_proxy_handler))
         .layer(cors)
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
         .with_state(state);
 
     Ok((app, config.address.clone(), config.port))
@@ -101,7 +104,12 @@ async fn auth_middleware(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let path = req.uri().path();
-    if path == "/" || path == "/demo.html" || path == "/health" || path == "/ping" || path.starts_with("/proxy") {
+    if path == "/"
+        || path == "/demo.html"
+        || path == "/health"
+        || path == "/ping"
+        || path.starts_with("/proxy")
+    {
         return Ok(next.run(req).await);
     }
 
@@ -131,7 +139,9 @@ async fn register_handler(
     headers: HeaderMap,
     Json(payload): Json<RegisterRequest>,
 ) -> Result<Json<RegisterResponse>, (StatusCode, String)> {
-    let session = state.session_manager.register(payload.url.clone(), payload.headers.clone());
+    let session = state
+        .session_manager
+        .register(payload.url.clone(), payload.headers.clone());
     let host_str = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -145,7 +155,11 @@ async fn register_handler(
     // Generate MediaFlow-compatible AES-256 encrypted token
     let proxy_data = ProxyData {
         destination: payload.url,
-        request_headers: if payload.headers.is_empty() { None } else { Some(payload.headers) },
+        request_headers: if payload.headers.is_empty() {
+            None
+        } else {
+            Some(payload.headers)
+        },
         exp: None,
         ip: None,
     };
@@ -160,7 +174,10 @@ async fn register_handler(
         host_str, encrypted_token
     );
 
-    info!("[stream-proxy] Registered stateful session {} for host {}", session.id, host_str);
+    info!(
+        "[stream-proxy] Registered stateful session {} for host {}",
+        session.id, host_str
+    );
     Ok(Json(RegisterResponse {
         proxy_url,
         encrypted_url,
@@ -173,7 +190,12 @@ async fn epg_handler(
 ) -> Result<Response, (StatusCode, String)> {
     let uri_str = match query.uri {
         Some(ref u) if !u.trim().is_empty() => u.clone(),
-        _ => return Err((StatusCode::BAD_REQUEST, "Missing 'uri' parameter for EPG".to_string())),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "Missing 'uri' parameter for EPG".to_string(),
+            ))
+        }
     };
 
     if let Some(cached) = state.epg_cache.get(&uri_str) {
@@ -187,7 +209,11 @@ async fn epg_handler(
             .into_response());
     }
 
-    match state.engine.fetch_url_bytes(&uri_str, &HashMap::new()).await {
+    match state
+        .engine
+        .fetch_url_bytes(&uri_str, &HashMap::new())
+        .await
+    {
         Ok(bytes) => {
             state.epg_cache.insert(uri_str, bytes.clone());
             Ok((
@@ -199,7 +225,10 @@ async fn epg_handler(
             )
                 .into_response())
         }
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to fetch EPG: {}", e))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to fetch EPG: {}", e),
+        )),
     }
 }
 
@@ -219,7 +248,12 @@ async fn stateful_proxy_handler(
     let session_id = path_segments[0];
     let session = match state.session_manager.get(session_id) {
         Some(s) => s,
-        None => return Err((StatusCode::FORBIDDEN, "Session expired or invalid".to_string())),
+        None => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Session expired or invalid".to_string(),
+            ))
+        }
     };
 
     let mut target_url = String::new();
@@ -238,8 +272,10 @@ async fn stateful_proxy_handler(
         }
     }
 
-    let forward_headers = filter_upstream_headers(&session.headers, &incoming_headers, &target_url, session_id);
-    let is_hls = target_url.to_lowercase().contains(".m3u8") || req.uri().path().to_lowercase().contains(".m3u8");
+    let forward_headers =
+        filter_upstream_headers(&session.headers, &incoming_headers, &target_url, session_id);
+    let is_hls = target_url.to_lowercase().contains(".m3u8")
+        || req.uri().path().to_lowercase().contains(".m3u8");
 
     if is_hls {
         handle_stateful_hls_playlist(&state, session_id, &target_url, &forward_headers).await
@@ -258,12 +294,22 @@ async fn encrypted_proxy_handler(
 ) -> Result<Response, (StatusCode, String)> {
     let token = match query_params.iter().find(|(k, _)| k == "token") {
         Some((_, val)) if !val.is_empty() => val,
-        _ => return Err((StatusCode::FORBIDDEN, "Missing encrypted token parameter".to_string())),
+        _ => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                "Missing encrypted token parameter".to_string(),
+            ))
+        }
     };
 
     let proxy_data = match state.encryption_handler.decrypt(token, None) {
         Ok(pd) => pd,
-        Err(e) => return Err((StatusCode::FORBIDDEN, format!("Invalid encrypted token: {}", e))),
+        Err(e) => {
+            return Err((
+                StatusCode::FORBIDDEN,
+                format!("Invalid encrypted token: {}", e),
+            ))
+        }
     };
 
     let mut target_url = proxy_data.destination.clone();
@@ -274,9 +320,15 @@ async fn encrypted_proxy_handler(
     }
 
     let session_headers = proxy_data.request_headers.clone().unwrap_or_default();
-    let forward_headers = filter_upstream_headers(&session_headers, &incoming_headers, &target_url, "encrypted");
+    let forward_headers = filter_upstream_headers(
+        &session_headers,
+        &incoming_headers,
+        &target_url,
+        "encrypted",
+    );
 
-    let is_hls = target_url.to_lowercase().contains(".m3u8") || req.uri().path().to_lowercase().contains(".m3u8");
+    let is_hls = target_url.to_lowercase().contains(".m3u8")
+        || req.uri().path().to_lowercase().contains(".m3u8");
 
     if is_hls {
         handle_encrypted_hls_playlist(&state, &target_url, &forward_headers, &proxy_data).await
@@ -296,7 +348,12 @@ async fn handle_stateful_hls_playlist(
             let content = String::from_utf8_lossy(&bytes);
             let base_uri = match Url::parse(target_url) {
                 Ok(u) => u,
-                Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Parse URL error: {}", e))),
+                Err(e) => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Parse URL error: {}", e),
+                    ))
+                }
             };
 
             let password = state.password.clone();
@@ -311,7 +368,13 @@ async fn handle_stateful_hls_playlist(
                     .and_then(|mut s| s.next_back())
                     .unwrap_or("item");
 
-                format!("/s/{}/{}?uri={}&token={}", session_id, filename, urlencoding::encode(resolved_target), password)
+                format!(
+                    "/s/{}/{}?uri={}&token={}",
+                    session_id,
+                    filename,
+                    urlencoding::encode(resolved_target),
+                    password
+                )
             });
 
             Ok((
@@ -341,7 +404,12 @@ async fn handle_encrypted_hls_playlist(
             let content = String::from_utf8_lossy(&bytes);
             let base_uri = match Url::parse(target_url) {
                 Ok(u) => u,
-                Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Parse URL error: {}", e))),
+                Err(e) => {
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Parse URL error: {}", e),
+                    ))
+                }
             };
 
             let rewritten = HlsPlaylistRewriter::rewrite(&content, &base_uri, |resolved_target| {
@@ -403,7 +471,12 @@ async fn handle_segment(
             if is_dash {
                 let bytes = match axum::body::to_bytes(upstream.body, usize::MAX).await {
                     Ok(b) => b,
-                    Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed reading DASH bytes: {}", e))),
+                    Err(e) => {
+                        return Err((
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Failed reading DASH bytes: {}", e),
+                        ))
+                    }
                 };
                 let raw_content = String::from_utf8_lossy(&bytes);
                 let rewritten = DashManifestRewriter::rewrite(&raw_content, Some(&state.password));
@@ -422,19 +495,31 @@ async fn handle_segment(
 
             if let Some(headers_map) = response_builder.headers_mut() {
                 headers_map.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-                headers_map.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=3600"));
+                headers_map.insert(
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("public, max-age=3600"),
+                );
                 for (k, v) in &upstream.headers {
                     headers_map.insert(k.clone(), v.clone());
                 }
             }
 
-            Ok(response_builder.body(upstream.body).unwrap_or_else(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Build response error").into_response()))
+            Ok(response_builder.body(upstream.body).unwrap_or_else(|_| {
+                (StatusCode::INTERNAL_SERVER_ERROR, "Build response error").into_response()
+            }))
         }
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to fetch segment: {}", e))),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to fetch segment: {}", e),
+        )),
     }
 }
 
-fn resolve_target_url(base_spec: &str, relative_segments: &[&str], query_params: &[(String, String)]) -> String {
+fn resolve_target_url(
+    base_spec: &str,
+    relative_segments: &[&str],
+    query_params: &[(String, String)],
+) -> String {
     let base_uri = match Url::parse(base_spec) {
         Ok(u) => u,
         Err(_) => return base_spec.to_string(),
@@ -445,15 +530,23 @@ fn resolve_target_url(base_spec: &str, relative_segments: &[&str], query_params:
     }
 
     let mut resolved = if relative_segments[0] == "_root_" {
-        let mut origin = format!("{}://{}", base_uri.scheme(), base_uri.host_str().unwrap_or(""));
+        let mut origin = format!(
+            "{}://{}",
+            base_uri.scheme(),
+            base_uri.host_str().unwrap_or("")
+        );
         if let Some(port) = base_uri.port() {
             origin.push_str(&format!(":{}", port));
         }
         let rel_path = relative_segments[1..].join("/");
-        Url::parse(&origin).and_then(|u| u.join(&rel_path)).unwrap_or_else(|_| base_uri.clone())
+        Url::parse(&origin)
+            .and_then(|u| u.join(&rel_path))
+            .unwrap_or_else(|_| base_uri.clone())
     } else {
         let rel_path = relative_segments.join("/");
-        base_uri.join(&rel_path).unwrap_or_else(|_| base_uri.clone())
+        base_uri
+            .join(&rel_path)
+            .unwrap_or_else(|_| base_uri.clone())
     };
 
     let mut merged_query: Vec<(String, String)> = Vec::new();
@@ -492,8 +585,6 @@ fn mime_for(path: &str) -> &'static str {
         "video/mp2t"
     } else if lower.contains(".mp4") {
         "video/mp4"
-    } else if lower.contains(".key") {
-        "application/octet-stream"
     } else {
         "application/octet-stream"
     }

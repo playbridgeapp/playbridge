@@ -35,6 +35,12 @@ pub struct SessionManager {
     sessions: Arc<DashMap<String, ProxySession>>,
 }
 
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SessionManager {
     pub fn new() -> Self {
         let manager = Self {
@@ -76,14 +82,19 @@ impl SessionManager {
             loop {
                 timer.tick().await;
                 let max_inactive = Duration::from_secs(600); // 10 minutes
-                let max_age = Duration::from_secs(7200);     // 2 hours
+                let max_age = Duration::from_secs(7200); // 2 hours
 
                 sessions.retain(|id, session| {
                     let inactive = session.last_accessed_at.elapsed();
                     let age = session.created_at.elapsed();
                     let expire = inactive > max_inactive || age > max_age;
                     if expire {
-                        info!("[stream-proxy] Expired session {} (inactive: {}s, age: {}s)", id, inactive.as_secs(), age.as_secs());
+                        info!(
+                            "[stream-proxy] Expired session {} (inactive: {}s, age: {}s)",
+                            id,
+                            inactive.as_secs(),
+                            age.as_secs()
+                        );
                     }
                     !expire
                 });

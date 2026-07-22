@@ -4,7 +4,10 @@ use std::env;
 const DEFAULT_DOCKER_PASSWORD: &str = "CHANGEME";
 
 #[derive(Parser, Debug, Clone)]
-#[command(name = "pb-proxy-rust", about = "PlayBridge Stream Proxy Server in Rust")]
+#[command(
+    name = "pb-proxy-rust",
+    about = "PlayBridge Stream Proxy Server in Rust"
+)]
 pub struct Config {
     #[arg(short = 'p', long, default_value = "8888", env = "PORT")]
     pub port: u16,
@@ -35,7 +38,8 @@ impl Config {
         }
         if trimmed == DEFAULT_DOCKER_PASSWORD {
             return Err(
-                "The default Docker Compose password is not allowed; set a unique password".to_string(),
+                "The default Docker Compose password is not allowed; set a unique password"
+                    .to_string(),
             );
         }
         Ok(trimmed.to_string())
