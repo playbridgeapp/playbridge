@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'dlna_client.dart';
+import 'package:flutter/foundation.dart';
+import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
+
 import 'protocol.dart';
-import 'roku_client.dart';
 import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
 
@@ -26,6 +27,9 @@ abstract class TvTransport {
   /// Credentials emitted when authenticated or paired.
   Stream<TvCredentials> get credentials;
 
+  /// Last capabilities reported by the receiver probe.
+  Map<String, dynamic> get capabilities => const {};
+
   /// Whether this protocol uses SAS pairing (6-digit PIN handshake).
   bool get supportsPairing => false;
   Stream<String> get sasCode => const Stream.empty();
@@ -46,22 +50,22 @@ abstract class TvTransport {
   Future<void> disconnect();
 
   /// Send a single video payload.
-  bool castVideo(PlayPayload video);
+  Future<bool> castVideo(PlayPayload video);
 
   /// Send a playlist payload.
-  bool castPlaylist(PlaylistPayload playlist);
+  Future<bool> castPlaylist(PlaylistPayload playlist);
 
   /// Send a control command string (e.g. 'play', 'pause', 'toggle', 'seek_forward', 'seek_back', 'seek_to').
-  bool sendControl(String command);
+  Future<bool> sendControl(String command);
 
   /// Request context query update from the receiver.
-  bool sendContextQuery() => false;
+  Future<bool> sendContextQuery() async => false;
 
   /// Jump to specific playlist index.
-  bool playlistJump(int index);
+  Future<bool> playlistJump(int index);
 
   /// Queue an item.
-  bool queueAdd(PlayPayload item);
+  Future<bool> queueAdd(PlayPayload item);
 
   /// Dispose transport resources and subscriptions.
   Future<void> dispose();
@@ -128,46 +132,52 @@ class PlayBridgeTransport extends TvTransport {
   Future<void> disconnect() => _client.disconnect();
 
   @override
-  bool castVideo(PlayPayload video) =>
+  Future<bool> castVideo(PlayPayload video) async =>
       _client.send(senderSingleVideoCommandJson(video));
 
   @override
-  bool castPlaylist(PlaylistPayload playlist) =>
+  Future<bool> castPlaylist(PlaylistPayload playlist) async =>
       _client.send(senderPlaylistCommandJson(playlist));
 
   @override
-  bool sendControl(String command) =>
+  Future<bool> sendControl(String command) async =>
       _client.send(senderControlCommandJson(command));
 
   @override
-  bool sendContextQuery() => _client.send(senderContextQueryJson());
+  Future<bool> sendContextQuery() async =>
+      _client.send(senderContextQueryJson());
 
   @override
-  bool playlistJump(int index) => _client.send(senderPlaylistJumpJson(index));
+  Future<bool> playlistJump(int index) async =>
+      _client.send(senderPlaylistJumpJson(index));
 
   @override
-  bool queueAdd(PlayPayload item) => _client.send(senderQueueAddJson(item));
+  Future<bool> queueAdd(PlayPayload item) async =>
+      _client.send(senderQueueAddJson(item));
 
   @override
   Future<void> dispose() => _client.dispose();
 }
 
-/// Transport implementation for DLNA (UPnP AVTransport & RenderingControl).
-class DlnaTransport extends TvTransport {
-  DlnaTransport({DlnaClient? client}) : _client = client ?? DlnaClient();
+/// Rust-backed transport shared by DLNA, Roku ECP, and Google Cast.
+class RustCastTransport extends TvTransport {
+  RustCastTransport(this.protocol, {rust.CastCoreLibrary? core}) : _core = core;
 
-  final DlnaClient _client;
+  @override
+  final TvProtocol protocol;
+
+  rust.CastCoreLibrary? _core;
+  rust.CastSession? _session;
+  rust.SessionCapabilities? _capabilities;
+  StreamSubscription<rust.CastSessionEvent>? _eventSub;
+  Timer? _pollTimer;
+  bool _polling = false;
+  String? _currentTitle;
+
   final _state = StreamController<SenderConnectionState>.broadcast();
   final _messages = StreamController<String>.broadcast();
   final _credentials = StreamController<TvCredentials>.broadcast();
   SenderConnectionState _current = SenderConnectionState.disconnected;
-  Timer? _pollTimer;
-
-  String? _currentTitle;
-  String _lastPlayState = 'stopped';
-
-  @override
-  TvProtocol get protocol => TvProtocol.dlna;
 
   @override
   Stream<SenderConnectionState> get state => _state.stream;
@@ -185,6 +195,18 @@ class DlnaTransport extends TvTransport {
   bool get supportsPairing => false;
 
   @override
+  Map<String, dynamic> get capabilities => {
+        if (_capabilities case final value?) ...{
+          'load': value.load,
+          'playbackControl': value.playbackControl,
+          'seek': value.seek,
+          'status': value.status,
+          if (value.receiverAppAvailable != null)
+            'receiverAppAvailable': value.receiverAppAvailable,
+        },
+      };
+
+  @override
   Future<void> connect({
     required DiscoveredTv tv,
     required String deviceName,
@@ -192,437 +214,259 @@ class DlnaTransport extends TvTransport {
     String? token,
     String? expectedPin,
   }) async {
-    _current = SenderConnectionState.connecting;
-    _state.add(_current);
-
-    final location = tv.location;
-    if (location == null || location.isEmpty) {
-      _current = SenderConnectionState.error;
-      _state.add(_current);
-      return;
-    }
-
-    final ok = await _client.loadDescription(location);
-    if (ok) {
-      _current = SenderConnectionState.connected;
-      _state.add(_current);
-    } else {
-      _current = SenderConnectionState.error;
-      _state.add(_current);
-    }
-  }
-
-  @override
-  Future<void> disconnect() async {
-    _stopPollTimer();
-    _current = SenderConnectionState.disconnected;
-    _state.add(_current);
-  }
-
-  @override
-  bool castVideo(PlayPayload video) {
-    if (!isConnected) return false;
-    final url = video.url;
-    if (url.isEmpty) return false;
-    final title = video.hasTitle() ? video.title : 'Media';
-    _currentTitle = title;
-    _lastPlayState = 'playing';
-
-    unawaited(_startPlayback(url, title));
-    return true;
-  }
-
-  Future<void> _startPlayback(String url, String title) async {
-    final okSet = await _client.setAvTransportUri(url, title: title);
-    if (!okSet) return;
-    final okPlay = await _client.play();
-    if (okPlay) {
-      _startPollTimer();
+    await _closeSession(sendDisconnected: false);
+    _setState(SenderConnectionState.connecting);
+    try {
+      final core = _core ??= rust.CastCoreLibrary.open();
+      final session = await core.connect(
+        rust.ReceiverEndpoint(
+          protocol: _rustProtocol(protocol),
+          addresses: tv.allAddresses,
+          port: tv.port,
+          location: tv.location,
+        ),
+      );
+      _session = session;
+      final connected = await session.connected;
+      _capabilities = connected.capabilities;
+      _eventSub = session.events.listen(
+        _onSessionEvent,
+        onError: (Object error, StackTrace stackTrace) {
+          _emitError('session', error);
+          _setState(SenderConnectionState.error);
+        },
+        onDone: () {
+          if (identical(_session, session)) {
+            _session = null;
+            _capabilities = null;
+            _stopPolling();
+            _setState(SenderConnectionState.disconnected);
+          }
+        },
+      );
+      _setState(SenderConnectionState.connected);
+    } on Object catch (error) {
+      _emitError('connect', error);
+      await _closeSession(sendDisconnected: false);
+      _setState(SenderConnectionState.error);
     }
   }
 
   @override
-  bool castPlaylist(PlaylistPayload playlist) {
-    if (playlist.items.isEmpty) return false;
-    return castVideo(playlist.items.first);
-  }
+  Future<void> disconnect() => _closeSession(sendDisconnected: true);
 
   @override
-  bool sendControl(String command) {
-    if (!isConnected) return false;
-
-    if (command.startsWith('seek_to:')) {
-      final ms = int.tryParse(command.substring('seek_to:'.length));
-      if (ms != null) {
-        unawaited(_client.seek(ms));
-        return true;
-      }
+  Future<bool> castVideo(PlayPayload video) async {
+    final session = _session;
+    if (!isConnected || session == null || video.url.isEmpty) return false;
+    if (_capabilities?.load == false) {
+      _emitError(
+        'load',
+        'This receiver does not have a compatible media receiver app',
+      );
       return false;
     }
-
-    switch (command) {
-      case 'play':
-      case 'resume':
-        _lastPlayState = 'playing';
-        unawaited(_client.play());
-        _startPollTimer();
-        return true;
-      case 'pause':
-        _lastPlayState = 'paused';
-        unawaited(_client.pause());
-        return true;
-      case 'toggle':
-        if (_lastPlayState == 'paused') {
-          _lastPlayState = 'playing';
-          unawaited(_client.play());
-          _startPollTimer();
-        } else {
-          _lastPlayState = 'paused';
-          unawaited(_client.pause());
-        }
-        return true;
-      case 'stop':
-        _stopPollTimer();
-        _lastPlayState = 'stopped';
-        unawaited(_client.stop());
-        _emitStatus('stopped', 0, 0);
-        return true;
-      case 'seek_forward':
-        unawaited(_seekRelative(10000));
-        return true;
-      case 'seek_back':
-        unawaited(_seekRelative(-10000));
-        return true;
-      default:
-        return false;
+    try {
+      final title =
+          video.hasTitle() && video.title.isNotEmpty ? video.title : 'Media';
+      await session.load(rust.MediaRequest(url: video.url, title: title));
+      _currentTitle = title;
+      _startPolling();
+      await _pollStatus();
+      return true;
+    } on Object catch (error) {
+      _emitError('load', error);
+      return false;
     }
   }
 
   @override
-  bool playlistJump(int index) => false;
-
-  @override
-  bool queueAdd(PlayPayload item) => false;
-
-  Future<void> _seekRelative(int deltaMs) async {
-    final pos = await _client.getPositionInfo();
-    if (pos == null) return;
-    final target = (pos.positionMs + deltaMs)
-        .clamp(0, pos.durationMs > 0 ? pos.durationMs : 24 * 3600 * 1000);
-    await _client.seek(target);
-  }
-
-  void _startPollTimer() {
-    _stopPollTimer();
-    _pollTimer = Timer.periodic(
-        const Duration(seconds: 1), (_) => unawaited(_pollStatus()));
-  }
-
-  void _stopPollTimer() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-  }
-
-  Future<void> _pollStatus() async {
-    if (!isConnected) return;
-    final stateStr = await _client.getTransportState();
-    final posInfo = await _client.getPositionInfo();
-
-    var playState = 'playing';
-    if (stateStr != null) {
-      final upper = stateStr.toUpperCase();
-      if (upper.contains('PAUSED')) {
-        playState = 'paused';
-      } else if (upper.contains('STOPPED') || upper.contains('NO_MEDIA')) {
-        playState = 'stopped';
-        _stopPollTimer();
-      } else if (upper.contains('TRANSITIONING')) {
-        playState = 'buffering';
-      }
-    }
-
-    _lastPlayState = playState;
-    final posMs = posInfo?.positionMs ?? 0;
-    final durMs = posInfo?.durationMs ?? 0;
-
-    _emitStatus(playState, posMs, durMs);
-  }
-
-  void _emitStatus(String state, int posMs, int durMs) {
-    if (_messages.isClosed) return;
-    final json = jsonEncode({
-      'type': 'status',
-      'state': state,
-      'position': posMs,
-      'duration': durMs,
-      if (_currentTitle != null) 'title': _currentTitle,
-    });
-    _messages.add(json);
-  }
-
-  @override
-  Future<void> dispose() async {
-    _stopPollTimer();
-    _client.close();
-    await _state.close();
-    await _messages.close();
-    await _credentials.close();
-  }
-}
-
-/// Transport implementation for Roku ECP (External Control Protocol).
-class RokuTransport extends TvTransport {
-  RokuTransport({RokuClient? client}) : _client = client ?? RokuClient();
-
-  final RokuClient _client;
-  final _state = StreamController<SenderConnectionState>.broadcast();
-  final _messages = StreamController<String>.broadcast();
-  final _credentials = StreamController<TvCredentials>.broadcast();
-  SenderConnectionState _current = SenderConnectionState.disconnected;
-  Timer? _pollTimer;
-  String? _currentTitle;
-  String _lastPlayState = 'stopped';
-
-  @override
-  TvProtocol get protocol => TvProtocol.roku;
-
-  @override
-  Stream<SenderConnectionState> get state => _state.stream;
-
-  @override
-  SenderConnectionState get currentState => _current;
-
-  @override
-  Stream<String> get messages => _messages.stream;
-
-  @override
-  Stream<TvCredentials> get credentials => _credentials.stream;
-
-  @override
-  bool get supportsPairing => false;
-
-  @override
-  Future<void> connect({
-    required DiscoveredTv tv,
-    required String deviceName,
-    required String deviceUUID,
-    String? token,
-    String? expectedPin,
-  }) async {
-    _current = SenderConnectionState.connecting;
-    _state.add(_current);
-
-    final port = tv.port ?? 8060;
-    _client.init(tv.host, port: port);
-
-    final ok = await _client.queryDeviceInfo();
-    if (ok || tv.host.isNotEmpty) {
-      _current = SenderConnectionState.connected;
-      _state.add(_current);
-    } else {
-      _current = SenderConnectionState.error;
-      _state.add(_current);
-    }
-  }
-
-  @override
-  Future<void> disconnect() async {
-    _stopPollTimer();
-    _current = SenderConnectionState.disconnected;
-    _state.add(_current);
-  }
-
-  @override
-  bool castVideo(PlayPayload video) {
-    if (!isConnected) return false;
-    final url = video.url;
-    if (url.isEmpty) return false;
-    final title = video.hasTitle() ? video.title : 'Media';
-    _currentTitle = title;
-    _lastPlayState = 'playing';
-
-    unawaited(_startPlayback(url, title));
-    return true;
-  }
-
-  Future<void> _startPlayback(String url, String title) async {
-    final ok = await _client.launchMedia(url, title: title);
-    if (ok) {
-      _startPollTimer();
-    }
-  }
-
-  @override
-  bool castPlaylist(PlaylistPayload playlist) {
+  Future<bool> castPlaylist(PlaylistPayload playlist) async {
     if (playlist.items.isEmpty) return false;
     return castVideo(playlist.items.first);
   }
 
   @override
-  bool sendControl(String command) {
-    if (!isConnected) return false;
-
-    switch (command) {
-      case 'play':
-      case 'resume':
-        _lastPlayState = 'playing';
-        unawaited(_client.play());
-        _startPollTimer();
-        return true;
-      case 'pause':
-        _lastPlayState = 'paused';
-        unawaited(_client.pause());
-        return true;
-      case 'toggle':
-        if (_lastPlayState == 'paused') {
-          _lastPlayState = 'playing';
-          unawaited(_client.play());
-          _startPollTimer();
-        } else {
-          _lastPlayState = 'paused';
-          unawaited(_client.pause());
+  Future<bool> sendControl(String command) async {
+    final session = _session;
+    if (!isConnected || session == null) return false;
+    try {
+      if (command.startsWith('seek_to:')) {
+        if (_capabilities?.seek == false) return false;
+        final milliseconds = int.tryParse(command.substring('seek_to:'.length));
+        if (milliseconds == null) return false;
+        await session
+            .seek(Duration(milliseconds: milliseconds.clamp(0, 1 << 62)));
+      } else {
+        switch (command) {
+          case 'play':
+          case 'resume':
+            await session.play();
+          case 'pause':
+            await session.pause();
+          case 'toggle':
+            final status = await session.status();
+            if (status.state == rust.PlaybackState.paused) {
+              await session.play();
+            } else {
+              await session.pause();
+            }
+          case 'stop':
+            await session.stop();
+            _stopPolling();
+            _emitStatus(const rust.PlaybackStatus(
+              state: rust.PlaybackState.stopped,
+              position: Duration.zero,
+              duration: Duration.zero,
+            ));
+          case 'seek_forward':
+            await session.relativeSeek(forward: true);
+          case 'seek_back':
+            await session.relativeSeek(forward: false);
+          default:
+            return false;
         }
-        return true;
-      case 'stop':
-        _stopPollTimer();
-        _lastPlayState = 'stopped';
-        unawaited(_client.stop());
-        _emitStatus('stopped', 0, 0);
-        return true;
-      case 'seek_forward':
-        unawaited(_client.seekForward());
-        return true;
-      case 'seek_back':
-        unawaited(_client.seekRewind());
-        return true;
-      default:
-        return false;
+      }
+      if (command != 'stop') {
+        _startPolling();
+        await _pollStatus();
+      }
+      return true;
+    } on Object catch (error) {
+      _emitError(command, error);
+      return false;
     }
   }
 
   @override
-  bool playlistJump(int index) => false;
+  Future<bool> playlistJump(int index) async => false;
 
   @override
-  bool queueAdd(PlayPayload item) => false;
+  Future<bool> queueAdd(PlayPayload item) async => false;
 
-  void _startPollTimer() {
-    _stopPollTimer();
-    _pollTimer = Timer.periodic(
-        const Duration(seconds: 1), (_) => unawaited(_pollStatus()));
+  void _onSessionEvent(rust.CastSessionEvent event) {
+    switch (event) {
+      case rust.CastSessionStatus(:final status):
+        _emitStatus(status);
+        if (status.state == rust.PlaybackState.stopped ||
+            status.state == rust.PlaybackState.finished) {
+          _stopPolling();
+        }
+      case rust.CastSessionError(:final operation, :final message):
+        _emitError(operation ?? 'session', message);
+      case rust.CastSessionFinished():
+        _session = null;
+        _capabilities = null;
+        _stopPolling();
+        _setState(SenderConnectionState.disconnected);
+      case rust.CastSessionConnected() || rust.CastSessionOperation():
+        break;
+    }
   }
 
-  void _stopPollTimer() {
+  void _startPolling() {
+    if (_pollTimer != null || _capabilities?.status == false) return;
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => unawaited(_pollStatus()),
+    );
+  }
+
+  void _stopPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
   }
 
   Future<void> _pollStatus() async {
-    if (!isConnected) return;
-    final status = await _client.getMediaPlayerStatus();
-    if (status == null) return;
-
-    var playState = 'playing';
-    final upper = status.state.toUpperCase();
-    if (upper == 'PAUSE') {
-      playState = 'paused';
-    } else if (upper == 'NONE' || upper == 'CLOSE') {
-      playState = 'stopped';
-      _stopPollTimer();
-    } else if (upper == 'BUFFER') {
-      playState = 'buffering';
+    final session = _session;
+    if (_polling || session == null || !isConnected) return;
+    _polling = true;
+    try {
+      await session.status();
+    } on Object catch (error) {
+      debugPrint('[tv-transport] ${protocol.label} status failed: $error');
+    } finally {
+      _polling = false;
     }
-
-    _lastPlayState = playState;
-    _emitStatus(playState, status.positionMs, status.durationMs);
   }
 
-  void _emitStatus(String state, int posMs, int durMs) {
+  void _emitStatus(rust.PlaybackStatus status) {
     if (_messages.isClosed) return;
-    final json = jsonEncode({
+    _messages.add(jsonEncode({
       'type': 'status',
-      'state': state,
-      'position': posMs,
-      'duration': durMs,
+      'state': status.state.name,
+      'position': status.position.inMilliseconds,
+      'duration': status.duration.inMilliseconds,
       if (_currentTitle != null) 'title': _currentTitle,
-    });
-    _messages.add(json);
+    }));
+  }
+
+  void _emitError(String operation, Object error) {
+    debugPrint('[tv-transport] ${protocol.label} $operation failed: $error');
+    if (!_messages.isClosed) {
+      _messages.add(jsonEncode({
+        'type': 'error',
+        'operation': operation,
+        'message': error.toString(),
+      }));
+    }
+  }
+
+  void _setState(SenderConnectionState value) {
+    _current = value;
+    if (!_state.isClosed) _state.add(value);
+  }
+
+  Future<void> _closeSession({required bool sendDisconnected}) async {
+    _stopPolling();
+    await _eventSub?.cancel();
+    _eventSub = null;
+    final session = _session;
+    _session = null;
+    _capabilities = null;
+    if (session != null && !session.isDisposed) {
+      try {
+        await session.disconnect();
+      } on Object {
+        // The receiver may already have closed the native worker.
+      }
+      session.dispose();
+    }
+    if (sendDisconnected) _setState(SenderConnectionState.disconnected);
   }
 
   @override
   Future<void> dispose() async {
-    _stopPollTimer();
-    _client.close();
+    await _closeSession(sendDisconnected: false);
     await _state.close();
     await _messages.close();
     await _credentials.close();
   }
 }
 
-class GoogleCastTransport extends TvTransport {
-  final _state = StreamController<SenderConnectionState>.broadcast();
-  final _messages = StreamController<String>.broadcast();
-  final _credentials = StreamController<TvCredentials>.broadcast();
-  SenderConnectionState _current = SenderConnectionState.disconnected;
-
-  @override
-  TvProtocol get protocol => TvProtocol.googleCast;
-
-  @override
-  Stream<SenderConnectionState> get state => _state.stream;
-
-  @override
-  SenderConnectionState get currentState => _current;
-
-  @override
-  Stream<String> get messages => _messages.stream;
-
-  @override
-  Stream<TvCredentials> get credentials => _credentials.stream;
-
-  @override
-  bool get supportsPairing => false;
-
-  @override
-  Future<void> connect({
-    required DiscoveredTv tv,
-    required String deviceName,
-    required String deviceUUID,
-    String? token,
-    String? expectedPin,
-  }) async {
-    _current = SenderConnectionState.connected;
-    _state.add(_current);
-  }
-
-  @override
-  Future<void> disconnect() async {
-    _current = SenderConnectionState.disconnected;
-    _state.add(_current);
-  }
-
-  @override
-  bool castVideo(PlayPayload video) => false;
-
-  @override
-  bool castPlaylist(PlaylistPayload playlist) => false;
-
-  @override
-  bool sendControl(String command) => false;
-
-  @override
-  bool playlistJump(int index) => false;
-
-  @override
-  bool queueAdd(PlayPayload item) => false;
-
-  @override
-  Future<void> dispose() async {
-    await _state.close();
-    await _messages.close();
-    await _credentials.close();
-  }
+class DlnaTransport extends RustCastTransport {
+  DlnaTransport({rust.CastCoreLibrary? core})
+      : super(TvProtocol.dlna, core: core);
 }
+
+class RokuTransport extends RustCastTransport {
+  RokuTransport({rust.CastCoreLibrary? core})
+      : super(TvProtocol.roku, core: core);
+}
+
+class GoogleCastTransport extends RustCastTransport {
+  GoogleCastTransport({rust.CastCoreLibrary? core})
+      : super(TvProtocol.googleCast, core: core);
+}
+
+rust.ReceiverProtocol _rustProtocol(TvProtocol protocol) => switch (protocol) {
+      TvProtocol.dlna => rust.ReceiverProtocol.dlna,
+      TvProtocol.roku => rust.ReceiverProtocol.roku,
+      TvProtocol.googleCast => rust.ReceiverProtocol.googleCast,
+      TvProtocol.playBridge => throw ArgumentError(
+          'PlayBridge sessions use the paired WebSocket transport',
+        ),
+    };
 
 /// Factory to instantiate appropriate transport for a receiver protocol.
 abstract class TvTransportFactory {

@@ -91,12 +91,11 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     final paired = controller.pairedTvs;
     // Paired TVs not currently visible on the network (so the user can still
     // reconnect / forget them).
-    final discoveredUuids = discovered
-        .where((device) => device.protocol == TvProtocol.playBridge)
-        .map((device) => device.uuid)
-        .toSet();
-    final offlinePaired =
-        paired.where((p) => !discoveredUuids.contains(p.uuid)).toList();
+    final discoveredIdentities =
+        discovered.map((device) => device.identityKey).toSet();
+    final offlinePaired = paired
+        .where((p) => !discoveredIdentities.contains(p.identityKey))
+        .toList();
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(28, 24, 28, 28),
@@ -186,26 +185,44 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
           ],
         ],
         const SizedBox(height: 20),
-        _SectionLabel(
-          icon: Icons.wifi_tethering,
-          label: 'On your network',
+        Row(
+          children: [
+            const Expanded(
+              child: _SectionLabel(
+                icon: Icons.wifi_tethering,
+                label: 'On your network',
+              ),
+            ),
+            TextButton.icon(
+              onPressed: controller.isScanning ? null : controller.rescan,
+              icon: controller.isScanning
+                  ? const SizedBox.square(
+                      dimension: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh, size: 18),
+              label: Text(controller.isScanning ? 'Scanning…' : 'Rescan'),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         if (discovered.isEmpty)
           _EmptyHint(
-            text: paired.isEmpty
-                ? 'Searching for TVs… make sure the TV app is open on the same network.'
-                : 'No TVs visible right now. Searching…',
+            text: controller.isScanning
+                ? 'Searching for TVs on your network…'
+                : 'No TVs found. Make sure the receiver is available, then select Rescan.',
           )
         else
           ...discovered.map((tv) => _DiscoveredRow(
                 tv: tv,
-                paired: tv.protocol == TvProtocol.playBridge &&
-                    controller.pairedTvs.any((p) => p.uuid == tv.uuid),
+                paired: controller.pairedTvs.any(
+                  (saved) => saved.identityKey == tv.identityKey,
+                ),
                 connectable: controller.canConnectTo(tv),
                 busy: _isBusy(controller.state),
                 onTap: () => controller.connectToDiscovered(tv),
-                onForget: () => controller.forget(tv.uuid),
+                onForget: () =>
+                    controller.forget(tv.uuid, protocol: tv.protocol),
               )),
         if (offlinePaired.isNotEmpty) ...[
           const SizedBox(height: 24),
@@ -215,7 +232,8 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                 tv: tv,
                 busy: _isBusy(controller.state),
                 onReconnect: () => controller.reconnect(tv),
-                onForget: () => controller.forget(tv.uuid),
+                onForget: () =>
+                    controller.forget(tv.uuid, protocol: tv.protocol),
               )),
         ],
         const SizedBox(height: 28),
@@ -414,6 +432,7 @@ class _StatusBanner extends StatelessWidget {
 
   (IconData, Color, String) _describe() {
     final name = activeTv?.name;
+    final protocol = activeTv?.protocol.label;
     return switch (state) {
       SenderConnectionState.disconnected => (
           Icons.tv_off,
@@ -443,7 +462,9 @@ class _StatusBanner extends StatelessWidget {
       SenderConnectionState.connected => (
           Icons.cast_connected,
           Colors.greenAccent,
-          name != null ? 'Connected to $name.' : 'Connected.',
+          name != null && protocol != null
+              ? 'Connected to $name via $protocol.'
+              : 'Connected.',
         ),
       SenderConnectionState.pairingDenied => (
           Icons.block,
@@ -492,11 +513,17 @@ class _DiscoveredRow extends StatelessWidget {
     final secure = tv.wssPort != null;
     final connectionLabel = switch (tv.protocol) {
       TvProtocol.playBridge => secure ? 'encrypted' : 'insecure',
-      TvProtocol.dlna || TvProtocol.roku || TvProtocol.googleCast => 'playback support next',
+      TvProtocol.dlna ||
+      TvProtocol.roku ||
+      TvProtocol.googleCast =>
+        'playback support next',
     };
     final subtitleColor = switch (tv.protocol) {
       TvProtocol.playBridge => secure ? Colors.greenAccent : Colors.amberAccent,
-      TvProtocol.dlna || TvProtocol.roku || TvProtocol.googleCast => Colors.white54,
+      TvProtocol.dlna ||
+      TvProtocol.roku ||
+      TvProtocol.googleCast =>
+        Colors.white54,
     };
     return _Row(
       leadingIcon: tv.protocol == TvProtocol.roku ? Icons.live_tv : Icons.tv,
@@ -547,7 +574,7 @@ class _PairedRow extends StatelessWidget {
     return _Row(
       leadingIcon: Icons.tv_off,
       title: tv.name,
-      subtitle: 'Last seen ${tv.host}',
+      subtitle: '${tv.protocol.label}  ·  Last seen ${tv.host}',
       subtitleColor: Colors.white38,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,

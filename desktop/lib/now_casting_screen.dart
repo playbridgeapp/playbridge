@@ -174,6 +174,10 @@ class _NowCastingCardState extends State<NowCastingCard> {
   Widget build(BuildContext context) {
     final c = widget.controller;
     final title = c.castingTitle ?? 'Now playing';
+    final activeTv = c.activeTv;
+    final receiverLabel = activeTv == null
+        ? c.activeProtocol.label
+        : '${activeTv.name} · ${activeTv.protocol.label}';
     final playing = c.remoteState == 'playing';
     final dur = c.remoteDurationMs.toDouble();
     final hasDuration = dur > 0;
@@ -196,11 +200,30 @@ class _NowCastingCardState extends State<NowCastingCard> {
                   size: 18, color: Colors.tealAccent),
               const SizedBox(width: 10),
               Expanded(
-                child: Text(title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      receiverLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.55),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),

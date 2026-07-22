@@ -8,7 +8,6 @@ import 'package:flutter/foundation.dart';
 import 'bridge_paths.dart';
 import 'extension_request_debug_log.dart';
 import 'player_controller.dart';
-import 'tv_discovery.dart';
 import 'tv_sender_controller.dart';
 
 /// Local IPC endpoint the browser extension reaches **via the native-messaging
@@ -235,14 +234,22 @@ class ExtensionBridge {
           _send(socket, {'type': 'result', 'ok': false});
           break;
         }
-        final ok = _sender.isConnected
-            ? _sender.sendControl(action)
-            : _localControl(action);
-        _send(socket, {
-          'type': 'result',
-          'ok': ok,
-          'target': _sender.isConnected ? 'tv' : 'local',
-        });
+        if (_sender.isConnected) {
+          unawaited(() async {
+            final ok = await _sender.sendControl(action);
+            _send(socket, {
+              'type': 'result',
+              'ok': ok,
+              'target': 'tv',
+            });
+          }());
+        } else {
+          _send(socket, {
+            'type': 'result',
+            'ok': _localControl(action),
+            'target': 'local',
+          });
+        }
         break;
       default:
         _send(socket, {'type': 'result', 'ok': false, 'error': 'unknown cmd'});
@@ -335,8 +342,9 @@ class ExtensionBridge {
             'name': d.name,
             'protocol': d.protocol.name,
             'connectable': _sender.canConnectTo(d),
-            'paired': d.protocol == TvProtocol.playBridge &&
-                _sender.pairedTvs.any((p) => p.uuid == d.uuid),
+            'paired': _sender.pairedTvs.any(
+              (saved) => saved.identityKey == d.identityKey,
+            ),
           },
       ],
     };

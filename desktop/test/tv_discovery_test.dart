@@ -1,7 +1,22 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 import 'package:playbridge_desktop/tv_discovery.dart';
 
 void main() {
+  test('keeps a location-only DLNA receiver connectable', () {
+    final device = discoveredTvFromRust(const ReceiverInfo(
+      id: 'dlna:receiver-1',
+      protocol: ReceiverProtocol.dlna,
+      name: 'Living Room TV',
+      addresses: [],
+      location: 'http://192.0.2.12:1400/device.xml',
+    ));
+
+    expect(device, isNotNull);
+    expect(device!.host, isEmpty);
+    expect(device.location, 'http://192.0.2.12:1400/device.xml');
+  });
+
   test('Rust PlayBridge result wins over matching Bonsoir fallback', () {
     final rust = _device(
       uuid: 'receiver-1',
@@ -48,6 +63,19 @@ void main() {
       TvProtocol.playBridge,
       TvProtocol.dlna,
     ]);
+  });
+
+  test('device identity key includes protocol', () {
+    final playBridge = _device(uuid: 'shared', name: 'Native');
+    final dlna = _device(
+      uuid: 'shared',
+      name: 'DLNA',
+      protocol: TvProtocol.dlna,
+    );
+
+    expect(playBridge.identityKey, 'playBridge:shared');
+    expect(dlna.identityKey, 'dlna:shared');
+    expect(playBridge.identityKey, isNot(dlna.identityKey));
   });
 }
 

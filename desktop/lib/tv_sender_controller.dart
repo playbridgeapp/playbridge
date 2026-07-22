@@ -37,12 +37,14 @@ class TvSenderController extends ChangeNotifier {
   TvTransport _transport;
 
   StreamSubscription<List<DiscoveredTv>>? _devSub;
+  StreamSubscription<bool>? _scanSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
   StreamSubscription<TvCredentials>? _credSub;
   StreamSubscription<String>? _msgSub;
   StreamSubscription<String>? _sasSub;
 
   List<DiscoveredTv> _discoveredRaw = const [];
+  bool _isScanning = false;
   SenderConnectionState _state = SenderConnectionState.disconnected;
   DiscoveredTv? _pending; // target of the in-flight / most recent connect
   TvRecord? _activeTv;
@@ -67,6 +69,7 @@ class TvSenderController extends ChangeNotifier {
       .toList(growable: false);
 
   List<TvRecord> get pairedTvs => _store.tvs;
+  bool get isScanning => _isScanning;
   SenderConnectionState get state => _state;
   TvRecord? get activeTv => _activeTv;
   bool get isConnected => _state == SenderConnectionState.connected;
@@ -114,9 +117,15 @@ class TvSenderController extends ChangeNotifier {
       _discoveredRaw = d;
       notifyListeners();
     });
+    _scanSub = _discovery.scanning.listen((isScanning) {
+      _isScanning = isScanning;
+      notifyListeners();
+    });
     _bindTransportSubscriptions();
     await _discovery.start();
   }
+
+  Future<void> rescan() => _discovery.rescan();
 
   void _bindTransportSubscriptions() {
     _stateSub?.cancel();
@@ -133,9 +142,9 @@ class TvSenderController extends ChangeNotifier {
     });
   }
 
-  void _ensureTransportFor(TvProtocol protocol) {
+  Future<void> _ensureTransportFor(TvProtocol protocol) async {
     if (_transport.protocol == protocol) return;
-    unawaited(_transport.dispose());
+    await _transport.dispose();
     _transport = TvTransportFactory.create(protocol);
     _bindTransportSubscriptions();
   }
@@ -157,8 +166,8 @@ class TvSenderController extends ChangeNotifier {
       return;
     }
     _pending = tv;
-    _ensureTransportFor(tv.protocol);
-    final known = _store.byUuid(tv.uuid);
+    await _ensureTransportFor(tv.protocol);
+    final known = _store.byIdentity(tv.protocol, tv.uuid);
     await _transport.connect(
       tv: tv,
       deviceName: _identity.deviceName,
@@ -171,18 +180,19 @@ class TvSenderController extends ChangeNotifier {
   /// Reconnect a known TV by token (e.g. from the paired list). Prefers a fresh
   /// discovered address when the TV is currently visible (survives DHCP changes).
   Future<void> reconnect(TvRecord tv) async {
-    final fresh = _discoveredByUuid(tv.uuid);
+    final fresh = _discoveredByIdentity(tv.protocol, tv.uuid);
     final target = DiscoveredTv(
       uuid: tv.uuid,
-      protocol: TvProtocol.playBridge,
+      protocol: tv.protocol,
       name: tv.name,
       host: fresh?.host ?? tv.host,
+      addresses: fresh?.allAddresses ?? tv.allAddresses,
       port: fresh?.port ?? tv.port,
       wssPort: fresh?.wssPort ?? tv.wssPort,
-      location: null,
+      location: fresh?.location ?? tv.location,
     );
     _pending = target;
-    _ensureTransportFor(target.protocol);
+    await _ensureTransportFor(target.protocol);
     await _transport.connect(
       tv: target,
       deviceName: _identity.deviceName,
@@ -194,18 +204,25 @@ class TvSenderController extends ChangeNotifier {
 
   Future<void> disconnect() => _transport.disconnect();
 
-  Future<void> forget(String uuid) async {
-    if (_activeTv?.uuid == uuid) await _transport.disconnect();
-    await _store.forget(uuid);
-    if (_activeTv?.uuid == uuid) _activeTv = null;
+  Future<void> forget(
+    String uuid, {
+    TvProtocol protocol = TvProtocol.playBridge,
+  }) async {
+    if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
+      await _transport.disconnect();
+    }
+    await _store.forget(uuid, protocol: protocol);
+    if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
+      _activeTv = null;
+    }
     notifyListeners();
   }
 
   // ─── Casting ──────────────────────────────────────────────────────────────
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
-  bool castVideo(PlayPayload video) {
-    final ok = _transport.castVideo(video);
+  Future<bool> castVideo(PlayPayload video) async {
+    final ok = await _transport.castVideo(video);
     if (ok) {
       _castingTitle =
           video.hasTitle() && video.title.isNotEmpty ? video.title : null;
@@ -214,7 +231,7 @@ class TvSenderController extends ChangeNotifier {
     return ok;
   }
 
-  bool castPlaylist(PlaylistPayload playlist) =>
+  Future<bool> castPlaylist(PlaylistPayload playlist) =>
       _transport.castPlaylist(playlist);
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
@@ -224,7 +241,12 @@ class TvSenderController extends ChangeNotifier {
     var targetUrl = url;
     var targetHeaders = headers;
 
-    if (castRouteThroughProxy && isConnected && _activeTv != null) {
+    final requiresHeaderProxy = headers != null &&
+        headers.isNotEmpty &&
+        _transport.protocol != TvProtocol.playBridge;
+    if ((castRouteThroughProxy || requiresHeaderProxy) &&
+        isConnected &&
+        _activeTv != null) {
       final active = _activeTv!;
       final lanIp = await _localLanIp(active.host);
       if (lanIp != null) {
@@ -245,31 +267,31 @@ class TvSenderController extends ChangeNotifier {
     if (title != null && title.isNotEmpty) {
       payload.title = title;
     }
-    return castVideo(payload);
+    return await castVideo(payload);
   }
 
-  bool queueAdd(PlayPayload item) => _transport.queueAdd(item);
+  Future<bool> queueAdd(PlayPayload item) => _transport.queueAdd(item);
 
-  bool playlistJump(int index) => _transport.playlistJump(index);
+  Future<bool> playlistJump(int index) => _transport.playlistJump(index);
 
-  bool sendControl(String command) => _transport.sendControl(command);
+  Future<bool> sendControl(String command) => _transport.sendControl(command);
 
-  bool sendContextQuery() => _transport.sendContextQuery();
+  Future<bool> sendContextQuery() => _transport.sendContextQuery();
 
   // Transport for the active cast (command strings match the TV's InputHandler).
-  bool playPause() => sendControl('toggle');
-  bool seekForward() => sendControl('seek_forward');
-  bool seekBack() => sendControl('seek_back');
+  Future<bool> playPause() => sendControl('toggle');
+  Future<bool> seekForward() => sendControl('seek_forward');
+  Future<bool> seekBack() => sendControl('seek_back');
 
   /// Absolute seek to [positionMs]. The TV's InputHandler accepts
   /// `seek_to:<positionMs>` (used by the phone seekbar too).
-  bool seekToMs(int positionMs) =>
+  Future<bool> seekToMs(int positionMs) =>
       sendControl('seek_to:${positionMs < 0 ? 0 : positionMs}');
 
   /// Stop playback on the TV and clear the local now-casting snapshot so the
   /// card disappears immediately (don't wait for a TV status that may not come).
-  bool stopCast() {
-    final ok = sendControl('stop');
+  Future<bool> stopCast() async {
+    final ok = await sendControl('stop');
     _clearNowCasting();
     return ok;
   }
@@ -293,7 +315,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   /// Jump to a playlist item on the TV by index.
-  bool playlistJumpTo(int index) => playlistJump(index);
+  Future<bool> playlistJumpTo(int index) => playlistJump(index);
 
   /// Cast a **local file** to the connected TV: serve it over LAN HTTP (tokenized
   /// + IP-restricted, D4) and point the TV's player at the URL. Returns false if
@@ -334,7 +356,7 @@ class TvSenderController extends ChangeNotifier {
     }
     if (items.isEmpty) return false;
 
-    final ok = castPlaylist(PlaylistPayload(items: items));
+    final ok = await castPlaylist(PlaylistPayload(items: items));
     if (ok) {
       // Optimistic now-casting snapshot; refined by the TV's status /
       // playlist_status echoes.
@@ -403,20 +425,43 @@ class TvSenderController extends ChangeNotifier {
       case SenderConnectionState.connected:
         final p = _pending;
         if (p != null) {
-          _activeTv = _store.byUuid(p.uuid) ??
-              TvRecord(
-                uuid: p.uuid,
-                name: p.name,
-                host: p.host,
-                port: p.port ?? 0,
-                wssPort: p.wssPort,
-                token: '',
-                certFingerprint: '',
-                lastConnected: DateTime.now(),
-              );
+          final existing = _store.byIdentity(p.protocol, p.uuid);
+          _activeTv = (existing ??
+                  TvRecord(
+                    uuid: p.uuid,
+                    protocol: p.protocol,
+                    name: p.name,
+                    host: p.host,
+                    addresses: p.allAddresses,
+                    port: p.port ?? 0,
+                    wssPort: p.wssPort,
+                    location: p.location,
+                    token: '',
+                    certFingerprint: '',
+                    capabilities: _transport.capabilities,
+                    lastConnected: DateTime.now(),
+                  ))
+              .copyWith(
+            name: p.name,
+            host: p.host,
+            addresses: p.allAddresses,
+            port: p.port,
+            wssPort: p.wssPort,
+            location: p.location,
+            capabilities: _transport.capabilities,
+            lastConnected: DateTime.now(),
+          );
           if (_transport.protocol == TvProtocol.playBridge) {
             _store.markConnected(p.uuid,
-                host: p.host, port: p.port, wssPort: p.wssPort);
+                protocol: p.protocol,
+                host: p.host,
+                addresses: p.allAddresses,
+                port: p.port,
+                wssPort: p.wssPort,
+                location: p.location,
+                capabilities: _transport.capabilities);
+          } else {
+            _store.upsert(_activeTv!);
           }
         }
         break;
@@ -441,15 +486,18 @@ class TvSenderController extends ChangeNotifier {
     // upsert is keyed by uuid, so this covers both first-pair and token refresh.
     _store.upsert(TvRecord(
       uuid: p.uuid,
+      protocol: p.protocol,
       name: p.name,
       host: p.host,
+      addresses: p.allAddresses,
       port: p.port ?? 0,
       wssPort: p.wssPort,
+      location: p.location,
       token: creds.token,
       certFingerprint: creds.certFingerprint,
       lastConnected: DateTime.now(),
     ));
-    _activeTv = _store.byUuid(p.uuid);
+    _activeTv = _store.byIdentity(p.protocol, p.uuid);
     notifyListeners();
   }
 
@@ -507,9 +555,9 @@ class TvSenderController extends ChangeNotifier {
     }
   }
 
-  DiscoveredTv? _discoveredByUuid(String uuid) {
+  DiscoveredTv? _discoveredByIdentity(TvProtocol protocol, String uuid) {
     for (final d in _discoveredRaw) {
-      if (d.uuid == uuid) return d;
+      if (d.protocol == protocol && d.uuid == uuid) return d;
     }
     return null;
   }
@@ -517,6 +565,7 @@ class TvSenderController extends ChangeNotifier {
   @override
   void dispose() {
     _devSub?.cancel();
+    _scanSub?.cancel();
     _stateSub?.cancel();
     _credSub?.cancel();
     _msgSub?.cancel();

@@ -18,6 +18,245 @@ enum ReceiverProtocol {
         'GoogleCast' => ReceiverProtocol.googleCast,
         _ => throw FormatException('Unknown receiver protocol: $value'),
       };
+
+  String get sessionWireName => switch (this) {
+        ReceiverProtocol.dlna => 'dlna',
+        ReceiverProtocol.roku => 'roku',
+        ReceiverProtocol.googleCast => 'google_cast',
+        ReceiverProtocol.playBridge ||
+        ReceiverProtocol.dial =>
+          throw StateError(
+            '$name is not supported by native receiver sessions',
+          ),
+      };
+
+  static ReceiverProtocol fromSessionWire(String value) => switch (value) {
+        'dlna' => ReceiverProtocol.dlna,
+        'roku' => ReceiverProtocol.roku,
+        'google_cast' => ReceiverProtocol.googleCast,
+        _ => throw FormatException('Unknown session protocol: $value'),
+      };
+}
+
+final class ReceiverEndpoint {
+  ReceiverEndpoint({
+    required this.protocol,
+    required List<String> addresses,
+    this.port,
+    this.location,
+  }) : addresses = List.unmodifiable(addresses);
+
+  factory ReceiverEndpoint.fromReceiverInfo(ReceiverInfo receiver) =>
+      ReceiverEndpoint(
+        protocol: receiver.protocol,
+        addresses: receiver.addresses,
+        port: receiver.port,
+        location: receiver.location,
+      );
+
+  final ReceiverProtocol protocol;
+  final List<String> addresses;
+  final int? port;
+  final String? location;
+
+  Map<String, Object?> toJson() {
+    if (protocol != ReceiverProtocol.dlna &&
+        (addresses.isEmpty ||
+            addresses.every((address) => address.trim().isEmpty))) {
+      throw StateError('A receiver endpoint requires at least one address');
+    }
+    return {
+      'protocol': protocol.sessionWireName,
+      'addresses': addresses,
+      if (port != null) 'port': port,
+      if (location != null) 'location': location,
+    };
+  }
+}
+
+final class MediaRequest {
+  const MediaRequest({required this.url, this.title, this.metadata});
+
+  final String url;
+  final String? title;
+  final String? metadata;
+
+  Map<String, Object?> toJson() => {
+        'url': url,
+        if (title != null) 'title': title,
+        if (metadata != null) 'metadata': metadata,
+      };
+}
+
+final class SessionCapabilities {
+  const SessionCapabilities({
+    required this.load,
+    required this.playbackControl,
+    required this.seek,
+    required this.status,
+    this.receiverAppAvailable,
+  });
+
+  final bool load;
+  final bool playbackControl;
+  final bool seek;
+  final bool status;
+  final bool? receiverAppAvailable;
+
+  factory SessionCapabilities.fromJson(Map<String, Object?> json) =>
+      SessionCapabilities(
+        load: json['load'] as bool? ?? false,
+        playbackControl: json['playback_control'] as bool? ?? false,
+        seek: json['seek'] as bool? ?? false,
+        status: json['status'] as bool? ?? false,
+        receiverAppAvailable: json['receiver_app_available'] as bool?,
+      );
+}
+
+enum PlaybackState {
+  buffering,
+  playing,
+  paused,
+  stopped,
+  finished,
+  unknown;
+
+  static PlaybackState fromWire(String? value) => switch (value) {
+        'buffering' => PlaybackState.buffering,
+        'playing' => PlaybackState.playing,
+        'paused' => PlaybackState.paused,
+        'stopped' => PlaybackState.stopped,
+        'finished' => PlaybackState.finished,
+        _ => PlaybackState.unknown,
+      };
+}
+
+final class PlaybackStatus {
+  const PlaybackStatus({
+    required this.state,
+    required this.position,
+    required this.duration,
+  });
+
+  final PlaybackState state;
+  final Duration position;
+  final Duration duration;
+
+  double get positionSeconds =>
+      position.inMicroseconds / Duration.microsecondsPerSecond;
+  double get durationSeconds =>
+      duration.inMicroseconds / Duration.microsecondsPerSecond;
+
+  factory PlaybackStatus.fromJson(Map<String, Object?> json) => PlaybackStatus(
+        state: PlaybackState.fromWire(json['state'] as String?),
+        position: _secondsToDuration(json['position_seconds']),
+        duration: _secondsToDuration(json['duration_seconds']),
+      );
+}
+
+Duration _secondsToDuration(Object? value) {
+  final seconds = value is num ? value.toDouble() : 0.0;
+  return Duration(
+      microseconds: (seconds * Duration.microsecondsPerSecond).round());
+}
+
+sealed class CastSessionEvent {
+  const CastSessionEvent();
+
+  factory CastSessionEvent.fromJsonString(String source) {
+    final decoded = jsonDecode(source);
+    if (decoded is! Map<String, Object?>) {
+      throw const FormatException('Session event must be a JSON object');
+    }
+    return CastSessionEvent.fromJson(decoded);
+  }
+
+  factory CastSessionEvent.fromJson(Map<String, Object?> json) {
+    final event = json['event'];
+    return switch (event) {
+      'connected' => CastSessionConnected(
+          protocol:
+              ReceiverProtocol.fromSessionWire(json['protocol']! as String),
+          capabilities: SessionCapabilities.fromJson(
+            json['capabilities']! as Map<String, Object?>,
+          ),
+          name: json['name'] as String?,
+        ),
+      'operation' => CastSessionOperation(
+          requestId: _requestId(json),
+          operation: json['operation']! as String,
+          ok: json['ok']! as bool,
+        ),
+      'status' => CastSessionStatus(
+          requestId: _requestId(json),
+          status: PlaybackStatus.fromJson(
+            json['status']! as Map<String, Object?>,
+          ),
+        ),
+      'error' => CastSessionError(
+          requestId: json['request_id']?.toString(),
+          operation: json['operation'] as String?,
+          message: json['message']! as String,
+        ),
+      'finished' => CastSessionFinished(json['reason']! as String),
+      _ => throw FormatException('Unknown session event: $event'),
+    };
+  }
+
+  static String _requestId(Map<String, Object?> json) {
+    final value = json['request_id'];
+    if (value == null) throw const FormatException('Missing request_id');
+    return value.toString();
+  }
+}
+
+final class CastSessionConnected extends CastSessionEvent {
+  const CastSessionConnected({
+    required this.protocol,
+    required this.capabilities,
+    this.name,
+  });
+  final ReceiverProtocol protocol;
+  final SessionCapabilities capabilities;
+  final String? name;
+}
+
+final class CastSessionOperation extends CastSessionEvent {
+  const CastSessionOperation({
+    required this.requestId,
+    required this.operation,
+    required this.ok,
+  });
+  final String requestId;
+  final String operation;
+  final bool ok;
+}
+
+final class CastSessionStatus extends CastSessionEvent {
+  const CastSessionStatus({required this.requestId, required this.status});
+  final String requestId;
+  final PlaybackStatus status;
+}
+
+final class CastSessionError extends CastSessionEvent implements Exception {
+  const CastSessionError({
+    required this.message,
+    this.requestId,
+    this.operation,
+  });
+  final String? requestId;
+  final String? operation;
+  final String message;
+
+  @override
+  String toString() => operation == null
+      ? 'Cast session error: $message'
+      : 'Cast session $operation error: $message';
+}
+
+final class CastSessionFinished extends CastSessionEvent {
+  const CastSessionFinished(this.reason);
+  final String reason;
 }
 
 final class ReceiverInfo {

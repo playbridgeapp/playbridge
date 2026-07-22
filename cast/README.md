@@ -42,9 +42,23 @@ with the matching static or dynamic library for each Apple target.
 ## C ABI
 
 `cast/ffi/include/playbridge_cast_core.h` is the stable surface intended for
-Dart FFI and other languages that do not need generated bindings. Discovery events
-are UTF-8 JSON. Strings returned by `pb_discovery_next_json` must be released with
-`pb_string_free`; scanner handles must be cancelled and released.
+Dart FFI and other languages that do not need generated bindings. Discovery and
+session events are UTF-8 JSON. Strings returned by either `next_json` function
+must be released with `pb_string_free`; handles must be cancelled and released.
+Consumers must check `pb_cast_core_abi_version` before resolving the rest of the
+session API.
+
+A session target selects exactly one protocol and retains all known addresses:
+
+```json
+{"protocol":"roku","addresses":["192.168.1.20"],"port":8060}
+```
+
+DLNA targets use `location`; Google Cast defaults to port 8009. Every queued
+command has a scalar `request_id`, which is echoed by its `operation`, `status`,
+or `error` event. Supported commands are `load`, `play`, `pause`, `stop`, `seek`,
+`relative_seek`, `status`, and `disconnect`. Session command/event queues are
+bounded and the worker exists only for the lifetime of an active connection.
 
 Protocol mask values are stable:
 

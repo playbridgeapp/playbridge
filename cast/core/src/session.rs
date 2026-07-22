@@ -31,6 +31,20 @@ impl MediaRequest {
             metadata: None,
         }
     }
+
+    fn dlna_metadata(&self) -> String {
+        if let Some(metadata) = &self.metadata {
+            return metadata.clone();
+        }
+        let title = self.title.as_deref().unwrap_or("PlayBridge media");
+        let content_type = castv2::media_format(&self.url).0;
+        format!(
+            r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="0" restricted="1"><dc:title>{}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:{}:*">{}</res></item></DIDL-Lite>"#,
+            escape_xml(title),
+            content_type,
+            escape_xml(&self.url),
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -89,7 +103,7 @@ impl ReceiverSession {
     pub async fn connect_dlna(location: &str, media: &MediaRequest) -> Result<Self> {
         let renderer = timeout(Renderer::load(location), "DLNA renderer connection").await??;
         timeout(
-            renderer.set_media_uri(&media.url, media.metadata.as_deref().unwrap_or("")),
+            renderer.set_media_uri(&media.url, &media.dlna_metadata()),
             "DLNA media load",
         )
         .await??;
@@ -128,7 +142,7 @@ impl ReceiverSession {
             }
             Self::Dlna(renderer) => {
                 renderer
-                    .set_media_uri(&media.url, media.metadata.as_deref().unwrap_or(""))
+                    .set_media_uri(&media.url, &media.dlna_metadata())
                     .await?;
                 renderer.play().await
             }
@@ -350,8 +364,9 @@ impl ReceiverSession {
 }
 
 impl GoogleCastSession {
-    async fn send_media(&mut self, mut payload: serde_json::Value) -> Result<()> {
-        payload["requestId"] = json!(self.request_ids.next());
+    async fn send_media(&mut self, mut payload: serde_json::Value) -> Result<u32> {
+        let request_id = self.request_ids.next();
+        payload["requestId"] = json!(request_id);
         payload["mediaSessionId"] = json!(self.details.media_session_id);
         self.details
             .channel
@@ -361,14 +376,18 @@ impl GoogleCastSession {
                 payload.to_string(),
             ))
             .await
-            .map_err(CastError::Protocol)
+            .map_err(CastError::Protocol)?;
+        Ok(request_id)
     }
     async fn media_command(&mut self, command: &str) -> Result<()> {
-        self.send_media(json!({ "type": command })).await
+        let request_id = self.send_media(json!({ "type": command })).await?;
+        self.wait_for_media_status(request_id).await.map(|_| ())
     }
     async fn seek(&mut self, seconds: f64) -> Result<()> {
-        self.send_media(json!({ "type": "SEEK", "currentTime": seconds.max(0.0) }))
-            .await
+        let request_id = self
+            .send_media(json!({ "type": "SEEK", "currentTime": seconds.max(0.0) }))
+            .await?;
+        self.wait_for_media_status(request_id).await.map(|_| ())
     }
     async fn receiver_command(&mut self, mut payload: serde_json::Value) -> Result<()> {
         payload["requestId"] = json!(self.request_ids.next());
@@ -392,7 +411,11 @@ impl GoogleCastSession {
         Ok(())
     }
     async fn status(&mut self) -> Result<PlaybackStatus> {
-        self.send_media(json!({ "type": "GET_STATUS" })).await?;
+        let request_id = self.send_media(json!({ "type": "GET_STATUS" })).await?;
+        self.wait_for_media_status(request_id).await
+    }
+
+    async fn wait_for_media_status(&mut self, request_id: u32) -> Result<PlaybackStatus> {
         let deadline = tokio::time::Instant::now() + OPERATION_TIMEOUT;
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -414,6 +437,29 @@ impl GoogleCastSession {
             if message.namespace == NS_MEDIA {
                 let payload: serde_json::Value = serde_json::from_str(&message.payload_utf8)
                     .map_err(|error| CastError::Protocol(error.to_string()))?;
+                if payload["requestId"]
+                    .as_u64()
+                    .is_some_and(|id| id != u64::from(request_id))
+                {
+                    continue;
+                }
+                if matches!(
+                    payload["type"].as_str(),
+                    Some("INVALID_REQUEST" | "LOAD_FAILED")
+                ) {
+                    return Err(CastError::Protocol(format!(
+                        "Google Cast rejected request: {}",
+                        payload["reason"].as_str().unwrap_or("unknown reason")
+                    )));
+                }
+                if payload["type"] == "MEDIA_STATUS"
+                    && payload["status"].as_array().is_some_and(Vec::is_empty)
+                {
+                    return Ok(PlaybackStatus {
+                        state: PlaybackState::Finished,
+                        ..PlaybackStatus::default()
+                    });
+                }
                 if let Some(status) = payload["status"].as_array().and_then(|items| items.first()) {
                     if let Some(id) = status["mediaSessionId"].as_i64() {
                         self.details.media_session_id = id;
@@ -471,6 +517,15 @@ fn format_dlna_time(seconds: f64) -> String {
     )
 }
 
+fn escape_xml(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 async fn timeout<T, E>(
     future: impl std::future::Future<Output = std::result::Result<T, E>>,
     operation: &'static str,
@@ -491,5 +546,15 @@ mod tests {
     #[test]
     fn formats_dlna_seek_time() {
         assert_eq!(format_dlna_time(3661.9), "01:01:01");
+    }
+
+    #[test]
+    fn generates_dlna_metadata_when_the_caller_does_not_supply_it() {
+        let mut media = MediaRequest::new("https://example.test/video.mp4?x=1&y=2");
+        media.title = Some("One & <Two>".into());
+        let metadata = media.dlna_metadata();
+        assert!(metadata.contains("One &amp; &lt;Two&gt;"));
+        assert!(metadata.contains("video/mp4"));
+        assert!(metadata.contains("x=1&amp;y=2"));
     }
 }

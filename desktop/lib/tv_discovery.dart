@@ -12,6 +12,18 @@ enum TvProtocol {
 
   const TvProtocol(this.label);
   final String label;
+
+  static TvProtocol fromStorageName(String? value) => switch (value) {
+        'dlna' => TvProtocol.dlna,
+        'roku' => TvProtocol.roku,
+        'googleCast' || 'google_cast' || 'googlecast' => TvProtocol.googleCast,
+        'playBridge' ||
+        'playbridge' ||
+        'native' ||
+        null =>
+          TvProtocol.playBridge,
+        _ => TvProtocol.playBridge,
+      };
 }
 
 /// A receiver found on the LAN by Rust discovery or the PlayBridge mDNS
@@ -31,6 +43,10 @@ class DiscoveredTv {
   /// changes (uuid stays the identity).
   final String host;
 
+  /// All resolved receiver addresses. [host] is the currently preferred
+  /// address; retaining the rest allows reconnect code to try fresh alternates.
+  final List<String> addresses;
+
   /// Plain `ws://` port the service advertises.
   final int? port;
 
@@ -46,10 +62,18 @@ class DiscoveredTv {
     required this.protocol,
     required this.name,
     required this.host,
+    this.addresses = const [],
     required this.port,
     required this.wssPort,
     this.location,
   });
+
+  String get stableId => uuid;
+  String get identityKey => '${protocol.name}:$stableId';
+  List<String> get allAddresses => List.unmodifiable({
+        if (host.isNotEmpty) host,
+        ...addresses.where((address) => address.isNotEmpty),
+      });
 
   @override
   bool operator ==(Object other) =>
@@ -57,13 +81,21 @@ class DiscoveredTv {
       other.uuid == uuid &&
       other.protocol == protocol &&
       other.host == host &&
+      listEquals(other.addresses, addresses) &&
       other.port == port &&
       other.wssPort == wssPort &&
       other.location == location;
 
   @override
-  int get hashCode =>
-      Object.hash(uuid, protocol, host, port, wssPort, location);
+  int get hashCode => Object.hash(
+        uuid,
+        protocol,
+        host,
+        Object.hashAll(addresses),
+        port,
+        wssPort,
+        location,
+      );
 }
 
 /// Browses the LAN for PlayBridge TV receivers — the sender-side counterpart to
@@ -84,6 +116,8 @@ class TvDiscoveryBrowser {
 
   final StreamController<List<DiscoveredTv>> _controller =
       StreamController<List<DiscoveredTv>>.broadcast();
+  final StreamController<bool> _scanningController =
+      StreamController<bool>.broadcast();
 
   // Keyed by mDNS service name: `uuid` is only known after a service resolves.
   final Map<String, DiscoveredTv> _bonjourResolved = {};
@@ -92,6 +126,8 @@ class TvDiscoveryBrowser {
 
   /// Stream of the current resolved-TV list (replaces on every change).
   Stream<List<DiscoveredTv>> get devices => _controller.stream;
+  Stream<bool> get scanning => _scanningController.stream;
+  bool get isScanning => _rustScanner != null || _rustStarting;
 
   List<DiscoveredTv> get current => mergeDiscoveredDevices(
         rust: _rustResolved.values,
@@ -133,6 +169,7 @@ class TvDiscoveryBrowser {
     if (_rustScanner != null) return;
     _rustStarting = true;
     _rustErrorCount = 0;
+    _emitScanning(true);
     try {
       final scanner = CastCoreLibrary.open().discover(
         protocols: const {
@@ -149,7 +186,7 @@ class TvDiscoveryBrowser {
           switch (event) {
             case ReceiverFound(:final receiver):
             case ReceiverUpdated(:final receiver):
-              final device = _fromRust(receiver);
+              final device = discoveredTvFromRust(receiver);
               if (device != null) {
                 _rustResolved[receiver.id] = device;
                 _emit();
@@ -165,6 +202,7 @@ class TvDiscoveryBrowser {
           _rustErrorCount++;
         },
         onDone: () {
+          if (!identical(_rustScanner, scanner)) return;
           debugPrint(
             '[tv-discovery] Rust scan finished: '
             'PlayBridge=${_count(TvProtocol.playBridge)}, '
@@ -173,13 +211,18 @@ class TvDiscoveryBrowser {
           );
           _rustScanner = null;
           _rustSub = null;
+          _emitScanning(false);
         },
       );
     } on Object {
       _rustErrorCount++;
+      _rustSub = null;
+      _rustScanner?.dispose();
+      _rustScanner = null;
       debugPrint(
         '[tv-discovery] Rust unavailable; using Bonsoir PlayBridge fallback',
       );
+      _emitScanning(false);
     } finally {
       _rustStarting = false;
     }
@@ -189,11 +232,28 @@ class TvDiscoveryBrowser {
       .where((device) => device.protocol == protocol)
       .length;
 
-  Future<void> _stopRustDiscovery() async {
-    await _rustSub?.cancel();
+  Future<void> _stopRustDiscovery({bool emitScanning = true}) async {
+    final subscription = _rustSub;
+    final scanner = _rustScanner;
     _rustSub = null;
-    _rustScanner?.dispose();
     _rustScanner = null;
+    await subscription?.cancel();
+    scanner?.dispose();
+    if (emitScanning) _emitScanning(false);
+  }
+
+  /// Starts a fresh bounded Rust scan without restarting the long-lived
+  /// PlayBridge Bonjour fallback or touching saved receivers.
+  Future<void> rescan() async {
+    if (!_started) return;
+    await _stopRustDiscovery(emitScanning: false);
+    _rustResolved.clear();
+    _emit();
+    await _startRustDiscovery();
+  }
+
+  void _emitScanning(bool value) {
+    if (!_scanningController.isClosed) _scanningController.add(value);
   }
 
   void _onEvent(BonsoirDiscoveryEvent event) {
@@ -254,27 +314,6 @@ class TvDiscoveryBrowser {
     _emit();
   }
 
-  DiscoveredTv? _fromRust(ReceiverInfo receiver) {
-    final protocol = switch (receiver.protocol) {
-      ReceiverProtocol.playBridge => TvProtocol.playBridge,
-      ReceiverProtocol.dlna => TvProtocol.dlna,
-      ReceiverProtocol.roku => TvProtocol.roku,
-      ReceiverProtocol.googleCast => TvProtocol.googleCast,
-      ReceiverProtocol.dial => null,
-    };
-    if (protocol == null || receiver.addresses.isEmpty) return null;
-    final identity = receiver.uuid?.trim();
-    return DiscoveredTv(
-      uuid: identity != null && identity.isNotEmpty ? identity : receiver.id,
-      protocol: protocol,
-      name: receiver.name,
-      host: receiver.addresses.first,
-      port: receiver.port,
-      wssPort: receiver.wssPort,
-      location: receiver.location,
-    );
-  }
-
   void _emit() => _controller.add(current);
 
   Future<void> stop() async {
@@ -293,7 +332,38 @@ class TvDiscoveryBrowser {
   Future<void> dispose() async {
     await stop();
     await _controller.close();
+    await _scanningController.close();
   }
+}
+
+@visibleForTesting
+DiscoveredTv? discoveredTvFromRust(ReceiverInfo receiver) {
+  final protocol = switch (receiver.protocol) {
+    ReceiverProtocol.playBridge => TvProtocol.playBridge,
+    ReceiverProtocol.dlna => TvProtocol.dlna,
+    ReceiverProtocol.roku => TvProtocol.roku,
+    ReceiverProtocol.googleCast => TvProtocol.googleCast,
+    ReceiverProtocol.dial => null,
+  };
+  if (protocol == null) return null;
+
+  final addresses = _orderedReceiverAddresses(receiver.addresses);
+  final location = receiver.location?.trim();
+  final hasDlnaLocation =
+      protocol == TvProtocol.dlna && location != null && location.isNotEmpty;
+  if (addresses.isEmpty && !hasDlnaLocation) return null;
+
+  final identity = receiver.uuid?.trim();
+  return DiscoveredTv(
+    uuid: identity != null && identity.isNotEmpty ? identity : receiver.id,
+    protocol: protocol,
+    name: receiver.name,
+    host: addresses.isEmpty ? '' : addresses.first,
+    addresses: addresses,
+    port: receiver.port,
+    wssPort: receiver.wssPort,
+    location: location,
+  );
 }
 
 @visibleForTesting
@@ -318,6 +388,7 @@ List<DiscoveredTv> mergeDiscoveredDevices({
         protocol: rustDevice.protocol,
         name: rustDevice.name,
         host: rustDevice.host,
+        addresses: rustDevice.addresses,
         port: device.port ?? rustDevice.port,
         wssPort: device.wssPort ?? rustDevice.wssPort,
         location: rustDevice.location,
@@ -331,4 +402,23 @@ List<DiscoveredTv> mergeDiscoveredDevices({
     return left.name.toLowerCase().compareTo(right.name.toLowerCase());
   });
   return List.unmodifiable(devices);
+}
+
+List<String> _orderedReceiverAddresses(Iterable<String> raw) {
+  final addresses = <String>{
+    for (final address in raw)
+      if (address.trim().isNotEmpty) address.trim(),
+  }.toList(growable: false);
+  addresses.sort((left, right) {
+    final leftRank = _addressRank(left);
+    final rightRank = _addressRank(right);
+    return leftRank != rightRank ? leftRank.compareTo(rightRank) : 0;
+  });
+  return addresses;
+}
+
+int _addressRank(String address) {
+  if (!address.contains(':') && address != '127.0.0.1') return 0;
+  if (address.contains(':') && !address.startsWith('::1')) return 1;
+  return 2;
 }

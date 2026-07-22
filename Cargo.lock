@@ -1625,6 +1625,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "uniffi",
+ "url",
 ]
 
 [[package]]

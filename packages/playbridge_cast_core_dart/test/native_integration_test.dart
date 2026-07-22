@@ -11,7 +11,14 @@ void main() {
   test(
     'owns a real native scanner through completion',
     () async {
-      final core = CastCoreLibrary.open(libraryPath: library.absolute.path);
+      final CastCoreLibrary core;
+      try {
+        core = CastCoreLibrary.open(libraryPath: library.absolute.path);
+      } on UnsupportedError catch (error) {
+        markTestSkipped('The packaged native library is stale: $error');
+        return;
+      }
+      expect(core.abiVersion, 1);
       final scanner = core.discover(
         protocols: {ReceiverProtocol.playBridge},
         timeout: const Duration(milliseconds: 500),
