@@ -1,4 +1,4 @@
-FROM rust:1.82-alpine AS builder
+FROM rust:alpine AS builder
 
 RUN apk add --no-cache musl-dev ffmpeg-dev pkgconfig
 

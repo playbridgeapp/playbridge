@@ -99,7 +99,10 @@ mod tests {
         let handler = EncryptionHandler::new(b"my_secure_password");
         let mut headers = HashMap::new();
         headers.insert("User-Agent".to_string(), "PlayBridge".to_string());
-        headers.insert("Authorization".to_string(), "Bearer secret_debrid_key".to_string());
+        headers.insert(
+            "Authorization".to_string(),
+            "Bearer secret_debrid_key".to_string(),
+        );
 
         let data = ProxyData {
             destination: "https://cdn.example.com/video.m3u8".to_string(),
@@ -113,6 +116,13 @@ mod tests {
 
         let decrypted = handler.decrypt(&token, None).unwrap();
         assert_eq!(decrypted.destination, "https://cdn.example.com/video.m3u8");
-        assert_eq!(decrypted.request_headers.unwrap().get("Authorization").unwrap(), "Bearer secret_debrid_key");
+        assert_eq!(
+            decrypted
+                .request_headers
+                .unwrap()
+                .get("Authorization")
+                .unwrap(),
+            "Bearer secret_debrid_key"
+        );
     }
 }

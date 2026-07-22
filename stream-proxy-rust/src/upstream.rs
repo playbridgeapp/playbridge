@@ -53,7 +53,10 @@ impl ConnectionEngine {
 
                 for (k, v) in resp.headers() {
                     let lower = k.as_str().to_lowercase();
-                    if lower == "content-range" || lower == "accept-ranges" || lower == "content-type" {
+                    if lower == "content-range"
+                        || lower == "accept-ranges"
+                        || lower == "content-type"
+                    {
                         out_headers.insert(k.clone(), v.clone());
                     }
                 }
@@ -86,7 +89,10 @@ impl ConnectionEngine {
                 warn!("[stream-proxy] reqwest returned HTTP {}, attempting FFmpeg AVIO fallback for {}", resp.status(), url);
             }
             Err(e) => {
-                warn!("[stream-proxy] reqwest error: {}, attempting FFmpeg AVIO fallback for {}", e, url);
+                warn!(
+                    "[stream-proxy] reqwest error: {}, attempting FFmpeg AVIO fallback for {}",
+                    e, url
+                );
             }
         }
 
@@ -165,6 +171,12 @@ pub fn filter_upstream_headers(
 }
 
 fn should_skip_header(lower_key: &str) -> bool {
-    const SKIP: &[&str] = &["host", "connection", "content-length", "accept-encoding", "range"];
+    const SKIP: &[&str] = &[
+        "host",
+        "connection",
+        "content-length",
+        "accept-encoding",
+        "range",
+    ];
     SKIP.contains(&lower_key) || lower_key.starts_with(':')
 }

@@ -16,8 +16,7 @@ impl HlsPlaylistRewriter {
         let lines = content.lines();
         let mut rewritten_lines = Vec::new();
 
-        let uri_attr_regex =
-            Regex::new(r#"(?i)(URI\s*=\s*")([^"]*)(")"#).expect("Valid regex");
+        let uri_attr_regex = Regex::new(r#"(?i)(URI\s*=\s*")([^"]*)(")"#).expect("Valid regex");
 
         for line in lines {
             let trimmed = line.trim();
@@ -28,19 +27,20 @@ impl HlsPlaylistRewriter {
 
             if trimmed.starts_with('#') {
                 if uri_attr_regex.is_match(line) {
-                    let rewritten_line = uri_attr_regex.replace_all(line, |caps: &regex::Captures| {
-                        let prefix = &caps[1];
-                        let relative_uri = &caps[2];
-                        let suffix = &caps[3];
+                    let rewritten_line =
+                        uri_attr_regex.replace_all(line, |caps: &regex::Captures| {
+                            let prefix = &caps[1];
+                            let relative_uri = &caps[2];
+                            let suffix = &caps[3];
 
-                        match base_uri.join(relative_uri) {
-                            Ok(resolved) => {
-                                let rewritten = rewrite_url(resolved.as_str());
-                                format!("{}{}{}", prefix, rewritten, suffix)
+                            match base_uri.join(relative_uri) {
+                                Ok(resolved) => {
+                                    let rewritten = rewrite_url(resolved.as_str());
+                                    format!("{}{}{}", prefix, rewritten, suffix)
+                                }
+                                Err(_) => caps[0].to_string(),
                             }
-                            Err(_) => caps[0].to_string(),
-                        }
-                    });
+                        });
                     rewritten_lines.push(rewritten_line.into_owned());
                 } else {
                     rewritten_lines.push(line.to_string());
@@ -79,11 +79,18 @@ http://cdn.example.com/segment2.ts
 "#;
         let base_url = Url::parse("https://stream.example.com/live/index.m3u8").unwrap();
         let rewritten = HlsPlaylistRewriter::rewrite(manifest, &base_url, |target| {
-            format!("http://127.0.0.1:8888/proxy?url={}", urlencoding::encode(target))
+            format!(
+                "http://127.0.0.1:8888/proxy?url={}",
+                urlencoding::encode(target)
+            )
         });
 
         assert!(rewritten.contains("URI=\"http://127.0.0.1:8888/proxy?url=https%3A%2F%2Fstream.example.com%2Flive%2Fenc.key\""));
-        assert!(rewritten.contains("http://127.0.0.1:8888/proxy?url=https%3A%2F%2Fstream.example.com%2Flive%2Fsegment1.ts"));
-        assert!(rewritten.contains("http://127.0.0.1:8888/proxy?url=http%3A%2F%2Fcdn.example.com%2Fsegment2.ts"));
+        assert!(rewritten.contains(
+            "http://127.0.0.1:8888/proxy?url=https%3A%2F%2Fstream.example.com%2Flive%2Fsegment1.ts"
+        ));
+        assert!(rewritten.contains(
+            "http://127.0.0.1:8888/proxy?url=http%3A%2F%2Fcdn.example.com%2Fsegment2.ts"
+        ));
     }
 }

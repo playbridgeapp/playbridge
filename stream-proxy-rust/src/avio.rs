@@ -10,12 +10,8 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 pub type AvFormatNetworkInitFn = unsafe extern "C" fn() -> c_int;
-pub type AvDictSetFn = unsafe extern "C" fn(
-    *mut *mut c_void,
-    *const c_char,
-    *const c_char,
-    c_int,
-) -> c_int;
+pub type AvDictSetFn =
+    unsafe extern "C" fn(*mut *mut c_void, *const c_char, *const c_char, c_int) -> c_int;
 pub type AvDictFreeFn = unsafe extern "C" fn(*mut *mut c_void);
 pub type AvioOpen2Fn = unsafe extern "C" fn(
     *mut *mut c_void,
@@ -74,7 +70,10 @@ impl AvioClient {
 
     fn load_libraries(custom_path: Option<&str>) -> Option<Arc<AvioFunctions>> {
         let (avutil_path, avformat_path) = find_ffmpeg_libraries(custom_path)?;
-        info!("[pb-proxy-avio] Loading FFmpeg libraries: avutil={:?}, avformat={:?}", avutil_path, avformat_path);
+        info!(
+            "[pb-proxy-avio] Loading FFmpeg libraries: avutil={:?}, avformat={:?}",
+            avutil_path, avformat_path
+        );
 
         unsafe {
             let avutil_lib = Library::new(&avutil_path).ok()?;
@@ -84,7 +83,8 @@ impl AvioClient {
             let av_dict_free: Symbol<AvDictFreeFn> = avutil_lib.get(b"av_dict_free\0").ok()?;
             let av_strerror: Symbol<AvStrErrorFn> = avutil_lib.get(b"av_strerror\0").ok()?;
 
-            let avformat_network_init: Symbol<AvFormatNetworkInitFn> = avformat_lib.get(b"avformat_network_init\0").ok()?;
+            let avformat_network_init: Symbol<AvFormatNetworkInitFn> =
+                avformat_lib.get(b"avformat_network_init\0").ok()?;
             let avio_open2: Symbol<AvioOpen2Fn> = avformat_lib.get(b"avio_open2\0").ok()?;
             let avio_read: Symbol<AvioReadFn> = avformat_lib.get(b"avio_read\0").ok()?;
             let avio_close: Symbol<AvioCloseFn> = avformat_lib.get(b"avio_close\0").ok()?;
@@ -158,8 +158,7 @@ impl AvioClient {
                 );
 
                 let c_timeout_key = CString::new("timeout").unwrap();
-                let c_timeout_val =
-                    CString::new(format!("{}", timeout_secs * 1_000_000)).unwrap();
+                let c_timeout_val = CString::new(format!("{}", timeout_secs * 1_000_000)).unwrap();
                 (funcs.av_dict_set)(
                     &mut options,
                     c_timeout_key.as_ptr(),
@@ -170,23 +169,25 @@ impl AvioClient {
                 let mut avio_ctx: *mut c_void = ptr::null_mut();
                 let c_url = CString::new(url.clone()).unwrap();
 
-                let open_res = (funcs.avio_open2)(
-                    &mut avio_ctx,
-                    c_url.as_ptr(),
-                    1,
-                    ptr::null(),
-                    &mut options,
-                );
+                let open_res =
+                    (funcs.avio_open2)(&mut avio_ctx, c_url.as_ptr(), 1, ptr::null(), &mut options);
 
                 if open_res < 0 {
                     let mut err_buf = vec![0u8; 1024];
-                    let _ = (funcs.av_strerror)(open_res, err_buf.as_mut_ptr() as *mut c_char, 1024);
+                    let _ =
+                        (funcs.av_strerror)(open_res, err_buf.as_mut_ptr() as *mut c_char, 1024);
                     let err_str = CStr::from_ptr(err_buf.as_ptr() as *const c_char)
                         .to_string_lossy()
                         .into_owned();
 
-                    error!("[pb-proxy-avio] avio_open2 failed for {}: code={} msg={}", url, open_res, err_str);
-                    let _ = tx.blocking_send(Err(format!("avio_open2 failed: code={} msg={}", open_res, err_str)));
+                    error!(
+                        "[pb-proxy-avio] avio_open2 failed for {}: code={} msg={}",
+                        url, open_res, err_str
+                    );
+                    let _ = tx.blocking_send(Err(format!(
+                        "avio_open2 failed: code={} msg={}",
+                        open_res, err_str
+                    )));
                     (funcs.av_dict_free)(&mut options);
                     return;
                 }
@@ -195,11 +196,8 @@ impl AvioClient {
                 let mut read_buffer = vec![0u8; buffer_size];
 
                 loop {
-                    let bytes_read = (funcs.avio_read)(
-                        avio_ctx,
-                        read_buffer.as_mut_ptr(),
-                        buffer_size as c_int,
-                    );
+                    let bytes_read =
+                        (funcs.avio_read)(avio_ctx, read_buffer.as_mut_ptr(), buffer_size as c_int);
 
                     if bytes_read > 0 {
                         let chunk = Bytes::copy_from_slice(&read_buffer[..bytes_read as usize]);
@@ -209,11 +207,18 @@ impl AvioClient {
                     } else {
                         if bytes_read != -541478725 && bytes_read < 0 {
                             let mut err_buf = vec![0u8; 1024];
-                            let _ = (funcs.av_strerror)(bytes_read, err_buf.as_mut_ptr() as *mut c_char, 1024);
+                            let _ = (funcs.av_strerror)(
+                                bytes_read,
+                                err_buf.as_mut_ptr() as *mut c_char,
+                                1024,
+                            );
                             let err_str = CStr::from_ptr(err_buf.as_ptr() as *const c_char)
                                 .to_string_lossy()
                                 .into_owned();
-                            let _ = tx.blocking_send(Err(format!("avio_read failed: code={} msg={}", bytes_read, err_str)));
+                            let _ = tx.blocking_send(Err(format!(
+                                "avio_read failed: code={} msg={}",
+                                bytes_read, err_str
+                            )));
                         }
                         break; // EOF
                     }

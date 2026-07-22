@@ -75,7 +75,7 @@ async fn test_register_stateful_and_encrypted_mediaflow_urls() {
         .await
         .unwrap();
     let json_resp: Value = serde_json::from_slice(&bytes).unwrap();
-    
+
     let proxy_url = json_resp["proxy_url"].as_str().unwrap();
     let encrypted_url = json_resp["encrypted_url"].as_str().unwrap();
 
@@ -91,12 +91,7 @@ async fn test_old_plaintext_base64_route_removed() {
     let uri = "/s/play/aHR0cHM6Ly9leGFtcGxlLmNvbS9saXZlL21hc3Rlci5tM3U4/eyJVc2VyLUFnZW50IjoiTW96aWxsYS81LjAgKCkifQ/master.m3u8?token=testpassword123";
 
     let response = app
-        .oneshot(
-            Request::builder()
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
         .await
         .unwrap();
 

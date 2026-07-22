@@ -16,7 +16,11 @@ impl DashManifestRewriter {
 
             match token {
                 Some(t) if !t.is_empty() && !clean_url.contains("token=") => {
-                    let separator = if clean_url.contains('?') { "&amp;" } else { "?" };
+                    let separator = if clean_url.contains('?') {
+                        "&amp;"
+                    } else {
+                        "?"
+                    };
                     format!("{}{}{}token={}", clean_url, separator, "", t)
                 }
                 _ => clean_url,
@@ -26,7 +30,8 @@ impl DashManifestRewriter {
         let mut result = content.to_string();
 
         // 1. Rewrite <BaseURL>...</BaseURL>
-        let base_url_re = Regex::new(r"(?i)<BaseURL([^>]*)>([^<]+)</BaseURL>").expect("Valid regex");
+        let base_url_re =
+            Regex::new(r"(?i)<BaseURL([^>]*)>([^<]+)</BaseURL>").expect("Valid regex");
         result = base_url_re
             .replace_all(&result, |caps: &regex::Captures| {
                 let attrs = &caps[1];
@@ -36,7 +41,8 @@ impl DashManifestRewriter {
             .into_owned();
 
         // 2. Rewrite <Location>...</Location>
-        let location_re = Regex::new(r"(?i)<Location([^>]*)>([^<]+)</Location>").expect("Valid regex");
+        let location_re =
+            Regex::new(r"(?i)<Location([^>]*)>([^<]+)</Location>").expect("Valid regex");
         result = location_re
             .replace_all(&result, |caps: &regex::Captures| {
                 let attrs = &caps[1];
@@ -46,7 +52,9 @@ impl DashManifestRewriter {
             .into_owned();
 
         // 3. Rewrite attributes in double quotes
-        let attr_dq_re = Regex::new(r#"(?i)\b(media|initialization|location|baseUrl)\s*=\s*"([^"]+)""#).expect("Valid regex");
+        let attr_dq_re =
+            Regex::new(r#"(?i)\b(media|initialization|location|baseUrl)\s*=\s*"([^"]+)""#)
+                .expect("Valid regex");
         result = attr_dq_re
             .replace_all(&result, |caps: &regex::Captures| {
                 let attr_name = &caps[1];
@@ -56,7 +64,9 @@ impl DashManifestRewriter {
             .into_owned();
 
         // 4. Rewrite attributes in single quotes
-        let attr_sq_re = Regex::new(r#"(?i)\b(media|initialization|location|baseUrl)\s*=\s*'([^']+)'"#).expect("Valid regex");
+        let attr_sq_re =
+            Regex::new(r#"(?i)\b(media|initialization|location|baseUrl)\s*=\s*'([^']+)'"#)
+                .expect("Valid regex");
         result = attr_sq_re
             .replace_all(&result, |caps: &regex::Captures| {
                 let attr_name = &caps[1];

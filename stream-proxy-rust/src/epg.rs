@@ -1,7 +1,7 @@
 use bytes::Bytes;
+use dashmap::DashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use dashmap::DashMap;
 
 struct EpgCacheEntry {
     bytes: Bytes,
