@@ -657,7 +657,7 @@ class SystemWebViewEngine(
                 mediaPlaybackRequiresUserGesture = false
                 allowFileAccess = false
                 allowContentAccess = true
-                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 
                 // User agent. A literal [userAgentOverride] (picked from the phone's User Agent
                 // manager) wins outright. Otherwise, in mobile mode use the WebView's OWN
