@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - 'stream-proxy-dart/**'
+      - 'stream-proxy-rust/**'
       - '.github/workflows/stream_proxy_build.yml'
   workflow_dispatch:
 
@@ -29,7 +29,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          VERSION=$(grep '^version:' stream-proxy-dart/pubspec.yaml | sed 's/version: //' | tr -d '[:space:]')
+          VERSION=$(grep '^version =' stream-proxy-rust/Cargo.toml | cut -d '"' -f2 | tr -d '[:space:]')
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Check tag
@@ -73,8 +73,8 @@ jobs:
         if: steps.check_tag.outputs.skipped == 'false'
         uses: docker/build-push-action@v6
         with:
-          context: ./stream-proxy-dart
-          file: ./stream-proxy-dart/Dockerfile
+          context: ./stream-proxy-rust
+          file: ./stream-proxy-rust/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
