@@ -1,0 +1,55 @@
+[package]
+name = "playbridge-cast-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "AGPL-3.0-or-later"
+description = "Portable PlayBridge receiver discovery and casting core"
+
+[lib]
+crate-type = ["rlib", "staticlib", "cdylib"]
+
+[dependencies]
+aes-gcm = "0.11"
+base64 = "0.22"
+futures-util = "0.3"
+getrandom = "0.4"
+hkdf = "0.12"
+hmac = "0.12"
+http = "1"
+m3u8-rs = "6"
+mdns-sd = { version = "0.20", default-features = false, features = ["async"] }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls", "stream"] }
+rupnp = { version = "3", default-features = false, features = ["tokio"] }
+roxmltree = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+url = "2"
+x25519-dalek = { version = "3", features = ["getrandom", "static_secrets"] }
+x509-parser = "0.18"
+zeroize = { version = "1", features = ["derive"] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+native-tls = "0.2"
+tokio-native-tls = "0.3"
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[[example]]
+name = "discover"
+path = "examples/discover.rs"
+
+[[example]]
+name = "pair"
+path = "examples/pair.rs"
+
+[[example]]
+name = "check_pin"
+path = "examples/check_pin.rs"

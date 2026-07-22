@@ -1,0 +1,86 @@
+# PlayBridge Cast
+
+This workspace contains the reusable receiver protocol core. It is intentionally
+independent of Android, Apple, Flutter, and desktop UI lifecycles.
+
+## Crates
+
+- `core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
+- `ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart consumers.
+- `../cli`: cross-platform CLI built directly on `core`.
+
+Discovery is caller-owned and time-boxed. A caller chooses one or more protocols,
+reads events, and cancels or drops the scanner when its screen or command ends. The
+core does not run a permanent background scan.
+
+## Verify
+
+```sh
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+## Regenerate platform bindings
+
+Install the UniFFI CLI at the same version as `ffi`, build the host
+dynamic library, then generate both façades:
+
+```sh
+cargo build -p playbridge-cast-core-ffi
+uniffi-bindgen generate --language kotlin \
+  --out-dir cast/bindings/kotlin \
+  target/debug/libplaybridge_cast_core_ffi.dylib
+uniffi-bindgen generate --language swift \
+  --out-dir cast/bindings/swift \
+  target/debug/libplaybridge_cast_core_ffi.dylib
+```
+
+The generated Kotlin binding requires JNA. Do not add it to an Android app until
+the matching ABI-specific `.so` files are packaged. The Swift output must be paired
+with the matching static or dynamic library for each Apple target.
+
+## C ABI
+
+`cast/ffi/include/playbridge_cast_core.h` is the stable surface intended for
+Dart FFI and other languages that do not need generated bindings. Discovery events
+are UTF-8 JSON. Strings returned by `pb_discovery_next_json` must be released with
+`pb_string_free`; scanner handles must be cancelled and released.
+
+Protocol mask values are stable:
+
+- PlayBridge: `1`
+- DLNA: `2`
+- Roku: `4`
+- DIAL: `8`
+- Google Cast: `16`
+
+Build the native library for the current desktop OS with
+`cast/build-desktop.sh`. The macOS build is universal; Linux and Windows builds
+are produced on their native operating systems.
+
+## Desktop CLI
+
+`cast/build-desktop.sh` also writes `playbridge` (`playbridge.exe` on
+Windows) beside the FFI library. It can scan one protocol, several selected
+protocols, or the normal automatic set without starting a background service:
+
+```sh
+playbridge discover --protocol playbridge --timeout 5
+playbridge discover --protocol dlna,roku --json
+playbridge discover --protocol all --json-lines
+```
+
+`--json` emits one deduplicated report after the scan. `--json-lines` streams
+stable started, found, updated, error, and finished event objects for scripts.
+
+## Android libraries
+
+Build and copy the two supported Android libraries with:
+
+```sh
+cd mobile/android
+./gradlew :app:buildRustCastCore
+```
+
+Platform applications remain responsible for their lifecycle, multicast locks,
+permissions, and UI integration.
