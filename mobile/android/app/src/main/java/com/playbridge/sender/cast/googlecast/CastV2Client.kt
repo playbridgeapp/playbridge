@@ -66,6 +66,8 @@ class CastV2Client {
     /** The media session ID of the currently loaded media. */
     @Volatile var mediaSessionId: Int = 0
         private set
+    @Volatile var receiverVolume: Float? = null
+        private set
 
     val isConnected: Boolean get() = socket?.isConnected == true && socket?.isClosed == false
 
@@ -119,6 +121,7 @@ class CastV2Client {
                 val json = JSONObject(msg.payload)
                 if (json.optString("type") == "RECEIVER_STATUS") {
                     val statusObj = json.optJSONObject("status")
+                    updateReceiverVolume(statusObj)
                     val apps = statusObj?.optJSONArray("applications")
                     if (apps != null && apps.length() > 0) {
                         for (i in 0 until apps.length()) {
@@ -185,6 +188,7 @@ class CastV2Client {
                 val json = JSONObject(msg.payload)
                 if (json.optString("type") == "RECEIVER_STATUS") {
                     val statusObj = json.optJSONObject("status")
+                    updateReceiverVolume(statusObj)
                     val apps = statusObj?.optJSONArray("applications")
                     if (apps != null && apps.length() > 0) {
                         for (i in 0 until apps.length()) {
@@ -306,11 +310,17 @@ class CastV2Client {
 
     /** Set volume (0.0 – 1.0). */
     fun setVolume(level: Float) {
+        receiverVolume = level.coerceIn(0f, 1f)
         sendMessage(RECEIVER_ID, NS_RECEIVER, JSONObject().apply {
             put("type", "SET_VOLUME")
             put("volume", JSONObject().apply { put("level", level.toDouble()) })
             put("requestId", nextRequestId())
         })
+    }
+
+    private fun updateReceiverVolume(status: JSONObject?) {
+        val level = status?.optJSONObject("volume")?.optDouble("level", Double.NaN)
+        if (level != null && level.isFinite()) receiverVolume = level.toFloat().coerceIn(0f, 1f)
     }
 
     data class MediaStatus(

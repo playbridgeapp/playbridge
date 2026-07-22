@@ -11,14 +11,11 @@ import androidx.lifecycle.viewModelScope
 import com.playbridge.sender.data.history.DatabaseProvider
 import kotlinx.coroutines.Dispatchers
 import com.playbridge.sender.data.history.CommandHistoryEntity
-import com.playbridge.sender.data.settings.SettingsRepository
+import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
-import com.playbridge.sender.cast.TargetKind
 import com.playbridge.sender.cast.PlaybackStatus
-import com.playbridge.sender.cast.dlna.DeviceDescription
-import com.playbridge.sender.cast.dlna.DlnaDiscovery
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import playbridge.PlayPayload
@@ -28,14 +25,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import okhttp3.OkHttpClient
-import java.net.URI
 import java.net.Socket
 import java.net.InetSocketAddress
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import java.util.UUID
-import java.util.concurrent.TimeUnit
 
 class ConnectionViewModel(
     application: Application,
@@ -43,7 +37,7 @@ class ConnectionViewModel(
     private val connectionStore: ConnectionStore = ConnectionStore(application),
     private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
     val castSessionManager: CastSessionManager,
-    private val settingsRepository: SettingsRepository,
+    private val discoveryRepository: ReceiverDiscoveryRepository,
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
@@ -53,45 +47,20 @@ class ConnectionViewModel(
     val connectionState: StateFlow<WebSocketClient.ConnectionState> = webSocketClient.connectionState
     val tvDevice: Flow<TvDevice?> = connectionStore.tvDevice
 
-    // OkHttp + continuous SSDP discovery for third-party DLNA renderers, run alongside mDNS.
-    private val dlnaHttp = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(6, TimeUnit.SECONDS)
-        .build()
-    private val dlnaDiscovery = DlnaDiscovery(application, dlnaHttp)
-    private val rustDiscoveryShadow = RustDiscoveryShadow(application)
+    private val _selectedDiscoveryProtocols = MutableStateFlow(CastProtocol.entries.toSet())
+    val selectedDiscoveryProtocols: StateFlow<Set<CastProtocol>> =
+        _selectedDiscoveryProtocols.asStateFlow()
 
-    // Rust core is the 100% primary discovery engine for PlayBridge, DLNA, and Roku.
-    val discoveredDevices: StateFlow<List<TvDevice>> = rustDiscoveryShadow.discoveredDevices.map { list ->
-        list.map { r ->
-            TvDevice(
-                ip = r.ip,
-                port = r.port,
-                name = r.name,
-                token = "",
-                uuid = r.uuid,
-                wssPort = r.wssPort,
-                logsPort = r.logsPort,
-                isDlna = r.isDlna,
-                isRoku = r.isRoku,
-                isGoogleCast = r.isGoogleCast,
-                controlUrl = r.location,
-            )
-        }
-    }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-
-    private fun DeviceDescription.Renderer.toDlnaTvDevice(): TvDevice {
-        val uri = avTransportControlUrl?.let { runCatching { URI(it) }.getOrNull() }
-        return TvDevice(
-            ip = uri?.host.orEmpty(),
-            port = (uri?.port ?: -1).takeIf { it > 0 } ?: 0,
-            token = "",
-            name = friendlyName,
-            uuid = udn ?: location,
-            isDlna = true,
-            controlUrl = avTransportControlUrl,
-        )
-    }
+    val discoveredDevices: StateFlow<List<TvDevice>> = combine(
+        discoveryRepository.devices,
+        _selectedDiscoveryProtocols,
+    ) { devices, protocols -> devices.filter { it.resolvedProtocol in protocols } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val discoveredEndpoints = combine(
+        discoveryRepository.endpoints,
+        _selectedDiscoveryProtocols,
+    ) { endpoints, protocols -> endpoints.filter { it.protocol in protocols } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
@@ -102,16 +71,32 @@ class ConnectionViewModel(
         viewModelScope.launch(Dispatchers.IO) {
             val results = devices.map { device ->
                 async {
-                    val online = try {
-                        Socket().use { socket ->
-                            val portToPing = device.wssPort ?: device.port
-                            socket.connect(InetSocketAddress(device.ip, portToPing), 600)
-                            true
-                        }
-                    } catch (_: Exception) {
-                        false
+                    val descriptionPort = device.descriptionUrl?.let { url ->
+                        runCatching {
+                            java.net.URI(url).let { uri ->
+                                uri.port.takeIf { it > 0 }
+                                    ?: when (uri.scheme?.lowercase()) {
+                                        "https" -> 443
+                                        "http" -> 80
+                                        else -> null
+                                    }
+                            }
+                        }.getOrNull()
                     }
-                    device.uuid to online
+                    val portToPing = device.wssPort ?: device.port.takeIf { it > 0 } ?: descriptionPort
+                    val online = portToPing != null && device.addresses.ifEmpty { listOf(device.ip) }
+                        .filter(String::isNotBlank)
+                        .any { address ->
+                            try {
+                                Socket().use { socket ->
+                                    socket.connect(InetSocketAddress(address, portToPing), 600)
+                                    true
+                                }
+                            } catch (_: Exception) {
+                                false
+                            }
+                        }
+                    device.endpointKey.toString() to online
                 }
             }.awaitAll().toMap()
             _savedDevicesOnlineStatus.value = results
@@ -123,7 +108,7 @@ class ConnectionViewModel(
 
     // --- Routing intent (authoritative; owned by CastSessionManager) ---
     // Screens read this to decide where playback goes instead of inferring from
-    // connectionState / the old `watch_on_tv` pref. See CONNECTION_ROUTING_PLAN.md.
+    // connectionState.
     val route: StateFlow<CastSessionManager.Route> = castSessionManager.route
     val routeTargetsTv: StateFlow<Boolean> = castSessionManager.routeTargetsTv
 
@@ -133,12 +118,11 @@ class ConnectionViewModel(
     /** User picked the saved native TV as the routing target. */
     fun selectNativeRoute() = castSessionManager.selectNativeRoute()
 
-    // --- DLNA cast target (owned by CastSessionManager so a cast survives this VM) ---
-    val activeDlnaTarget: StateFlow<TvDevice?> = castSessionManager.activeDlnaTarget
-    val activeGoogleCastTarget: StateFlow<TvDevice?> = castSessionManager.activeGoogleCastTarget
-    val activeRokuTarget: StateFlow<TvDevice?> = castSessionManager.activeRokuTarget
-    val dlnaStatus: StateFlow<PlaybackStatus?> = castSessionManager.dlnaStatus
-    val dlnaMediaTitle: StateFlow<String?> = castSessionManager.dlnaMediaTitle
+    // --- Cast target state (owned by CastSessionManager so a cast survives this VM) ---
+    val activeExternalDevice: StateFlow<TvDevice?> = castSessionManager.activeExternalDevice
+    val externalStatus: StateFlow<PlaybackStatus?> = castSessionManager.externalStatus
+    val externalMediaTitle: StateFlow<String?> = castSessionManager.externalMediaTitle
+    val castSessionState = castSessionManager.sessionState
 
     // Foreground scan session. Discovery is time-boxed (SCAN_WINDOW_MS) so the SSDP
     // M-SEARCH loop and mDNS listener don't run forever; the UI binds [isScanning] for
@@ -146,7 +130,6 @@ class ConnectionViewModel(
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
     private var scanTimeoutJob: Job? = null
-    @Volatile private var rustDiscoveryShadowEnabled = false
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
@@ -180,13 +163,6 @@ class ConnectionViewModel(
     }
 
     init {
-        viewModelScope.launch {
-            settingsRepository.rustDiscoveryShadowMode.collect { enabled ->
-                rustDiscoveryShadowEnabled = enabled
-                if (!enabled) rustDiscoveryShadow.stop()
-            }
-        }
-
         // Handle Auto-connection
         viewModelScope.launch {
             tvDevice.combine(connectionState) { device, state ->
@@ -211,21 +187,13 @@ class ConnectionViewModel(
             }
         }
 
-        // Manage discovery (mDNS + DLNA SSDP). Stop discovery once we're connected — but
-        // NOT while merely Connecting: a failing (re)connect flaps through Connecting
-        // repeatedly, and killing the scan there would suppress the very UUID heal that
-        // fixes a stale IP after the TV moved (router restart).
-        viewModelScope.launch {
-            connectionState.collect { state ->
-                if (state is WebSocketClient.ConnectionState.Connected) {
-                    stopDiscovery()
-                }
-            }
-        }
+        // Keep a foreground scan independent of the current connection. One television may expose
+        // several protocols, and connecting PlayBridge must not hide DLNA/Roku/Google Cast results
+        // while the Discover tab's bounded scan window is still active.
 
-        // Handle NSD discovery for saved TV
+        // Handle Rust discovery updates for the saved native TV.
         viewModelScope.launch {
-            discoveredDevices.combine(tvDevice) { devices, savedDevice ->
+            discoveryRepository.devices.combine(tvDevice) { devices, savedDevice ->
                 Pair(devices, savedDevice)
             }.collect { (devices, savedDevice) ->
                 if (savedDevice != null && savedDevice.uuid.isNotEmpty()) {
@@ -340,11 +308,9 @@ class ConnectionViewModel(
     }
 
     fun connect(device: TvDevice) {
-        // Connecting natively supersedes any DLNA target.
-        clearDlnaTarget()
         // A deliberate connect is an explicit "watch on this TV" intent — record it as the
         // authoritative route so playback routing and the foreground-service / reconnect
-        // supervisor agree (see CONNECTION_ROUTING_PLAN.md). Cold-start auto-connect goes
+        // supervisor agree. Cold-start auto-connect goes
         // through webSocketClient.connect() directly and intentionally does NOT set this.
         castSessionManager.selectNativeRoute()
         // A deliberate connect (user picked or cast to a device) re-enables auto-connect, which a
@@ -355,7 +321,7 @@ class ConnectionViewModel(
         viewModelScope.launch {
             // The complete endpoint is live receiver state; a saved/history entry may
             // contain a stale address or predate TLS, so prefer current discovery by UUID.
-            val merged = ConnectionMerge.withDiscoveredEndpoint(device, discoveredDevices.value)
+            val merged = ConnectionMerge.withDiscoveredEndpoint(device, discoveryRepository.devices.value)
             Log.d(TAG, "Connecting to: ${merged.name} at ${merged.ip}:${merged.port} (wss=${merged.wssPort})")
             hasAttemptedInitialConnect = true
             activeConnectingDevice = merged
@@ -368,9 +334,11 @@ class ConnectionViewModel(
     }
 
     /** Select a DLNA renderer as the active cast target (drops any native session). */
-    fun selectDlnaTarget(device: TvDevice) = castSessionManager.selectDlnaTarget(device)
-
-    fun clearDlnaTarget() = castSessionManager.clearDlnaTarget()
+    fun selectDlnaTarget(device: TvDevice): Boolean {
+        val selected = castSessionManager.selectDlnaTarget(device)
+        if (selected) viewModelScope.launch { connectionStore.addToHistory(device) }
+        return selected
+    }
 
     /** Select a Roku device as the active cast target. */
     fun selectRokuTarget(device: TvDevice) {
@@ -379,8 +347,6 @@ class ConnectionViewModel(
             connectionStore.addToHistory(device)
         }
     }
-
-    fun clearRokuTarget() = castSessionManager.clearRokuTarget()
 
     fun rokuKeypress(key: String) = castSessionManager.rokuKeypress(key)
 
@@ -392,33 +358,28 @@ class ConnectionViewModel(
         }
     }
 
-    fun clearGoogleCastTarget() = castSessionManager.clearGoogleCastTarget()
+    fun disconnectExternalTarget() = castSessionManager.stopAndClearExternalTarget()
 
-    /** Cast a media item to the active DLNA target. No-op if none selected. */
-    fun playOnDlna(media: MediaItem) = castSessionManager.playOnDlna(media)
+    fun castToSelectedExternal(media: MediaItem): Boolean = castSessionManager.load(media)
 
-    fun dlnaPlay() = castSessionManager.dlnaPlay()
-    fun dlnaPause() = castSessionManager.dlnaPause()
-    fun dlnaStop() = castSessionManager.dlnaStop()
-    fun dlnaSeek(positionMs: Long) = castSessionManager.dlnaSeek(positionMs)
+    fun externalPlay() = castSessionManager.play()
+    fun externalPause() = castSessionManager.pause()
+    fun externalStop() = castSessionManager.stop()
+    fun externalSeek(positionMs: Long) = castSessionManager.seekTo(positionMs)
+    fun externalSetVolume(percent: Int) = castSessionManager.setVolume(percent)
+    fun externalAdjustVolume(up: Boolean) = castSessionManager.adjustVolume(up)
 
     /**
      * Cast an on-device file (content:// URI) to the active target. Prefers an active
-     * DLNA renderer; otherwise a connected native receiver (served via the proxy so
+     * external receiver; otherwise a connected native receiver (served via the proxy so
      * the TV can fetch it). Returns false if no target is available.
      */
     fun castLocalFile(uriString: String, mime: String?, title: String?, durationMs: Long = 0L): Boolean {
         val media = MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs)
-        if (castSessionManager.isDlnaActive) {
-            castSessionManager.playOnDlna(media)
-            return true
-        }
-        val gcTarget = castSessionManager.activeTarget.value
-        if (gcTarget != null && gcTarget.kind == TargetKind.GOOGLE_CAST) {
-            viewModelScope.launch { runCatching { gcTarget.load(media) } }
-            return true
-        }
-        if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
+        if (castSessionManager.load(media)) return true
+        if (route.value is CastSessionManager.Route.NativeTv &&
+            connectionState.value is WebSocketClient.ConnectionState.Connected
+        ) {
             viewModelScope.launch {
                 val proxyUrl = DlnaProxyHolder.proxy(getApplication<Application>())
                     .publishLocal(uriString.toUri(), mime)
@@ -437,7 +398,7 @@ class ConnectionViewModel(
 
     /**
      * Cast a web stream (e.g. an IPTV channel) with optional request [headers] to the active
-     * target. Prefers an active DLNA renderer (proxy injects headers); otherwise a connected
+     * target. Prefers an active external receiver; otherwise a connected
      * native receiver. Returns false if no target is available.
      */
     fun castWebStream(
@@ -447,16 +408,10 @@ class ConnectionViewModel(
         mime: String? = null,
     ): Boolean {
         val media = MediaItem(url = url, headers = headers, mimeType = mime, title = title)
-        if (castSessionManager.isDlnaActive) {
-            castSessionManager.playOnDlna(media)
-            return true
-        }
-        val gcTarget = castSessionManager.activeTarget.value
-        if (gcTarget != null && gcTarget.kind == TargetKind.GOOGLE_CAST) {
-            viewModelScope.launch { runCatching { gcTarget.load(media) } }
-            return true
-        }
-        if (connectionState.value is WebSocketClient.ConnectionState.Connected) {
+        if (castSessionManager.load(media)) return true
+        if (route.value is CastSessionManager.Route.NativeTv &&
+            connectionState.value is WebSocketClient.ConnectionState.Connected
+        ) {
             val cmd = createSingleVideoCommandJson(
                 PlayPayload(url = url, title = title ?: "Channel", headers = headers, content_type = mime),
             )
@@ -469,6 +424,7 @@ class ConnectionViewModel(
 
     fun disconnect() {
         activeConnectingDevice = null
+        castSessionManager.selectThisDevice()
         webSocketClient.disconnect()
         // Also disable auto-connect so it doesn't immediately reconnect
         setAutoConnectEnabled(false)
@@ -493,7 +449,7 @@ class ConnectionViewModel(
 
             // If the removed device is the currently saved one, clear it
             val currentSaved = connectionStore.tvDevice.first()
-            if (currentSaved != null && currentSaved.ip == device.ip && currentSaved.port == device.port) {
+            if (currentSaved != null && ConnectionMerge.isSameDevice(currentSaved, device)) {
                 connectionStore.clearTvDevice()
             }
         }
@@ -520,12 +476,17 @@ class ConnectionViewModel(
      * stop automatically. Idempotent for the engines (their start() is a no-op when already
      * running); calling again re-arms the timeout, so this doubles as rescan().
      */
-    fun startDiscovery() {
+    fun startDiscovery(protocols: Set<CastProtocol> = _selectedDiscoveryProtocols.value) {
+        _selectedDiscoveryProtocols.value = protocols.ifEmpty { CastProtocol.entries.toSet() }
         scanTimeoutJob?.cancel()
-        rustDiscoveryShadow.start(viewModelScope, SCAN_WINDOW_MS) { summary ->
+        discoveryRepository.start(
+            owner = ReceiverDiscoveryRepository.OWNER_UI,
+            protocols = _selectedDiscoveryProtocols.value,
+            timeoutMs = SCAN_WINDOW_MS,
+        ) { summary ->
             Log.i(
                 TAG,
-                "Rust discovery finished: PlayBridge=${summary.playBridgeDevices}, DLNA=${summary.dlnaDevices}, Roku=${summary.rokuDevices}, errors=${summary.errors}"
+                "Rust discovery finished: PlayBridge=${summary.playBridgeDevices}, DLNA=${summary.dlnaDevices}, Roku=${summary.rokuDevices}, GoogleCast=${summary.googleCastDevices}, errors=${summary.errors}"
             )
         }
         _isScanning.value = true
@@ -538,16 +499,18 @@ class ConnectionViewModel(
     /** User-triggered re-scan (e.g. the Rescan button); restarts the scan window. */
     fun rescan() = startDiscovery()
 
+    fun setDiscoveryProtocols(protocols: Set<CastProtocol>) = startDiscovery(protocols)
+
     fun stopDiscovery() {
         scanTimeoutJob?.cancel()
         scanTimeoutJob = null
-        rustDiscoveryShadow.stop()
+        discoveryRepository.stop(ReceiverDiscoveryRepository.OWNER_UI)
         _isScanning.value = false
     }
 
     override fun onCleared() {
         super.onCleared()
-        rustDiscoveryShadow.stop()
+        discoveryRepository.stop(ReceiverDiscoveryRepository.OWNER_UI)
         // While a cast session is active, CastSessionManager + CastSessionService own the
         // socket's lifetime — episode queueing must survive this ViewModel (screen-off /
         // activity death). Otherwise close the socket as before. Never destroy(): the

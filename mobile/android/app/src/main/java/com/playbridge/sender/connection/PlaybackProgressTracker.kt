@@ -52,8 +52,8 @@ data class InAppContent(
  *    — written every ~10s / on pause / on skip-away, deleted once watched, pruned
  *    after ~6 months. Surfaced in the library detail screen.
  *
- * Covers both transports: native (TV-pushed status/playlist echo) and DLNA (polled
- * status + the visual_metadata attached to the loaded MediaItem).
+ * Covers native playback (TV-pushed status/playlist echo) and external receivers
+ * (protocol status + the visual_metadata attached to the loaded MediaItem).
  *
  * Safety: tracks nothing without a tmdbId (browser-detected videos have none), vetoes
  * on a title mismatch (another phone's content), never regresses progress, and dedups
@@ -160,13 +160,13 @@ class PlaybackProgressTracker(
             ) { pb, pl, id, season, ctx -> Tick(pb, pl, id, season, ctx) }
                 .collect { onTick(it) }
         }
-        // DLNA leg: the renderer has no playlist echo — identity comes from the
+        // External-receiver leg: there is no native playlist echo — identity comes from the
         // visual_metadata the phone attached to the loaded MediaItem.
         scope.launch {
             combine(
-                castSessionManager.dlnaStatus,
-                castSessionManager.dlnaNowPlayingMeta,
-                castSessionManager.activeDlnaTarget,
+                castSessionManager.externalStatus,
+                castSessionManager.externalNowPlayingMeta,
+                castSessionManager.activeExternalDevice,
             ) { status, meta, target -> Triple(status, meta, target) }
                 .collect { (status, meta, target) -> onDlnaTick(status, meta, target != null) }
         }

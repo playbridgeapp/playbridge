@@ -10,12 +10,14 @@ import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.TargetKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -29,25 +31,32 @@ class DlnaCastTarget(
     override val id: String,
     override val name: String,
     private val avTransport: AvTransportClient,
+    private val renderingControl: RenderingControlClient? = null,
     private val proxy: LocalProxyServer,
 ) : CastTarget {
 
     override val kind = TargetKind.DLNA
 
-    override val capabilities = setOf(
+    override val capabilities = buildSet {
+        addAll(setOf(
         Capability.LOAD,
         Capability.PLAY_PAUSE,
         Capability.SEEK,
         Capability.STOP,
         Capability.NOW_PLAYING,
-    )
+        ))
+        if (renderingControl != null) add(Capability.VOLUME)
+    }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var currentProxyUrl: String? = null
     @Volatile private var cachedDurationMs = 0L
     @Volatile private var durationTries = 0
+    private val _status = MutableStateFlow(PlaybackStatus(PlaybackState.IDLE))
+    private var pollJob: Job? = null
 
     override suspend fun load(media: MediaItem) {
+        _status.value = PlaybackStatus(PlaybackState.BUFFERING)
         cachedDurationMs = media.durationMs.coerceAtLeast(0L) // e.g. MediaStore for local files
         durationTries = 0
         val proxyUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
@@ -59,6 +68,8 @@ class DlnaCastTarget(
         // SetAVTransportURI resets the playhead to 0; Play then starts the hand-off.
         avTransport.setAvTransportUri(proxyUrl)
         avTransport.play()
+        _status.value = PlaybackStatus(PlaybackState.PLAYING)
+        startPolling()
 
         // Resume point: seek once the renderer has begun playback (an immediate Seek is
         // ignored by most renderers while still TRANSITIONING). Poll the transport state
@@ -96,6 +107,7 @@ class DlnaCastTarget(
 
     override suspend fun play() {
         avTransport.play()
+        startPolling()
     }
 
     override suspend fun pause() {
@@ -104,49 +116,69 @@ class DlnaCastTarget(
 
     override suspend fun stop() {
         avTransport.stop()
+        stopPolling()
+        _status.value = PlaybackStatus(PlaybackState.STOPPED)
     }
 
     override suspend fun seekTo(positionMs: Long) {
         avTransport.seek(formatTime(positionMs))
     }
 
-    /** No RenderingControl wired yet (P3). */
-    override suspend fun setVolume(percent: Int) = Unit
+    override suspend fun setVolume(percent: Int) {
+        renderingControl?.setVolume(percent)
+    }
 
-    override fun status(): Flow<PlaybackStatus> = flow {
-        while (true) {
-            val pos = avTransport.getPositionInfo()
-            val state = mapState(avTransport.getTransportState())
-            val live = proxy.isLiveStream
-            // Duration, renderer-first: TrackDuration, else GetMediaInfo (a few tries), else our
-            // HLS playlist #EXTINF sum (the proxy's vodDurationMs — MediaMetadataRetriever can't
-            // read .m3u8), else our probed/seeded value. Live streams have no fixed total.
-            var durationMs = if (live) 0L else parseTime(pos?.trackDuration)
-            if (!live && durationMs <= 0L) {
-                if (cachedDurationMs <= 0L && durationTries < 20) {
-                    durationTries++
-                    cachedDurationMs = parseTime(avTransport.getMediaDuration())
+    suspend fun adjustVolume(delta: Int) {
+        val control = renderingControl ?: return
+        val current = control.getVolume() ?: return
+        control.setVolume(current + delta)
+    }
+
+    override fun status(): Flow<PlaybackStatus> = _status.asStateFlow()
+
+    private fun startPolling() {
+        if (pollJob?.isActive == true) return
+        pollJob = scope.launch {
+            while (isActive) {
+                runCatching {
+                    val pos = avTransport.getPositionInfo()
+                    val state = mapState(avTransport.getTransportState())
+                    val live = proxy.isLiveStream
+                    // Duration, renderer-first: TrackDuration, else GetMediaInfo (a few tries),
+                    // else the proxy's HLS duration, then the probed/seeded duration.
+                    var durationMs = if (live) 0L else parseTime(pos?.trackDuration)
+                    if (!live && durationMs <= 0L) {
+                        if (cachedDurationMs <= 0L && durationTries < 20) {
+                            durationTries++
+                            cachedDurationMs = parseTime(avTransport.getMediaDuration())
+                        }
+                        if (cachedDurationMs <= 0L && proxy.vodDurationMs > 0L) {
+                            cachedDurationMs = proxy.vodDurationMs
+                        }
+                        durationMs = cachedDurationMs
+                    } else if (durationMs > 0L) {
+                        cachedDurationMs = durationMs
+                    }
+                    _status.value = PlaybackStatus(
+                        state = state,
+                        positionMs = parseTime(pos?.relTime),
+                        durationMs = durationMs,
+                        isLive = live,
+                    )
+                    if (state == PlaybackState.STOPPED) stopPolling()
                 }
-                if (cachedDurationMs <= 0L && proxy.vodDurationMs > 0L) {
-                    cachedDurationMs = proxy.vodDurationMs
-                }
-                durationMs = cachedDurationMs
-            } else if (durationMs > 0L) {
-                cachedDurationMs = durationMs
+                delay(POLL_INTERVAL_MS)
             }
-            emit(
-                PlaybackStatus(
-                    state = state,
-                    positionMs = parseTime(pos?.relTime),
-                    durationMs = durationMs,
-                    isLive = live,
-                ),
-            )
-            delay(POLL_INTERVAL_MS)
         }
-    }.flowOn(Dispatchers.IO)
+    }
+
+    private fun stopPolling() {
+        pollJob?.cancel()
+        pollJob = null
+    }
 
     override fun release() {
+        stopPolling()
         scope.cancel()
         // Proxy sessions are LRU-evicted, so there's nothing to free per-target.
         currentProxyUrl = null

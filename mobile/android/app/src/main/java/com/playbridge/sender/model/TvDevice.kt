@@ -25,11 +25,84 @@ data class TvDevice(
     // TvCapabilityOptions. Empty until we've authed with a capability-reporting receiver.
     val players: List<String> = emptyList(),
     val browsers: List<String> = emptyList(),
+    // New protocol-qualified model. Null is retained only so records written by older builds can
+    // be decoded and migrated using the legacy booleans below.
+    val protocol: CastProtocol? = null,
+    // Rust discovery can return multiple IPv4/IPv6 endpoints. [ip] remains the preferred address
+    // for compatibility with the existing WebSocket and UI call sites during migration.
+    val addresses: List<String> = emptyList(),
     // DLNA/UPnP renderer discovered via SSDP (not the native WS receiver). When true,
     // [controlUrl] is the AVTransport SOAP endpoint and there is no token/pairing.
     val isDlna: Boolean = false,
     val isRoku: Boolean = false,
     val isGoogleCast: Boolean = false,
+    val descriptionUrl: String? = null,
     val controlUrl: String? = null,
+    val renderingControlUrl: String? = null,
     val lastConnected: Long = System.currentTimeMillis()
-)
+) {
+    val resolvedProtocol: CastProtocol
+        get() = protocol ?: when {
+            isDlna -> CastProtocol.DLNA
+            isRoku -> CastProtocol.ROKU
+            isGoogleCast -> CastProtocol.GOOGLE_CAST
+            else -> CastProtocol.PLAYBRIDGE
+        }
+
+    val endpointKey: EndpointKey
+        get() = EndpointKey(
+            protocol = resolvedProtocol,
+            stableId = uuid.ifEmpty { "${addresses.firstOrNull() ?: ip}:${port}" },
+        )
+
+    fun toReceiverEndpoint(): ReceiverEndpoint = ReceiverEndpoint(
+        key = endpointKey,
+        name = name,
+        addresses = (addresses.ifEmpty { listOf(ip) }).filter(String::isNotBlank).distinct(),
+        port = port.takeIf { it > 0 },
+        wssPort = wssPort,
+        logsPort = logsPort,
+        descriptionUrl = descriptionUrl,
+        controlUrl = controlUrl,
+        renderingControlUrl = renderingControlUrl,
+    )
+
+    fun toSavedEndpoint(): SavedReceiverEndpoint = SavedReceiverEndpoint(
+        endpoint = toReceiverEndpoint(),
+        playBridgeCredentials = if (resolvedProtocol == CastProtocol.PLAYBRIDGE) {
+            PlayBridgeCredentials(token, certFingerprint, players, browsers)
+        } else {
+            null
+        },
+        lastConnected = lastConnected,
+    )
+
+    companion object {
+        fun fromSavedEndpoint(saved: SavedReceiverEndpoint): TvDevice {
+            val endpoint = saved.endpoint
+            val address = endpoint.preferredAddress.orEmpty()
+            val credentials = saved.playBridgeCredentials
+            return TvDevice(
+                ip = address,
+                port = endpoint.effectivePort ?: 0,
+                token = credentials?.token.orEmpty(),
+                name = endpoint.name,
+                uuid = endpoint.key.stableId,
+                wssPort = endpoint.wssPort,
+                logsPort = endpoint.logsPort,
+                certFingerprint = credentials?.certFingerprint,
+                players = credentials?.players.orEmpty(),
+                browsers = credentials?.browsers.orEmpty(),
+                protocol = endpoint.protocol,
+                addresses = endpoint.addresses,
+                isDlna = endpoint.protocol == CastProtocol.DLNA,
+                isRoku = endpoint.protocol == CastProtocol.ROKU,
+                isGoogleCast = endpoint.protocol == CastProtocol.GOOGLE_CAST,
+                descriptionUrl = endpoint.descriptionUrl,
+                controlUrl = endpoint.controlUrl,
+                renderingControlUrl = endpoint.renderingControlUrl,
+                lastConnected = saved.lastConnected,
+            )
+        }
+    }
+}

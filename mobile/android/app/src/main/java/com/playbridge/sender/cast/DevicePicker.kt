@@ -1,6 +1,4 @@
 package com.playbridge.sender.cast
-import androidx.core.content.edit
-
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -53,14 +51,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.platform.LocalContext
-import android.content.Context
 import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.sender.connection.ConnectionMerge
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.ui.TvDeviceRow
-import com.playbridge.sender.ui.buildUnifiedDevices
 import com.playbridge.sender.ui.connectKnownOrPair
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
@@ -76,7 +73,7 @@ private val ConnectingOrange = Color(0xFFFF9800)
  *
  * Presentation-only and self-contained — it reads the active [ConnectionViewModel] for its label
  * and status, so callers don't thread device lists/handlers down. Host-specific side effects go
- * through [onPickedThisDevice] / [onPickedDevice] (e.g. the `watch_on_tv` preference).
+ * through [onPickedThisDevice] / [onPickedDevice].
  *
  * @param showThisDevice include a "This Device" (play on phone) entry — false in the Cast sheet.
  * @param castStatusLabel use cast-target status wording ("<device name>" when connected,
@@ -97,30 +94,35 @@ fun DeviceChip(
     val viewModel: ConnectionViewModel = koinViewModel()
     val connectionState by viewModel.connectionState.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
-    val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
+    val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
+    val route by viewModel.route.collectAsState()
 
-    val isDlna = activeDlnaTarget != null
-    val isConnected = isDlna || connectionState is WebSocketClient.ConnectionState.Connected
-    val isConnecting = !isDlna && (
+    val externalSelected = route is CastSessionManager.Route.External && activeExternalDevice != null
+    val nativeSelected = route is CastSessionManager.Route.NativeTv
+    val isConnected = externalSelected ||
+        (nativeSelected && connectionState is WebSocketClient.ConnectionState.Connected)
+    val isConnecting = nativeSelected && (
         connectionState is WebSocketClient.ConnectionState.Connecting ||
             connectionState is WebSocketClient.ConnectionState.Retrying ||
             connectionState is WebSocketClient.ConnectionState.WaitingForApproval
         )
 
-    val name = activeDlnaTarget?.name ?: tvDevice?.name
+    val name = if (externalSelected) activeExternalDevice?.name else tvDevice?.name
     val label = when {
         castStatusLabel -> when {
             isConnected -> name ?: "TV"
             isConnecting -> "Connecting…"
+            nativeSelected -> name ?: "TV"
             else -> "Not connected"
         }
         isConnected -> "Watching on: ${name ?: "TV"}"
         isConnecting -> "Connecting to: ${name ?: "TV"}…"
+        nativeSelected -> "Watching on: ${name ?: "TV"}"
         else -> "Watching on: This Device"
     }
     val icon = when {
-        isDlna -> Icons.Default.Cast
-        isConnected || isConnecting -> Icons.Default.Tv
+        externalSelected -> Icons.Default.Cast
+        nativeSelected -> Icons.Default.Tv
         else -> Icons.Default.Smartphone
     }
     val iconTint = when {
@@ -204,11 +206,11 @@ fun DeviceChip(
 
 /**
  * Bottom-sheet device picker: a minimal version of the full TV Connection screen. Shows the active
- * cast target (with Disconnect), an optional "This Device" entry, the scannable "Your TVs" list
- * (saved + discovered, reusing [TvDeviceRow]), and an "All devices" link to the full screen.
+ * cast target (with Disconnect), an optional "This Device" entry, the saved "Your TVs" list,
+ * and an "All devices" link to the full discovery screen.
  *
  * Self-sources the activity [ConnectionViewModel] and drives connect/disconnect/DLNA directly;
- * [onPickedThisDevice] / [onPickedDevice] are host hooks for side effects like `watch_on_tv`.
+ * [onPickedThisDevice] / [onPickedDevice] are optional host hooks after routing changes.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -219,20 +221,22 @@ fun DeviceConnectionSheet(
     onPickedThisDevice: (() -> Unit)? = null,
     onPickedDevice: ((TvDevice) -> Unit)? = null
 ) {
-    val context = LocalContext.current
-    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val viewModel: ConnectionViewModel = koinViewModel()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
     val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
     val connectionState by viewModel.connectionState.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
-    val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
+    val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
+    val route by viewModel.route.collectAsState()
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-    val isConnecting = connectionState is WebSocketClient.ConnectionState.Connecting ||
-        connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
-        connectionState is WebSocketClient.ConnectionState.Retrying
-    val onPhone = !isConnected && !isConnecting && activeDlnaTarget == null
+    val nativeSelected = route is CastSessionManager.Route.NativeTv
+    val isConnecting = nativeSelected && (
+        connectionState is WebSocketClient.ConnectionState.Connecting ||
+            connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
+            connectionState is WebSocketClient.ConnectionState.Retrying
+        )
+    val onPhone = route is CastSessionManager.Route.ThisDevice
 
     // Ping saved devices when history changes or sheet is opened
     LaunchedEffect(history) {
@@ -240,7 +244,7 @@ fun DeviceConnectionSheet(
     }
 
     val unified = history.map { saved ->
-        val isOnline = pings[saved.uuid] == true
+        val isOnline = pings[saved.endpointKey.toString()] == true
         UnifiedDevice(
             connectDevice = saved,
             historyEntry = saved,
@@ -248,10 +252,10 @@ fun DeviceConnectionSheet(
             lastConnected = saved.lastConnected
         )
     }.filterNot { u ->
-        isConnected && tvDevice?.let { c ->
-            (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
-                (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
-        } == true
+        activeExternalDevice?.let { ConnectionMerge.isSameDevice(u.connectDevice, it) } == true ||
+            (nativeSelected && isConnected && tvDevice?.let { c ->
+                ConnectionMerge.isSameDevice(u.connectDevice, c)
+            } == true)
     }.sortedWith(
         compareByDescending<UnifiedDevice> { it.isOnline }
             .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
@@ -274,26 +278,25 @@ fun DeviceConnectionSheet(
             )
 
             // Active target card (DLNA / connected TV) or a connecting indicator.
-            val dlna = activeDlnaTarget
+            val external = activeExternalDevice
             when {
-                dlna != null -> ActiveDeviceCard(
-                    name = dlna.name,
-                    subtitle = "${dlna.ip} · cast a video to play here",
+                external != null -> ActiveDeviceCard(
+                    name = external.name,
+                    subtitle = "${external.ip} · cast a video to play here",
                     icon = Icons.Default.Cast,
-                    badge = "DLNA",
+                    badge = external.resolvedProtocol.displayName,
                     onDisconnect = {
-                        viewModel.dlnaStop()
-                        viewModel.clearDlnaTarget()
+                        viewModel.disconnectExternalTarget()
                         onDismiss()
                     }
                 )
-                isConnected -> {
+                nativeSelected && isConnected -> {
                     val connected = connectionState as WebSocketClient.ConnectionState.Connected
                     ActiveDeviceCard(
                         name = connected.serverName,
                         subtitle = tvDevice?.let { "${it.ip}:${it.port}" },
                         icon = Icons.Default.Tv,
-                        badge = null,
+                        badge = CastProtocol.PLAYBRIDGE.displayName,
                         onDisconnect = {
                             // A manual disconnect is a deliberate "stop watching on TV":
                             // route back to this phone so nothing tries to reconnect.
@@ -312,7 +315,7 @@ fun DeviceConnectionSheet(
             // Player-engine picker, shown with the connected TV it configures (native
             // sessions only — DLNA renderers pick their own player). Options reflect
             // what this TV reported at auth; the choice persists via SettingsRepository.
-            if (isConnected && dlna == null) {
+            if (nativeSelected && isConnected && external == null) {
                 val settingsRepository: SettingsRepository = koinInject()
                 val playerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
                 val scope = rememberCoroutineScope()
@@ -344,10 +347,8 @@ fun DeviceConnectionSheet(
                 ThisDeviceRow(
                     selected = onPhone,
                     onClick = {
-                        // Authoritative routing intent (see CONNECTION_ROUTING_PLAN.md).
+                        // Authoritative routing intent.
                         viewModel.selectThisDevice()
-                        viewModel.disconnect()
-                        browserPrefs.edit { putBoolean("watch_on_tv", false) }
                         onPickedThisDevice?.invoke()
                         onDismiss()
                     }
@@ -402,10 +403,10 @@ fun DeviceConnectionSheet(
 
                 val filtered = unified.filter { u ->
                     when (selectedProtocolFilter) {
-                        "PlayBridge" -> !u.connectDevice.isDlna && !u.connectDevice.isRoku && !u.connectDevice.isGoogleCast
-                        "DLNA" -> u.connectDevice.isDlna
-                        "Roku" -> u.connectDevice.isRoku
-                        "Google Cast" -> u.connectDevice.isGoogleCast
+                        "PlayBridge" -> u.connectDevice.resolvedProtocol == CastProtocol.PLAYBRIDGE
+                        "DLNA" -> u.connectDevice.resolvedProtocol == CastProtocol.DLNA
+                        "Roku" -> u.connectDevice.resolvedProtocol == CastProtocol.ROKU
+                        "Google Cast" -> u.connectDevice.resolvedProtocol == CastProtocol.GOOGLE_CAST
                         else -> true
                     }
                 }
@@ -414,26 +415,36 @@ fun DeviceConnectionSheet(
                     TvDeviceRow(
                         device = device,
                         onClick = {
-                            if (device.connectDevice.isDlna) {
-                                viewModel.selectDlnaTarget(device.connectDevice)
-                            } else if (device.connectDevice.isRoku) {
-                                viewModel.selectRokuTarget(device.connectDevice)
-                            } else if (device.connectDevice.isGoogleCast) {
-                                viewModel.selectGoogleCastTarget(device.connectDevice)
-                            } else {
-                                viewModel.selectNativeRoute()
-                                connectKnownOrPair(
-                                    viewModel,
-                                    history,
-                                    device.connectDevice.ip,
-                                    device.connectDevice.port,
-                                    device.connectDevice.name,
-                                    device.connectDevice.uuid
-                                )
+                            val ready = when (device.connectDevice.resolvedProtocol) {
+                                CastProtocol.DLNA -> viewModel.selectDlnaTarget(device.connectDevice)
+                                CastProtocol.ROKU -> true.also {
+                                    viewModel.selectRokuTarget(device.connectDevice)
+                                }
+                                CastProtocol.GOOGLE_CAST -> true.also {
+                                    viewModel.selectGoogleCastTarget(device.connectDevice)
+                                }
+                                CastProtocol.PLAYBRIDGE -> {
+                                    viewModel.selectNativeRoute()
+                                    val alreadyLinked = isConnected && tvDevice?.let {
+                                        ConnectionMerge.isSameDevice(it, device.connectDevice)
+                                    } == true
+                                    if (!alreadyLinked) {
+                                        connectKnownOrPair(
+                                            viewModel,
+                                            history,
+                                            device.connectDevice.ip,
+                                            device.connectDevice.port,
+                                            device.connectDevice.name,
+                                            device.connectDevice.uuid
+                                        )
+                                    }
+                                    true
+                                }
                             }
-                            browserPrefs.edit { putBoolean("watch_on_tv", true) }
-                            onPickedDevice?.invoke(device.connectDevice)
-                            onDismiss()
+                            if (ready) {
+                                onPickedDevice?.invoke(device.connectDevice)
+                                onDismiss()
+                            }
                         },
                         onRemove = device.historyEntry?.let { entry ->
                             { viewModel.removeDeviceFromHistory(entry) }

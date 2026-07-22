@@ -658,7 +658,8 @@ class WebSocketClient {
             } else {
                 freshDevice.name == conn.serverName
             })
-        if (freshDevice != null && !freshDevice.isDlna &&
+        if (freshDevice != null &&
+            freshDevice.resolvedProtocol == com.playbridge.sender.model.CastProtocol.PLAYBRIDGE &&
             freshDevice.token.isNotEmpty() && sameReceiver &&
             (freshDevice.ip != conn.ip || freshDevice.port != conn.port ||
                 freshDevice.wssPort != conn.wssPort || freshDevice.token != conn.token ||

@@ -1,6 +1,4 @@
 package com.playbridge.sender.library
-import androidx.core.content.edit
-
 import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -70,7 +68,6 @@ import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import androidx.compose.ui.graphics.painter.ColorPainter
 import com.playbridge.sender.data.library.*
-import com.playbridge.sender.connection.WebSocketClient
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -97,7 +94,6 @@ fun LibraryScreen(
     installedAddons: List<InstalledAddonEntity>,
     onOpenUrl: (String) -> Unit,
     tvName: String? = null,
-    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
     onOpenConnectionScreen: () -> Unit = {},
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
@@ -135,7 +131,6 @@ fun LibraryScreen(
             installedAddons = installedAddons,
             onOpenUrl = onOpenUrl,
             tvName = tvName,
-            connectionState = connectionState,
             onOpenConnectionScreen = onOpenConnectionScreen,
             onMenuClick = onMenuClick,
             onMovieClick = onMovieClick,
@@ -163,7 +158,6 @@ private fun LibraryScreenContent(
     installedAddons: List<InstalledAddonEntity>,
     onOpenUrl: (String) -> Unit,
     tvName: String?,
-    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
     onOpenConnectionScreen: () -> Unit = {},
     onMenuClick: () -> Unit,
     onMovieClick: (Int) -> Unit,
@@ -180,21 +174,6 @@ private fun LibraryScreenContent(
     onSearchFocused: () -> Unit,
     onStartSearch: () -> Unit,
 ) {
-    val context = LocalContext.current
-    val browserPrefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
-
-    LaunchedEffect(connectionState) {
-        if (connectionState is WebSocketClient.ConnectionState.Connected) {
-            browserPrefs.edit { putBoolean("watch_on_tv", true) }
-        } else if (connectionState is WebSocketClient.ConnectionState.Disconnected ||
-                   connectionState is WebSocketClient.ConnectionState.Error ||
-                   connectionState is WebSocketClient.ConnectionState.AuthFailed ||
-                   connectionState is WebSocketClient.ConnectionState.PairingDenied ||
-                   connectionState is WebSocketClient.ConnectionState.PinMismatch) {
-            browserPrefs.edit { putBoolean("watch_on_tv", false) }
-        }
-    }
-
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // Check if API key is configured (only needed for Browse/search)
@@ -909,4 +888,3 @@ private fun LibraryScreenContent(
     }
     }
 }
-

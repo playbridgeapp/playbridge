@@ -80,13 +80,18 @@ class GoogleCastTarget(
             return
         }
 
-        // Serve media through the local proxy so the Chromecast can reach header-
-        // protected streams and local files.
+        // Relay only when the receiver cannot fetch the source itself. Public HTTP(S) media
+        // without custom headers goes direct to Cast, avoiding needless phone bandwidth,
+        // wake time, and a single point of failure during long playback.
         val proxy = DlnaProxyHolder.proxy(context)
         val proxyUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
             proxy.publishLocal(media.url.toUri(), media.mimeType)
-        } else {
+        } else if (media.headers.isNotEmpty() ||
+            (!media.url.startsWith("http://") && !media.url.startsWith("https://"))
+        ) {
             proxy.publish(media.url, media.headers, media.mimeType)
+        } else {
+            media.url
         }
 
         val ok = withContext(Dispatchers.IO) {
@@ -126,6 +131,12 @@ class GoogleCastTarget(
 
     override suspend fun setVolume(percent: Int) {
         val level = (percent / 100f).coerceIn(0f, 1f)
+        withContext(Dispatchers.IO) { client.setVolume(level) }
+    }
+
+    suspend fun adjustVolume(delta: Float) {
+        if (!ensureConnected()) return
+        val level = ((client.receiverVolume ?: 0.5f) + delta).coerceIn(0f, 1f)
         withContext(Dispatchers.IO) { client.setVolume(level) }
     }
 

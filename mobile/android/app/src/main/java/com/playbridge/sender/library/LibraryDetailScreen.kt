@@ -166,9 +166,9 @@ fun LibraryDetailScreen(
     val browserPrefs = remember { context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
     val browserSettings = remember { context.getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
     // Routing intent is authoritative and reactive: it follows the device picker / route
-    // live (see CONNECTION_ROUTING_PLAN.md). Deriving it from [routeTargetsTv] — rather than
-    // a one-time snapshot of the old `watch_on_tv` pref — is what fixes "switch to This
-    // Device on this screen, but it still casts to the TV": the previous local state never
+    // live. Deriving it from [routeTargetsTv] — rather than
+    // a one-time preference snapshot — is what fixes "switch to This Device on this screen,
+    // but it still casts to the TV": the previous local state never
     // updated until the screen was recomposed from scratch.
     val watchOnTv = routeTargetsTv
 

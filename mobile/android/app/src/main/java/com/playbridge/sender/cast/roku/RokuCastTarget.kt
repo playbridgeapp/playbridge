@@ -1,12 +1,14 @@
 package com.playbridge.sender.cast.roku
 
-import android.util.Log
+import android.content.Context
+import androidx.core.net.toUri
 import com.playbridge.sender.cast.Capability
 import com.playbridge.sender.cast.CastTarget
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.TargetKind
+import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +23,7 @@ import kotlinx.coroutines.launch
 class RokuCastTarget(
     val device: TvDevice,
     private val scope: CoroutineScope,
+    private val context: Context,
     private val client: RokuClient = RokuClient(),
 ) : CastTarget {
 
@@ -32,6 +35,7 @@ class RokuCastTarget(
         Capability.LOAD,
         Capability.PLAY_PAUSE,
         Capability.STOP,
+        Capability.VOLUME,
         Capability.REMOTE,
         Capability.NOW_PLAYING,
     )
@@ -40,10 +44,18 @@ class RokuCastTarget(
     private var pollJob: Job? = null
 
     override suspend fun load(media: MediaItem) {
+        val proxy = DlnaProxyHolder.proxy(context)
+        val reachableUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
+            proxy.publishLocal(media.url.toUri(), media.mimeType)
+        } else if (media.headers.isNotEmpty()) {
+            proxy.publish(media.url, media.headers, media.mimeType)
+        } else {
+            media.url
+        }
         val ok = client.launchMedia(
             host = device.ip,
             port = device.port.takeIf { it > 0 } ?: 8060,
-            url = media.url,
+            url = reachableUrl,
             title = media.title
         )
         if (ok) {
@@ -72,14 +84,7 @@ class RokuCastTarget(
         // Roku ECP does not support arbitrary Seek over keypress easily; no-op or fast forward/rewind
     }
 
-    override suspend fun setVolume(percent: Int) {
-        // Roku TV supports VolumeUp / VolumeDown keypresses
-        if (percent > 50) {
-            sendKeypress("VolumeUp")
-        } else {
-            sendKeypress("VolumeDown")
-        }
-    }
+    override suspend fun setVolume(percent: Int) = Unit
 
     fun sendKeypress(key: String) {
         scope.launch(Dispatchers.IO) {
