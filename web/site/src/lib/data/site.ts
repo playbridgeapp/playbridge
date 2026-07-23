@@ -19,9 +19,8 @@ export type Platform = {
 };
 
 export const SENDERS: Platform[] = [
-  { icon: 'android', name: 'Android app', desc: 'Browse, search, and send anything to a player.' }
-  // Hidden for now — the Firefox extension sender is not being promoted.
-  // { icon: 'firefox', name: 'Firefox extension', desc: 'Send links from any tab — right-click → cast.' }
+  { icon: 'android', name: 'Android app', desc: 'Browse, search, and send anything to a player.' },
+  { icon: 'firefox', name: 'Browser extension', desc: 'Detect & cast media from Firefox or Chrome tabs.' }
 ];
 
 export const PLAYERS: Platform[] = [
@@ -287,24 +286,42 @@ export const INSTALL_TABS: InstallTab[] = [
     cmd: '',
     meta: []
   },
-  // Hidden for now — the Firefox extension sender is not being promoted.
-  // {
-  //   id: 'firefox',
-  //   label: 'Firefox',
-  //   role: 'sender',
-  //   icon: 'firefox',
-  //   title: 'Firefox extension',
-  //   steps: [
-  //     ['Download', 'Latest .xpi from GitHub Releases.'],
-  //     ['Install', 'Drag the .xpi onto Firefox.'],
-  //     ['Right-click links', 'Send any link to a player.']
-  //   ],
-  //   cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=9f2d8e&expanded=true',
-  //   downloadUrl: '/download/firefox',
-  //   meta: [
-  //     ['sha256', '77fa…d3e2'],
-  //     ['size', '3.2 MB'],
-  //     ['min', 'Firefox 109']
-  //   ]
-  // }
+  {
+    id: 'chrome',
+    label: 'Chrome',
+    role: 'sender',
+    icon: 'desktop',
+    title: 'Chrome Extension',
+    steps: [
+      ['Open Store', 'Install PlayBridge Video Detector from Chrome Web Store.'],
+      ['Pair Desktop', 'Run PlayBridge desktop receiver to handle casting.'],
+      ['Cast Videos', 'Detect and cast streams from web pages with one click.']
+    ],
+    cmd: 'chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim',
+    downloadUrl: 'https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en',
+    meta: [
+      ['store', 'Chrome Web Store'],
+      ['platform', 'Chrome, Brave, Edge'],
+      ['status', 'Published']
+    ]
+  },
+  {
+    id: 'firefox',
+    label: 'Firefox',
+    role: 'sender',
+    icon: 'firefox',
+    title: 'Firefox Extension',
+    steps: [
+      ['Open Store', 'Install PlayBridge Video Detector from Firefox Add-ons.'],
+      ['Pair Desktop', 'Run PlayBridge desktop receiver to handle casting.'],
+      ['Cast Videos', 'Detect and cast streams from web pages with one click.']
+    ],
+    cmd: 'addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector',
+    downloadUrl: 'https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/',
+    meta: [
+      ['store', 'Firefox Add-ons'],
+      ['platform', 'Firefox Desktop'],
+      ['status', 'Published']
+    ]
+  }
 ];

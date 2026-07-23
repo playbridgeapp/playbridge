@@ -144,17 +144,25 @@
                 rel="noopener noreferrer"
                 class="btn btn--primary"
               >
-                <Icon name="download" size={13} stroke={2.0} /> Download
+                {#if tab.downloadUrl.startsWith('https://')}
+                  <Icon name="link" size={13} stroke={2.0} /> Get Extension
+                {:else}
+                  <Icon name="download" size={13} stroke={2.0} /> Download
+                {/if}
               </a>
             {/if}
             <a
-              href={'https://' + tab.cmd}
+              href={tab.cmd.startsWith('http') ? tab.cmd : 'https://' + tab.cmd}
               target="_blank"
               rel="noopener noreferrer"
               class="btn"
               class:btn--primary={!tab.downloadUrl}
             >
-              <Icon name="github" size={13} /> View on GitHub
+              {#if tab.cmd.includes('github.com')}
+                <Icon name="github" size={13} /> View on GitHub
+              {:else}
+                <Icon name="link" size={13} /> Open Store
+              {/if}
             </a>
           {/if}
         </div>
