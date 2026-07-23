@@ -24,6 +24,8 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 | `playbridge-extension` | Browser extension and native-messaging integration |
 | `playbridge-web` | Svelte website and static web assets |
 | `playbridge-protocol` | Protocol schema, generated bindings, and consumer compatibility |
+| `playbridge-rust-core` | Portable Rust casting engine, UniFFI/C/JNI bindings, and Rust CLI |
+| `playbridge-stream-proxy-rust` | High-performance Rust streaming proxy and MediaFlow encryption |
 
 Before working in a project, load the matching specialist skill. For cross-project work, load each affected specialist or delegate non-overlapping consumers to subagents using those skills. Keep shared contracts and files with one designated writer, and keep the primary agent responsible for integration and final verification.
 
@@ -43,7 +45,10 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Apple phone | `mobile/apple/` | Swift/Xcode project |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver for macOS, Windows, and Linux |
-| Stream proxy | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
+| Stream proxy (Dart) | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
+| Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption |
+| Rust Core & FFI | `cast/core/`, `cast/ffi/` | Portable Rust receiver discovery/casting core and UniFFI/C/JNI bindings |
+| Rust CLI | `cli/` | Command-line client binary (`playbridge`) for Rust Core |
 | Extension | `extension/` | Browser extension, JavaScript/TypeScript |
 | Web | `web/` | Svelte site |
 | Protocol assets | `protocol/` | In-repository AsyncAPI contract, protocol documentation, and generated artifacts |
