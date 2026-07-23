@@ -42,7 +42,7 @@ The PlayBridge senders and extensions are available on official store registries
 
 * **Android Phone (Sender)**:
   * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
-  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=5c9b2f&expanded=true).
 * **Browser Extension (Sender — Firefox & Chrome)**:
   * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
   * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
