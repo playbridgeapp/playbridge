@@ -65,11 +65,29 @@ The PlayBridge senders and extensions are available on official store registries
 
 ## How to connect & cast
 
-1. Connect your phone and receiver to the **same Wi-Fi network**, and open the PlayBridge app on both.
-2. On the phone, tap the **device chip** (top of the Library and browser cast screens) — it lists discovered receivers. Tap yours to connect.
-   - *Not discovered?* Tap **"All devices & manual connect"** and enter the receiver's IP address (shown on its screen).
-3. On first connect, the receiver displays a **6-digit pairing code**. Enter it on the phone to verify and secure the connection — devices you've already paired reconnect automatically.
-4. Browse any video site in the phone browser, play a video, and tap cast when PlayBridge detects the stream — or send a movie/episode directly from the Library.
+PlayBridge provides multiple ways to discover receivers and cast media — using your phone, browser extension, Desktop app, or command-line CLI.
+
+### 1. Connect on the same Wi-Fi
+
+Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) and target receiver (Android TV, Apple TV, Desktop app, or DLNA Smart TV) are connected to the **same local Wi-Fi network**.
+
+### 2. Discover & Pair Receivers
+
+- **Automatic Discovery**: Open PlayBridge on your phone or Desktop app. Tap the **device chip** to see automatically discovered receivers on your network (via mDNS & UPnP).
+- **Manual IP Connect**: If a receiver isn't listed automatically, enter the receiver's IP address (displayed on its home screen).
+- **Secure 6-Digit Pairing**: On your first connection to a PlayBridge receiver (Android TV, Apple TV, Desktop), a **6-digit pairing PIN** appears on the receiver screen. Enter it on your sender to establish a secure, encrypted connection (`wss://`). Paired devices auto-reconnect on future sessions.
+- **DLNA / UPnP Smart TVs**: Discovered automatically on your local network without requiring a pairing PIN.
+
+### 3. Choose your Sender
+
+- 📱 **Phone App (Android / iOS)**: Browse video sites in the built-in ad-blocked browser, cast movies/episodes from your Stremio library and add-ons, load IPTV playlists, or stream local phone files.
+- 🖥️ **Desktop App (Receiver & Sender)**: Plays incoming casts from phone and extension senders. Also acts as a sender to cast local video files (with drag-and-drop) or stream URLs to TVs.
+- 🧩 **Browser Extension (Firefox & Chrome)**: Detects streams in active browser tabs and casts them to your TV via the Desktop app.
+- 💻 **Rust CLI (`playbridge`)**: Discover receivers and send local files or URLs directly from your terminal:
+  ```bash
+  playbridge discover               # Discover local network receivers
+  playbridge send video.mp4         # Send a local file or stream URL to a receiver
+  ```
 
 ## Screenshots
 
