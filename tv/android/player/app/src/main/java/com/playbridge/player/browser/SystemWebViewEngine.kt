@@ -656,7 +656,7 @@ class SystemWebViewEngine(
                 setSupportZoom(true)
                 mediaPlaybackRequiresUserGesture = false
                 allowFileAccess = false
-                allowContentAccess = true
+                allowContentAccess = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
 
                 // User agent. A literal [userAgentOverride] (picked from the phone's User Agent
