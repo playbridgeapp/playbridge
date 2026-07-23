@@ -55,11 +55,11 @@ The PlayBridge senders and extensions are available on official store registries
 
 - **Android TV / Fire TV (receiver)**:
   - Open the **Downloader** app on your TV and enter code `9557748` to install the TV Player directly, or
-  - download the latest `tv-player` APK from [Releases](https://github.com/playbridgeapp/playbridge/releases) and sideload it.
+  - download the latest `tv-player` APK from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=8d2a1c&expanded=true) and sideload it.
   - *Note:* on first launch the TV app asks for "Display over other apps" — required for the receiver to come to the foreground when a cast arrives.
-  - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing.
+  - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing (download from [TV Browser Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=3e7f9a&expanded=true)).
 - **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
-- **Desktop (receiver)**: download the build for your OS from [Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
+- **Desktop (receiver)**: download the build for your OS from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
 - **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
 
