@@ -153,15 +153,21 @@ Media and codec support ultimately depends on the selected playback engine, oper
 - **Android Phone (sender)**:
   - <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
   - or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) and install it.
+- **Browser Extension (sender)**:
+  - <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="40"></a>
+  - <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="40"></a>
 - **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
 
-### Google Play
+### Store Listings
 
-The Android phone sender is publicly available on Google Play:
+The PlayBridge senders and extensions are available on official store registries:
 
 * **Android Phone (Sender)**:
   * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
   * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+* **Browser Extension (Sender — Firefox & Chrome)**:
+  * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
+  * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
 * **Android TV (Player) — closed testing**
   * **Group invite**: [pbtvclosedtesters Google Group](https://groups.google.com/g/pbtvclosedtesters)
   * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.player)

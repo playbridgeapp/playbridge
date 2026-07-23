@@ -8,6 +8,13 @@ A **Firefox and Chromium** extension that detects media in desktop browser tabs 
 - Protocol bindings via `@bufbuild/protobuf`, generated from the [`protocol/`](../protocol/) submodule
 - Manifests: `manifests/firefox.json` (MV2) and `manifests/chrome.json` (MV3)
 
+## Install from Web Stores
+
+PlayBridge Video Detector is published on official extension stores:
+
+- **Firefox Add-ons**: [PlayBridge Video Detector on Firefox Add-ons](https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/)
+- **Chrome Web Store**: [PlayBridge Video Detector on Chrome Web Store](https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en)
+
 ## Build
 
 ```bash
