@@ -48,6 +48,7 @@ import com.playbridge.sender.downloads.DownloadsScreen
 import com.playbridge.sender.history.BookmarksScreen
 import com.playbridge.sender.history.CastHistoryScreen
 import com.playbridge.sender.history.HistoryScreen
+import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.ui.ConnectionScreen
@@ -162,7 +163,7 @@ fun AppNavHost(
         { addToCollectionDraft = it }
     val connectionCoordinator: ConnectionCoordinator = koinInject()
     val tvQueueCoordinator: com.playbridge.sender.connection.TvQueueCoordinator = koinInject()
-    val dlnaQueueCoordinator: com.playbridge.sender.connection.DlnaQueueCoordinator = koinInject()
+    val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator = koinInject()
     val historyDao: HistoryDao = koinInject()
     val bookmarkDao: BookmarkDao = koinInject()
     val addonRepository: AddonRepository = koinInject()
@@ -174,12 +175,12 @@ fun AppNavHost(
 
     // 2. Collect Live Flows / Collected states locally
     val connectionState by connectionViewModel.connectionState.collectAsState()
-    val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
-    val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
     val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
-    val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
-    val dlnaStatus by connectionViewModel.dlnaStatus.collectAsState()
-    val dlnaMediaTitle by connectionViewModel.dlnaMediaTitle.collectAsState()
+    val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsState()
+    val externalStatus by connectionViewModel.externalStatus.collectAsState()
+    val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsState()
+    val castSessionState by connectionViewModel.castSessionState.collectAsState()
+    val castRoute by connectionViewModel.route.collectAsState()
     // Authoritative routing intent — reactive so screens follow device-picker changes live.
     val routeTargetsTv by connectionViewModel.routeTargetsTv.collectAsState()
     val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
@@ -721,9 +722,15 @@ fun AppNavHost(
                     ConnectionScreen(
                         viewModel = connectionViewModel,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                        onRemoteClick = if (
+                            activeExternalDevice != null ||
+                            (castRoute is CastSessionManager.Route.NativeTv &&
+                                connectionState is WebSocketClient.ConnectionState.Connected)
+                        ) {
                             {
-                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                if (activeExternalDevice == null) {
+                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                }
                                 onScreenChange(Screen.Remote)
                             }
                         } else null,
@@ -767,43 +774,49 @@ fun AppNavHost(
                     BackHandler {
                         onScreenChange(remoteReturnScreen)
                     }
-                    val dlna = activeDlnaTarget
-                    if (dlna != null) {
-                        // Unified remote: feed the native RemoteControlScreen from the DLNA target,
-                        // with dlnaMode hiding native-only controls (tracks/volume/loop).
+                    val external = activeExternalDevice
+                    if (external != null) {
                         RemoteControlScreen(
                             activeContext = "player",
                             onBack = { onScreenChange(remoteReturnScreen) },
-                            onRemoteKey = {},
+                            onRemoteKey = { key ->
+                                when {
+                                    key == "volume_up" -> connectionViewModel.externalAdjustVolume(true)
+                                    key == "volume_down" -> connectionViewModel.externalAdjustVolume(false)
+                                    external.resolvedProtocol == com.playbridge.sender.model.CastProtocol.ROKU ->
+                                        connectionViewModel.rokuKeypress(key)
+                                }
+                            },
                             onMouseMove = { _, _ -> },
                             onMouseClick = {},
                             onMouseScroll = { _, _ -> },
                             onPlayerControl = { cmd ->
                                 when (cmd) {
-                                    "play" -> connectionViewModel.dlnaPlay()
-                                    "pause" -> connectionViewModel.dlnaPause()
-                                    "stop" -> connectionViewModel.dlnaStop()
-                                    "seek_back" -> connectionViewModel.dlnaSeek(
-                                        ((dlnaStatus?.positionMs ?: 0L) - 10_000L).coerceAtLeast(0L),
+                                    "play" -> connectionViewModel.externalPlay()
+                                    "pause" -> connectionViewModel.externalPause()
+                                    "stop" -> connectionViewModel.externalStop()
+                                    "seek_back" -> connectionViewModel.externalSeek(
+                                        ((externalStatus?.positionMs ?: 0L) - 10_000L).coerceAtLeast(0L),
                                     )
-                                    "seek_forward" -> connectionViewModel.dlnaSeek(
-                                        (dlnaStatus?.positionMs ?: 0L) + 10_000L,
+                                    "seek_forward" -> connectionViewModel.externalSeek(
+                                        (externalStatus?.positionMs ?: 0L) + 10_000L,
                                     )
                                 }
                             },
-                            playbackState = when (dlnaStatus?.state) {
+                            playbackState = when (externalStatus?.state) {
                                 PlaybackState.PLAYING -> "playing"
                                 PlaybackState.BUFFERING -> "buffering"
                                 PlaybackState.PAUSED -> "paused"
                                 else -> "paused"
                             },
-                            dlnaMode = true,
-                            isLive = dlnaStatus?.isLive == true,
-                            positionMs = dlnaStatus?.positionMs ?: 0L,
-                            durationMs = dlnaStatus?.durationMs ?: 0L,
-                            mediaTitle = dlnaMediaTitle ?: dlna.name,
-                            onSeekTo = { connectionViewModel.dlnaSeek(it) },
-                            tvName = dlna.name,
+                            externalProtocolLabel = external.resolvedProtocol.displayName,
+                            externalCapabilities = castSessionState.capabilities,
+                            isLive = externalStatus?.isLive == true,
+                            positionMs = externalStatus?.positionMs ?: 0L,
+                            durationMs = externalStatus?.durationMs ?: 0L,
+                            mediaTitle = externalMediaTitle ?: external.name,
+                            onSeekTo = { connectionViewModel.externalSeek(it) },
+                            tvName = external.name,
                         )
                     } else RemoteControlScreen(
                         activeContext = tvActiveContext,
@@ -915,7 +928,8 @@ fun AppNavHost(
                             if (command == "stop") { connectionCoordinator.tvActiveContext.value = "idle" }
                         },
                         // Connected-device status pill (switching/disconnecting lives in the Library cast picker).
-                        tvName = tvDevice?.name,
+                        tvName = activeExternalDevice?.name
+                            ?: tvDevice?.name?.takeIf { castRoute is CastSessionManager.Route.NativeTv },
                         connectionState = connectionState
                     )
                 }
@@ -950,12 +964,17 @@ fun AppNavHost(
                             onScreenChange(Screen.Browser)
                         },
                         tvName = tvDevice?.name,
-                        connectionState = connectionState,
                         onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onRemoteClick = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                        onRemoteClick = if (
+                            activeExternalDevice != null ||
+                            (castRoute is CastSessionManager.Route.NativeTv &&
+                                connectionState is WebSocketClient.ConnectionState.Connected)
+                        ) {
                             {
-                                connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                if (activeExternalDevice == null) {
+                                    connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
+                                }
                                 onScreenChange(Screen.Remote)
                             }
                         } else null,
@@ -986,8 +1005,11 @@ fun AppNavHost(
                         forcedSource = screen.source,
                         addonRepository = addonRepository,
                         viewModel = libraryViewModel,
-                        tvName = tvDevice?.name,
-                        isTvConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                        tvName = activeExternalDevice?.name
+                            ?: tvDevice?.name?.takeIf { castRoute is CastSessionManager.Route.NativeTv },
+                        isTvConnected = activeExternalDevice != null ||
+                            (castRoute is CastSessionManager.Route.NativeTv &&
+                                connectionState is WebSocketClient.ConnectionState.Connected),
                         routeTargetsTv = routeTargetsTv,
                         onSetWatchRoute = { toTv ->
                             if (toTv) connectionViewModel.selectNativeRoute() else connectionViewModel.selectThisDevice()
@@ -1006,11 +1028,15 @@ fun AppNavHost(
                             // previous series onto this new video (context never goes "idle" on a
                             // back-to-back cast, so the coordinators won't self-clear).
                             tvQueueCoordinator.stop()
-                            dlnaQueueCoordinator.stop()
-                            // DLNA renderer is the active target — play via the local proxy, no WS.
-                            // (Subtitles/prefs are native-receiver features; skipped on DLNA.)
-                            activeDlnaTarget?.let { dlna ->
-                                connectionViewModel.playOnDlna(
+                            externalQueueCoordinator.stop()
+                            if (castRoute is CastSessionManager.Route.ThisDevice) {
+                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                return@onPlayPayload
+                            }
+                            // A third-party receiver is active — use its protocol target, not WS.
+                            // Receiver-specific unsupported metadata is ignored by the target.
+                            activeExternalDevice?.let { external ->
+                                connectionViewModel.castToSelectedExternal(
                                     MediaItem(
                                         url = payload.url,
                                         headers = payload.headers,
@@ -1019,7 +1045,7 @@ fun AppNavHost(
                                         visualMetadata = payload.visual_metadata,
                                     )
                                 )
-                                Toast.makeText(context, "Casting to ${dlna.name}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Casting to ${external.name}", Toast.LENGTH_SHORT).show()
                                 if (autoSwitchToRemote) onScreenChange(Screen.Remote)
                                 return@onPlayPayload
                             }
@@ -1083,14 +1109,17 @@ fun AppNavHost(
                             }
                         },
                         onStartTvEpisodeQueue = onStartQueue@{ current, plan ->
-                            // DLNA can't hold a queue — the phone drives episode advance:
-                            // DlnaQueueCoordinator loads the start episode and watches the
-                            // renderer's position to resolve & load each next one.
-                            activeDlnaTarget?.let { dlna ->
-                                dlnaQueueCoordinator.start(plan)
+                            if (castRoute is CastSessionManager.Route.ThisDevice) {
+                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                return@onStartQueue
+                            }
+                            // External protocols use phone-driven episode advance: the coordinator
+                            // watches status and resolves/loads the next episode on the same target.
+                            activeExternalDevice?.let { external ->
+                                externalQueueCoordinator.start(plan)
                                 Toast.makeText(
                                     context,
-                                    "Casting to ${dlna.name} — episodes will auto-advance",
+                                    "Casting to ${external.name} — episodes will auto-advance",
                                     Toast.LENGTH_SHORT
                                 ).show()
                                 if (autoSwitchToRemote) onScreenChange(Screen.Remote)
@@ -1174,8 +1203,12 @@ fun AppNavHost(
                             }
                         },
                         onSendStreamToTv = onSendStream@{ url, title, headers, contentType ->
-                            activeDlnaTarget?.let { dlna ->
-                                connectionViewModel.playOnDlna(
+                            if (castRoute is CastSessionManager.Route.ThisDevice) {
+                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                return@onSendStream
+                            }
+                            activeExternalDevice?.let { external ->
+                                connectionViewModel.castToSelectedExternal(
                                     MediaItem(
                                         url = url,
                                         headers = headers ?: emptyMap(),
@@ -1185,7 +1218,7 @@ fun AppNavHost(
                                         title = title,
                                     )
                                 )
-                                Toast.makeText(context, "Casting to ${dlna.name}", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Casting to ${external.name}", Toast.LENGTH_SHORT).show()
                                 if (autoSwitchToRemote) onScreenChange(Screen.Remote)
                                 return@onSendStream
                             }
@@ -1242,12 +1275,16 @@ fun AppNavHost(
                             // series session keeps `queue_add`-ing onto the Hub list (often the
                             // same S/E at a different stream URL, which used to show as duplicates).
                             tvQueueCoordinator.stop()
-                            dlnaQueueCoordinator.stop()
-                            // DLNA: no renderer-side playlist — run the Hub playlist through the
-                            // phone-driven advancer (items already carry resolved/Hub urls).
-                            activeDlnaTarget?.let { dlna ->
+                            externalQueueCoordinator.stop()
+                            if (castRoute is CastSessionManager.Route.ThisDevice) {
+                                Toast.makeText(context, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                return@onPlayPlaylist
+                            }
+                            // External protocols use the phone-driven advancer (items already carry
+                            // resolved/Hub URLs).
+                            activeExternalDevice?.let { external ->
                                 if (playlist.items.isEmpty()) return@onPlayPlaylist
-                                dlnaQueueCoordinator.start(
+                                externalQueueCoordinator.start(
                                     com.playbridge.sender.connection.TvEpisodeQueuePlan(
                                         streamType = "series",
                                         forcedSource = null,
@@ -1260,7 +1297,7 @@ fun AppNavHost(
                                 )
                                 Toast.makeText(
                                     context,
-                                    "Casting to ${dlna.name} — episodes will auto-advance",
+                                    "Casting to ${external.name} — episodes will auto-advance",
                                     Toast.LENGTH_SHORT
                                 ).show()
                                 if (autoSwitchToRemote) onScreenChange(Screen.Remote)
@@ -1326,7 +1363,15 @@ fun AppNavHost(
                                 }
                             }
                         },
-                        onQueueAdd = { item ->
+                        onQueueAdd = onQueueAdd@{ item ->
+                            if (castRoute !is CastSessionManager.Route.NativeTv) {
+                                Toast.makeText(
+                                    context,
+                                    "Queue editing is only available with PlayBridge receivers",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                return@onQueueAdd
+                            }
                             val playerMode = tvPlayerMode.takeIf { it != "tv" }
                             val itemWithPrefs = item.copy(
                                 player_mode = playerMode,
@@ -1514,34 +1559,37 @@ fun AppNavHost(
                 targetScreen == Screen.Collections ||
                 targetScreen is Screen.CollectionDetail) && !libraryAddonsTab
             if (showNowPlayingBar) {
-                val dlnaActive = activeDlnaTarget != null
+                val externalActive = activeExternalDevice != null
                 // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even
                 // though the status poll keeps reporting a (STOPPED) status.
-                val dlnaState = dlnaStatus?.state
-                val dlnaStopped = dlnaState == PlaybackState.STOPPED ||
-                    dlnaState == PlaybackState.IDLE ||
-                    dlnaState == PlaybackState.ERROR
-                val dlnaHasMedia = dlnaActive && dlnaMediaTitle != null && !dlnaStopped
+                val externalState = externalStatus?.state
+                val externalStopped = externalState == PlaybackState.STOPPED ||
+                    externalState == PlaybackState.IDLE ||
+                    externalState == PlaybackState.ERROR
+                val externalHasMedia = externalActive && externalMediaTitle != null && !externalStopped
                 val wsConnected = connectionState is WebSocketClient.ConnectionState.Connected
-                val nativePlaying = tvActiveContext == "player" && wsConnected
-                val playing = dlnaHasMedia || nativePlaying
+                val nativeSelected = castRoute is CastSessionManager.Route.NativeTv
+                val nativePlaying = tvActiveContext == "player" && wsConnected && nativeSelected
+                val playing = externalHasMedia || nativePlaying
 
                 // Pause + progress for the bar: freeze the equalizer while paused and
                 // drive the bottom progress line off the live status snapshots.
                 val paused =
-                    if (dlnaActive) dlnaState == PlaybackState.PAUSED
+                    if (externalActive) externalState == PlaybackState.PAUSED
                     else tvPlayback?.state == "paused"
                 val playbackProgress = when {
-                    dlnaActive -> dlnaStatus?.takeIf { it.durationMs > 0 }
+                    externalActive -> externalStatus?.takeIf { it.durationMs > 0 }
                         ?.let { it.positionMs.toFloat() / it.durationMs }
                     else -> tvPlayback?.takeIf { it.durationMs > 0 }
                         ?.let { it.positionMs.toFloat() / it.durationMs }
                 }
 
-                val deviceName = activeDlnaTarget?.name ?: tvDevice?.name
+                val deviceName = activeExternalDevice?.name ?: if (nativeSelected) tvDevice?.name else null
+                val protocolName = activeExternalDevice?.resolvedProtocol?.displayName
+                    ?: CastProtocol.PLAYBRIDGE.displayName.takeIf { nativeSelected }
                 val leadingIcon = when {
-                    dlnaActive -> Icons.Default.Cast
-                    wsConnected -> Icons.Default.Tv
+                    externalActive -> Icons.Default.Cast
+                    nativeSelected && wsConnected -> Icons.Default.Tv
                     else -> Icons.Default.Smartphone
                 }
 
@@ -1549,12 +1597,13 @@ fun AppNavHost(
                 val secondaryText: String?
                 when {
                     playing -> {
-                        primaryText = (if (dlnaActive) dlnaMediaTitle else tvPlayback?.title) ?: "Now playing"
-                        secondaryText = "on ${deviceName ?: "TV"}"
+                        primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
+                        secondaryText = "on ${deviceName ?: "TV"}" +
+                            protocolName?.let { " · $it" }.orEmpty()
                     }
-                    dlnaActive || wsConnected -> {
+                    externalActive || (nativeSelected && wsConnected) -> {
                         primaryText = deviceName ?: "TV"
-                        secondaryText = "Ready to cast"
+                        secondaryText = protocolName?.let { "$it · Ready to cast" } ?: "Ready to cast"
                     }
                     else -> {
                         primaryText = "This Device"
@@ -1568,7 +1617,7 @@ fun AppNavHost(
                     leadingIcon = leadingIcon,
                     onClick = {
                         if (playing) {
-                            if (!dlnaActive) {
+                            if (!externalActive) {
                                 connectionViewModel.webSocketClient.send(
                                     com.playbridge.shared.protocol.createContextQueryJson()
                                 )

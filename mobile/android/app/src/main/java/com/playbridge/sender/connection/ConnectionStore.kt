@@ -8,6 +8,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import androidx.datastore.preferences.preferencesDataStore
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.model.SavedReceiverEndpoint
 import com.playbridge.shared.protocol.protocolJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -28,6 +29,7 @@ class ConnectionStore(private val context: Context) {
     companion object {
         private val TV_DEVICE = stringPreferencesKey("tv_device")
         private val DEVICE_HISTORY = stringPreferencesKey("device_history")
+        private val SAVED_ENDPOINTS_V2 = stringPreferencesKey("saved_receiver_endpoints_v2")
         private const val KEY_ALIAS = "playbridge_connection_tokens_v1"
         private const val ENCRYPTED_PREFIX = "enc:v1:"
     }
@@ -48,15 +50,12 @@ class ConnectionStore(private val context: Context) {
     /**
      * Get device history
      */
-    val deviceHistory: Flow<List<TvDevice>> = context.dataStore.data.map { prefs ->
-        prefs[DEVICE_HISTORY]?.let {
-            try {
-                decodeHistory(it)
-            } catch (e: Exception) {
-                emptyList()
-            }
-        } ?: emptyList()
+    val savedEndpoints: Flow<List<SavedReceiverEndpoint>> = context.dataStore.data.map { prefs ->
+        readHistory(prefs).map(TvDevice::toSavedEndpoint)
     }
+
+    /** Compatibility view for screens still being migrated to [SavedReceiverEndpoint]. */
+    val deviceHistory: Flow<List<TvDevice>> = context.dataStore.data.map(::readHistory)
 
     /**
      * Save TV device
@@ -72,23 +71,9 @@ class ConnectionStore(private val context: Context) {
      */
     suspend fun addToHistory(device: TvDevice) {
         context.dataStore.edit { prefs ->
-            val historyJson = prefs[DEVICE_HISTORY]
-            val currentHistory = if (historyJson != null) {
-                try {
-                    decodeHistory(historyJson)
-                } catch (e: Exception) {
-                    emptyList()
-                }
-            } else {
-                emptyList()
-            }
-
+            val currentHistory = readHistory(prefs)
             val newHistory = ConnectionMerge.upsertHistory(currentHistory, device)
-
-            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
-                newHistory.map(::protect)
-            )
+            writeHistory(prefs, newHistory)
         }
     }
 
@@ -99,24 +84,14 @@ class ConnectionStore(private val context: Context) {
      */
     suspend fun wipeHistoryToken(device: TvDevice) {
         context.dataStore.edit { prefs ->
-            val historyJson = prefs[DEVICE_HISTORY] ?: return@edit
-            val currentHistory = try {
-                decodeHistory(historyJson)
-            } catch (e: Exception) {
-                return@edit
-            }
+            val currentHistory = readHistory(prefs)
+            if (currentHistory.isEmpty()) return@edit
 
             val newHistory = currentHistory.map { entry ->
-                val matches =
-                    (device.uuid.isNotEmpty() && entry.uuid == device.uuid) ||
-                        (entry.ip == device.ip && entry.port == device.port)
+                val matches = ConnectionMerge.isSameDevice(entry, device)
                 if (matches) entry.copy(token = "") else entry
             }
-
-            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
-                newHistory.map(::protect)
-            )
+            writeHistory(prefs, newHistory)
         }
     }
 
@@ -125,19 +100,12 @@ class ConnectionStore(private val context: Context) {
      */
     suspend fun removeFromHistory(device: TvDevice) {
         context.dataStore.edit { prefs ->
-            val historyJson = prefs[DEVICE_HISTORY] ?: return@edit
-            val currentHistory = try {
-                decodeHistory(historyJson)
-            } catch (e: Exception) {
-                emptyList()
-            }
+            val currentHistory = readHistory(prefs)
+            if (currentHistory.isEmpty()) return@edit
 
             val newHistory = ConnectionMerge.removeHistoryDevice(currentHistory, device)
 
-            prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
-                kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
-                newHistory.map(::protect)
-            )
+            writeHistory(prefs, newHistory)
         }
     }
 
@@ -161,6 +129,32 @@ class ConnectionStore(private val context: Context) {
         ConnectionMerge.normalizeHistory(
             protocolJson.decodeFromString<List<TvDevice>>(json).map(::unprotect)
         )
+
+    private fun readHistory(prefs: Preferences): List<TvDevice> {
+        prefs[SAVED_ENDPOINTS_V2]?.let { json ->
+            runCatching {
+                protocolJson.decodeFromString<List<SavedReceiverEndpoint>>(json)
+                    .map(TvDevice::fromSavedEndpoint)
+                    .map(::unprotect)
+            }.getOrNull()?.let(ConnectionMerge::normalizeHistory)?.let { return it }
+        }
+        return prefs[DEVICE_HISTORY]?.let { json ->
+            runCatching { decodeHistory(json) }.getOrDefault(emptyList())
+        } ?: emptyList()
+    }
+
+    /** Dual-write during the migration window so older builds can still read history. */
+    private fun writeHistory(prefs: MutablePreferences, history: List<TvDevice>) {
+        val protected = history.map(::protect)
+        prefs[DEVICE_HISTORY] = protocolJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(TvDevice.serializer()),
+            protected,
+        )
+        prefs[SAVED_ENDPOINTS_V2] = protocolJson.encodeToString(
+            kotlinx.serialization.builtins.ListSerializer(SavedReceiverEndpoint.serializer()),
+            protected.map(TvDevice::toSavedEndpoint),
+        )
+    }
 
     private fun protect(device: TvDevice): TvDevice =
         if (device.token.isEmpty() || device.token.startsWith(ENCRYPTED_PREFIX)) device

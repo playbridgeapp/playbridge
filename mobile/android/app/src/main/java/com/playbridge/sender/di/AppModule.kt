@@ -2,7 +2,6 @@ package com.playbridge.sender.di
 
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.ConnectionViewModel
-import com.playbridge.sender.connection.NsdHelper
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.data.debrid.DebridRepository
@@ -107,10 +106,15 @@ val appModule = module {
         )
     }
 
-    // 4. WebSocket Client & NSD Helpers
+    // 4. WebSocket client, persistence, and the process-wide Rust discovery owner
     single { WebSocketClient() }
     single { ConnectionStore(androidContext()) }
-    single { NsdHelper(androidContext()) }
+    single {
+        com.playbridge.sender.connection.ReceiverDiscoveryRepository(
+            context = androidContext(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1)),
+        )
+    }
 
     // 5. ConnectionCoordinator Singleton
     single {
@@ -132,7 +136,7 @@ val appModule = module {
             connectionCoordinator = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
             connectionStore = get(),
-            nsdHelper = get(),
+            discoveryRepository = get(),
             settingsRepository = get(),
         )
     }
@@ -150,9 +154,9 @@ val appModule = module {
         )
     }
 
-    // 5c. DlnaQueueCoordinator — phone-driven episode auto-advance on DLNA renderers
+    // 5c. ExternalQueueCoordinator — phone-driven episode auto-advance for third-party receivers
     single {
-        com.playbridge.sender.connection.DlnaQueueCoordinator(
+        com.playbridge.sender.connection.ExternalQueueCoordinator(
             context = androidContext(),
             addonRepository = get(),
             castSessionManager = get(),
@@ -208,9 +212,9 @@ val appModule = module {
             application = androidApplication(),
             webSocketClient = get(),
             connectionStore = get(),
-            nsdHelper = get(),
             commandHistoryDb = get(),
-            castSessionManager = get()
+            castSessionManager = get(),
+            discoveryRepository = get(),
         )
     }
 

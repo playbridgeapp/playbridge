@@ -14,30 +14,29 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
- * Phone-driven episode auto-advance for DLNA renderers.
+ * Phone-driven episode auto-advance for external receivers.
  *
- * DLNA has no queue: the renderer plays exactly one URI. So unlike
+ * Third-party receiver protocols expose one current media item through this app. Unlike
  * [TvQueueCoordinator] (which pre-loads the native receiver's queue with `queue_add`),
- * this watches the renderer's polled playback status ([CastSessionManager.dlnaStatus])
+ * this watches the receiver status ([CastSessionManager.externalStatus])
  * and, when the current episode reaches its end, resolves the next episode's stream
  * (bingeGroup-consistent, via [EpisodeStreamResolver]) and hands the renderer the new
  * URI. Resolving lazily also keeps debrid links fresh.
  *
- * The plan is abandoned when: the DLNA target is cleared, the user explicitly stops or
- * casts something else ([CastSessionManager.dlnaInterrupts]), playback is stopped
+ * The plan is abandoned when: the external target is cleared, the user explicitly stops or
+ * casts something else ([CastSessionManager.externalInterrupts]), playback is stopped
  * mid-episode from the TV's own remote, an advance fails to start playing within a
  * timeout, or the season ends.
  *
- * Requires the phone alive throughout — guaranteed by CastSessionService while a DLNA
- * target is selected.
+ * Requires the phone alive throughout — guaranteed by CastSessionService while media is loaded.
  */
-class DlnaQueueCoordinator(
+class ExternalQueueCoordinator(
     private val context: Context,
     private val addonRepository: AddonRepository,
     private val castSessionManager: CastSessionManager,
     private val scope: CoroutineScope,
 ) {
-    private val TAG = "DlnaQueueCoordinator"
+    private val TAG = "ExternalQueueCoordinator"
     private val mutex = Mutex()
 
     private enum class Phase {
@@ -64,15 +63,15 @@ class DlnaQueueCoordinator(
     init {
         // Target gone → plan gone.
         scope.launch {
-            castSessionManager.activeDlnaTarget.collect { if (it == null) stop() }
+            castSessionManager.activeExternalDevice.collect { if (it == null) stop() }
         }
         // User stop / user cast supersedes the plan.
         scope.launch {
-            castSessionManager.dlnaInterrupts.collect { stop() }
+            castSessionManager.externalInterrupts.collect { stop() }
         }
-        // The advance state machine, fed by the ~1s DLNA status poll.
+        // The advance state machine, fed by the active protocol's status stream.
         scope.launch {
-            castSessionManager.dlnaStatus.collect { onStatus(it) }
+            castSessionManager.externalStatus.collect { onStatus(it) }
         }
     }
 
@@ -102,7 +101,7 @@ class DlnaQueueCoordinator(
                 autoPick = AutoPickPrefs.fromContext(context)
             }
             Log.d(TAG, "Started: ${newPlan.items.size} episodes, start=${newPlan.startIndex}, bingeGroup=${newPlan.bingeGroup}")
-            castSessionManager.playOnDlnaFromQueue(
+            castSessionManager.playOnExternalFromQueue(
                 MediaItem(
                     url = startUrl,
                     headers = startTemplate.headers,
@@ -144,7 +143,7 @@ class DlnaQueueCoordinator(
                     val nearEnd = knownDuration && lastPos >= lastDur - END_WINDOW_MS
                     val endedWhilePlaying = st.state == PlaybackState.PLAYING &&
                         knownDuration && st.positionMs >= lastDur - PLAYING_END_MS
-                    val stopped = st.state == PlaybackState.STOPPED
+                    val stopped = st.state == PlaybackState.STOPPED || st.state == PlaybackState.IDLE
                     when {
                         // Stopped well before the end and not by us → TV-side stop; abandon.
                         stopped && knownDuration && !nearEnd -> {
@@ -197,7 +196,7 @@ class DlnaQueueCoordinator(
                 }
                 if (stillCurrent) {
                     Log.d(TAG, "Advancing to episode index $next: ${tmpl.title}")
-                    castSessionManager.playOnDlnaFromQueue(
+                    castSessionManager.playOnExternalFromQueue(
                         MediaItem(
                             url = url,
                             headers = tmpl.headers,

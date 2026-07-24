@@ -10,29 +10,27 @@ object ConnectionMerge {
      * can change between launches, while credentials remain attached to stable identity.
      */
     fun withDiscoveredEndpoint(device: TvDevice, discovered: List<TvDevice>): TvDevice {
-        val match = (if (device.uuid.isNotEmpty()) discovered.find { it.uuid == device.uuid } else null)
-            ?: discovered.find { it.ip == device.ip && it.port == device.port }
+        val sameProtocol = discovered.filter { it.resolvedProtocol == device.resolvedProtocol }
+        val match = (if (device.uuid.isNotEmpty()) sameProtocol.find { it.uuid == device.uuid } else null)
+            ?: sameProtocol.find { it.ip == device.ip && it.port == device.port }
             ?: return device
         return device.copy(
             ip = match.ip,
+            addresses = match.addresses,
             port = match.port,
             name = match.name,
             wssPort = match.wssPort,
             logsPort = match.logsPort,
+            descriptionUrl = match.descriptionUrl,
+            controlUrl = match.controlUrl,
+            renderingControlUrl = match.renderingControlUrl,
         )
     }
 
-    /**
-     * Combine native (mDNS) and DLNA (SSDP) discovery into one list. We intentionally
-     * keep BOTH entries when one device offers both, so the user can choose the
-     * full-featured native path or the DLNA renderer (distinguished by a badge).
-     */
-    fun mergeDiscovered(native: List<TvDevice>, dlna: List<TvDevice>): List<TvDevice> =
-        native + dlna.filter { it.ip.isNotEmpty() }
-
-    /** Same physical device: uuid match when both known, else ip/port. */
+    /** Same protocol endpoint: stable ID match when known, else protocol + ip/port. */
     fun isSameDevice(a: TvDevice, b: TvDevice): Boolean =
-        (a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port)
+        a.resolvedProtocol == b.resolvedProtocol &&
+            ((a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port))
 
     /**
      * Put [device] at the front of connection history while replacing every older

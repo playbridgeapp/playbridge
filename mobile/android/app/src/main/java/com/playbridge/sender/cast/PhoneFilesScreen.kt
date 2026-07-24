@@ -136,9 +136,11 @@ fun PhoneFilesScreen(
     var showSortSheet by remember { mutableStateOf(false) }
 
     val connectionState by viewModel.connectionState.collectAsState()
-    val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
-    val hasExternalTarget = activeDlnaTarget != null ||
-        connectionState is WebSocketClient.ConnectionState.Connected
+    val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
+    val castRoute by viewModel.route.collectAsState()
+    val hasExternalTarget = activeExternalDevice != null ||
+        (castRoute is CastSessionManager.Route.NativeTv &&
+            connectionState is WebSocketClient.ConnectionState.Connected)
 
     val requiredPerms = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -398,12 +400,6 @@ fun PhoneFilesScreen(
                 onOpenAllDevices()
             },
             showThisDevice = true,
-            // Picking "This Device" disconnects WS; also release any active DLNA target so
-            // playback routes to the in-app player rather than the renderer.
-            onPickedThisDevice = {
-                viewModel.dlnaStop()
-                viewModel.clearDlnaTarget()
-            },
         )
     }
 }

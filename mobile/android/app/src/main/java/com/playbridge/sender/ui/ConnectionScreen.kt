@@ -2,6 +2,8 @@ package com.playbridge.sender.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -42,7 +44,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import kotlinx.coroutines.delay
 import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.sender.connection.ConnectionMerge
 import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -61,10 +65,12 @@ fun ConnectionScreen(
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
-    val activeDlnaTarget by viewModel.activeDlnaTarget.collectAsState()
+    val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
+    val route by viewModel.route.collectAsState()
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
     val isScanning by viewModel.isScanning.collectAsState()
+    val discoveryProtocols by viewModel.selectedDiscoveryProtocols.collectAsState()
 
     var selectedTab by remember { mutableStateOf(initialTab) }
 
@@ -86,7 +92,7 @@ fun ConnectionScreen(
     }
 
     val savedUnified = history.map { saved ->
-        val isOnline = pings[saved.uuid] == true
+        val isOnline = pings[saved.endpointKey.toString()] == true
         UnifiedDevice(
             connectDevice = saved,
             historyEntry = saved,
@@ -94,17 +100,17 @@ fun ConnectionScreen(
             lastConnected = saved.lastConnected
         )
     }.filterNot { u ->
-        isConnected && tvDevice?.let { c ->
-            (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
-                (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
-        } == true
+        activeExternalDevice?.let { ConnectionMerge.isSameDevice(u.connectDevice, it) } == true ||
+            (isConnected && tvDevice?.let { c ->
+                ConnectionMerge.isSameDevice(u.connectDevice, c)
+            } == true)
     }.sortedWith(
         compareByDescending<UnifiedDevice> { it.isOnline }
             .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
     )
 
     val discoveredUnified = discoveredDevices.map { discovered ->
-        val historyEntry = history.find { it.uuid == discovered.uuid || (it.ip == discovered.ip && it.port == discovered.port) }
+        val historyEntry = history.find { ConnectionMerge.isSameDevice(it, discovered) }
         UnifiedDevice(
             connectDevice = discovered,
             historyEntry = historyEntry,
@@ -112,10 +118,10 @@ fun ConnectionScreen(
             lastConnected = historyEntry?.lastConnected
         )
     }.filterNot { u ->
-        isConnected && tvDevice?.let { c ->
-            (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
-                (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
-        } == true
+        activeExternalDevice?.let { ConnectionMerge.isSameDevice(u.connectDevice, it) } == true ||
+            (isConnected && tvDevice?.let { c ->
+                ConnectionMerge.isSameDevice(u.connectDevice, c)
+            } == true)
     }
 
     var showManualDialog by remember { mutableStateOf(false) }
@@ -146,6 +152,29 @@ fun ConnectionScreen(
     // When a device is selected, check history for a saved token (shared with the device-picker sheet).
     fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") =
         connectKnownOrPair(viewModel, history, ip, port, name, uuid)
+
+    fun selectEndpoint(device: TvDevice) {
+        val ready = when (device.resolvedProtocol) {
+            CastProtocol.DLNA -> viewModel.selectDlnaTarget(device)
+            CastProtocol.ROKU -> true.also { viewModel.selectRokuTarget(device) }
+            CastProtocol.GOOGLE_CAST -> true.also { viewModel.selectGoogleCastTarget(device) }
+            CastProtocol.PLAYBRIDGE -> true.also {
+                val alreadyLinked = isConnected && tvDevice?.let {
+                    ConnectionMerge.isSameDevice(it, device)
+                } == true
+                if (alreadyLinked) viewModel.selectNativeRoute()
+                else onDeviceSelected(device.ip, device.port, device.name, device.uuid)
+            }
+        }
+        if (device.resolvedProtocol != CastProtocol.PLAYBRIDGE) {
+            coroutineScope.launch {
+                snackbarHostState.showSnackbar(
+                    if (ready) "Selected ${device.name} — cast a video to play here"
+                    else "${device.name} is still preparing. Try again in a moment.",
+                )
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -209,12 +238,12 @@ fun ConnectionScreen(
             ) {
                 if (selectedTab == 0) {
                     // TAB 0: YOUR DEVICES
-                    // Active DLNA cast target (mutually exclusive with a native connection).
-                    val dlnaTarget = activeDlnaTarget
-                    if (dlnaTarget != null) {
+                    // Exactly one external protocol session can own playback at a time.
+                    val externalDevice = activeExternalDevice
+                    if (externalDevice != null) {
                         item {
                             Text(
-                                text = "Casting via DLNA",
+                                text = "Casting via ${externalDevice.resolvedProtocol.displayName}",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
@@ -244,7 +273,7 @@ fun ConnectionScreen(
                                         )
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = dlnaTarget.name,
+                                                text = externalDevice.name,
                                                 style = MaterialTheme.typography.titleMedium,
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -252,7 +281,7 @@ fun ConnectionScreen(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "${dlnaTarget.ip} · cast a video to play here",
+                                                text = "${externalDevice.ip} · ${externalDevice.resolvedProtocol.displayName}",
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                                             )
@@ -264,8 +293,7 @@ fun ConnectionScreen(
                                     ) {
                                         Button(
                                             onClick = {
-                                                viewModel.dlnaStop()
-                                                viewModel.clearDlnaTarget()
+                                                viewModel.disconnectExternalTarget()
                                             },
                                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
                                         ) {
@@ -284,7 +312,11 @@ fun ConnectionScreen(
                         val serverName = connected.serverName
                         item {
                             Text(
-                                text = "Connected TV",
+                                text = if (route is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
+                                    "Casting via ${CastProtocol.PLAYBRIDGE.displayName}"
+                                } else {
+                                    "Connected via ${CastProtocol.PLAYBRIDGE.displayName}"
+                                },
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Bold
@@ -351,17 +383,23 @@ fun ConnectionScreen(
 
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Checkbox(
-                                                checked = autoConnectEnabled,
-                                                onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
-                                            )
-                                            Text("Auto-connect to this TV", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                        Checkbox(
+                                            checked = autoConnectEnabled,
+                                            onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
+                                        )
+                                        Text("Auto-connect to this TV", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                                    ) {
+                                        if (route !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
+                                            TextButton(onClick = { viewModel.selectNativeRoute() }) {
+                                                Text("Cast here")
+                                            }
                                         }
-
                                         Button(
                                             onClick = { viewModel.disconnect() },
                                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
@@ -427,23 +465,7 @@ fun ConnectionScreen(
                         items(savedUnified) { device ->
                             TvDeviceRow(
                                 device = device,
-                                onClick = {
-                                    if (device.connectDevice.isDlna) {
-                                        viewModel.selectDlnaTarget(device.connectDevice)
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                "Selected ${device.connectDevice.name} — cast a video to play here"
-                                            )
-                                        }
-                                    } else {
-                                        onDeviceSelected(
-                                            device.connectDevice.ip,
-                                            device.connectDevice.port,
-                                            device.connectDevice.name,
-                                            device.connectDevice.uuid
-                                        )
-                                    }
-                                },
+                                onClick = { selectEndpoint(device.connectDevice) },
                                 onRemove = device.historyEntry?.let { entry ->
                                     { viewModel.removeDeviceFromHistory(entry) }
                                 }
@@ -488,6 +510,39 @@ fun ConnectionScreen(
                         }
                     }
 
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            FilterChip(
+                                selected = discoveryProtocols.size == CastProtocol.entries.size,
+                                onClick = {
+                                    viewModel.setDiscoveryProtocols(CastProtocol.entries.toSet())
+                                },
+                                label = { Text("All") },
+                            )
+                            CastProtocol.entries.forEach { protocol ->
+                                FilterChip(
+                                    selected = protocol in discoveryProtocols,
+                                    onClick = {
+                                        val next = if (discoveryProtocols.size == CastProtocol.entries.size) {
+                                            setOf(protocol)
+                                        } else if (protocol in discoveryProtocols && discoveryProtocols.size > 1) {
+                                            discoveryProtocols - protocol
+                                        } else {
+                                            discoveryProtocols + protocol
+                                        }
+                                        viewModel.setDiscoveryProtocols(next)
+                                    },
+                                    label = { Text(protocol.displayName) },
+                                )
+                            }
+                        }
+                    }
+
                     if (discoveredUnified.isEmpty()) {
                         item {
                             Card(
@@ -512,30 +567,32 @@ fun ConnectionScreen(
                             }
                         }
                     } else {
-                        items(discoveredUnified) { device ->
-                            TvDeviceRow(
-                                device = device,
-                                onClick = {
-                                    if (device.connectDevice.isDlna) {
-                                        viewModel.selectDlnaTarget(device.connectDevice)
-                                        coroutineScope.launch {
-                                            snackbarHostState.showSnackbar(
-                                                "Selected ${device.connectDevice.name} — cast a video to play here"
-                                            )
-                                        }
-                                    } else {
-                                        onDeviceSelected(
-                                            device.connectDevice.ip,
-                                            device.connectDevice.port,
-                                            device.connectDevice.name,
-                                            device.connectDevice.uuid
-                                        )
-                                    }
-                                },
-                                onRemove = device.historyEntry?.let { entry ->
-                                    { viewModel.removeDeviceFromHistory(entry) }
+                        CastProtocol.entries.forEach { protocol ->
+                            val protocolDevices = discoveredUnified.filter {
+                                it.connectDevice.resolvedProtocol == protocol
+                            }
+                            if (protocolDevices.isNotEmpty()) {
+                                item(key = "protocol-${protocol.name}") {
+                                    Text(
+                                        text = protocol.displayName,
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.padding(top = 4.dp),
+                                    )
                                 }
-                            )
+                                items(
+                                    items = protocolDevices,
+                                    key = { it.connectDevice.endpointKey.toString() },
+                                ) { device ->
+                                    TvDeviceRow(
+                                        device = device,
+                                        onClick = { selectEndpoint(device.connectDevice) },
+                                        onRemove = device.historyEntry?.let { entry ->
+                                            { viewModel.removeDeviceFromHistory(entry) }
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -573,54 +630,6 @@ data class UnifiedDevice(
 }
 
 /**
- * Merge saved + freshly-discovered TVs into a single "Your TVs" list, annotated with live online
- * status. Shared by [ConnectionScreen] and the device-picker sheet so both show identical results.
- * Saved entries adopt live mDNS ip/port when online (a saved address can go stale); the
- * currently-connected device is dropped (it has its own card above the list).
- */
-fun buildUnifiedDevices(
-    discovered: List<TvDevice>,
-    history: List<TvDevice>,
-    connectedDevice: TvDevice?,
-    isConnected: Boolean
-): List<UnifiedDevice> {
-    fun liveMatch(device: TvDevice): TvDevice? =
-        if (device.uuid.isNotEmpty()) discovered.find { it.uuid == device.uuid }
-        else discovered.find { it.ip == device.ip && it.port == device.port }
-
-    val knownUuids = history.mapNotNull { it.uuid.takeIf(String::isNotEmpty) }.toSet()
-    val knownIpPorts = history.map { "${it.ip}:${it.port}" }.toSet()
-
-    val knownDevices = history.map { saved ->
-        val live = liveMatch(saved)
-        UnifiedDevice(
-            connectDevice = if (live != null)
-                saved.copy(ip = live.ip, port = live.port, wssPort = live.wssPort ?: saved.wssPort)
-            else saved,
-            historyEntry = saved,
-            isOnline = live != null,
-            lastConnected = saved.lastConnected
-        )
-    }
-    val newDevices = discovered
-        .filter { d -> if (d.uuid.isNotEmpty()) d.uuid !in knownUuids else "${d.ip}:${d.port}" !in knownIpPorts }
-        .map { UnifiedDevice(connectDevice = it, historyEntry = null, isOnline = true, lastConnected = null) }
-
-    return (newDevices + knownDevices)
-        .filterNot { u ->
-            isConnected && connectedDevice?.let { c ->
-                (u.connectDevice.uuid.isNotEmpty() && u.connectDevice.uuid == c.uuid) ||
-                    (u.connectDevice.ip == c.ip && u.connectDevice.port == c.port)
-            } == true
-        }
-        .sortedWith(
-            compareByDescending<UnifiedDevice> { it.isOnline }
-                // Newly-discovered (no lastConnected) sort to the top of the online group.
-                .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
-        )
-}
-
-/**
  * Connect to a TV, reusing a saved pairing token when we have one (silent reconnect) and otherwise
  * connecting with an empty token so [WebSocketClient] sends a pairing request. Shared by
  * [ConnectionScreen] and the device-picker sheet.
@@ -633,10 +642,11 @@ fun connectKnownOrPair(
     name: String,
     uuid: String = ""
 ) {
+    val nativeHistory = history.filter { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
     val existing = if (uuid.isNotEmpty()) {
-        history.find { it.uuid == uuid } ?: history.find { it.ip == ip && it.port == port }
+        nativeHistory.find { it.uuid == uuid } ?: nativeHistory.find { it.ip == ip && it.port == port }
     } else {
-        history.find { it.ip == ip && it.port == port }
+        nativeHistory.find { it.ip == ip && it.port == port }
     }
     if (existing != null && existing.token.isNotEmpty()) {
         viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
@@ -684,7 +694,10 @@ fun TvDeviceRow(
                 modifier = Modifier.weight(1f)
             ) {
                 Icon(
-                    imageVector = if (device.connectDevice.isDlna) Icons.Default.Cast else Icons.Default.Tv,
+                    imageVector = if (
+                        device.connectDevice.resolvedProtocol == CastProtocol.DLNA ||
+                        device.connectDevice.resolvedProtocol == CastProtocol.GOOGLE_CAST
+                    ) Icons.Default.Cast else Icons.Default.Tv,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(32.dp)
@@ -703,22 +716,24 @@ fun TvDeviceRow(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        if (device.connectDevice.isDlna) {
-                            Surface(
-                                color = MaterialTheme.colorScheme.tertiaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                                shape = RoundedCornerShape(4.dp)
-                            ) {
-                                Text(
-                                    text = "DLNA",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                )
-                            }
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                            shape = RoundedCornerShape(4.dp)
+                        ) {
+                            Text(
+                                text = device.connectDevice.resolvedProtocol.displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
                         }
                     }
                     Text(
-                        text = "${device.connectDevice.ip}:${device.connectDevice.port}",
+                        text = if (device.connectDevice.port > 0) {
+                            "${device.connectDevice.ip}:${device.connectDevice.port}"
+                        } else {
+                            device.connectDevice.ip
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

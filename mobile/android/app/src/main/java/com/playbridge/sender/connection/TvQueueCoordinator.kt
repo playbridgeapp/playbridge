@@ -222,7 +222,7 @@ class TvQueueCoordinator(
      * the plan [mutex]: holding that lock across the fetch would block stop()/start()/every
      * signal tick for the duration of the slowest addon (a user switching series would
      * visibly stall). The epoch/plan re-check on commit discards results that a supersession
-     * made stale — the same pattern DlnaQueueCoordinator.advance() uses.
+     * made stale — the same pattern ExternalQueueCoordinator.advance() uses.
      *
      * Only one [topUp] runs at a time ([topUpGate]): playlist_status / status ticks fire
      * frequently and previously each could enter this loop, both snapshot the same
