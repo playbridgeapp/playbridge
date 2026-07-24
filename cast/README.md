@@ -8,6 +8,8 @@ independent of Android, Apple, Flutter, and desktop UI lifecycles.
 - `core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
 - `ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart consumers.
 - `../cli`: cross-platform CLI built directly on `core`.
+- `../stream-proxy-rust`: embeddable and standalone media proxy.
+- `../browser-receiver-rust`: sender-hosted web receiver library and binary.
 
 Discovery is caller-owned and time-boxed. A caller chooses one or more protocols,
 reads events, and cancels or drops the scanner when its screen or command ends. The
@@ -47,6 +49,11 @@ session events are UTF-8 JSON. Strings returned by either `next_json` function
 must be released with `pb_string_free`; handles must be cancelled and released.
 Consumers must check `pb_cast_core_abi_version` before resolving the rest of the
 session API.
+
+Desktop builds enable the optional `sender-services` feature. Its separate
+`pb_sender_services_*` ABI owns the Rust proxy for the app lifetime and starts
+the web-browser receiver only on request. Keeping this lifecycle ABI separate
+allows phone builds to ship the protocol core without pulling in either server.
 
 A session target selects exactly one protocol and retains all known addresses:
 

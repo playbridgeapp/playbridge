@@ -590,13 +590,6 @@ packages:
       relative: true
     source: path
     version: "0.1.0"
-  playbridge_stream_proxy:
-    dependency: "direct main"
-    description:
-      path: "../stream-proxy-dart"
-      relative: true
-    source: path
-    version: "0.2.1"
   plugin_platform_interface:
     dependency: transitive
     description:

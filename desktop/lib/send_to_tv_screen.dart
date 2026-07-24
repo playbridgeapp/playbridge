@@ -11,6 +11,45 @@ import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
 import 'tv_sender_controller.dart';
 
+/// Shows the browser-receiver pairing prompt.
+///
+/// The entered value is kept outside a [TextEditingController] so the dialog's
+/// dismissal animation cannot rebuild a field whose controller was already
+/// disposed.
+@visibleForTesting
+Future<String?> showBrowserPairingCodeDialog(
+  BuildContext context, {
+  required String receiverName,
+}) {
+  var enteredCode = '';
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text('Pair $receiverName'),
+      content: TextField(
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        maxLength: 6,
+        decoration: const InputDecoration(
+          labelText: 'Code shown in the TV browser',
+        ),
+        onChanged: (value) => enteredCode = value,
+        onSubmitted: (value) => Navigator.pop(dialogContext, value),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, enteredCode),
+          child: const Text('Pair'),
+        ),
+      ],
+    ),
+  );
+}
+
 /// The desktop's **sender** surface (D3: lives in the main window). Lists TVs
 /// discovered on the LAN, lets the user pair/connect, and manages the active
 /// connection. Casting actual content is wired once local-file casting (WS-2)
@@ -64,7 +103,13 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       child: Stack(
         children: [
           _content(context),
-          if (_dragging) const Positioned.fill(child: _DropOverlay()),
+          if (_dragging)
+            Positioned.fill(
+              child: _DropOverlay(
+                targetName:
+                    controller.isConnected ? controller.activeTv?.name : null,
+              ),
+            ),
         ],
       ),
     );
@@ -106,9 +151,23 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Discover PlayBridge, DLNA, Roku, and Google Cast receivers on your network.',
+          'Discover PlayBridge, DLNA, Roku, and Google Cast receivers, or open a receiver in any modern TV browser.',
           style: TextStyle(
               fontSize: 13, color: Colors.white.withValues(alpha: 0.6)),
+        ),
+        const SizedBox(height: 20),
+        _BrowserReceiverCard(
+          running: controller.browserReceiverRunning,
+          urls: controller.browserHost?.urls ?? const [],
+          requests: controller.browserPairingRequests,
+          activeReceiverName: controller.isConnected &&
+                  controller.activeTv?.protocol == TvProtocol.webBrowser
+              ? controller.activeTv?.name
+              : null,
+          onStart: _startBrowserReceiver,
+          onStop: _stopBrowserReceiver,
+          onApprove: _approveBrowser,
+          onCastFiles: _pickAndCast,
         ),
         const SizedBox(height: 20),
         _StatusBanner(
@@ -220,6 +279,8 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                 ),
                 connectable: controller.canConnectTo(tv),
                 busy: _isBusy(controller.state),
+                active: controller.isConnected &&
+                    controller.activeTv?.identityKey == tv.identityKey,
                 onTap: () => controller.connectToDiscovered(tv),
                 onForget: () =>
                     controller.forget(tv.uuid, protocol: tv.protocol),
@@ -304,6 +365,35 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
     );
   }
 
+  Future<void> _approveBrowser(BrowserPairingRequest request) async {
+    final code = await showBrowserPairingCodeDialog(
+      context,
+      receiverName: request.name,
+    );
+    if (code == null || code.trim().length != 6) return;
+    try {
+      await controller.approveBrowser(request.sessionId, code.trim());
+    } on Object catch (error) {
+      _snack(error.toString());
+    }
+  }
+
+  Future<void> _startBrowserReceiver() async {
+    try {
+      await controller.startBrowserReceiver();
+    } on Object catch (error) {
+      _snack('Could not start browser receiver: $error');
+    }
+  }
+
+  Future<void> _stopBrowserReceiver() async {
+    try {
+      await controller.stopBrowserReceiver();
+    } on Object catch (error) {
+      _snack('Could not stop browser receiver: $error');
+    }
+  }
+
   bool _isBusy(SenderConnectionState s) =>
       s == SenderConnectionState.connecting ||
       s == SenderConnectionState.waitingForChallenge ||
@@ -355,10 +445,13 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
 
 /// Full-screen translucent hint shown while files are dragged over the screen.
 class _DropOverlay extends StatelessWidget {
-  const _DropOverlay();
+  const _DropOverlay({this.targetName});
+
+  final String? targetName;
 
   @override
   Widget build(BuildContext context) {
+    final connected = targetName != null;
     return Container(
       color: Colors.black.withValues(alpha: 0.55),
       alignment: Alignment.center,
@@ -370,21 +463,162 @@ class _DropOverlay extends StatelessWidget {
           border: Border.all(
               color: Colors.tealAccent.withValues(alpha: 0.6), width: 2),
         ),
-        child: const Column(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.playlist_add, size: 40, color: Colors.tealAccent),
-            SizedBox(height: 12),
+            const Icon(Icons.playlist_add, size: 40, color: Colors.tealAccent),
+            const SizedBox(height: 12),
             Text('Drop to cast',
-                style: TextStyle(
+                style: const TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
                     color: Colors.white)),
-            SizedBox(height: 4),
-            Text('Multiple files play as a playlist',
-                style: TextStyle(fontSize: 13, color: Colors.white70)),
+            const SizedBox(height: 4),
+            Text(
+              connected
+                  ? 'Send to $targetName · multiple files become a playlist'
+                  : 'Connect a receiver before dropping files',
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
+            ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _BrowserReceiverCard extends StatelessWidget {
+  const _BrowserReceiverCard({
+    required this.running,
+    required this.urls,
+    required this.requests,
+    required this.activeReceiverName,
+    required this.onStart,
+    required this.onStop,
+    required this.onApprove,
+    required this.onCastFiles,
+  });
+
+  final bool running;
+  final List<String> urls;
+  final List<BrowserPairingRequest> requests;
+  final String? activeReceiverName;
+  final Future<void> Function() onStart;
+  final Future<void> Function() onStop;
+  final Future<void> Function(BrowserPairingRequest) onApprove;
+  final Future<void> Function() onCastFiles;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.035),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.10)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.language, size: 19, color: Colors.tealAccent),
+              const SizedBox(width: 10),
+              const Expanded(
+                child: Text(
+                  'TV web browser receiver',
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+              ),
+              if (running)
+                OutlinedButton(
+                  onPressed: onStop,
+                  child: const Text('Stop'),
+                )
+              else
+                FilledButton(
+                  onPressed: onStart,
+                  child: const Text('Start'),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            running
+                ? 'Open one of these addresses in the TV browser and enter its code here. The paired browser becomes the active cast target automatically.'
+                : 'Use a browser-only TV, console, or computer as a temporary receiver. The host starts only when requested.',
+            style: TextStyle(
+              fontSize: 12,
+              color: Colors.white.withValues(alpha: 0.58),
+            ),
+          ),
+          if (running && urls.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (final url in urls)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 3),
+                child: SelectableText(
+                  url,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.tealAccent,
+                  ),
+                ),
+              ),
+          ],
+          if (activeReceiverName != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
+              decoration: BoxDecoration(
+                color: Colors.greenAccent.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(
+                  color: Colors.greenAccent.withValues(alpha: 0.24),
+                ),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.cast_connected,
+                    size: 18,
+                    color: Colors.greenAccent,
+                  ),
+                  const SizedBox(width: 9),
+                  Expanded(
+                    child: Text(
+                      '$activeReceiverName is ready to receive media.',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: onCastFiles,
+                    icon: const Icon(Icons.video_file, size: 17),
+                    label: const Text('Cast files…'),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (requests.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            for (final request in requests)
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${request.name} is waiting to pair',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => onApprove(request),
+                    child: const Text('Enter code'),
+                  ),
+                ],
+              ),
+          ],
+        ],
       ),
     );
   }
@@ -497,6 +731,7 @@ class _DiscoveredRow extends StatelessWidget {
     required this.paired,
     required this.connectable,
     required this.busy,
+    required this.active,
     required this.onTap,
     required this.onForget,
   });
@@ -505,6 +740,7 @@ class _DiscoveredRow extends StatelessWidget {
   final bool paired;
   final bool connectable;
   final bool busy;
+  final bool active;
   final VoidCallback onTap;
   final VoidCallback onForget;
 
@@ -513,10 +749,8 @@ class _DiscoveredRow extends StatelessWidget {
     final secure = tv.wssPort != null;
     final connectionLabel = switch (tv.protocol) {
       TvProtocol.playBridge => secure ? 'encrypted' : 'insecure',
-      TvProtocol.dlna ||
-      TvProtocol.roku ||
-      TvProtocol.googleCast =>
-        'playback support next',
+      TvProtocol.dlna || TvProtocol.roku || TvProtocol.googleCast => 'ready',
+      TvProtocol.webBrowser => 'paired for this session',
     };
     final subtitleColor = switch (tv.protocol) {
       TvProtocol.playBridge => secure ? Colors.greenAccent : Colors.amberAccent,
@@ -524,34 +758,44 @@ class _DiscoveredRow extends StatelessWidget {
       TvProtocol.roku ||
       TvProtocol.googleCast =>
         Colors.white54,
+      TvProtocol.webBrowser => Colors.greenAccent,
     };
     return _Row(
       leadingIcon: tv.protocol == TvProtocol.roku ? Icons.live_tv : Icons.tv,
       title: tv.name,
       subtitle: '${tv.protocol.label}  ·  ${tv.host}  ·  $connectionLabel',
       subtitleColor: subtitleColor,
-      trailing: !connectable
-          ? const FilledButton(onPressed: null, child: Text('Unavailable'))
-          : paired
-              ? Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    FilledButton(
+      trailing: active
+          ? const FilledButton(
+              onPressed: null,
+              child: Text('Connected'),
+            )
+          : !connectable
+              ? const FilledButton(onPressed: null, child: Text('Unavailable'))
+              : paired
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        FilledButton(
+                          onPressed: busy ? null : onTap,
+                          child: const Text('Connect'),
+                        ),
+                        IconButton(
+                          tooltip: 'Forget',
+                          iconSize: 18,
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: onForget,
+                        ),
+                      ],
+                    )
+                  : FilledButton(
                       onPressed: busy ? null : onTap,
-                      child: const Text('Connect'),
+                      child: Text(
+                        tv.protocol == TvProtocol.webBrowser
+                            ? 'Connect'
+                            : 'Pair',
+                      ),
                     ),
-                    IconButton(
-                      tooltip: 'Forget',
-                      iconSize: 18,
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: onForget,
-                    ),
-                  ],
-                )
-              : FilledButton(
-                  onPressed: busy ? null : onTap,
-                  child: const Text('Pair'),
-                ),
     );
   }
 }

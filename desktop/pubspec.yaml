@@ -30,12 +30,8 @@ dependencies:
   playbridge_protocol:
     path: ../protocol/generated/dart
 
-  # Standalone streaming proxy
-  playbridge_stream_proxy:
-    path: ../stream-proxy-dart
-
-  # Shared Rust discovery and casting protocols. Imported by sender features as
-  # they migrate; adding the package does not start background discovery.
+  # Shared Rust discovery, casting protocols, stream proxy, and browser receiver
+  # host. Services start only while Desktop is running.
   playbridge_cast_core:
     path: ../packages/playbridge_cast_core_dart
 

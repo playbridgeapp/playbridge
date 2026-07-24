@@ -10,6 +10,7 @@ extern "C" {
 
 typedef struct DiscoveryScanner DiscoveryScanner;
 typedef struct CastSession CastSession;
+typedef struct SenderServices SenderServices;
 
 /* Increment when the stable C ABI or its JSON event contract changes. */
 uint32_t pb_cast_core_abi_version(void);
@@ -31,6 +32,21 @@ bool pb_session_submit_json(const CastSession *session, const char *command_json
 char *pb_session_next_json(const CastSession *session, uint64_t wait_ms);
 void pb_session_cancel(const CastSession *session);
 void pb_session_free(const CastSession *session);
+
+/*
+ * Optional Desktop sender-services ABI. The native library must be built with
+ * the `sender-services` feature. It owns one embedded stream proxy and an
+ * on-demand browser-receiver host. Commands and events are UTF-8 JSON.
+ */
+uint32_t pb_sender_services_abi_version(void);
+SenderServices *pb_sender_services_start(void);
+bool pb_sender_services_submit_json(const SenderServices *services,
+                                    const char *command_json);
+char *pb_sender_services_next_json(const SenderServices *services,
+                                   uint64_t wait_ms);
+void pb_sender_services_cancel(const SenderServices *services);
+void pb_sender_services_free(const SenderServices *services);
+
 void pb_string_free(char *value);
 
 #ifdef __cplusplus

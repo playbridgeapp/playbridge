@@ -8,13 +8,19 @@ use crossterm::{
     },
 };
 use std::{
+    collections::HashMap,
     io::{self, Write},
     path::PathBuf,
     time::Duration,
 };
 use tokio::time::sleep;
 
+use playbridge_browser_receiver::{
+    BrowserReceiverConfig, BrowserReceiverEvent, BrowserReceiverHost, BrowserReceiverService,
+    local_urls,
+};
 use playbridge_cast_core::{
+    browser::{BrowserCommand, BrowserMedia, BrowserPlaybackState},
     castv2,
     discovery::{DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver, ReceiverProtocol},
     playbridge::{PairingSession, ReceiverFrame, SenderFrame},
@@ -22,9 +28,9 @@ use playbridge_cast_core::{
     session::{MediaRequest, PlaybackState, ReceiverSession},
     upnp::Renderer,
 };
+use stream_proxy_rust::{ProxyServer, ProxyServerConfig};
 
 use crate::credentials::PlaybridgeCredentials;
-use crate::http_server::LocalMediaServer;
 use crate::preferred::PreferredDevice;
 
 struct RawModeGuard;
@@ -69,31 +75,187 @@ impl Drop for PickerTerminalGuard {
     }
 }
 
+pub async fn run_browser_send(media_target: String) -> Result<(), String> {
+    println!("Media Target: {media_target}");
+    validate_media_target(&media_target)?;
+    let (media_url, control, proxy) = cast_to_browser(&media_target, None, None).await?;
+    wait_for_server_exit(&media_url, Some(control), Some(proxy)).await;
+    Ok(())
+}
+
+async fn cast_to_browser(
+    media_target: &str,
+    existing_proxy: Option<ProxyServer>,
+    existing_media_url: Option<String>,
+) -> Result<(String, TargetControl, ProxyServer), String> {
+    validate_media_target(media_target)?;
+    let host = BrowserReceiverHost::start(BrowserReceiverConfig::default()).await?;
+    println!("Open one of these addresses on the receiving device:");
+    for url in host.urls() {
+        println!("  {url}");
+    }
+    println!("Waiting for a browser receiver. Press Ctrl+C to cancel.");
+
+    let proxy = match existing_proxy {
+        Some(proxy) => proxy,
+        None => ProxyServer::start(ProxyServerConfig::default()).await?,
+    };
+    let proxy_host = primary_lan_host(proxy.local_addr().port())?;
+    let media_url = match existing_media_url {
+        Some(url) => url,
+        None => {
+            let path = resolve_media_path(media_target);
+            if path.is_file() {
+                proxy
+                    .register_file(&proxy_host, path, None, Duration::from_secs(6 * 60 * 60))?
+                    .url
+            } else {
+                proxy
+                    .register_remote(&proxy_host, media_target, HashMap::new())?
+                    .url
+            }
+        }
+    };
+    let service = host.service();
+    let mut events = service.subscribe();
+    loop {
+        let event = tokio::select! {
+            event = events.recv() => event.map_err(|error| error.to_string())?,
+            _ = tokio::signal::ctrl_c() => return Err("Browser receiver setup cancelled".into()),
+        };
+        if let BrowserReceiverEvent::PairingRequested { session, .. } = event {
+            println!("\nPairing request from \"{}\".", session.name);
+            print!("Enter the six-digit code shown in the browser: ");
+            io::stdout().flush().map_err(|error| error.to_string())?;
+            let code = tokio::task::spawn_blocking(|| {
+                let mut input = String::new();
+                io::stdin()
+                    .read_line(&mut input)
+                    .map(|_| input)
+                    .map_err(|error| error.to_string())
+            })
+            .await
+            .map_err(|error| error.to_string())??;
+            match service.approve(&session.session_id, code.trim()).await {
+                Ok(()) => {
+                    let media = BrowserMedia {
+                        url: media_url.clone(),
+                        title: media_title(media_target),
+                        content_type: media_content_type(media_target),
+                        poster_url: None,
+                        subtitle_url: None,
+                        start_position_ms: None,
+                    };
+                    service.load(&session.session_id, media).await?;
+                    println!("Casting to \"{}\" via Web Browser.", session.name);
+                    return Ok((
+                        media_url,
+                        TargetControl::Browser {
+                            host,
+                            service,
+                            session_id: session.session_id,
+                            events,
+                        },
+                        proxy,
+                    ));
+                }
+                Err(error) => eprintln!("Pairing failed: {error}"),
+            }
+        }
+    }
+}
+
+fn resolve_media_path(media_target: &str) -> PathBuf {
+    if let Some(relative) = media_target.strip_prefix("~/")
+        && let Some(home) = std::env::var_os("HOME")
+    {
+        return PathBuf::from(home).join(relative);
+    }
+    PathBuf::from(media_target)
+}
+
+fn validate_media_target(media_target: &str) -> Result<(), String> {
+    let target = media_target.trim();
+    if target.is_empty() {
+        return Err("media target cannot be empty".into());
+    }
+
+    let path = resolve_media_path(target);
+    if path.exists() {
+        if path.is_file() {
+            return Ok(());
+        }
+        return Err(format!("media path is not a file: {}", path.display()));
+    }
+
+    if target.starts_with("http://") || target.starts_with("https://") {
+        return Ok(());
+    }
+
+    Err(format!("media file does not exist: {}", path.display()))
+}
+
+fn primary_lan_host(port: u16) -> Result<String, String> {
+    let url = local_urls(port)
+        .into_iter()
+        .find(|url| !url.contains("127.0.0.1"))
+        .or_else(|| local_urls(port).into_iter().next())
+        .ok_or_else(|| "could not determine a LAN address for the media proxy".to_owned())?;
+    url.strip_prefix("http://")
+        .and_then(|value| value.rsplit_once(':').map(|(host, _)| host.to_owned()))
+        .ok_or_else(|| "invalid local proxy address".to_owned())
+}
+
+fn media_title(target: &str) -> Option<String> {
+    let path = resolve_media_path(target);
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_owned)
+}
+
+fn media_content_type(target: &str) -> Option<String> {
+    let lower = target
+        .split('?')
+        .next()
+        .unwrap_or(target)
+        .to_ascii_lowercase();
+    let content_type = if lower.ends_with(".m3u8") {
+        "application/vnd.apple.mpegurl"
+    } else if lower.ends_with(".mpd") {
+        "application/dash+xml"
+    } else if lower.ends_with(".webm") {
+        "video/webm"
+    } else if lower.ends_with(".mp3") {
+        "audio/mpeg"
+    } else if lower.ends_with(".m4a") {
+        "audio/mp4"
+    } else if lower.ends_with(".mp4") || lower.ends_with(".m4v") {
+        "video/mp4"
+    } else {
+        return None;
+    };
+    Some(content_type.into())
+}
+
 #[allow(clippy::collapsible_if)]
 pub async fn run_send(media_target: String) -> Result<(), String> {
     println!("Media Target: {media_target}");
+    validate_media_target(&media_target)?;
 
     // Resolve local file vs remote URL
-    let resolved_path = if let Some(relative) = media_target.strip_prefix("~/") {
-        if let Some(home) = std::env::var_os("HOME") {
-            let mut path = PathBuf::from(home);
-            path.push(relative);
-            path
-        } else {
-            PathBuf::from(&media_target)
-        }
-    } else {
-        PathBuf::from(&media_target)
-    };
+    let resolved_path = resolve_media_path(&media_target);
 
-    let (media_url, _server_handle) = if resolved_path.exists() && resolved_path.is_file() {
+    let (media_url, mut proxy_server) = if resolved_path.exists() && resolved_path.is_file() {
         println!(
-            "Starting local HTTP media server for {:?}...",
+            "Starting Rust media proxy for {:?}...",
             resolved_path.file_name().unwrap_or_default()
         );
-        let (server, handle) = LocalMediaServer::start(resolved_path).await?;
-        println!("Local HTTP server running at {}\n", server.url);
-        (server.url, Some(handle))
+        let server = ProxyServer::start(ProxyServerConfig::default()).await?;
+        let host = primary_lan_host(server.local_addr().port())?;
+        let media =
+            server.register_file(&host, resolved_path, None, Duration::from_secs(6 * 60 * 60))?;
+        println!("Local media proxy running at {}\n", media.url);
+        (media.url, Some(server))
     } else {
         (media_target.clone(), None)
     };
@@ -164,7 +326,7 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
             };
             match result {
                 Ok(channel_opt) => {
-                    wait_for_server_exit(&media_url, channel_opt, _server_handle.is_some()).await;
+                    wait_for_server_exit(&media_url, channel_opt, proxy_server.take()).await;
                     return Ok(());
                 }
                 Err(err) => {
@@ -178,7 +340,18 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
     }
 
     // 2. Continuous live discovery and interactive menu
-    let (target, make_preferred) = live_discovery_interactive_select().await?;
+    let selection = live_discovery_interactive_select().await?;
+    let (target, make_preferred) = match selection {
+        PickerSelection::Browser => {
+            let final_existing_media_url = proxy_server.as_ref().map(|_| media_url.clone());
+            let (browser_url, control, browser_proxy) =
+                cast_to_browser(&media_target, proxy_server.take(), final_existing_media_url)
+                    .await?;
+            wait_for_server_exit(&browser_url, Some(control), Some(browser_proxy)).await;
+            return Ok(());
+        }
+        PickerSelection::Receiver(target, make_preferred) => (target, make_preferred),
+    };
 
     let address = target
         .addresses
@@ -238,7 +411,7 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
     };
 
     if result.is_ok() {
-        wait_for_server_exit(&media_url, channel_opt, _server_handle.is_some()).await;
+        wait_for_server_exit(&media_url, channel_opt, proxy_server.take()).await;
     }
 
     result
@@ -254,6 +427,12 @@ enum TargetControl {
     Dlna(Renderer),
     Playbridge(Box<SecureWebSocket>),
     Roku(ReceiverSession),
+    Browser {
+        host: BrowserReceiverHost,
+        service: BrowserReceiverService,
+        session_id: String,
+        events: tokio::sync::broadcast::Receiver<BrowserReceiverEvent>,
+    },
 }
 
 fn format_time(secs: f64) -> String {
@@ -307,9 +486,9 @@ fn parse_dlna_time(time_str: &str) -> Option<f64> {
 async fn wait_for_server_exit(
     media_url: &str,
     mut target_control: Option<TargetControl>,
-    is_local_server: bool,
+    proxy_server: Option<ProxyServer>,
 ) {
-    if is_local_server || target_control.is_some() {
+    if proxy_server.is_some() || target_control.is_some() {
         println!("\nStreaming media at {}", media_url);
         println!("Interactive Controls:");
         match target_control {
@@ -345,6 +524,14 @@ async fn wait_for_server_exit(
                 println!("  [Right] / [D] : Fast Forward");
                 println!("  [Q] / [Ctrl+C]: Stop Playback & Exit\n");
             }
+            Some(TargetControl::Browser { .. }) => {
+                println!("  [Space] / [P] : Pause / Resume");
+                println!("  [Left]  / [A] : Seek Backward (-10s)");
+                println!("  [Right] / [D] : Seek Forward (+10s)");
+                println!("  [Up]    / [W] : Volume Up (+5%)");
+                println!("  [Down]  / [S] : Volume Down (-5%)");
+                println!("  [Q] / [Ctrl+C]: Stop Playback & Exit\n");
+            }
             None => {
                 println!("  [Q] / [Ctrl+C]: Stop Local Server & Exit\n");
             }
@@ -359,6 +546,7 @@ async fn wait_for_server_exit(
         let mut last_tick = tokio::time::Instant::now();
         let mut current_pos_secs: f64 = 0.0;
         let mut duration_secs: f64 = 0.0;
+        let mut browser_disconnected = false;
 
         loop {
             // Update local time estimate if playing
@@ -481,6 +669,39 @@ async fn wait_for_server_exit(
                 }
             }
 
+            if let Some(TargetControl::Browser { ref mut events, .. }) = target_control {
+                while let Ok(event) = events.try_recv() {
+                    match event {
+                        BrowserReceiverEvent::Status { session, .. } => {
+                            current_pos_secs = session.status.position_ms as f64 / 1000.0;
+                            duration_secs = session.status.duration_ms as f64 / 1000.0;
+                            volume_level = session.status.volume as f32;
+                            is_paused = matches!(
+                                session.status.state,
+                                BrowserPlaybackState::Paused
+                                    | BrowserPlaybackState::AutoplayBlocked
+                            );
+                        }
+                        BrowserReceiverEvent::Ended { session } => {
+                            current_pos_secs = session.status.duration_ms as f64 / 1000.0;
+                            duration_secs = current_pos_secs;
+                            is_paused = true;
+                        }
+                        BrowserReceiverEvent::Error { message, .. } => {
+                            print!("\r\x1b[K[Browser receiver error: {message}]");
+                        }
+                        BrowserReceiverEvent::Disconnected { .. } => {
+                            browser_disconnected = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if browser_disconnected {
+                print!("\r\x1b[K[Browser receiver disconnected]");
+                break;
+            }
+
             // Keyboard input polling
             if event::poll(Duration::from_millis(80)).unwrap_or(false) {
                 if let Ok(Event::Key(key)) = event::read() {
@@ -556,6 +777,21 @@ async fn wait_for_server_exit(
                                         if is_paused { "PAUSED" } else { "PLAYING" }
                                     );
                                 }
+                                Some(TargetControl::Browser {
+                                    ref service,
+                                    ref session_id,
+                                    ..
+                                }) => {
+                                    let action = if is_paused {
+                                        BrowserCommand::Pause
+                                    } else {
+                                        BrowserCommand::Play
+                                    };
+                                    if let Err(error) = service.command(session_id, action, None) {
+                                        is_paused = !is_paused;
+                                        print!("\r\x1b[K[Browser control failed: {error}]");
+                                    }
+                                }
                                 None => {}
                             }
                             let _ = io::stdout().flush();
@@ -610,6 +846,17 @@ async fn wait_for_server_exit(
                                     };
                                     let _ = socket.send(&cmd).await;
                                     print!("\r\x1b[K[Seek -10s]");
+                                }
+                                Some(TargetControl::Browser {
+                                    ref service,
+                                    ref session_id,
+                                    ..
+                                }) => {
+                                    let _ = service.command(
+                                        session_id,
+                                        BrowserCommand::Seek,
+                                        Some(current_pos_secs * 1000.0),
+                                    );
                                 }
                                 None => {}
                             }
@@ -666,6 +913,17 @@ async fn wait_for_server_exit(
                                     let _ = socket.send(&cmd).await;
                                     print!("\r\x1b[K[Seek +10s]");
                                 }
+                                Some(TargetControl::Browser {
+                                    ref service,
+                                    ref session_id,
+                                    ..
+                                }) => {
+                                    let _ = service.command(
+                                        session_id,
+                                        BrowserCommand::Seek,
+                                        Some(current_pos_secs * 1000.0),
+                                    );
+                                }
                                 None => {}
                             }
                             let _ = io::stdout().flush();
@@ -690,6 +948,18 @@ async fn wait_for_server_exit(
                                     let _ = socket.send(&cmd).await;
                                     print!("\r\x1b[K[Volume Up]");
                                 }
+                                Some(TargetControl::Browser {
+                                    ref service,
+                                    ref session_id,
+                                    ..
+                                }) => {
+                                    let _ = service.command(
+                                        session_id,
+                                        BrowserCommand::SetVolume,
+                                        Some(volume_level as f64),
+                                    );
+                                    print!("\r\x1b[K[Volume: {:.0}%]", volume_level * 100.0);
+                                }
                                 _ => {}
                             }
                             let _ = io::stdout().flush();
@@ -713,6 +983,18 @@ async fn wait_for_server_exit(
                                     };
                                     let _ = socket.send(&cmd).await;
                                     print!("\r\x1b[K[Volume Down]");
+                                }
+                                Some(TargetControl::Browser {
+                                    ref service,
+                                    ref session_id,
+                                    ..
+                                }) => {
+                                    let _ = service.command(
+                                        session_id,
+                                        BrowserCommand::SetVolume,
+                                        Some(volume_level as f64),
+                                    );
+                                    print!("\r\x1b[K[Volume: {:.0}%]", volume_level * 100.0);
                                 }
                                 _ => {}
                             }
@@ -861,15 +1143,32 @@ async fn wait_for_server_exit(
                     eprintln!("\nwarning: failed to stop Roku playback: {error}");
                 }
             }
+            Some(TargetControl::Browser {
+                host,
+                service,
+                session_id,
+                ..
+            }) => {
+                let _ = service.command(&session_id, BrowserCommand::Stop, None);
+                service.disconnect(&session_id);
+                if let Err(error) = host.shutdown().await {
+                    eprintln!("\nwarning: failed to stop browser receiver host: {error}");
+                }
+            }
             None => {}
         }
 
         println!("\nStopped streaming.");
     }
+    if let Some(server) = proxy_server
+        && let Err(error) = server.shutdown().await
+    {
+        eprintln!("warning: failed to stop media proxy: {error}");
+    }
 }
 
 #[allow(clippy::collapsible_if)]
-async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String> {
+async fn live_discovery_interactive_select() -> Result<PickerSelection, String> {
     let mut stream = DiscoveryStream::start(DiscoveryConfig::default());
     let mut receivers = Vec::<Receiver>::new();
     let mut selection = 0usize;
@@ -888,15 +1187,24 @@ async fn live_discovery_interactive_select() -> Result<(Receiver, bool), String>
                         selection -= 1;
                         redraw(&receivers, selection)?;
                     }
-                    KeyCode::Down if !receivers.is_empty() && selection + 1 < receivers.len() => {
+                    KeyCode::Down if selection + 1 < receivers.len() + 1 => {
                         selection += 1;
                         redraw(&receivers, selection)?;
                     }
-                    KeyCode::Enter if !receivers.is_empty() => {
-                        break Ok((receivers[selection].clone(), false));
+                    KeyCode::Enter if selection == receivers.len() => {
+                        break Ok(PickerSelection::Browser);
                     }
-                    KeyCode::Char('p') | KeyCode::Char('P') if !receivers.is_empty() => {
-                        break Ok((receivers[selection].clone(), true));
+                    KeyCode::Enter if selection < receivers.len() => {
+                        break Ok(PickerSelection::Receiver(
+                            receivers[selection].clone(),
+                            false,
+                        ));
+                    }
+                    KeyCode::Char('p') | KeyCode::Char('P') if selection < receivers.len() => {
+                        break Ok(PickerSelection::Receiver(
+                            receivers[selection].clone(),
+                            true,
+                        ));
                     }
                     KeyCode::Char('r') | KeyCode::Char('R') => {
                         receivers.clear();
@@ -955,17 +1263,34 @@ fn redraw(receivers: &[Receiver], selection: usize) -> Result<(), String> {
             .map_err(|error| error.to_string())?;
         }
     }
+    let browser_prefix = if selection == receivers.len() {
+        ">"
+    } else {
+        " "
+    };
+    write!(
+        stdout,
+        "\r\nWeb Browser\r\n  {} Open receiver setup page\r\n",
+        browser_prefix
+    )
+    .map_err(|error| error.to_string())?;
 
     write!(
         stdout,
-        "\r\n[↑/↓] Navigate  [Enter] Cast  [P] Preferred  [R] Rescan  [Q] Cancel\r\n"
+        "\r\n[↑/↓] Navigate  [Enter] Cast/Setup  [P] Preferred  [R] Rescan  [Q] Cancel\r\n"
     )
     .map_err(|error| error.to_string())?;
 
     stdout.flush().map_err(|error| error.to_string())
 }
 
+enum PickerSelection {
+    Receiver(Receiver, bool),
+    Browser,
+}
+
 fn upsert_receiver(receivers: &mut Vec<Receiver>, receiver: Receiver, selection: &mut usize) {
+    let browser_selected = *selection == receivers.len();
     let selected_id = receivers.get(*selection).map(|item| item.id.clone());
     if let Some(existing) = receivers.iter_mut().find(|item| item.id == receiver.id) {
         *existing = receiver;
@@ -978,9 +1303,13 @@ fn upsert_receiver(receivers: &mut Vec<Receiver>, receiver: Receiver, selection:
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
             .then_with(|| left.id.0.cmp(&right.id.0))
     });
-    *selection = selected_id
-        .and_then(|id| receivers.iter().position(|item| item.id == id))
-        .unwrap_or_else(|| (*selection).min(receivers.len().saturating_sub(1)));
+    *selection = if browser_selected {
+        receivers.len()
+    } else {
+        selected_id
+            .and_then(|id| receivers.iter().position(|item| item.id == id))
+            .unwrap_or_else(|| (*selection).min(receivers.len().saturating_sub(1)))
+    };
 }
 
 const fn protocol_rank(protocol: ReceiverProtocol) -> u8 {
@@ -1294,5 +1623,17 @@ mod tests {
             &["fe80::1%en0", "192.168.1.32", "fdeb::2"],
         );
         assert_eq!(address_summary(&receiver), "192.168.1.32 (+2 more)");
+    }
+
+    #[test]
+    fn media_target_validation_accepts_http_urls() {
+        assert!(validate_media_target("https://example.test/video.mpd").is_ok());
+    }
+
+    #[test]
+    fn media_target_validation_explains_missing_local_files() {
+        let error = validate_media_target("/definitely/missing/video.mpd").unwrap_err();
+        assert!(error.contains("media file does not exist"));
+        assert!(error.contains("/definitely/missing/video.mpd"));
     }
 }

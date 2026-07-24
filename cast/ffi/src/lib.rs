@@ -23,6 +23,9 @@ use serde_json::Value;
 
 uniffi::setup_scaffolding!();
 
+#[cfg(feature = "sender-services")]
+mod sender_services;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 pub enum Protocol {
     PlayBridge,

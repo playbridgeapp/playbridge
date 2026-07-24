@@ -147,11 +147,19 @@ class ExtensionBridge {
         final headers =
             (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
         final title = obj['title'] as String?;
+        final rawContentType = (obj['contentType'] as String?)?.trim();
+        final contentType = rawContentType == null || rawContentType.isEmpty
+            ? null
+            : rawContentType;
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
           unawaited(() async {
-            final ok =
-                await _sender.castUrl(url, headers: headers, title: title);
+            final ok = await _sender.castUrl(
+              url,
+              headers: headers,
+              title: title,
+              contentType: contentType,
+            );
             _send(socket, {
               'type': 'result',
               'ok': ok,
@@ -169,6 +177,7 @@ class ExtensionBridge {
             url,
             headers: headers,
             title: title,
+            contentType: contentType,
             isRemote: true,
           ));
           _send(socket, {

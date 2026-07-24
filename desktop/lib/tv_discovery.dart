@@ -8,7 +8,8 @@ enum TvProtocol {
   playBridge('PlayBridge'),
   dlna('DLNA'),
   roku('Roku'),
-  googleCast('Google Cast');
+  googleCast('Google Cast'),
+  webBrowser('Web Browser');
 
   const TvProtocol(this.label);
   final String label;
@@ -17,6 +18,7 @@ enum TvProtocol {
         'dlna' => TvProtocol.dlna,
         'roku' => TvProtocol.roku,
         'googleCast' || 'google_cast' || 'googlecast' => TvProtocol.googleCast,
+        'webBrowser' || 'web_browser' => TvProtocol.webBrowser,
         'playBridge' ||
         'playbridge' ||
         'native' ||

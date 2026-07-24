@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
 
 import 'protocol.dart';
+import 'stream_proxy_server.dart';
 import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
 
@@ -459,12 +460,239 @@ class GoogleCastTransport extends RustCastTransport {
       : super(TvProtocol.googleCast, core: core);
 }
 
+/// Transport for a browser page connected to Desktop's on-demand Rust host.
+class BrowserTransport extends TvTransport {
+  BrowserTransport({rust.SenderServices? services})
+      : _services = services ?? StreamProxyServer.instance.services;
+
+  final rust.SenderServices _services;
+  final _state = StreamController<SenderConnectionState>.broadcast();
+  final _messages = StreamController<String>.broadcast();
+  final _credentials = StreamController<TvCredentials>.broadcast();
+  StreamSubscription<Map<String, Object?>>? _events;
+  SenderConnectionState _current = SenderConnectionState.disconnected;
+  String? _sessionId;
+  int _positionMs = 0;
+  String _playbackState = 'idle';
+
+  @override
+  TvProtocol get protocol => TvProtocol.webBrowser;
+
+  @override
+  Stream<SenderConnectionState> get state => _state.stream;
+
+  @override
+  SenderConnectionState get currentState => _current;
+
+  @override
+  Stream<String> get messages => _messages.stream;
+
+  @override
+  Stream<TvCredentials> get credentials => _credentials.stream;
+
+  @override
+  Map<String, dynamic> get capabilities => const {
+        'load': true,
+        'playbackControl': true,
+        'seek': true,
+        'status': true,
+      };
+
+  @override
+  Future<void> connect({
+    required DiscoveredTv tv,
+    required String deviceName,
+    required String deviceUUID,
+    String? token,
+    String? expectedPin,
+  }) async {
+    await disconnect();
+    _sessionId = tv.uuid;
+    _events = _services.events.listen(_onEvent);
+    _setState(SenderConnectionState.connected);
+  }
+
+  @override
+  Future<void> disconnect() async {
+    final sessionId = _sessionId;
+    _sessionId = null;
+    await _events?.cancel();
+    _events = null;
+    if (sessionId != null) {
+      try {
+        await _services.disconnectBrowser(sessionId);
+      } on Object {
+        // The browser may already have closed its tab or navigated away.
+      }
+    }
+    _setState(SenderConnectionState.disconnected);
+  }
+
+  @override
+  Future<bool> castVideo(PlayPayload video) async {
+    return castBrowserMedia(
+      url: video.url,
+      title: video.hasTitle() ? video.title : null,
+      contentType: _contentTypeForUrl(video.url),
+      posterUrl: video.posterUrlOrNull,
+      subtitleUrl: video.subtitlesOrNull?.first,
+      startPosition: video.startPositionMsOrNull == null
+          ? null
+          : Duration(milliseconds: video.startPositionMsOrNull!),
+    );
+  }
+
+  Future<bool> castBrowserMedia({
+    required String url,
+    String? title,
+    String? contentType,
+    String? posterUrl,
+    String? subtitleUrl,
+    Duration? startPosition,
+  }) async {
+    final sessionId = _sessionId;
+    if (sessionId == null || url.isEmpty) return false;
+    try {
+      await _services.loadBrowser(
+        sessionId: sessionId,
+        url: url,
+        title: title,
+        contentType: contentType == null || contentType.isEmpty
+            ? _contentTypeForUrl(url)
+            : contentType,
+        posterUrl: posterUrl,
+        subtitleUrl: subtitleUrl,
+        startPosition: startPosition,
+      );
+      return true;
+    } on Object catch (error) {
+      _emitError('load', error);
+      return false;
+    }
+  }
+
+  String? _contentTypeForUrl(String url) {
+    final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
+    if (path.endsWith('.mpd')) return 'application/dash+xml';
+    if (path.endsWith('.m3u8')) return 'application/vnd.apple.mpegurl';
+    return null;
+  }
+
+  @override
+  Future<bool> castPlaylist(PlaylistPayload playlist) => playlist.items.isEmpty
+      ? Future.value(false)
+      : castVideo(playlist.items.first);
+
+  @override
+  Future<bool> sendControl(String command) async {
+    final sessionId = _sessionId;
+    if (sessionId == null) return false;
+    String action;
+    double? value;
+    if (command.startsWith('seek_to:')) {
+      action = 'seek';
+      final position = int.tryParse(command.substring('seek_to:'.length));
+      if (position == null) return false;
+      value = position.toDouble();
+    } else {
+      switch (command) {
+        case 'play':
+        case 'resume':
+          action = 'play';
+        case 'pause':
+          action = 'pause';
+        case 'toggle':
+          action = _playbackState == 'paused' ? 'play' : 'pause';
+        case 'stop':
+          action = 'stop';
+        case 'seek_forward':
+          action = 'seek';
+          value = (_positionMs + 10000).toDouble();
+        case 'seek_back':
+          action = 'seek';
+          value = (_positionMs - 10000).clamp(0, 1 << 62).toDouble();
+        default:
+          return false;
+      }
+    }
+    try {
+      await _services.controlBrowser(
+        sessionId: sessionId,
+        action: action,
+        value: value,
+      );
+      return true;
+    } on Object catch (error) {
+      _emitError(command, error);
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> playlistJump(int index) async => false;
+
+  @override
+  Future<bool> queueAdd(PlayPayload item) async => false;
+
+  void _onEvent(Map<String, Object?> event) {
+    final session = event['session'];
+    if (session is Map && session['sessionId']?.toString() == _sessionId) {
+      if (event['event'] == 'status' || event['event'] == 'ended') {
+        final status = session['status'];
+        if (status is Map) {
+          _playbackState = status['state']?.toString() ?? _playbackState;
+          _positionMs = (status['positionMs'] as num?)?.toInt() ?? _positionMs;
+          _messages.add(jsonEncode({
+            'type': 'status',
+            'state': _playbackState,
+            'position': _positionMs,
+            'duration': (status['durationMs'] as num?)?.toInt() ?? 0,
+            if (status['title'] != null) 'title': status['title'],
+          }));
+        }
+      } else if (event['event'] == 'error') {
+        _emitError('browser', event['message'] ?? 'Browser playback failed');
+      }
+    } else if (event['event'] == 'disconnected' &&
+        event['session_id']?.toString() == _sessionId) {
+      _sessionId = null;
+      _setState(SenderConnectionState.disconnected);
+    }
+  }
+
+  void _emitError(String operation, Object error) {
+    if (!_messages.isClosed) {
+      _messages.add(jsonEncode({
+        'type': 'error',
+        'operation': operation,
+        'message': error.toString(),
+      }));
+    }
+  }
+
+  void _setState(SenderConnectionState value) {
+    _current = value;
+    if (!_state.isClosed) _state.add(value);
+  }
+
+  @override
+  Future<void> dispose() async {
+    await disconnect();
+    await _state.close();
+    await _messages.close();
+    await _credentials.close();
+  }
+}
+
 rust.ReceiverProtocol _rustProtocol(TvProtocol protocol) => switch (protocol) {
       TvProtocol.dlna => rust.ReceiverProtocol.dlna,
       TvProtocol.roku => rust.ReceiverProtocol.roku,
       TvProtocol.googleCast => rust.ReceiverProtocol.googleCast,
       TvProtocol.playBridge => throw ArgumentError(
           'PlayBridge sessions use the paired WebSocket transport',
+        ),
+      TvProtocol.webBrowser => throw ArgumentError(
+          'Web Browser sessions use the sender-hosted receiver transport',
         ),
     };
 
@@ -480,6 +708,8 @@ abstract class TvTransportFactory {
         return RokuTransport();
       case TvProtocol.googleCast:
         return GoogleCastTransport();
+      case TvProtocol.webBrowser:
+        return BrowserTransport();
     }
   }
 }

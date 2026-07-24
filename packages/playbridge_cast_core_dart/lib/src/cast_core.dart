@@ -125,16 +125,21 @@ final class CastCoreLibrary {
   static List<String> candidateLibraryPaths() {
     final executable = File(Platform.resolvedExecutable);
     final executableDir = executable.parent.path;
+    final workingDir = Directory.current.path;
     if (Platform.isMacOS) {
       return [
         '$executableDir/../Frameworks/libplaybridge_cast_core_ffi.dylib',
         '$executableDir/libplaybridge_cast_core_ffi.dylib',
+        '$workingDir/native/cast_core/macos/libplaybridge_cast_core_ffi.dylib',
+        '$workingDir/../../desktop/native/cast_core/macos/libplaybridge_cast_core_ffi.dylib',
         'libplaybridge_cast_core_ffi.dylib',
       ];
     }
     if (Platform.isWindows) {
       return [
         '$executableDir/playbridge_cast_core_ffi.dll',
+        '$workingDir/native/cast_core/windows/playbridge_cast_core_ffi.dll',
+        '$workingDir/../../desktop/native/cast_core/windows/playbridge_cast_core_ffi.dll',
         'playbridge_cast_core_ffi.dll',
       ];
     }
@@ -142,6 +147,8 @@ final class CastCoreLibrary {
       return [
         '$executableDir/lib/libplaybridge_cast_core_ffi.so',
         '$executableDir/libplaybridge_cast_core_ffi.so',
+        '$workingDir/native/cast_core/linux/libplaybridge_cast_core_ffi.so',
+        '$workingDir/../../desktop/native/cast_core/linux/libplaybridge_cast_core_ffi.so',
         'libplaybridge_cast_core_ffi.so',
       ];
     }

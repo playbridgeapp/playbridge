@@ -1,4 +1,4 @@
 [workspace]
-members = ["cli", "cast/core", "cast/ffi", "stream-proxy-rust"]
+members = ["cli", "cast/core", "cast/ffi", "stream-proxy-rust", "browser-receiver-rust"]
 exclude = ["inspirations/mediaflow-proxy-light"]
 resolver = "3"

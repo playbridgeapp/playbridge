@@ -1167,8 +1167,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                 PlaybackOsd(
                                                     message: _osdMessage!),
                                               if (_mainDragging)
-                                                const Positioned.fill(
-                                                  child: _MainDropOverlay(),
+                                                Positioned.fill(
+                                                  child: _MainDropOverlay(
+                                                    targetName: _sender
+                                                            .isConnected
+                                                        ? _sender.activeTv?.name
+                                                        : null,
+                                                  ),
                                                 ),
                                               if (_stillWatching.isPrompting)
                                                 Positioned.fill(
@@ -1904,12 +1909,14 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
 
       final Map<String, String> headers = currentItem?.headers ?? {};
       try {
-        proxiedUrl = StreamProxyServer.instance.registerSession(url, headers);
+        proxiedUrl =
+            await StreamProxyServer.instance.registerSession(url, headers);
       } catch (e) {
         stdout
             .writeln('[external-player] Failed to register proxy session: $e');
       }
     }
+    if (!context.mounted) return;
 
     showDialog(
       context: context,
@@ -2222,10 +2229,13 @@ class _AudioMenuButton extends StatelessWidget {
 
 /// Full-surface hint while media is dragged onto the main player.
 class _MainDropOverlay extends StatelessWidget {
-  const _MainDropOverlay();
+  const _MainDropOverlay({this.targetName});
+
+  final String? targetName;
 
   @override
   Widget build(BuildContext context) {
+    final casting = targetName != null;
     return Container(
       color: Colors.black.withValues(alpha: 0.55),
       alignment: Alignment.center,
@@ -2239,23 +2249,25 @@ class _MainDropOverlay extends StatelessWidget {
             width: 2,
           ),
         ),
-        child: const Column(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.file_download, size: 40, color: Colors.tealAccent),
-            SizedBox(height: 12),
+            const Icon(Icons.file_download, size: 40, color: Colors.tealAccent),
+            const SizedBox(height: 12),
             Text(
-              'Drop to play',
-              style: TextStyle(
+              casting ? 'Drop to cast' : 'Drop to play here',
+              style: const TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.w700,
                 color: Colors.white,
               ),
             ),
-            SizedBox(height: 4),
+            const SizedBox(height: 4),
             Text(
-              'TV linked → cast · otherwise plays here',
-              style: TextStyle(fontSize: 13, color: Colors.white70),
+              casting
+                  ? 'Send to $targetName'
+                  : 'No receiver is currently connected',
+              style: const TextStyle(fontSize: 13, color: Colors.white70),
             ),
           ],
         ),

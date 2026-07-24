@@ -16,17 +16,37 @@ void main() {
     await StreamProxyServer.instance.stop();
   });
 
-  test('Off mode returns original item unchanged', () {
+  test('Off mode returns original item unchanged', () async {
     final item = QueueItem(
       url: 'https://example.com/stream.m3u8',
       title: 'Test stream',
       headers: {'User-Agent': 'Mozilla'},
     );
 
-    final prepared = PlaybackRequestPreparer.prepare(item, StreamProxyMode.off);
+    final prepared =
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.off);
 
     expect(prepared.url, equals(item.url));
     expect(prepared.headers, equals(item.headers));
+  });
+
+  test('DASH uses mpv-compatible proxy EDL when proxy mode is off', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+    final item = QueueItem(
+      url: 'https://example.com/companion/api/manifest/dash/id/video',
+      title: 'DASH stream',
+      headers: {'Origin': 'https://example.com'},
+      contentType: 'application/dash+xml',
+    );
+
+    final prepared =
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.off);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.url, endsWith('/manifest.edl'));
+    expect(prepared.headers, isNull);
+    expect(prepared.originalUrl, item.url);
   });
 
   test('Always mode proxies MP4 streams', () async {
@@ -40,11 +60,10 @@ void main() {
     );
 
     final prepared =
-        PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
 
     expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
     expect(prepared.url, contains('/movie.mp4'));
-    expect(prepared.url, contains('?token='));
     expect(prepared.headers, isNull);
   });
 
@@ -60,16 +79,15 @@ void main() {
     );
 
     final prepared =
-        PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
 
     expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
-    expect(prepared.url, contains('/stream.m3u8'));
-    expect(prepared.url, contains('?token='));
+    expect(prepared.url, contains('/playlist.m3u8'));
     expect(prepared.headers,
         isNull); // Player headers must be null so they aren't re-forwarded
   });
 
-  test('Auto mode does not proxy if host has not failed', () {
+  test('Auto mode does not proxy if host has not failed', () async {
     final item = QueueItem(
       url: 'https://example.com/stream.m3u8',
       title: 'Test stream',
@@ -77,7 +95,7 @@ void main() {
     );
 
     final prepared =
-        PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
 
     expect(prepared.url, equals(item.url));
   });
@@ -97,10 +115,9 @@ void main() {
     PlaybackRequestPreparer.markHostFailed(url);
 
     final prepared =
-        PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
 
     expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
-    expect(prepared.url, contains('?token='));
     expect(prepared.headers, isNull);
   });
 
@@ -118,11 +135,10 @@ void main() {
     );
 
     final prepared =
-        PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
 
     expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
     expect(prepared.url, contains('/movie.mp4'));
-    expect(prepared.url, contains('?token='));
     expect(prepared.headers, isNull);
   });
 }

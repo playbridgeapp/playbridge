@@ -17,11 +17,15 @@ required_schemas = %w[
   SenderFrame ReceiverFrame PairingCommit PairingChallenge PairingReveal
   PairingConfirmation PairingApproved CredentialBundle Auth AuthResponse
   PlayPayload PlaylistPayload Status Context PlaylistStatus Tracks PlayerSettings
+  BrowserHostFrame BrowserClientFrame BrowserMedia BrowserCapabilities
 ]
 missing_schemas = required_schemas.reject { |name| schemas.key?(name) }
 abort "missing required schemas: #{missing_schemas.join(', ')}" unless missing_schemas.empty?
 
-required_messages = %w[SenderTextFrame ReceiverTextFrame PointerBinaryFrame]
+required_messages = %w[
+  SenderTextFrame ReceiverTextFrame PointerBinaryFrame
+  BrowserHostTextFrame BrowserClientTextFrame
+]
 missing_messages = required_messages.reject { |name| messages.key?(name) }
 abort "missing required messages: #{missing_messages.join(', ')}" unless missing_messages.empty?
 
