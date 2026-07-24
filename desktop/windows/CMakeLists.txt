@@ -89,6 +89,15 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
+set(PLAYBRIDGE_CAST_CORE_LIBRARY
+  "${CMAKE_CURRENT_SOURCE_DIR}/../native/cast_core/windows/playbridge_cast_core_ffi.dll")
+if(EXISTS "${PLAYBRIDGE_CAST_CORE_LIBRARY}")
+  install(FILES "${PLAYBRIDGE_CAST_CORE_LIBRARY}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+else()
+  message(WARNING "PlayBridge Cast Core library is missing; run cast/build-desktop.sh on Windows")
+endif()
+
 if(PLUGIN_BUNDLED_LIBRARIES)
   install(FILES "${PLUGIN_BUNDLED_LIBRARIES}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"

@@ -1,86 +1,105 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math';
 
-import 'package:playbridge_stream_proxy/stream_proxy_server.dart' as proxy;
+import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 
 class StreamProxyServer {
   static final StreamProxyServer instance = StreamProxyServer._();
 
   StreamProxyServer._();
 
-  proxy.StreamProxyServer? _server;
+  SenderServices? _services;
+  StreamSubscription<Map<String, Object?>>? _eventSubscription;
   int? _port;
-  String? _sessionToken;
 
   int? get port => _port;
-  bool get isRunning => _server != null;
-  String? get sessionToken => _sessionToken;
+  bool get isRunning => _services != null;
+  SenderServices get services =>
+      _services ?? (throw StateError('Rust sender services are not running'));
+  Stream<Map<String, Object?>> get events => services.events;
 
   Future<void> start() async {
-    if (_server != null) return;
-
-    // 1. Find an available port on loopback
-    final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    _port = socket.port;
-    await socket.close();
-
-    // 2. Generate a secure random token for the proxy session
-    final rng = Random.secure();
-    final randomBytes = List<int>.generate(16, (_) => rng.nextInt(256));
-    final sessionToken = base64Url.encode(randomBytes).replaceAll('=', '');
-    _sessionToken = sessionToken;
-
-    // 3. Start the Shelf server directly in-process
-    stdout
-        .writeln('[stream-proxy] Starting in-process proxy on port $_port...');
-    _server = proxy.StreamProxyServer(password: sessionToken);
-
-    // Bind to 0.0.0.0 to allow connection from external TV receivers in the same network
-    await _server!.start(host: '0.0.0.0', port: _port!);
+    if (_services != null) return;
+    final services = SenderServices.start();
+    _services = services;
+    final started = Completer<void>();
+    _eventSubscription = services.events.listen(
+      (event) {
+        if (event['event'] == 'started') {
+          _port = event['proxyPort'] as int?;
+          if (!started.isCompleted) started.complete();
+        } else if (event['event'] == 'error' &&
+            event['operation'] == 'start' &&
+            !started.isCompleted) {
+          started.completeError(
+            StateError(event['message']?.toString() ?? 'Proxy failed to start'),
+          );
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!started.isCompleted) started.completeError(error, stackTrace);
+      },
+    );
+    try {
+      await started.future.timeout(const Duration(seconds: 10));
+    } on Object {
+      await stop();
+      rethrow;
+    }
   }
 
   Future<void> stop() async {
-    if (_server == null) return;
-    stdout.writeln('[stream-proxy] Stopping in-process proxy...');
-    await _server!.stop();
-    _server = null;
+    final services = _services;
+    _services = null;
     _port = null;
-    _sessionToken = null;
+    await _eventSubscription?.cancel();
+    _eventSubscription = null;
+    services?.dispose();
   }
 
-  /// Registers a new upstream streaming session and returns the stateless loopback URL.
-  String registerSession(String originalUrl, Map<String, String> headers) {
-    if (_port == null) {
-      throw StateError('Proxy server is not running');
+  Future<RegisteredMedia> registerRemote(
+    String originalUrl,
+    Map<String, String> headers, {
+    String host = '127.0.0.1',
+  }) =>
+      services.registerUrl(host: host, url: originalUrl, headers: headers);
+
+  /// Compatibility helper for local playback callers.
+  Future<String> registerSession(
+    String originalUrl,
+    Map<String, String> headers,
+  ) async =>
+      (await registerRemote(originalUrl, headers)).url;
+
+  bool ownsUrl(String value) {
+    final uri = Uri.tryParse(value);
+    final activePort = _port;
+    if (uri == null || activePort == null || uri.port != activePort) {
+      return false;
     }
-
-    final urlB64 =
-        base64Url.encode(utf8.encode(originalUrl)).replaceAll('=', '');
-
-    // Filter headers to only pass non-empty string headers
-    final cleanHeaders = <String, String>{};
-    headers.forEach((k, v) {
-      if (k.isNotEmpty && v.isNotEmpty) {
-        cleanHeaders[k] = v;
-      }
-    });
-
-    final headersB64 = cleanHeaders.isNotEmpty
-        ? base64Url
-            .encode(utf8.encode(jsonEncode(cleanHeaders)))
-            .replaceAll('=', '')
-        : 'empty';
-
-    // Derive the filename from the original URL so the proxy can detect
-    // media type (e.g. .m3u8 vs .mp4) from the path.
-    final origUri = Uri.tryParse(originalUrl);
-    final filename = (origUri != null && origUri.pathSegments.isNotEmpty)
-        ? origUri.pathSegments.last
-        : 'stream';
-
-    final tokenQuery = _sessionToken != null ? '?token=$_sessionToken' : '';
-    return 'http://127.0.0.1:$_port/s/play/$urlB64/$headersB64/$filename$tokenQuery';
+    return uri.path.startsWith('/s/') ||
+        uri.path.startsWith('/proxy/') ||
+        uri.path.startsWith('/media/');
   }
+
+  String urlForHost(String value, String host) =>
+      Uri.parse(value).replace(host: host).toString();
+
+  String mpvDashUrl(String value) {
+    final uri = Uri.parse(value);
+    final segments = [...uri.pathSegments];
+    if (segments.isEmpty) return value;
+    segments[segments.length - 1] = 'manifest.edl';
+    return uri.replace(pathSegments: segments).toString();
+  }
+
+  Future<RegisteredMedia> registerFile(
+    String path, {
+    required String host,
+    String? contentType,
+  }) =>
+      services.registerFile(
+        host: host,
+        path: path,
+        contentType: contentType,
+      );
 }

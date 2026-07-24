@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		A8C0C0DE20CA57C000000001 /* libplaybridge_cast_core_ffi.dylib in Bundle Framework */ = {isa = PBXBuildFile; fileRef = A8C0C0DE20CA57C000000002 /* libplaybridge_cast_core_ffi.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A1B2C3D4E5F60718293A4B5D /* MediaRemoteHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5C /* MediaRemoteHandler.swift */; };
 		129B0BC1764C753C66B06FE9 /* Pods_Runner.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0D44112AA135796FBC7CBDD5 /* Pods_Runner.framework */; };
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
@@ -56,6 +57,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				A8C0C0DE20CA57C000000001 /* libplaybridge_cast_core_ffi.dylib in Bundle Framework */,
 			);
 			name = "Bundle Framework";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -63,6 +65,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A8C0C0DE20CA57C000000002 /* libplaybridge_cast_core_ffi.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libplaybridge_cast_core_ffi.dylib; path = ../native/cast_core/macos/libplaybridge_cast_core_ffi.dylib; sourceTree = SOURCE_ROOT; };
 		0D44112AA135796FBC7CBDD5 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D5294CF71000263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		331C80D7294CF71000263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
@@ -191,6 +194,7 @@
 		D73912EC22F37F3D000D13A0 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				A8C0C0DE20CA57C000000002 /* libplaybridge_cast_core_ffi.dylib */,
 				0D44112AA135796FBC7CBDD5 /* Pods_Runner.framework */,
 				D8D61F62E1274F07E04243C5 /* Pods_RunnerTests.framework */,
 			);

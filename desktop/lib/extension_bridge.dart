@@ -147,11 +147,19 @@ class ExtensionBridge {
         final headers =
             (obj['headers'] as Map?)?.map((k, v) => MapEntry('$k', '$v'));
         final title = obj['title'] as String?;
+        final rawContentType = (obj['contentType'] as String?)?.trim();
+        final contentType = rawContentType == null || rawContentType.isEmpty
+            ? null
+            : rawContentType;
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
           unawaited(() async {
-            final ok =
-                await _sender.castUrl(url, headers: headers, title: title);
+            final ok = await _sender.castUrl(
+              url,
+              headers: headers,
+              title: title,
+              contentType: contentType,
+            );
             _send(socket, {
               'type': 'result',
               'ok': ok,
@@ -169,6 +177,7 @@ class ExtensionBridge {
             url,
             headers: headers,
             title: title,
+            contentType: contentType,
             isRemote: true,
           ));
           _send(socket, {
@@ -234,14 +243,22 @@ class ExtensionBridge {
           _send(socket, {'type': 'result', 'ok': false});
           break;
         }
-        final ok = _sender.isConnected
-            ? _sender.sendControl(action)
-            : _localControl(action);
-        _send(socket, {
-          'type': 'result',
-          'ok': ok,
-          'target': _sender.isConnected ? 'tv' : 'local',
-        });
+        if (_sender.isConnected) {
+          unawaited(() async {
+            final ok = await _sender.sendControl(action);
+            _send(socket, {
+              'type': 'result',
+              'ok': ok,
+              'target': 'tv',
+            });
+          }());
+        } else {
+          _send(socket, {
+            'type': 'result',
+            'ok': _localControl(action),
+            'target': 'local',
+          });
+        }
         break;
       default:
         _send(socket, {'type': 'result', 'ok': false, 'error': 'unknown cmd'});
@@ -332,7 +349,11 @@ class ExtensionBridge {
           {
             'uuid': d.uuid,
             'name': d.name,
-            'paired': _sender.pairedTvs.any((p) => p.uuid == d.uuid),
+            'protocol': d.protocol.name,
+            'connectable': _sender.canConnectTo(d),
+            'paired': _sender.pairedTvs.any(
+              (saved) => saved.identityKey == d.identityKey,
+            ),
           },
       ],
     };

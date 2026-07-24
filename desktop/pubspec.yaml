@@ -30,9 +30,10 @@ dependencies:
   playbridge_protocol:
     path: ../protocol/generated/dart
 
-  # Standalone streaming proxy
-  playbridge_stream_proxy:
-    path: ../stream-proxy-dart
+  # Shared Rust discovery, casting protocols, stream proxy, and browser receiver
+  # host. Services start only while Desktop is running.
+  playbridge_cast_core:
+    path: ../packages/playbridge_cast_core_dart
 
   # mDNS service publishing (_playbridge._tcp.) + persistent pairing
   bonsoir: ^5.1.10

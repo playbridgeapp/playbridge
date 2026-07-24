@@ -180,6 +180,7 @@ class PlayerController extends ChangeNotifier {
     String? title,
     Map<String, String>? headers,
     List<String>? subtitles,
+    String? contentType,
     bool isRemote = false,
   }) async {
     await playPlaylist(
@@ -189,6 +190,7 @@ class PlayerController extends ChangeNotifier {
           title: title ?? url,
           headers: headers,
           subtitles: subtitles,
+          contentType: contentType,
         ),
       ],
       0,
@@ -212,10 +214,10 @@ class PlayerController extends ChangeNotifier {
     _opening = true;
     notifyListeners();
 
-    final prepared = items.map((item) {
-      final mode = store?.streamProxyMode ?? StreamProxyMode.off;
-      return PlaybackRequestPreparer.prepare(item, mode);
-    }).toList();
+    final mode = store?.streamProxyMode ?? StreamProxyMode.off;
+    final prepared = await Future.wait(
+      items.map((item) => PlaybackRequestPreparer.prepare(item, mode)),
+    );
 
     _queue
       ..clear()
@@ -250,7 +252,7 @@ class PlayerController extends ChangeNotifier {
       return;
     }
     final mode = store?.streamProxyMode ?? StreamProxyMode.off;
-    final prepared = PlaybackRequestPreparer.prepare(item, mode);
+    final prepared = await PlaybackRequestPreparer.prepare(item, mode);
     _queue.add(prepared);
     queueChanges.value++;
     notifyListeners();
@@ -422,12 +424,7 @@ class PlayerController extends ChangeNotifier {
               '[player-controller] Direct HLS playback failed. Retrying via stream proxy...');
 
           // Re-prepare the item forcing proxy mode
-          final preparedItem = PlaybackRequestPreparer.prepare(
-              currentItem, StreamProxyMode.always);
-          _queue[_currentIndex] = preparedItem;
-
-          // Re-open the queue/playlist at the current index
-          unawaited(_engine.openPlaylist(_queue, _currentIndex));
+          unawaited(_retryThroughProxy(currentItem));
         }
       }
     }
@@ -438,7 +435,17 @@ class PlayerController extends ChangeNotifier {
   bool get isCurrentItemProxied {
     if (_currentIndex < 0 || _currentIndex >= _queue.length) return false;
     final url = _queue[_currentIndex].url;
-    return url.contains('127.0.0.1') && url.contains('/s/play/');
+    return url.contains('127.0.0.1') && url.contains('/s/');
+  }
+
+  Future<void> _retryThroughProxy(QueueItem item) async {
+    final preparedItem = await PlaybackRequestPreparer.prepare(
+      item,
+      StreamProxyMode.always,
+    );
+    if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
+    _queue[_currentIndex] = preparedItem;
+    await _engine.openPlaylist(_queue, _currentIndex);
   }
 
   /// Seamlessly switches the current item between direct ↔ proxied playback.
@@ -514,6 +521,7 @@ class PlayerController extends ChangeNotifier {
         rating: item.rating,
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
+        contentType: item.contentType,
       );
       debugPrint('[player] toggling to direct playback at ${currentPos}ms');
     } else {
@@ -522,7 +530,7 @@ class PlayerController extends ChangeNotifier {
       late final String loopbackUrl;
       try {
         loopbackUrl =
-            StreamProxyServer.instance.registerSession(item.url, headers);
+            await StreamProxyServer.instance.registerSession(item.url, headers);
       } catch (error) {
         debugPrint(
             '[player] proxy toggle unavailable (${error.runtimeType}); keeping direct playback');
@@ -548,6 +556,7 @@ class PlayerController extends ChangeNotifier {
         rating: item.rating,
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
+        contentType: item.contentType,
       );
       debugPrint('[player] toggling to proxied playback at ${currentPos}ms');
     }

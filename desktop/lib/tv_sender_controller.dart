@@ -3,19 +3,19 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 
-import 'local_file_server.dart';
 import 'pairing_store.dart';
 import 'protocol.dart';
 import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
-import 'tv_sender_client.dart';
+import 'tv_transport.dart';
 
 /// Orchestrates the desktop's **sender** role: LAN discovery, the paired-TV
-/// store, and the pinned `wss://` client. Connect to a discovered TV (first-time
-/// pairing) or reconnect a known one by token; persists the credentials the TV
-/// issues. A `ChangeNotifier` so the UI/tray can bind directly.
+/// store, and multi-protocol receiver transport clients (`wss://`, DLNA, Roku).
+/// Connect to a discovered TV (first-time pairing) or reconnect a known one by token;
+/// persists the credentials the TV issues. A `ChangeNotifier` so the UI/tray can bind directly.
 ///
 /// Device identity (deviceId / deviceName) is reused from the existing receiver
 /// [PairingStore] — the desktop is one device whether sending or receiving.
@@ -23,22 +23,31 @@ class TvSenderController extends ChangeNotifier {
   TvSenderController({
     required PairingStore identity,
     required TvConnectionStore store,
+    TvTransport? transport,
   })  : _identity = identity,
-        _store = store;
+        _store = store,
+        _discovery = TvDiscoveryBrowser(),
+        _transport = transport ?? PlayBridgeTransport();
 
   final PairingStore _identity;
   final TvConnectionStore _store;
-  final TvDiscoveryBrowser _discovery = TvDiscoveryBrowser();
-  final TvSenderClient _client = TvSenderClient();
-  final LocalFileServer _fileServer = LocalFileServer();
+  final TvDiscoveryBrowser _discovery;
+  TvTransport _transport;
 
   StreamSubscription<List<DiscoveredTv>>? _devSub;
+  StreamSubscription<bool>? _scanSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
   StreamSubscription<TvCredentials>? _credSub;
   StreamSubscription<String>? _msgSub;
   StreamSubscription<String>? _sasSub;
+  StreamSubscription<Map<String, Object?>>? _servicesSub;
 
   List<DiscoveredTv> _discoveredRaw = const [];
+  final Map<String, DiscoveredTv> _browserReceivers = {};
+  final Map<String, BrowserPairingRequest> _browserPairingRequests = {};
+  BrowserHostInfo? _browserHost;
+  String? _browserSessionToActivate;
+  bool _isScanning = false;
   SenderConnectionState _state = SenderConnectionState.disconnected;
   DiscoveredTv? _pending; // target of the in-flight / most recent connect
   TvRecord? _activeTv;
@@ -58,15 +67,21 @@ class TvSenderController extends ChangeNotifier {
   /// Discovered TVs on the LAN, always excluding this app's own receiver
   /// advertisement. Local playback is the default when nothing is linked
   /// (extension bridge / cold-start file); self-cast is not offered.
-  List<DiscoveredTv> get discovered => _discoveredRaw
-      .where((t) => t.uuid != _identity.deviceId)
-      .toList(growable: false);
+  List<DiscoveredTv> get discovered => [
+        ..._discoveredRaw.where((t) => t.uuid != _identity.deviceId),
+        ..._browserReceivers.values,
+      ];
 
   List<TvRecord> get pairedTvs => _store.tvs;
+  bool get isScanning => _isScanning;
   SenderConnectionState get state => _state;
   TvRecord? get activeTv => _activeTv;
   bool get isConnected => _state == SenderConnectionState.connected;
   String? get currentSas => _currentSas;
+  BrowserHostInfo? get browserHost => _browserHost;
+  bool get browserReceiverRunning => _browserHost != null;
+  List<BrowserPairingRequest> get browserPairingRequests =>
+      List.unmodifiable(_browserPairingRequests.values);
 
   bool get castRouteThroughProxy => _identity.castRouteThroughProxy;
 
@@ -88,39 +103,121 @@ class TvSenderController extends ChangeNotifier {
   bool get isCasting => _castingTitle != null || _castPlaylist.isNotEmpty;
 
   /// TV → desktop messages (status / playlist_status / tracks / context).
-  Stream<String> get messages => _client.messages;
+  Stream<String> get messages => _transport.messages;
+
+  /// Active transport protocol.
+  TvProtocol get activeProtocol => _transport.protocol;
+
+  bool canConnectTo(DiscoveredTv tv) {
+    switch (tv.protocol) {
+      case TvProtocol.playBridge:
+        return tv.port != null;
+      case TvProtocol.dlna:
+        return tv.location != null && tv.location!.isNotEmpty;
+      case TvProtocol.roku:
+      case TvProtocol.googleCast:
+        return tv.host.isNotEmpty;
+      case TvProtocol.webBrowser:
+        return _browserReceivers.containsKey(tv.uuid);
+    }
+  }
 
   Future<void> start() async {
+    await StreamProxyServer.instance.start();
     _devSub = _discovery.devices.listen((d) {
       _discoveredRaw = d;
       notifyListeners();
     });
-    _stateSub = _client.state.listen(_onState);
-    _credSub = _client.credentials.listen(_onCredentials);
-    _msgSub = _client.messages.listen(_onTvMessage);
-    _sasSub = _client.sasCode.listen((sas) {
-      _currentSas = sas;
+    _scanSub = _discovery.scanning.listen((isScanning) {
+      _isScanning = isScanning;
       notifyListeners();
     });
+    _bindTransportSubscriptions();
+    _servicesSub = StreamProxyServer.instance.events.listen(_onServicesEvent);
     await _discovery.start();
   }
 
-  bool submitSasCode(String code) => _client.submitSasCode(code);
+  Future<void> rescan() => _discovery.rescan();
+
+  Future<void> startBrowserReceiver() async {
+    _browserHost = await StreamProxyServer.instance.services.startBrowser();
+    notifyListeners();
+  }
+
+  Future<void> stopBrowserReceiver() async {
+    if (_transport.protocol == TvProtocol.webBrowser) {
+      await _transport.disconnect();
+    }
+    await StreamProxyServer.instance.services.stopBrowser();
+    _browserHost = null;
+    _browserSessionToActivate = null;
+    _browserPairingRequests.clear();
+    _browserReceivers.clear();
+    notifyListeners();
+  }
+
+  /// Approves a browser and makes it the active cast target as soon as the
+  /// receiver confirms the paired session.
+  Future<void> approveBrowser(String sessionId, String code) async {
+    _browserSessionToActivate = sessionId;
+    try {
+      await StreamProxyServer.instance.services.approveBrowser(
+        sessionId: sessionId,
+        code: code,
+      );
+    } on Object {
+      if (_browserSessionToActivate == sessionId) {
+        _browserSessionToActivate = null;
+      }
+      rethrow;
+    }
+  }
+
+  void _bindTransportSubscriptions() {
+    _stateSub?.cancel();
+    _credSub?.cancel();
+    _msgSub?.cancel();
+    _sasSub?.cancel();
+
+    _stateSub = _transport.state.listen(_onState);
+    _credSub = _transport.credentials.listen(_onCredentials);
+    _msgSub = _transport.messages.listen(_onTvMessage);
+    _sasSub = _transport.sasCode.listen((sas) {
+      _currentSas = sas;
+      notifyListeners();
+    });
+  }
+
+  Future<void> _ensureTransportFor(TvProtocol protocol) async {
+    if (_transport.protocol == protocol) return;
+    await _transport.dispose();
+    _transport = TvTransportFactory.create(protocol);
+    _bindTransportSubscriptions();
+  }
+
+  bool submitSasCode(String code) => _transport.submitSasCode(code);
 
   /// SAS retry hint surfaced to the pairing UI.
-  int get sasAttemptsLeft => _client.sasAttemptsLeft;
-  bool get lastSasWrong => _client.lastSasWrong;
+  int get sasAttemptsLeft => _transport.sasAttemptsLeft;
+  bool get lastSasWrong => _transport.lastSasWrong;
 
   /// Connect to a TV found via discovery. Reconnects silently when already
   /// paired; otherwise runs the SAS pairing handshake (the user enters the
   /// 6-digit code shown on the TV).
   Future<void> connectToDiscovered(DiscoveredTv tv) async {
+    if (!canConnectTo(tv)) {
+      debugPrint(
+        '[tv-sender] ${tv.protocol.label} playback transport is not enabled yet',
+      );
+      return;
+    }
     _pending = tv;
-    final known = _store.byUuid(tv.uuid);
-    await _client.connect(
-      host: tv.host,
-      port: tv.port,
-      wssPort: tv.wssPort,
+    await _ensureTransportFor(tv.protocol);
+    final known = tv.protocol == TvProtocol.webBrowser
+        ? null
+        : _store.byIdentity(tv.protocol, tv.uuid);
+    await _transport.connect(
+      tv: tv,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
       token: known?.token,
@@ -131,19 +228,21 @@ class TvSenderController extends ChangeNotifier {
   /// Reconnect a known TV by token (e.g. from the paired list). Prefers a fresh
   /// discovered address when the TV is currently visible (survives DHCP changes).
   Future<void> reconnect(TvRecord tv) async {
-    final fresh = _discoveredByUuid(tv.uuid);
+    final fresh = _discoveredByIdentity(tv.protocol, tv.uuid);
     final target = DiscoveredTv(
       uuid: tv.uuid,
+      protocol: tv.protocol,
       name: tv.name,
       host: fresh?.host ?? tv.host,
+      addresses: fresh?.allAddresses ?? tv.allAddresses,
       port: fresh?.port ?? tv.port,
       wssPort: fresh?.wssPort ?? tv.wssPort,
+      location: fresh?.location ?? tv.location,
     );
     _pending = target;
-    await _client.connect(
-      host: target.host,
-      port: target.port,
-      wssPort: target.wssPort,
+    await _ensureTransportFor(target.protocol);
+    await _transport.connect(
+      tv: target,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
       token: tv.token,
@@ -151,20 +250,27 @@ class TvSenderController extends ChangeNotifier {
     );
   }
 
-  Future<void> disconnect() => _client.disconnect();
+  Future<void> disconnect() => _transport.disconnect();
 
-  Future<void> forget(String uuid) async {
-    if (_activeTv?.uuid == uuid) await _client.disconnect();
-    await _store.forget(uuid);
-    if (_activeTv?.uuid == uuid) _activeTv = null;
+  Future<void> forget(
+    String uuid, {
+    TvProtocol protocol = TvProtocol.playBridge,
+  }) async {
+    if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
+      await _transport.disconnect();
+    }
+    await _store.forget(uuid, protocol: protocol);
+    if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
+      _activeTv = null;
+    }
     notifyListeners();
   }
 
   // ─── Casting ──────────────────────────────────────────────────────────────
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
-  bool castVideo(PlayPayload video) {
-    final ok = _client.send(senderSingleVideoCommandJson(video));
+  Future<bool> castVideo(PlayPayload video) async {
+    final ok = await _transport.castVideo(video);
     if (ok) {
       _castingTitle =
           video.hasTitle() && video.title.isNotEmpty ? video.title : null;
@@ -173,26 +279,44 @@ class TvSenderController extends ChangeNotifier {
     return ok;
   }
 
-  bool castPlaylist(PlaylistPayload playlist) =>
-      _client.send(senderPlaylistCommandJson(playlist));
+  Future<bool> castPlaylist(PlaylistPayload playlist) =>
+      _transport.castPlaylist(playlist);
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth) and a [title].
   Future<bool> castUrl(String url,
-      {Map<String, String>? headers, String? title}) async {
+      {Map<String, String>? headers,
+      String? title,
+      String? contentType}) async {
     var targetUrl = url;
     var targetHeaders = headers;
 
-    if (castRouteThroughProxy && isConnected && _activeTv != null) {
+    final requiresHeaderProxy = headers != null &&
+        headers.isNotEmpty &&
+        _transport.protocol != TvProtocol.playBridge;
+    final alreadyProxied = StreamProxyServer.instance.ownsUrl(url);
+    if ((castRouteThroughProxy || requiresHeaderProxy || alreadyProxied) &&
+        isConnected &&
+        _activeTv != null) {
       final active = _activeTv!;
       final lanIp = await _localLanIp(active.host);
       if (lanIp != null) {
-        // Register session in local proxy server
-        final loopbackUrl =
-            StreamProxyServer.instance.registerSession(url, headers ?? {});
-        // Replace loopback host 127.0.0.1 with the local LAN IP that the TV can reach
-        targetUrl = loopbackUrl.replaceFirst('127.0.0.1', lanIp);
-        // The headers are managed by the proxy server, so we send null/empty headers to the TV
+        final proxy = StreamProxyServer.instance;
+        if (alreadyProxied) {
+          // demo.html and the extension can hand us a URL already backed by
+          // this proxy. Re-registering it creates a nested DASH proxy that
+          // browser players cannot initialize. Only publish the same session
+          // on the LAN address the receiver can reach.
+          targetUrl = proxy.urlForHost(url, lanIp);
+        } else {
+          final registration = await proxy.registerRemote(
+            url,
+            headers ?? {},
+            host: lanIp,
+          );
+          targetUrl = registration.url;
+        }
+        // The proxy session owns the upstream request headers.
         targetHeaders = null;
       }
     }
@@ -204,32 +328,38 @@ class TvSenderController extends ChangeNotifier {
     if (title != null && title.isNotEmpty) {
       payload.title = title;
     }
-    return castVideo(payload);
+    if (_transport case BrowserTransport browser) {
+      return browser.castBrowserMedia(
+        url: targetUrl,
+        title: title,
+        contentType: contentType,
+      );
+    }
+    return await castVideo(payload);
   }
 
-  bool queueAdd(PlayPayload item) => _client.send(senderQueueAddJson(item));
+  Future<bool> queueAdd(PlayPayload item) => _transport.queueAdd(item);
 
-  bool playlistJump(int index) => _client.send(senderPlaylistJumpJson(index));
+  Future<bool> playlistJump(int index) => _transport.playlistJump(index);
 
-  bool sendControl(String command) =>
-      _client.send(senderControlCommandJson(command));
+  Future<bool> sendControl(String command) => _transport.sendControl(command);
 
-  bool sendContextQuery() => _client.send(senderContextQueryJson());
+  Future<bool> sendContextQuery() => _transport.sendContextQuery();
 
   // Transport for the active cast (command strings match the TV's InputHandler).
-  bool playPause() => sendControl('toggle');
-  bool seekForward() => sendControl('seek_forward');
-  bool seekBack() => sendControl('seek_back');
+  Future<bool> playPause() => sendControl('toggle');
+  Future<bool> seekForward() => sendControl('seek_forward');
+  Future<bool> seekBack() => sendControl('seek_back');
 
   /// Absolute seek to [positionMs]. The TV's InputHandler accepts
   /// `seek_to:<positionMs>` (used by the phone seekbar too).
-  bool seekToMs(int positionMs) =>
+  Future<bool> seekToMs(int positionMs) =>
       sendControl('seek_to:${positionMs < 0 ? 0 : positionMs}');
 
   /// Stop playback on the TV and clear the local now-casting snapshot so the
   /// card disappears immediately (don't wait for a TV status that may not come).
-  bool stopCast() {
-    final ok = sendControl('stop');
+  Future<bool> stopCast() async {
+    final ok = await sendControl('stop');
     _clearNowCasting();
     return ok;
   }
@@ -253,7 +383,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   /// Jump to a playlist item on the TV by index.
-  bool playlistJumpTo(int index) => playlistJump(index);
+  Future<bool> playlistJumpTo(int index) => playlistJump(index);
 
   /// Cast a **local file** to the connected TV: serve it over LAN HTTP (tokenized
   /// + IP-restricted, D4) and point the TV's player at the URL. Returns false if
@@ -272,7 +402,6 @@ class TvSenderController extends ChangeNotifier {
     final present = files.where((f) => f.existsSync()).toList(growable: false);
     if (present.isEmpty) return false;
 
-    await _fileServer.start();
     final host = await _localLanIp(active.host);
     if (host == null) return false;
 
@@ -282,9 +411,11 @@ class TvSenderController extends ChangeNotifier {
       final filename = file.uri.pathSegments.isNotEmpty
           ? file.uri.pathSegments.last
           : 'video';
-      final token = _fileServer.register(file, clientIp: active.host);
-      final url = _fileServer.urlFor(token, host, filename: filename);
-      final payload = PlayPayload()..url = url;
+      final registration = await StreamProxyServer.instance.registerFile(
+        file.path,
+        host: host,
+      );
+      final payload = PlayPayload()..url = registration.url;
       final label =
           (titles != null && i < titles.length && titles[i].isNotEmpty)
               ? titles[i]
@@ -294,7 +425,7 @@ class TvSenderController extends ChangeNotifier {
     }
     if (items.isEmpty) return false;
 
-    final ok = castPlaylist(PlaylistPayload(items: items));
+    final ok = await castPlaylist(PlaylistPayload(items: items));
     if (ok) {
       // Optimistic now-casting snapshot; refined by the TV's status /
       // playlist_status echoes.
@@ -363,10 +494,46 @@ class TvSenderController extends ChangeNotifier {
       case SenderConnectionState.connected:
         final p = _pending;
         if (p != null) {
-          _activeTv = _store.byUuid(p.uuid);
-          // Refresh volatile fields (host may have changed between sessions).
-          _store.markConnected(p.uuid,
-              host: p.host, port: p.port, wssPort: p.wssPort);
+          final existing = _store.byIdentity(p.protocol, p.uuid);
+          _activeTv = (existing ??
+                  TvRecord(
+                    uuid: p.uuid,
+                    protocol: p.protocol,
+                    name: p.name,
+                    host: p.host,
+                    addresses: p.allAddresses,
+                    port: p.port ?? 0,
+                    wssPort: p.wssPort,
+                    location: p.location,
+                    token: '',
+                    certFingerprint: '',
+                    capabilities: _transport.capabilities,
+                    lastConnected: DateTime.now(),
+                  ))
+              .copyWith(
+            name: p.name,
+            host: p.host,
+            addresses: p.allAddresses,
+            port: p.port,
+            wssPort: p.wssPort,
+            location: p.location,
+            capabilities: _transport.capabilities,
+            lastConnected: DateTime.now(),
+          );
+          if (_transport.protocol == TvProtocol.webBrowser) {
+            // Browser receiver sessions are intentionally ephemeral.
+          } else if (_transport.protocol == TvProtocol.playBridge) {
+            _store.markConnected(p.uuid,
+                protocol: p.protocol,
+                host: p.host,
+                addresses: p.allAddresses,
+                port: p.port,
+                wssPort: p.wssPort,
+                location: p.location,
+                capabilities: _transport.capabilities);
+          } else {
+            _store.upsert(_activeTv!);
+          }
         }
         break;
       case SenderConnectionState.disconnected:
@@ -390,15 +557,18 @@ class TvSenderController extends ChangeNotifier {
     // upsert is keyed by uuid, so this covers both first-pair and token refresh.
     _store.upsert(TvRecord(
       uuid: p.uuid,
+      protocol: p.protocol,
       name: p.name,
       host: p.host,
-      port: p.port,
+      addresses: p.allAddresses,
+      port: p.port ?? 0,
       wssPort: p.wssPort,
+      location: p.location,
       token: creds.token,
       certFingerprint: creds.certFingerprint,
       lastConnected: DateTime.now(),
     ));
-    _activeTv = _store.byUuid(p.uuid);
+    _activeTv = _store.byIdentity(p.protocol, p.uuid);
     notifyListeners();
   }
 
@@ -456,23 +626,113 @@ class TvSenderController extends ChangeNotifier {
     }
   }
 
-  DiscoveredTv? _discoveredByUuid(String uuid) {
+  DiscoveredTv? _discoveredByIdentity(TvProtocol protocol, String uuid) {
     for (final d in _discoveredRaw) {
-      if (d.uuid == uuid) return d;
+      if (d.protocol == protocol && d.uuid == uuid) return d;
     }
     return null;
+  }
+
+  void _onServicesEvent(Map<String, Object?> event) {
+    final kind = event['event'];
+    final rawSession = event['session'];
+    if (rawSession is Map) {
+      final session = rawSession.cast<String, Object?>();
+      final sessionId = session['sessionId']?.toString();
+      final name = session['name']?.toString();
+      if (sessionId == null || name == null) return;
+      if (kind == 'pairing_requested') {
+        _browserPairingRequests[sessionId] = BrowserPairingRequest(
+          sessionId: sessionId,
+          name: name,
+          expiresIn: Duration(
+            milliseconds: (event['expires_in_ms'] as num?)?.toInt() ?? 0,
+          ),
+        );
+      } else if (kind == 'connected' ||
+          kind == 'capabilities' ||
+          kind == 'status') {
+        _browserPairingRequests.remove(sessionId);
+        final receiver = DiscoveredTv(
+          uuid: sessionId,
+          protocol: TvProtocol.webBrowser,
+          name: name,
+          host: _browserLanHost(),
+          port: _browserHost?.port,
+          wssPort: null,
+        );
+        _browserReceivers[sessionId] = receiver;
+        if (_browserSessionToActivate == sessionId) {
+          _browserSessionToActivate = null;
+          unawaited(_activateBrowserReceiver(receiver));
+        }
+      }
+      notifyListeners();
+      return;
+    }
+    if (kind == 'disconnected') {
+      final sessionId = event['session_id']?.toString();
+      if (sessionId != null) {
+        if (_browserSessionToActivate == sessionId) {
+          _browserSessionToActivate = null;
+        }
+        _browserPairingRequests.remove(sessionId);
+        _browserReceivers.remove(sessionId);
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _activateBrowserReceiver(DiscoveredTv receiver) async {
+    try {
+      await connectToDiscovered(receiver);
+    } on Object catch (error) {
+      debugPrint(
+        '[tv-sender] could not activate browser receiver '
+        '${receiver.name}: $error',
+      );
+    }
+  }
+
+  String _browserLanHost() {
+    final urls = _browserHost?.urls ?? const [];
+    for (final value in urls) {
+      final host = Uri.tryParse(value)?.host;
+      if (host != null &&
+          host.isNotEmpty &&
+          host != '127.0.0.1' &&
+          host != 'localhost' &&
+          host != '::1') {
+        return host;
+      }
+    }
+    return urls.isEmpty ? '' : Uri.tryParse(urls.first)?.host ?? '';
   }
 
   @override
   void dispose() {
     _devSub?.cancel();
+    _scanSub?.cancel();
     _stateSub?.cancel();
     _credSub?.cancel();
     _msgSub?.cancel();
     _sasSub?.cancel();
+    _servicesSub?.cancel();
     _discovery.dispose();
-    _client.dispose();
-    _fileServer.stop();
+    _transport.dispose();
     super.dispose();
   }
+}
+
+@immutable
+class BrowserPairingRequest {
+  const BrowserPairingRequest({
+    required this.sessionId,
+    required this.name,
+    required this.expiresIn,
+  });
+
+  final String sessionId;
+  final String name;
+  final Duration expiresIn;
 }

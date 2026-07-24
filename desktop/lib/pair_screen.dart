@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'pairing_store.dart';
-import 'server.dart';
+import 'receiver_server.dart';
 
 class PairScreen extends StatefulWidget {
   const PairScreen({
@@ -15,6 +15,7 @@ class PairScreen extends StatefulWidget {
     this.tlsError,
     required this.pendingRequest,
     required this.onDeny,
+    required this.onPairedDevicesChanged,
   });
 
   final PairingStore store;
@@ -26,6 +27,7 @@ class PairScreen extends StatefulWidget {
   final String? tlsError;
   final PendingPairingRequest? pendingRequest;
   final VoidCallback onDeny;
+  final VoidCallback onPairedDevicesChanged;
 
   @override
   State<PairScreen> createState() => _PairScreenState();
@@ -78,6 +80,7 @@ class _PairScreenState extends State<PairScreen> {
                               final updated = widget.store.pairedDevices;
                               setDialogState(() => local = updated);
                               setState(() => _devices = updated);
+                              widget.onPairedDevicesChanged();
                             },
                             style: TextButton.styleFrom(
                                 foregroundColor: Colors.redAccent),
@@ -122,6 +125,7 @@ class _PairScreenState extends State<PairScreen> {
                                 final updated = widget.store.pairedDevices;
                                 setDialogState(() => local = updated);
                                 setState(() => _devices = updated);
+                                widget.onPairedDevicesChanged();
                               },
                             );
                           },

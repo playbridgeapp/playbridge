@@ -8,7 +8,7 @@ import 'package:window_manager/window_manager.dart';
 import 'auto_launch.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
-import 'server.dart';
+import 'receiver_server.dart';
 
 /// Owns the menu-bar / system-tray icon and keeps it in sync with the
 /// receiver's state. Wires "show window", "launch at login" and "quit"

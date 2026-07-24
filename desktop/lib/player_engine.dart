@@ -25,6 +25,7 @@ class QueueItem {
     this.episodeTitle,
     this.originalUrl,
     this.originalHeaders,
+    this.contentType,
   });
 
   final String url;
@@ -36,6 +37,7 @@ class QueueItem {
   /// routing through the loopback proxy so the toggle can reverse the rewrite.
   final String? originalUrl;
   final Map<String, String>? originalHeaders;
+  final String? contentType;
 
   /// Resume point (ms) seeded from the phone's resume store. Mutable because
   /// it is consumed (nulled) after the first seek, so re-playing this item

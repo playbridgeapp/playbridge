@@ -8,7 +8,7 @@ import 'logging/log_store.dart';
 import 'logs_screen.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
-import 'server.dart';
+import 'receiver_server.dart';
 import 'update/app_version.dart';
 import 'update/update_checker.dart';
 
