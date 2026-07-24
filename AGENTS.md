@@ -20,10 +20,12 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 |---|---|
 | `playbridge-android` | Android phone, Android TV, shared Kotlin, and shared Android dependencies |
 | `playbridge-apple` | Apple phone and Apple TV applications |
-| `playbridge-desktop-proxy` | Flutter Desktop and the Dart stream proxy |
+| `playbridge-desktop-proxy` | Flutter Desktop, its Rust-backed receiver adapter, and the Dart stream proxy |
 | `playbridge-extension` | Browser extension and native-messaging integration |
 | `playbridge-web` | Svelte website and static web assets |
 | `playbridge-protocol` | Protocol schema, generated bindings, and consumer compatibility |
+| `playbridge-rust-core` | Portable Rust casting and receiver engines, UniFFI/C/JNI bindings, and Rust CLI |
+| `playbridge-stream-proxy-rust` | High-performance Rust streaming proxy and MediaFlow encryption |
 
 Before working in a project, load the matching specialist skill. For cross-project work, load each affected specialist or delegate non-overlapping consumers to subagents using those skills. Keep shared contracts and files with one designated writer, and keep the primary agent responsible for integration and final verification.
 
@@ -43,7 +45,13 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Apple phone | `mobile/apple/` | Swift/Xcode project |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver for macOS, Windows, and Linux |
-| Stream proxy | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
+| Stream proxy (Dart) | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
+| Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption |
+| Rust Cast Core | `cast/core/` | Portable discovery, protocol clients, pairing primitives, and casting sessions |
+| Rust Receiver | `cast/receiver/` | Secure reusable PlayBridge WSS receiver runtime; consumers provide playback and platform lifecycle |
+| Rust FFI | `cast/ffi/` | UniFFI plus stable C/JNI bindings for Cast Core and the receiver runtime |
+| Dart Cast bindings | `packages/playbridge_cast_core_dart/` | Dart FFI wrappers consumed by Flutter Desktop and standalone Dart applications |
+| Rust CLI | `cli/` | Command-line client binary (`playbridge`) for Rust Core |
 | Extension | `extension/` | Browser extension, JavaScript/TypeScript |
 | Web | `web/` | Svelte site |
 | Protocol assets | `protocol/` | In-repository AsyncAPI contract, protocol documentation, and generated artifacts |
@@ -91,6 +99,25 @@ Changes to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.
 - `mobile/android/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
 - `tv/android/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
 - `extension/src/background.ts`, which manually handles protocol JSON
+
+### Native receiver runtime ripple
+
+Changes to the PlayBridge receiver wire behavior, `cast/receiver/` public API, or
+the receiver C ABI must be checked across:
+
+- `cast/core/src/playbridge.rs`
+- `cast/ffi/src/receiver_runtime.rs` and `cast/ffi/include/playbridge_cast_core.h`
+- `packages/playbridge_cast_core_dart/lib/src/receiver_runtime.dart`
+- `desktop/lib/receiver_server.dart`, `desktop/lib/cert_manager.dart`, and `desktop/lib/pairing_store.dart`
+- `cli/src/receive.rs`
+
+Rust owns TLS/WSS, pairing, authentication, resource limits, and typed command
+delivery. Consumer applications own playback, UI, discovery lifecycle, and
+platform services. Preserve existing TLS identities/SPKI pins, accept compatible
+raw and SHA-256 token records during migrations, and never log the raw token
+emitted by a successful pairing. Bump the receiver ABI version for incompatible
+C/Dart changes, rebuild Desktop libraries with `cast/build-desktop.sh`, and run
+the native receiver smoke test.
 
 ### Shared dependency versions
 
