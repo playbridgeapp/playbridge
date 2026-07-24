@@ -26,7 +26,9 @@ pub enum SenderFrame {
     #[serde(rename = "pairing_commit", rename_all = "camelCase")]
     PairingCommit {
         commit: String,
+        #[serde(alias = "device_name")]
         device_name: String,
+        #[serde(rename = "deviceUUID", alias = "deviceUuid", alias = "device_uuid")]
         device_uuid: String,
     },
     #[serde(rename = "pairing_reveal", rename_all = "camelCase")]
@@ -42,6 +44,8 @@ pub enum SenderFrame {
         #[serde(skip_serializing_if = "Option::is_none")]
         payload: Option<Value>,
     },
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -69,6 +73,8 @@ pub enum ReceiverFrame {
     },
     #[serde(rename = "status")]
     Status {
+        #[serde(default)]
+        state: String,
         #[serde(default)]
         position: u64,
         #[serde(default)]
@@ -101,6 +107,120 @@ pub struct PairingSession {
     #[zeroize(skip)]
     transcript: Option<Vec<u8>>,
     shared_secret: Option<[u8; 32]>,
+}
+
+#[derive(Zeroize, ZeroizeOnDrop)]
+pub struct ReceiverPairingSession {
+    private_key: [u8; 32],
+    public_key: [u8; 32],
+    nonce_t: [u8; 16],
+    commit: [u8; 32],
+    #[zeroize(skip)]
+    transcript: Option<Vec<u8>>,
+    shared_secret: Option<[u8; 32]>,
+}
+
+impl ReceiverPairingSession {
+    pub fn start(commit: &str) -> Result<(Self, ReceiverFrame)> {
+        let commit = decode_array::<32>(commit, "commit")?;
+        let secret = StaticSecret::random();
+        let public_key = PublicKey::from(&secret).to_bytes();
+        let private_key = secret.to_bytes();
+        let mut nonce_t = [0_u8; 16];
+        getrandom::fill(&mut nonce_t).map_err(|_| CastError::Crypto)?;
+        Ok((
+            Self {
+                private_key,
+                public_key,
+                nonce_t,
+                commit,
+                transcript: None,
+                shared_secret: None,
+            },
+            ReceiverFrame::PairingChallenge {
+                tv_eph_pub: BASE64.encode(public_key),
+                nonce_t: BASE64.encode(nonce_t),
+            },
+        ))
+    }
+
+    pub fn accept_reveal(&mut self, sender_eph_pub: &str, nonce_s: &str) -> Result<String> {
+        let sender_public = decode_array::<32>(sender_eph_pub, "senderEphPub")?;
+        let nonce_s = decode_array::<16>(nonce_s, "nonceS")?;
+        if sha256(&[sender_public.as_slice(), nonce_s.as_slice()].concat())
+            .ct_eq(&self.commit)
+            .unwrap_u8()
+            != 1
+        {
+            return Err(CastError::Protocol("pairing commitment mismatch".into()));
+        }
+        let secret = StaticSecret::from(self.private_key);
+        let shared = secret
+            .diffie_hellman(&PublicKey::from(sender_public))
+            .to_bytes();
+        let transcript = [
+            self.commit.as_slice(),
+            self.public_key.as_slice(),
+            self.nonce_t.as_slice(),
+            sender_public.as_slice(),
+            nonce_s.as_slice(),
+        ]
+        .concat();
+        let sas = generate_sas(&shared, &transcript);
+        self.shared_secret = Some(shared);
+        self.transcript = Some(transcript);
+        Ok(sas)
+    }
+
+    pub fn approve(
+        &self,
+        confirmation_mac: &str,
+        credentials: &CredentialBundle,
+    ) -> Result<ReceiverFrame> {
+        let (shared, transcript) = self.secrets()?;
+        let submitted = BASE64
+            .decode(confirmation_mac)
+            .map_err(|_| CastError::Protocol("invalid confirmation MAC".into()))?;
+        let key = hkdf_expand(shared, b"confirmationKey")?;
+        let mut mac = <HmacSha256 as Mac>::new_from_slice(&key).map_err(|_| CastError::Crypto)?;
+        mac.update(transcript);
+        let expected = mac.finalize().into_bytes();
+        if submitted.as_slice().ct_eq(expected.as_slice()).unwrap_u8() != 1 {
+            return Err(CastError::Protocol("pairing confirmation mismatch".into()));
+        }
+
+        let key = hkdf_expand(shared, b"playbridgeCredentialKey-v1")?;
+        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| CastError::Crypto)?;
+        let mut nonce = [0_u8; 12];
+        getrandom::fill(&mut nonce).map_err(|_| CastError::Crypto)?;
+        let plaintext = serde_json::to_vec(credentials)
+            .map_err(|error| CastError::Protocol(error.to_string()))?;
+        let nonce_ref = Nonce::try_from(nonce.as_slice()).map_err(|_| CastError::Crypto)?;
+        let ciphertext = cipher
+            .encrypt(
+                &nonce_ref,
+                Payload {
+                    msg: &plaintext,
+                    aad: &sha256(transcript),
+                },
+            )
+            .map_err(|_| CastError::Crypto)?;
+        Ok(ReceiverFrame::PairingApproved {
+            nonce: BASE64.encode(nonce),
+            ciphertext: BASE64.encode(ciphertext),
+        })
+    }
+
+    fn secrets(&self) -> Result<(&[u8; 32], &[u8])> {
+        Ok((
+            self.shared_secret
+                .as_ref()
+                .ok_or(CastError::MissingField("pairing shared secret"))?,
+            self.transcript
+                .as_deref()
+                .ok_or(CastError::MissingField("pairing transcript"))?,
+        ))
+    }
 }
 
 impl PairingSession {
@@ -291,6 +411,44 @@ mod tests {
         })
         .unwrap();
         assert!(!playlist.contains(r#""startIndex""#));
+
+        let pairing = encode_text(&SenderFrame::PairingCommit {
+            commit: "commit".into(),
+            device_name: "Phone".into(),
+            device_uuid: "phone-id".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            pairing,
+            r#"{"type":"pairing_commit","commit":"commit","deviceName":"Phone","deviceUUID":"phone-id"}"#
+        );
+    }
+
+    #[test]
+    fn pairing_commit_accepts_established_and_legacy_identity_spellings() {
+        for json in [
+            r#"{"type":"pairing_commit","commit":"value","deviceName":"Phone","deviceUUID":"id"}"#,
+            r#"{"type":"pairing_commit","commit":"value","deviceName":"Phone","deviceUuid":"id"}"#,
+            r#"{"type":"pairing_commit","commit":"value","device_name":"Phone","device_uuid":"id"}"#,
+        ] {
+            assert!(matches!(
+                serde_json::from_str::<SenderFrame>(json).unwrap(),
+                SenderFrame::PairingCommit {
+                    device_name,
+                    device_uuid,
+                    ..
+                } if device_name == "Phone" && device_uuid == "id"
+            ));
+        }
+    }
+
+    #[test]
+    fn sender_parser_tolerates_unknown_message_types() {
+        assert_eq!(
+            serde_json::from_str::<SenderFrame>(r#"{"type":"future_sender_message","value":1}"#)
+                .unwrap(),
+            SenderFrame::Unknown
+        );
     }
 
     #[test]
@@ -373,5 +531,55 @@ mod tests {
                 Some("sha256/other"),
             )
             .is_err());
+    }
+
+    #[test]
+    fn sender_and_receiver_pairing_sessions_interoperate() {
+        let (mut sender, commit) =
+            PairingSession::start("sender".into(), "sender-id".into()).unwrap();
+        let SenderFrame::PairingCommit { commit, .. } = commit else {
+            panic!("expected commit");
+        };
+        let (mut receiver, challenge) = ReceiverPairingSession::start(&commit).unwrap();
+        let ReceiverFrame::PairingChallenge {
+            tv_eph_pub,
+            nonce_t,
+        } = challenge
+        else {
+            panic!("expected challenge");
+        };
+        let (sas, reveal) = sender.accept_challenge(&tv_eph_pub, &nonce_t).unwrap();
+        let SenderFrame::PairingReveal {
+            sender_eph_pub,
+            nonce_s,
+        } = reveal
+        else {
+            panic!("expected reveal");
+        };
+        assert_eq!(
+            receiver.accept_reveal(&sender_eph_pub, &nonce_s).unwrap(),
+            sas
+        );
+        let SenderFrame::PairingConfirmation { mac } = sender.confirmation(&sas, &sas).unwrap()
+        else {
+            panic!("expected confirmation");
+        };
+        let credentials = CredentialBundle {
+            token: "token".into(),
+            cert_fingerprint: Some("sha256/test".into()),
+            players: vec!["mpv".into()],
+            browsers: vec![],
+        };
+        let ReceiverFrame::PairingApproved { nonce, ciphertext } =
+            receiver.approve(&mac, &credentials).unwrap()
+        else {
+            panic!("expected approval");
+        };
+        assert_eq!(
+            sender
+                .decrypt_credentials(&nonce, &ciphertext, Some("sha256/test"))
+                .unwrap(),
+            credentials
+        );
     }
 }

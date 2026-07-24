@@ -15,6 +15,12 @@ pub struct RokuStatus {
     pub duration_ms: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RokuApp {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct RokuClient {
     http: Client,
@@ -85,6 +91,27 @@ impl RokuClient {
             });
         }
         parse_device_name(&response_text_limited(response).await?)
+    }
+
+    pub async fn apps(&self) -> Result<Vec<RokuApp>> {
+        let url = self.base_url.join("query/apps")?;
+        let response = self.http.get(url).send().await?;
+        let status = response.status();
+        if !status.is_success() {
+            return Err(CastError::ReceiverHttp {
+                operation: "Roku installed apps",
+                status,
+            });
+        }
+        parse_apps(&response_text_limited(response).await?)
+    }
+
+    pub async fn has_play_on_roku(&self) -> Result<bool> {
+        Ok(self
+            .apps()
+            .await?
+            .iter()
+            .any(|app| app.id == PLAY_ON_ROKU_APP_ID))
     }
 
     async fn expect_success(
@@ -161,6 +188,25 @@ fn parse_device_name(xml: &str) -> Result<String> {
     Err(CastError::MissingField("Roku device name"))
 }
 
+fn parse_apps(xml: &str) -> Result<Vec<RokuApp>> {
+    let document = roxmltree::Document::parse(xml)
+        .map_err(|error| CastError::Protocol(format!("invalid Roku apps XML: {error}")))?;
+    Ok(document
+        .descendants()
+        .filter(|node| node.has_tag_name("app"))
+        .filter_map(|node| {
+            let id = node.attribute("id")?.trim();
+            if id.is_empty() {
+                return None;
+            }
+            Some(RokuApp {
+                id: id.to_owned(),
+                name: node.text().unwrap_or("").trim().to_owned(),
+            })
+        })
+        .collect())
+}
+
 fn parse_roku_time_ms(value: &str) -> Option<u64> {
     let trimmed = value.trim();
     let number = trimmed.split_whitespace().next()?.trim_end_matches("ms");
@@ -220,5 +266,16 @@ mod tests {
             .unwrap(),
             "Living Room Roku"
         );
+    }
+
+    #[test]
+    fn parses_roku_apps_and_receiver_capability() {
+        let apps = parse_apps(
+            r#"<apps><app id="12">Netflix</app><app id="15985" version="2.0">Play on Roku</app></apps>"#,
+        )
+        .unwrap();
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[1].id, PLAY_ON_ROKU_APP_ID);
+        assert_eq!(apps[1].name, "Play on Roku");
     }
 }
