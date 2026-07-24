@@ -285,7 +285,6 @@ fun createPairingDeniedJson(): String = """{"type":"pairing_denied"}"""
 
 fun createAuthResponseJson(
     success: Boolean,
-    token: String? = null,
     certFingerprint: String? = null,
     players: List<String> = emptyList(),
     browsers: List<String> = emptyList(),
@@ -293,7 +292,6 @@ fun createAuthResponseJson(
     buildJsonObject {
         put("type", "auth_response")
         put("success", success)
-        if (token != null) put("token", token)
         if (certFingerprint != null) put("certFingerprint", certFingerprint)
         if (players.isNotEmpty()) put("players", buildJsonArray { players.forEach { add(it) } })
         if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })

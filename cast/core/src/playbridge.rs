@@ -63,8 +63,6 @@ pub enum ReceiverFrame {
     AuthResponse {
         success: bool,
         #[serde(default)]
-        token: Option<String>,
-        #[serde(default)]
         cert_fingerprint: Option<String>,
         #[serde(default)]
         players: Vec<String>,
