@@ -57,4 +57,22 @@ void main() {
     expect(() => store.setReceiverPort(65536), throwsArgumentError);
     expect(store.receiverPort, PairingStore.defaultReceiverPort);
   });
+
+  test('Rust token digests update the matching paired device', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PairingStore.load();
+    await store.addPairedDevice(PairedDeviceRecord(
+      deviceUUID: 'phone-id',
+      deviceName: 'Phone',
+      token: 'secret',
+      lastConnected: DateTime.fromMillisecondsSinceEpoch(1),
+    ));
+    final digest = store.pairedDevices.single.token;
+
+    await store.updateLastConnectedDigest(digest);
+
+    final updated = store.pairedDevices.single;
+    expect(updated.token, digest);
+    expect(updated.lastConnected.millisecondsSinceEpoch, greaterThan(1));
+  });
 }
