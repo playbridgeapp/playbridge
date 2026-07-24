@@ -408,14 +408,7 @@ class WebSocketClient {
                                     // Resync context after every (re)connect — see the
                                     // pairing_approved path for rationale.
                                     webSocket.send(createContextQueryJson())
-                                    val token = json["token"]?.toString()?.replace("\"", "")
-                                    val certFp = json["certFingerprint"]?.toString()?.replace("\"", "")
-                                        ?.takeIf { it.isNotEmpty() && it != "null" }
-                                    if (!token.isNullOrEmpty() && token != "null") {
-                                        val pin = certFp ?: capturedServerPin ?: targetConnection?.pin
-                                        targetConnection = targetConnection?.copy(token = token, pin = pin)
-                                        scope.launch { _newCredentials.emit(IssuedCredentials(token, pin)) }
-                                    }
+                                    // SEC-005: legacy echoed tokens in auth_response are ignored.
                                 } else {
                                     Log.e(TAG, "Authentication failed — stale token")
                                     // Set flag before close so onClosed doesn't overwrite AuthFailed

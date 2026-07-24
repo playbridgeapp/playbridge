@@ -135,7 +135,6 @@ components:
       properties:
         type: { const: auth_response }
         success: { type: boolean }
-        token: { type: string, minLength: 1, writeOnly: true }
         certFingerprint: { $ref: '#/components/schemas/SpkiPin' }
         players:
           type: array

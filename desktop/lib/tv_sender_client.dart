@@ -413,12 +413,9 @@ class TvSenderClient {
       _close();
       return;
     }
-    final token = obj['token'] as String?;
     final certFp = (obj['certFingerprint'] as String?)?.trim();
     final pin = (certFp != null && certFp.isNotEmpty) ? certFp : _capturedPin;
-    if (token != null && token.isNotEmpty && !_credentials.isClosed) {
-      _credentials.add(TvCredentials(token, pin));
-    }
+    // SEC-005: legacy echoed tokens in auth_response are ignored.
     _setState(SenderConnectionState.connected);
   }
 
