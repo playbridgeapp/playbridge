@@ -6,8 +6,11 @@ independent of Android, Apple, Flutter, and desktop UI lifecycles.
 ## Crates
 
 - `core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
+- `receiver`: secure PlayBridge WSS receiver runtime with typed command events.
 - `ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart consumers.
 - `../cli`: cross-platform CLI built directly on `core`.
+- `../stream-proxy-rust`: embeddable and standalone media proxy.
+- `../browser-receiver-rust`: sender-hosted web receiver library and binary.
 
 Discovery is caller-owned and time-boxed. A caller chooses one or more protocols,
 reads events, and cancels or drops the scanner when its screen or command ends. The
@@ -42,9 +45,34 @@ with the matching static or dynamic library for each Apple target.
 ## C ABI
 
 `cast/ffi/include/playbridge_cast_core.h` is the stable surface intended for
-Dart FFI and other languages that do not need generated bindings. Discovery events
-are UTF-8 JSON. Strings returned by `pb_discovery_next_json` must be released with
-`pb_string_free`; scanner handles must be cancelled and released.
+Dart FFI and other languages that do not need generated bindings. Discovery and
+session events are UTF-8 JSON. Strings returned by either `next_json` function
+must be released with `pb_string_free`; handles must be cancelled and released.
+Consumers must check `pb_cast_core_abi_version` before resolving the rest of the
+session API.
+
+Desktop builds enable the optional `sender-services` feature. Its separate
+`pb_sender_services_*` ABI owns the Rust proxy for the app lifetime and starts
+the web-browser receiver only on request. Keeping this lifecycle ABI separate
+allows phone builds to ship the protocol core without pulling in either server.
+
+The `pb_receiver_runtime_*` ABI exposes the shared native PlayBridge receiver.
+It accepts a caller-owned TLS identity and authorized token digests, then emits
+pairing, connection, and authenticated command events. Playback snapshots and
+other receiver responses are submitted by the host application, keeping Flutter
+and mobile player lifecycles outside Rust.
+
+A session target selects exactly one protocol and retains all known addresses:
+
+```json
+{"protocol":"roku","addresses":["192.168.1.20"],"port":8060}
+```
+
+DLNA targets use `location`; Google Cast defaults to port 8009. Every queued
+command has a scalar `request_id`, which is echoed by its `operation`, `status`,
+or `error` event. Supported commands are `load`, `play`, `pause`, `stop`, `seek`,
+`relative_seek`, `status`, and `disconnect`. Session command/event queues are
+bounded and the worker exists only for the lifetime of an active connection.
 
 Protocol mask values are stable:
 
@@ -54,9 +82,10 @@ Protocol mask values are stable:
 - DIAL: `8`
 - Google Cast: `16`
 
-Build the native library for the current desktop OS with
-`cast/build-desktop.sh`. The macOS build is universal; Linux and Windows builds
-are produced on their native operating systems.
+The reusable Dart wrapper lives in `../packages/playbridge_cast_core_dart`. Build
+the native library for the current desktop OS with `cast/build-desktop.sh`. The
+macOS build is universal; Linux and Windows builds are produced by their native
+Desktop CI jobs and packaged by Flutter's platform build files.
 
 ## Desktop CLI
 
@@ -73,14 +102,15 @@ playbridge discover --protocol all --json-lines
 `--json` emits one deduplicated report after the scan. `--json-lines` streams
 stable started, found, updated, error, and finished event objects for scripts.
 
-## Android libraries
+## Android packaging status
 
-Build and copy the two supported Android libraries with:
+The phone uses a thin JNI adapter rather than JNA. Build and copy the two supported
+Android libraries with:
 
 ```sh
 cd mobile/android
 ./gradlew :app:buildRustCastCore
 ```
 
-Platform applications remain responsible for their lifecycle, multicast locks,
-permissions, and UI integration.
+The phone uses Rust as its primary PlayBridge, DLNA, and Roku discovery engine;
+Android retains the platform lifecycle, multicast lock, and UI integration.
