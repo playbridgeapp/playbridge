@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     env,
+    io::IsTerminal,
     process::ExitCode,
     time::Duration,
 };
@@ -73,17 +74,33 @@ enum JsonLine<'a> {
 
 mod credentials;
 mod google_cast;
-mod http_server;
 mod preferred;
+mod receive;
 mod send;
+mod update;
 
 use google_cast::run_google_cast;
 use preferred::PreferredDevice;
-use send::run_send;
+use receive::run_receiver;
+use send::{run_browser_send, run_send};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match run(env::args().skip(1).collect()).await {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    if should_check_for_updates(&arguments)
+        && let Some(update) = update::check_for_update().await
+    {
+        eprintln!(
+            "\nUpdate available: PlayBridge CLI {} → {}",
+            env!("CARGO_PKG_VERSION"),
+            update.version
+        );
+        eprintln!(
+            "Run: curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh\n"
+        );
+    }
+
+    match run(arguments).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("error: {message}");
@@ -94,12 +111,33 @@ async fn main() -> ExitCode {
     }
 }
 
+fn should_check_for_updates(arguments: &[String]) -> bool {
+    if !std::io::stderr().is_terminal()
+        || env::var_os("PLAYBRIDGE_NO_UPDATE_CHECK").is_some()
+        || arguments
+            .iter()
+            .any(|value| matches!(value.as_str(), "--json" | "--json-lines"))
+    {
+        return false;
+    }
+    !arguments
+        .iter()
+        .any(|value| matches!(value.as_str(), "--help" | "-h" | "--version" | "-V"))
+}
+
 async fn run(arguments: Vec<String>) -> Result<(), String> {
     if arguments
         .first()
         .is_some_and(|value| value == "--help" || value == "-h")
     {
         println!("{}", usage());
+        return Ok(());
+    }
+    if arguments
+        .first()
+        .is_some_and(|value| value == "--version" || value == "-V")
+    {
+        println!("playbridge {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     let Some(command) = arguments.first() else {
@@ -112,6 +150,22 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 return Err("missing media file or URL to send".into());
             };
             run_send(target.clone()).await
+        }
+        "browser" => {
+            let Some(target) = arguments.get(1) else {
+                return Err("missing media file or URL for browser receiver".into());
+            };
+            run_browser_send(target.clone()).await
+        }
+        "receiver" | "receive" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!("{}", usage());
+                return Ok(());
+            }
+            run_receiver(&arguments[1..]).await
         }
         "discover" => {
             if arguments[1..]
@@ -318,9 +372,12 @@ fn usage() -> &'static str {
     r#"PlayBridge CLI
 
 Usage:
+  playbridge --version                     Print the CLI version
   playbridge <filename|URL>              Interactively cast a file/URL with auto-send
   playbridge send <filename|URL>         Explicit send command
   playbridge cast <filename|URL>         Explicit cast command
+  playbridge browser <filename|URL>      Cast through a sender-hosted browser receiver
+  playbridge receiver [options]         Run as a PlayBridge receiver using mpv
   playbridge discover [options]          Discover receivers on your local network
   playbridge google-cast status [options] Connect to Cast and query status only
   playbridge preferred [clear]           View or clear the saved preferred device
@@ -336,6 +393,9 @@ Google Cast Status Options:
       --address <address> Connect directly instead of discovering
       --port <port>       CastV2 port (default 8009)
       --json              Print the receiver status as JSON
+Receiver Options:
+      --name <name>       Receiver name advertised on the LAN
+      --port <port>       Preferred WSS port (default 8765; tries 10 ports)
   -h, --help              Show this help"#
 }
 
