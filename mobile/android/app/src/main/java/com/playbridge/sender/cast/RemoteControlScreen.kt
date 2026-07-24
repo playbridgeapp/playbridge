@@ -144,7 +144,8 @@ fun RemoteControlScreen(
     onBrowserControl: (String) -> Unit = {},
     onPlayerControl: (String) -> Unit = {},
     playbackState: String? = null,
-    dlnaMode: Boolean = false,
+    externalProtocolLabel: String? = null,
+    externalCapabilities: Set<Capability>? = null,
     isLive: Boolean = false,
     positionMs: Long = 0L,
     durationMs: Long = 0L,
@@ -175,7 +176,16 @@ fun RemoteControlScreen(
     var showSubtitlesSheet by remember { mutableStateOf(false) }
     val remoteContext = remoteContextOf(activeContext)
     val videoActive = playbackState == "playing" || playbackState == "paused" || playbackState == "buffering"
-
+    val externalMode = externalProtocolLabel != null
+    val capabilities = externalCapabilities.orEmpty()
+    val supportsRemote = !externalMode || Capability.REMOTE in capabilities
+    val supportsVolume = !externalMode || Capability.VOLUME in capabilities
+    val supportsSeek = !externalMode || Capability.SEEK in capabilities
+    val availableModes = buildList {
+        add(RemoteMode.CONTEXT)
+        if (supportsRemote) add(RemoteMode.DPAD)
+        if (!externalMode) add(RemoteMode.TOUCHPAD)
+    }
     var modeByContext by remember {
         mutableStateOf(
             mapOf(
@@ -186,6 +196,7 @@ fun RemoteControlScreen(
         )
     }
     val selectedMode = modeByContext[remoteContext] ?: RemoteMode.CONTEXT
+    val effectiveMode = selectedMode.takeIf { it in availableModes } ?: RemoteMode.CONTEXT
     fun selectMode(mode: RemoteMode) { modeByContext = modeByContext + (remoteContext to mode) }
 
     LaunchedEffect(remoteContext, videoActive) {
@@ -220,16 +231,20 @@ fun RemoteControlScreen(
             ConnectedTvChip(
                 deviceName = tvName,
                 connectionState = connectionState,
-                isDlna = dlnaMode
+                protocolLabel = externalProtocolLabel,
             )
             Spacer(modifier = Modifier.height(12.dp))
 
             // Segmented Mode Selector for immediate UX clarity
-            RemoteModeSegmentedRow(selected = selectedMode, onSelect = { selectMode(it) })
+            RemoteModeSegmentedRow(
+                selected = effectiveMode,
+                modes = availableModes,
+                onSelect = { selectMode(it) },
+            )
             Spacer(modifier = Modifier.height(16.dp))
 
             AnimatedContent(
-                targetState = selectedMode to remoteContext,
+                targetState = effectiveMode to remoteContext,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -248,7 +263,7 @@ fun RemoteControlScreen(
                             RemoteContext.PLAYER -> {
                                 NowPlayingPanel(title = mediaTitle)
 
-                                if (!dlnaMode) {
+                                if (!externalMode) {
                                     TrackChipsRow(
                                         audioTracks = audioTracks,
                                         subtitleTracks = subtitleTracks,
@@ -270,7 +285,7 @@ fun RemoteControlScreen(
                                     durationMs = durationMs,
                                     isLive = isLive,
                                     isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
-                                    enableVolume = !dlnaMode,
+                                    enableVolume = supportsVolume,
                                     onSeekTo = onSeekTo,
                                     onVolumeUp = { onRemoteKey("volume_up") },
                                     onVolumeDown = { onRemoteKey("volume_down") },
@@ -278,8 +293,8 @@ fun RemoteControlScreen(
                                 )
                                 MediaControlRow(
                                     onPlayerControl = onPlayerControl,
-                                    showLoop = !dlnaMode,
-                                    showSeek = !isLive
+                                    showLoop = !externalMode,
+                                    showSeek = !isLive && supportsSeek,
                                 )
                             }
 
@@ -288,7 +303,7 @@ fun RemoteControlScreen(
                                 positionMs = positionMs,
                                 durationMs = durationMs,
                                 isLive = isLive,
-                                dlnaMode = dlnaMode,
+                                dlnaMode = externalMode,
                                 mediaTitle = mediaTitle,
                                 onBrowserControl = onBrowserControl,
                                 onRemoteKey = onRemoteKey
@@ -306,7 +321,7 @@ fun RemoteControlScreen(
                                 DpadArea(onRemoteKey = onRemoteKey)
                             }
                             ModeBottomBar(
-                                ctx = ctx, dlnaMode = dlnaMode, isLive = isLive,
+                                ctx = ctx, dlnaMode = externalMode, isLive = isLive,
                                 playbackState = playbackState, onRemoteKey = onRemoteKey,
                                 onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
                             )
@@ -323,7 +338,7 @@ fun RemoteControlScreen(
                                 )
                             }
                             ModeBottomBar(
-                                ctx = ctx, dlnaMode = dlnaMode, isLive = isLive,
+                                ctx = ctx, dlnaMode = externalMode, isLive = isLive,
                                 playbackState = playbackState, onRemoteKey = onRemoteKey,
                                 onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
                             )
@@ -404,7 +419,11 @@ private fun Modifier.glassSurface(
 
 /** Segmented Row for switching remote modes instantly */
 @Composable
-private fun RemoteModeSegmentedRow(selected: RemoteMode, onSelect: (RemoteMode) -> Unit) {
+private fun RemoteModeSegmentedRow(
+    selected: RemoteMode,
+    modes: List<RemoteMode>,
+    onSelect: (RemoteMode) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -412,7 +431,7 @@ private fun RemoteModeSegmentedRow(selected: RemoteMode, onSelect: (RemoteMode) 
             .padding(4.dp),
         horizontalArrangement = Arrangement.SpaceEvenly
     ) {
-        RemoteMode.entries.forEach { mode ->
+        modes.forEach { mode ->
             val isSelected = mode == selected
             Row(
                 modifier = Modifier
@@ -446,10 +465,11 @@ private fun RemoteModeSegmentedRow(selected: RemoteMode, onSelect: (RemoteMode) 
 private fun ConnectedTvChip(
     deviceName: String?,
     connectionState: WebSocketClient.ConnectionState,
-    isDlna: Boolean = false
+    protocolLabel: String? = null,
 ) {
-    val isConnected = isDlna || connectionState is WebSocketClient.ConnectionState.Connected
-    val isConnecting = !isDlna && (
+    val isExternal = protocolLabel != null
+    val isConnected = isExternal || connectionState is WebSocketClient.ConnectionState.Connected
+    val isConnecting = !isExternal && (
         connectionState is WebSocketClient.ConnectionState.Connecting ||
             connectionState is WebSocketClient.ConnectionState.Retrying ||
             connectionState is WebSocketClient.ConnectionState.WaitingForApproval
@@ -463,15 +483,15 @@ private fun ConnectedTvChip(
         else -> Color.White.copy(alpha = 0.6f)
     }
 
-    val name = deviceName ?: if (isDlna) "renderer" else "TV"
+    val name = deviceName ?: if (isExternal) "receiver" else "TV"
     val label = when {
-        isDlna -> "Casting to $name"
+        isExternal -> "Casting to $name"
         isConnected -> "Watching on $name"
         isConnecting -> "Connecting to $name…"
         else -> "Not connected"
     }
     val icon = when {
-        isDlna -> Icons.Default.Cast
+        isExternal -> Icons.Default.Cast
         isConnected || isConnecting -> Icons.Default.Tv
         else -> Icons.Default.Smartphone
     }
@@ -496,7 +516,7 @@ private fun ConnectedTvChip(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.widthIn(max = 240.dp)
             )
-            if (isDlna) ProtocolBadge(text = "DLNA", accent = accent)
+            protocolLabel?.let { ProtocolBadge(text = it, accent = accent) }
         }
     }
 }

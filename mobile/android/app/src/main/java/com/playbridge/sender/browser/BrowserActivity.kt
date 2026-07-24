@@ -105,7 +105,6 @@ import mozilla.components.lib.state.Store
 
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.WebSocketClient
-import com.playbridge.sender.connection.NsdHelper
 import com.playbridge.sender.history.BookmarksScreen
 import com.playbridge.sender.history.CastHistoryScreen
 import com.playbridge.sender.history.HistoryScreen
@@ -209,6 +208,7 @@ class BrowserActivity : ComponentActivity() {
 
     private val connectionViewModel: ConnectionViewModel by viewModel()
     private val connectionCoordinator: ConnectionCoordinator by inject()
+    private val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
     private val historyDao: com.playbridge.sender.data.history.HistoryDao by inject()
@@ -216,6 +216,29 @@ class BrowserActivity : ComponentActivity() {
     private val downloadDao: com.playbridge.sender.data.downloads.DownloadDao by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
     private val updateChecker: com.playbridge.sender.update.UpdateChecker by inject()
+
+    /**
+     * Third-party protocols do not expose PlayBridge's native playlist command. Keep the
+     * ordered list on the phone and let the external queue coordinator advance it as each
+     * item finishes.
+     */
+    private fun startExternalPlaylist(items: List<PlayPayload>, startIndex: Int = 0) {
+        if (items.isEmpty()) return
+        externalQueueCoordinator.start(
+            com.playbridge.sender.connection.TvEpisodeQueuePlan(
+                streamType = "playlist",
+                forcedSource = null,
+                bingeGroup = null,
+                startIndex = startIndex.coerceIn(items.indices),
+                items = items.map { payload ->
+                    com.playbridge.sender.connection.TvQueueEpisode(
+                        streamId = "",
+                        template = payload,
+                    )
+                },
+            )
+        )
+    }
 
     /**
      * Phase-2 cutover: route browser/cast-sheet downloads through the new WorkManager
@@ -531,7 +554,8 @@ class BrowserActivity : ComponentActivity() {
                 com.playbridge.sender.update.UpdateGate(updateChecker)
             }
             val connectionState by connectionViewModel.connectionState.collectAsState()
-            val activeDlnaTarget by connectionViewModel.activeDlnaTarget.collectAsState()
+            val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsState()
+            val castRoute by connectionViewModel.route.collectAsState()
             val scope = rememberCoroutineScope()
 
             // Suggestions State
@@ -554,8 +578,6 @@ class BrowserActivity : ComponentActivity() {
 
             // Connection ViewModel State
             val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
-            val discoveredDevices by connectionViewModel.discoveredDevices.collectAsState()
-            val history by connectionViewModel.deviceHistory.collectAsState(initial = emptyList())
 
             // Session and navigation state from BrowserStore
             val store = Components.store
@@ -854,37 +876,19 @@ class BrowserActivity : ComponentActivity() {
             val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
 
             // Set up Bridge callback to handle Hub UI cast requests
-            LaunchedEffect(connectionViewModel, preferredAudioLang, preferredSubLang, defaultVideoQuality, maxBitrateCapMbps) {
+            LaunchedEffect(
+                connectionViewModel,
+                castRoute,
+                preferredAudioLang,
+                preferredSubLang,
+                defaultVideoQuality,
+                maxBitrateCapMbps,
+            ) {
                 com.playbridge.sender.browser.Components.onBridgeCastRequest = { items, startIndex, playlistMetadata ->
                     Log.d("BrowserActivity", "Cast requested via Extension Bridge: ${items.size} items, startIndex: $startIndex")
                     
                     lifecycleScope.launch {
-                        // Reconnect attempt before sending — mirrors LibraryDetailScreen behavior
-                        val savedDevice = connectionViewModel.tvDevice.first()
-                        if (savedDevice != null && connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                            Log.i("BrowserActivity", "TV disconnected, attempting reconnection before bridge cast")
-                            runOnUiThread {
-                                Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show()
-                            }
-                            connectionViewModel.connect(savedDevice!!)
-                            
-                            // Wait for connection with timeout (e.g. 8 seconds)
-                            // This allows the Hub UI to trigger a play even if the app was backgrounded and lost connection
-                            withTimeoutOrNull(8000) {
-                                connectionViewModel.connectionState.first { it is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected }
-                            }
-
-                            if (connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
-                                Log.w("BrowserActivity", "Wait for connection timed out or failed. Aborting cast.")
-                                runOnUiThread {
-                                    Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show()
-                                }
-                                return@launch
-                            }
-                        }
-
                         val currentMode = tvPlayerMode.takeIf { it != "tv" }
-                        
                         val playPayloads = items.map { item ->
                             item.copy(
                                 player_mode = item.player_mode ?: currentMode,
@@ -894,21 +898,56 @@ class BrowserActivity : ComponentActivity() {
                                 max_bitrate_cap_mbps = item.max_bitrate_cap_mbps ?: maxBitrateCapMbps,
                             )
                         }
+                        if (playPayloads.isEmpty()) return@launch
 
-                        if (playPayloads.isNotEmpty()) {
-                            val cmd = createPlaylistCommandJson(PlaylistPayload(
+                        when (castRoute) {
+                            is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
+                                runOnUiThread {
+                                    Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                }
+                                return@launch
+                            }
+                            is com.playbridge.sender.cast.CastSessionManager.Route.External -> {
+                                startExternalPlaylist(playPayloads, startIndex)
+                                return@launch
+                            }
+                            is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
+                        }
+
+                        // Reconnect only the selected native route. A retained PlayBridge socket
+                        // must not steal a cast intended for This Device or another protocol.
+                        val savedDevice = connectionViewModel.tvDevice.first()
+                        if (savedDevice != null && connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                            Log.i("BrowserActivity", "TV disconnected, attempting reconnection before bridge cast")
+                            runOnUiThread {
+                                Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show()
+                            }
+                            connectionViewModel.connect(savedDevice)
+                            withTimeoutOrNull(8000) {
+                                connectionViewModel.connectionState.first {
+                                    it is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected
+                                }
+                            }
+                            if (connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                                Log.w("BrowserActivity", "Wait for connection timed out or failed. Aborting cast.")
+                                runOnUiThread {
+                                    Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show()
+                                }
+                                return@launch
+                            }
+                        }
+
+                        val cmd = createPlaylistCommandJson(PlaylistPayload(
                                 items = playPayloads,
                                 start_index = startIndex,
                                 visual_metadata = playlistMetadata,
                             ))
-                            
-                            connectionViewModel.sendCommandAndRecord(
-                                commandJson = cmd,
-                                type = "playlist",
-                                url = playPayloads[startIndex.coerceIn(0, playPayloads.size - 1)].url,
-                                title = playPayloads[startIndex.coerceIn(0, playPayloads.size - 1)].title ?: "Playlist"
-                            )
-                        }
+                        connectionViewModel.sendCommandAndRecord(
+                            commandJson = cmd,
+                            type = "playlist",
+                            url = playPayloads[startIndex.coerceIn(playPayloads.indices)].url,
+                            title = playPayloads[startIndex.coerceIn(playPayloads.indices)].title ?: "Playlist"
+                        )
                     }
                 }
             }
@@ -1002,9 +1041,27 @@ class BrowserActivity : ComponentActivity() {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
 
                 scope.launch {
-                    // DLNA: a third-party renderer is the active target — cast via the proxy, skip WS.
-                    val dlnaTarget = connectionViewModel.activeDlnaTarget.value
-                    if (dlnaTarget != null) {
+                    if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice) {
+                        showBrowserConnectSheet = true
+                        return@launch
+                    }
+                    val externalTarget = connectionViewModel.activeExternalDevice.value
+                    if (externalTarget != null) {
+                        val content = pendingContentPayload
+                        if (content != null && videoCount == 0) {
+                            connectionViewModel.castToSelectedExternal(
+                                com.playbridge.sender.cast.MediaItem(
+                                    url = content.url,
+                                    headers = content.headers,
+                                    title = content.title,
+                                    startPositionMs = content.start_position_ms ?: 0L,
+                                    visualMetadata = content.visual_metadata,
+                                )
+                            )
+                            Toast.makeText(this@BrowserActivity, "Casting to ${externalTarget.name}", Toast.LENGTH_SHORT).show()
+                            if (autoSwitchToRemote) currentScreen = Screen.Remote
+                            return@launch
+                        }
                         val video = detectedVideos.filter { !it.isSubtitle }
                             .sortedWith(
                                 compareByDescending<DetectedVideo> { it.castScore() }
@@ -1015,16 +1072,29 @@ class BrowserActivity : ComponentActivity() {
                             Toast.makeText(this@BrowserActivity, "No video detected to cast", Toast.LENGTH_SHORT).show()
                             return@launch
                         }
-                        val headers = VideoDetector.mediaHeaders(video)
-                        connectionViewModel.playOnDlna(
-                            com.playbridge.sender.cast.MediaItem(
-                                url = video.url,
-                                headers = headers,
-                                mimeType = video.contentType,
-                                title = video.title ?: selectedTab?.content?.title,
+                        val playlist = video.playlistPayload?.map { item ->
+                            item.copy(
+                                player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                max_bitrate_cap_mbps = maxBitrateCapMbps,
                             )
-                        )
-                        Toast.makeText(this@BrowserActivity, "Casting to ${dlnaTarget.name}", Toast.LENGTH_SHORT).show()
+                        }
+                        if (playlist != null) {
+                            startExternalPlaylist(playlist)
+                        } else {
+                            val headers = VideoDetector.mediaHeaders(video)
+                            connectionViewModel.castToSelectedExternal(
+                                com.playbridge.sender.cast.MediaItem(
+                                    url = video.url,
+                                    headers = headers,
+                                    mimeType = video.contentType,
+                                    title = video.title ?: selectedTab?.content?.title,
+                                )
+                            )
+                        }
+                        Toast.makeText(this@BrowserActivity, "Casting to ${externalTarget.name}", Toast.LENGTH_SHORT).show()
                         if (autoSwitchToRemote) currentScreen = Screen.Remote
                         return@launch
                     }
@@ -1244,9 +1314,10 @@ class BrowserActivity : ComponentActivity() {
             // auto-connect is still enabled. A manual disconnect turns it off, so reopening the
             // sheet then respects that choice instead of immediately reconnecting.
             LaunchedEffect(showVideoSheet) {
-                // Don't auto-reconnect the native receiver when a DLNA target is active.
+                // Don't auto-reconnect the native receiver while another protocol is selected.
                 if (showVideoSheet && connectionState is WebSocketClient.ConnectionState.Disconnected &&
-                    connectionViewModel.activeDlnaTarget.value == null &&
+                    connectionViewModel.activeExternalDevice.value == null &&
+                    castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
                     connectionViewModel.autoConnectEnabled.value) {
                     tvDevice?.let { device ->
                         Log.d("BrowserActivity", "Cast sheet opened while disconnected. Reconnecting to ${device.name}")
@@ -1258,7 +1329,9 @@ class BrowserActivity : ComponentActivity() {
             // Link context menu
             LinkContextMenu(
                 url = contextMenuUrl,
-                isConnected = connectionState is WebSocketClient.ConnectionState.Connected,
+                isConnected = activeExternalDevice != null ||
+                    (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
+                        connectionState is WebSocketClient.ConnectionState.Connected),
                 onPlayOnTv = { linkUrl ->
                     val video = DetectedVideo(
                         url = linkUrl,
@@ -1401,7 +1474,9 @@ class BrowserActivity : ComponentActivity() {
                                             interceptedMagnet = magnet
                                             isEditing = false
                                         },
-                                        isTvConnected = (connectionState is WebSocketClient.ConnectionState.Connected || activeDlnaTarget != null),
+                                        isTvConnected = activeExternalDevice != null ||
+                                            (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
+                                                connectionState is WebSocketClient.ConnectionState.Connected),
                                         onTvClick = { showBrowserConnectSheet = true },
                                         onRemoteClick = {
                                             if (connectionState is WebSocketClient.ConnectionState.Connected) {
@@ -1845,7 +1920,8 @@ class BrowserActivity : ComponentActivity() {
                     showVideoSheet = showVideoSheet,
                     detectedVideos = detectedVideos,
                     pendingContentPayload = pendingContentPayload,
-                    isTvPlaying = tvActiveContext == "player",
+                    isTvPlaying = castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
+                        tvActiveContext == "player",
                     onDismissVideoSheet = {
                         showVideoSheet = false
                         forcePlaylistSheet = null
@@ -1855,23 +1931,42 @@ class BrowserActivity : ComponentActivity() {
                         pendingContentPayload = null
                     },
                     onVideoClick = onVideoClick@ { video, subs ->
-                         // DLNA: a third-party renderer is the active target — cast via the proxy.
-                         val dlnaTarget = connectionViewModel.activeDlnaTarget.value
-                         if (dlnaTarget != null) {
-                             val dlnaHeaders = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
-                             connectionViewModel.playOnDlna(
-                                 com.playbridge.sender.cast.MediaItem(
-                                     url = video.url,
-                                     headers = dlnaHeaders,
-                                     mimeType = video.contentType,
-                                     title = video.title ?: selectedTab?.content?.title,
-                                 )
-                             )
-                             Toast.makeText(this@BrowserActivity, "Casting to ${dlnaTarget.name}", Toast.LENGTH_SHORT).show()
-                             showVideoSheet = false
-                             forcePlaylistSheet = null
-                             if (autoSwitchToRemote) currentScreen = Screen.Remote
-                             return@onVideoClick
+                         when (castRoute) {
+                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
+                                 Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                 return@onVideoClick
+                             }
+                             is com.playbridge.sender.cast.CastSessionManager.Route.External -> {
+                                 val externalTarget = activeExternalDevice ?: return@onVideoClick
+                                 val playlist = video.playlistPayload?.map { item ->
+                                     item.copy(
+                                         player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                                         preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                                         preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                                         default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                                         max_bitrate_cap_mbps = maxBitrateCapMbps,
+                                     )
+                                 }
+                                 if (playlist != null) {
+                                     startExternalPlaylist(playlist)
+                                 } else {
+                                     val mediaHeaders = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                                     connectionViewModel.castToSelectedExternal(
+                                         com.playbridge.sender.cast.MediaItem(
+                                             url = video.url,
+                                             headers = mediaHeaders,
+                                             mimeType = video.contentType,
+                                             title = video.title ?: selectedTab?.content?.title,
+                                         )
+                                     )
+                                 }
+                                 Toast.makeText(this@BrowserActivity, "Casting to ${externalTarget.name}", Toast.LENGTH_SHORT).show()
+                                 showVideoSheet = false
+                                 forcePlaylistSheet = null
+                                 if (autoSwitchToRemote) currentScreen = Screen.Remote
+                                 return@onVideoClick
+                             }
+                             is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
                          }
                          // A bundle (e.g. "Play All" from the debrid screen) carries its real items in
                          // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
@@ -1927,7 +2022,16 @@ class BrowserActivity : ComponentActivity() {
                          showVideoSheet = false
                          forcePlaylistSheet = null
                     },
-                    onQueueVideo = { video, subtitles ->
+                    onQueueVideo = onQueueVideo@ { video, subtitles ->
+                        if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
+                            val message = if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External) {
+                                "Queue editing is only available with PlayBridge receivers"
+                            } else {
+                                "Choose a receiver first"
+                            }
+                            Toast.makeText(this@BrowserActivity, message, Toast.LENGTH_SHORT).show()
+                            return@onQueueVideo
+                        }
                         when (connectionState) {
                             is WebSocketClient.ConnectionState.Connected -> {
                                 val items: List<PlayPayload> = video.playlistPayload ?: run {
@@ -1967,15 +2071,31 @@ class BrowserActivity : ComponentActivity() {
                     onPlayerModeChange = { mode ->
                         composeScope.launch { settingsRepository.setTvPlayerMode(mode) }
                     },
-                    // When a DLNA renderer is the active target, show it as the destination.
-                    selectedTvDevice = activeDlnaTarget ?: tvDevice,
+                    selectedTvDevice = when (castRoute) {
+                        is com.playbridge.sender.cast.CastSessionManager.Route.External -> activeExternalDevice
+                        is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> tvDevice
+                        is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> null
+                    },
                     onOpenAllDevices = {
                         showVideoSheet = false
                         connectionInitialTab = 1
                         currentScreen = Screen.Connection
                     },
                     browseUrl = castSheetBrowseOverride ?: currentUrl,
-                    onBrowseClick = { selectedMode, desktopMode ->
+                    onBrowseClick = onBrowseClick@ { selectedMode, desktopMode ->
+                        if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
+                            val message = if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External) {
+                                "Browser casting requires a PlayBridge receiver"
+                            } else {
+                                "Choose a receiver first"
+                            }
+                            Toast.makeText(this@BrowserActivity, message, Toast.LENGTH_SHORT).show()
+                            return@onBrowseClick
+                        }
+                        if (connectionState !is WebSocketClient.ConnectionState.Connected) {
+                            Toast.makeText(this@BrowserActivity, "Not connected to TV", Toast.LENGTH_SHORT).show()
+                            return@onBrowseClick
+                        }
                         val effectiveUrl = castSheetBrowseOverride ?: currentUrl
                         val cmd = com.playbridge.shared.protocol.createBrowserCommandJson(effectiveUrl, browserMode = selectedMode.takeIf { it != "tv" }, desktopMode = desktopMode.takeIf { it })
                         connectionViewModel.sendCommandAndRecord(cmd, "browser", effectiveUrl, "Browser Page")
@@ -2004,7 +2124,32 @@ class BrowserActivity : ComponentActivity() {
                     mediaflowProxyPassword = mediaflowProxyPassword ?: "",
                     mediaflowAutoSelect = mediaflowAutoSelect,
                     mediaflowProxyEnabled = mediaflowProxyEnabled,
-                    onContentClick = { payload ->
+                    onContentClick = onContentClick@ { payload ->
+                        when (castRoute) {
+                            is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
+                                Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
+                                return@onContentClick
+                            }
+                            is com.playbridge.sender.cast.CastSessionManager.Route.External -> {
+                                val externalTarget = activeExternalDevice ?: return@onContentClick
+                                connectionViewModel.castToSelectedExternal(
+                                    com.playbridge.sender.cast.MediaItem(
+                                        url = payload.url,
+                                        headers = payload.headers,
+                                        title = payload.title,
+                                        startPositionMs = payload.start_position_ms ?: 0L,
+                                        visualMetadata = payload.visual_metadata,
+                                    )
+                                )
+                                browserViewModel.logHistory(payload.url, payload.title)
+                                Toast.makeText(this@BrowserActivity, "Casting to ${externalTarget.name}", Toast.LENGTH_SHORT).show()
+                                showVideoSheet = false
+                                forcePlaylistSheet = null
+                                if (autoSwitchToRemote) currentScreen = Screen.Remote
+                                return@onContentClick
+                            }
+                            is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
+                        }
                         val cmd = createSingleVideoCommandJson(
                             payload.copy(
                                 player_mode = sheetPlayerMode.takeIf { it != "tv" },
@@ -2028,6 +2173,29 @@ class BrowserActivity : ComponentActivity() {
                         if (sent) Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
                         showVideoSheet = false
                         forcePlaylistSheet = null
+                    },
+                    onQueueContent = onQueueContent@ { payload ->
+                        if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv ||
+                            connectionState !is WebSocketClient.ConnectionState.Connected
+                        ) {
+                            Toast.makeText(this@BrowserActivity, "Not connected to a PlayBridge receiver", Toast.LENGTH_SHORT).show()
+                            return@onQueueContent
+                        }
+                        val queued = payload.copy(
+                            player_mode = sheetPlayerMode.takeIf { it != "tv" },
+                            preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
+                            preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
+                            default_video_quality = defaultVideoQuality.takeIf { it != "Auto" },
+                            max_bitrate_cap_mbps = maxBitrateCapMbps,
+                        )
+                        if (connectionViewModel.webSocketClient.send(
+                                com.playbridge.shared.protocol.createQueueAddCommandJson(queued)
+                            )
+                        ) {
+                            Toast.makeText(this@BrowserActivity, "Added to queue", Toast.LENGTH_SHORT).show()
+                            showVideoSheet = false
+                            forcePlaylistSheet = null
+                        }
                     },
                     // Magnet Parsing Sheet States
                     interceptedMagnet = interceptedMagnet,

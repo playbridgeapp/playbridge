@@ -1,6 +1,8 @@
 package com.playbridge.sender.cast
 
 import kotlinx.coroutines.flow.Flow
+import com.playbridge.sender.model.EndpointKey
+import com.playbridge.sender.model.TvDevice
 
 /**
  * A transport-agnostic playback target — the seam that lets the cast sheet,
@@ -52,7 +54,7 @@ interface CastTarget {
     fun release()
 }
 
-enum class TargetKind { NATIVE, DLNA }
+enum class TargetKind { NATIVE, DLNA, ROKU, GOOGLE_CAST }
 
 enum class Capability {
     /** Set a new media URI. */
@@ -114,3 +116,21 @@ data class PlaybackStatus(
 )
 
 enum class PlaybackState { IDLE, BUFFERING, PLAYING, PAUSED, STOPPED, ERROR }
+
+enum class SessionPhase { LOCAL, SELECTED, CONNECTING, CONNECTED, PLAYING, FAILED }
+
+/** The protocol-neutral state consumed by connection UI, notifications and controls. */
+data class CastSessionState(
+    val phase: SessionPhase = SessionPhase.LOCAL,
+    val endpointKey: EndpointKey? = null,
+    val device: TvDevice? = null,
+    val targetKind: TargetKind? = null,
+    val capabilities: Set<Capability> = emptySet(),
+    val playback: PlaybackStatus? = null,
+    val mediaTitle: String? = null,
+    val error: String? = null,
+) {
+    val isExternal: Boolean
+        get() = endpointKey != null && targetKind != null && targetKind != TargetKind.NATIVE
+    val isActive: Boolean get() = phase != SessionPhase.LOCAL
+}
