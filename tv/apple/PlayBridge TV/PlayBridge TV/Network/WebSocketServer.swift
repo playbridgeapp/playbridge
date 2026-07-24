@@ -802,7 +802,7 @@ class WebSocketServer: ObservableObject {
             self.connectedCount = self.connectedConnections.count
             if sendAuthResponse {
                 // Safe on reconnect: the sender has already pinned this TLS identity.
-                var response: [String: Any] = ["type": "auth_response", "success": true, "token": token]
+                var response: [String: Any] = ["type": "auth_response", "success": true]
                 if let fp = self.certFingerprint { response["certFingerprint"] = fp }
                 response["players"] = Self.capabilityPlayers
                 self.send(json: response, to: connection)

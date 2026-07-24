@@ -180,31 +180,6 @@ store and may be exposed through local access or backups.
 **Done when:** Preference exports do not contain bearer tokens and legacy values
 are migrated or revoked.
 
-### SEC-005: Desktop and Apple TV echo tokens on successful reauthentication
-
-**Affected:** Desktop receiver and Apple TV receiver; corresponding senders still
-accept optional token refresh fields.
-
-**Risk:** The token is unnecessarily duplicated in response objects and memory,
-increasing exposure to logging, debugging, instrumentation, or future parsing
-mistakes. Pinned WSS prevents passive LAN disclosure, so this is not a control
-channel break, but it violates the minimum-disclosure standard.
-
-**Evidence:**
-
-- Desktop `server.dart` passes the received token to `authResponseJson` after a
-  successful `AuthCmd`.
-- Apple TV `WebSocketServer.swift` inserts `"token": token` into successful
-  reconnect `auth_response` messages.
-- Android TV already returns success, pin, and capabilities without the token.
-
-**Required remediation:** Stop including tokens in reconnect responses and stop
-interpreting `auth_response.token` as a refresh. Token rotation must use a
-separate authenticated protocol operation if introduced later.
-
-**Done when:** Cross-platform reconnect tests assert that `auth_response` never
-contains `token` and existing pairings still reconnect.
-
 ### SEC-006: Pre-authentication resource limits are uneven
 
 **Affected:** Primarily Android TV and Apple TV receivers; re-audit desktop when
@@ -323,7 +298,6 @@ exports, and proxy/player logs on every platform.
    adding more replay persistence.
 2. **SEC-002:** encrypt receiver history and favorites while preserving working
    replay.
-3. **SEC-005:** remove token echo; this is small and independently testable.
 4. **SEC-004 and SEC-007:** migrate token storage and verification consistently.
 5. **SEC-006:** standardize receiver connection, frame, and timeout limits.
 6. **SEC-009 and SEC-010:** establish conformance fixtures and the cross-platform
