@@ -11,7 +11,11 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
   - MediaFlow AES-256-CBC token encryption for stateless proxying (`/proxy/hls/...`).
 - 🎬 **HLS & DASH Rewriting**: Dynamic manifest rewriter for `.m3u8` and `.mpd` playlists.
 - 🌐 **CDN Signature Compatible**: Preserves query parameter key ordering for Akamai and signed media CDN validation.
-- 📺 **Embedded Web Receiver UI**: Serves interactive dark-mode player at `GET /` and `GET /demo.html`.
+- 📦 **Embeddable Service**: `ProxyServer` starts on an ephemeral port, registers
+  remote URLs or local files, and shuts down cleanly with its owning app.
+- 📁 **Scoped Local Files**: Unguessable, expiring grants with HEAD and byte-range
+  support for seeking.
+- 🧪 **Embedded Proxy Demo**: Serves a link builder and local test player at `GET /` and `GET /demo.html` for exercising stateful and encrypted proxy URLs. It is a diagnostic interface, not a casting receiver.
 
 ## Environment Variables
 
@@ -52,11 +56,14 @@ Content-Type: application/json
 **Response**:
 ```json
 {
-  "session_id": "SAA4j85zgLaBL7x1L91L6A",
-  "proxy_url": "http://192.168.1.50:8888/s/SAA4j85zgLaBL7x1L91L6A/manifest.m3u8?token=YOUR_API_PASSWORD",
+  "proxy_url": "http://192.168.1.50:8888/s/SAA4j85zgLaBL7x1L91L6A/manifest.m3u8",
   "encrypted_url": "http://192.168.1.50:8888/proxy/hls/manifest.m3u8?token=..."
 }
 ```
+
+The returned scoped `/s/` URL carries a cryptographically random session ID, so
+the receiving player does not need the registration password. Registration
+itself remains authenticated.
 
 ### 2. MediaFlow Stateless AES Encryption (`GET /proxy/hls/...`)
 Encodes destination URL and headers inside an AES-256-CBC encrypted token parameter:
@@ -65,4 +72,4 @@ GET /proxy/hls/manifest.m3u8?token=<AES_ENCRYPTED_PAYLOAD>
 ```
 
 ### 3. Health Check (`GET /health`)
-Returns `200 OK` with JSON status: `{"status": "ok"}`.
+Returns `200 OK` with the body `OK`.

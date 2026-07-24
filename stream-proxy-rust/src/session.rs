@@ -69,18 +69,25 @@ impl SessionManager {
         self.sessions.clear();
     }
 
+    pub fn revoke(&self, id: &str) -> bool {
+        self.sessions.remove(id).is_some()
+    }
+
     fn generate_id() -> String {
-        let mut bytes = [0u8; 16];
+        let mut bytes = [0u8; 24];
         rand::thread_rng().fill(&mut bytes);
         URL_SAFE_NO_PAD.encode(bytes)
     }
 
     fn start_cleanup_task(&self) {
-        let sessions = self.sessions.clone();
+        let sessions = Arc::downgrade(&self.sessions);
         tokio::spawn(async move {
             let mut timer = interval(Duration::from_secs(30));
             loop {
                 timer.tick().await;
+                let Some(sessions) = sessions.upgrade() else {
+                    break;
+                };
                 let max_inactive = Duration::from_secs(600); // 10 minutes
                 let max_age = Duration::from_secs(7200); // 2 hours
 

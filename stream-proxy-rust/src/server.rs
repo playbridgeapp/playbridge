@@ -3,12 +3,13 @@ use crate::crypto::{EncryptionHandler, ProxyData};
 use crate::dash::DashManifestRewriter;
 use crate::epg::EpgCache;
 use crate::hls::HlsPlaylistRewriter;
+use crate::local_file::FileGrantManager;
 use crate::session::SessionManager;
 use crate::upstream::{filter_upstream_headers, ConnectionEngine};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
-    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -16,8 +17,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio_util::io::ReaderStream;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use url::Url;
@@ -26,6 +30,7 @@ use url::Url;
 pub struct AppState {
     pub password: String,
     pub session_manager: SessionManager,
+    pub file_grants: FileGrantManager,
     pub epg_cache: EpgCache,
     pub engine: Arc<ConnectionEngine>,
     pub encryption_handler: EncryptionHandler,
@@ -44,50 +49,161 @@ pub struct RegisterResponse {
     pub encrypted_url: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegisteredMedia {
+    pub id: String,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encrypted_url: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct EpgQuery {
     pub uri: Option<String>,
 }
 
+#[derive(Clone)]
+pub struct ProxyService {
+    state: AppState,
+}
+
+impl ProxyService {
+    pub fn new(password: String, ffmpeg_path: Option<String>) -> Self {
+        let encryption_handler = EncryptionHandler::new(password.as_bytes());
+        Self {
+            state: AppState {
+                password,
+                session_manager: SessionManager::new(),
+                file_grants: FileGrantManager::new(),
+                epg_cache: EpgCache::new(Duration::from_secs(14400)),
+                engine: Arc::new(ConnectionEngine::new(ffmpeg_path)),
+                encryption_handler,
+            },
+        }
+    }
+
+    pub fn router(&self) -> Router {
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+            .expose_headers([
+                header::CONTENT_LENGTH,
+                header::CONTENT_RANGE,
+                header::ACCEPT_RANGES,
+            ]);
+
+        Router::new()
+            .route("/", get(demo_html_handler))
+            .route("/demo.html", get(demo_html_handler))
+            .route("/health", get(health_handler))
+            .route("/ping", get(health_handler))
+            .route("/register", post(register_handler))
+            .route("/epg", get(epg_handler))
+            .route("/s/*path", get(stateful_proxy_handler))
+            .route("/proxy/*path", get(encrypted_proxy_handler))
+            .route(
+                "/media/*path",
+                get(local_file_handler).head(local_file_handler),
+            )
+            .layer(cors)
+            .layer(middleware::from_fn_with_state(
+                self.state.clone(),
+                auth_middleware,
+            ))
+            .with_state(self.state.clone())
+    }
+
+    pub fn register_remote(
+        &self,
+        base_url: &str,
+        original_url: String,
+        headers: HashMap<String, String>,
+    ) -> Result<RegisteredMedia, String> {
+        let parsed = Url::parse(&original_url).map_err(|error| error.to_string())?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err("only HTTP(S) media URLs can be proxied".into());
+        }
+        let session = self
+            .state
+            .session_manager
+            .register(original_url.clone(), headers.clone());
+        let filename = registered_media_filename(&parsed);
+        let proxy_url = format!(
+            "{}/s/{}/{}",
+            base_url.trim_end_matches('/'),
+            session.id,
+            urlencoding::encode(&filename)
+        );
+        let proxy_data = ProxyData {
+            destination: original_url,
+            request_headers: (!headers.is_empty()).then_some(headers),
+            exp: None,
+            ip: None,
+        };
+        let encrypted_token = self.state.encryption_handler.encrypt(&proxy_data)?;
+        let encrypted_url = format!(
+            "{}/proxy/stream/{}?token={}",
+            base_url.trim_end_matches('/'),
+            urlencoding::encode(&filename),
+            encrypted_token
+        );
+        Ok(RegisteredMedia {
+            id: session.id,
+            url: proxy_url,
+            encrypted_url: Some(encrypted_url),
+        })
+    }
+
+    pub fn register_file(
+        &self,
+        base_url: &str,
+        path: impl AsRef<Path>,
+        content_type: Option<String>,
+        ttl: Duration,
+    ) -> Result<RegisteredMedia, String> {
+        let grant = self.state.file_grants.register(path, content_type, ttl)?;
+        Ok(RegisteredMedia {
+            id: grant.id.clone(),
+            url: format!(
+                "{}/media/{}/{}",
+                base_url.trim_end_matches('/'),
+                grant.id,
+                urlencoding::encode(&grant.filename)
+            ),
+            encrypted_url: None,
+        })
+    }
+
+    pub fn revoke(&self, id: &str) -> bool {
+        self.state.session_manager.revoke(id) || self.state.file_grants.revoke(id)
+    }
+
+    pub fn clear(&self) {
+        self.state.session_manager.clear();
+        self.state.file_grants.clear();
+    }
+}
+
+fn registered_media_filename(url: &Url) -> String {
+    let lower = url.as_str().to_ascii_lowercase();
+    if lower.contains(".mpd") || lower.contains("manifest/dash") {
+        return "manifest.mpd".to_string();
+    }
+    if lower.contains(".m3u8") || lower.contains("manifest/hls") {
+        return "playlist.m3u8".to_string();
+    }
+    url.path_segments()
+        .and_then(|mut segments| segments.next_back())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "media".to_string())
+}
+
 pub fn create_router(config: Config) -> Result<(Router, String, u16), String> {
     let password = config.get_validated_password()?;
-    let encryption_handler = EncryptionHandler::new(password.as_bytes());
-
-    let state = AppState {
-        password: password.clone(),
-        session_manager: SessionManager::new(),
-        epg_cache: EpgCache::new(Duration::from_secs(14400)), // 4 hours
-        engine: Arc::new(ConnectionEngine::new(config.ffmpeg_path.clone())),
-        encryption_handler,
-    };
-
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any)
-        .expose_headers([
-            header::CONTENT_LENGTH,
-            header::CONTENT_RANGE,
-            header::ACCEPT_RANGES,
-        ]);
-
-    let app = Router::new()
-        .route("/", get(demo_html_handler))
-        .route("/demo.html", get(demo_html_handler))
-        .route("/health", get(health_handler))
-        .route("/ping", get(health_handler))
-        .route("/register", post(register_handler))
-        .route("/epg", get(epg_handler))
-        .route("/s/*path", get(stateful_proxy_handler))
-        .route("/proxy/*path", get(encrypted_proxy_handler))
-        .layer(cors)
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ))
-        .with_state(state);
-
-    Ok((app, config.address.clone(), config.port))
+    let service = ProxyService::new(password, config.ffmpeg_path.clone());
+    Ok((service.router(), config.address.clone(), config.port))
 }
 
 async fn demo_html_handler() -> axum::response::Html<&'static str> {
@@ -109,6 +225,8 @@ async fn auth_middleware(
         || path == "/health"
         || path == "/ping"
         || path.starts_with("/proxy")
+        || path.starts_with("/s/")
+        || path.starts_with("/media/")
     {
         return Ok(next.run(req).await);
     }
@@ -147,9 +265,13 @@ async fn register_handler(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("127.0.0.1:8888");
 
+    let filename = Url::parse(&payload.url)
+        .map(|url| registered_media_filename(&url))
+        .unwrap_or_else(|_| "media".to_string());
     let proxy_url = format!(
-        "http://{}/s/{}/manifest.m3u8?token={}",
-        host_str, session.id, state.password
+        "http://{host_str}/s/{}/{}",
+        session.id,
+        urlencoding::encode(&filename)
     );
 
     // Generate MediaFlow-compatible AES-256 encrypted token
@@ -169,9 +291,17 @@ async fn register_handler(
         .encrypt(&proxy_data)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
+    let route_kind = if filename.ends_with(".m3u8") {
+        "hls"
+    } else {
+        "stream"
+    };
     let encrypted_url = format!(
-        "http://{}/proxy/hls/manifest.m3u8?token={}",
-        host_str, encrypted_token
+        "http://{}/proxy/{}/{}?token={}",
+        host_str,
+        route_kind,
+        urlencoding::encode(&filename),
+        encrypted_token
     );
 
     info!(
@@ -264,7 +394,7 @@ async fn stateful_proxy_handler(
     }
 
     if target_url.is_empty() {
-        if path_segments.len() == 2 && path_segments[1] == "manifest.m3u8" {
+        if path_segments.len() == 2 {
             target_url = session.original_url.clone();
         } else {
             let rel_segments = &path_segments[1..];
@@ -274,11 +404,25 @@ async fn stateful_proxy_handler(
 
     let forward_headers =
         filter_upstream_headers(&session.headers, &incoming_headers, &target_url, session_id);
+    let public_base_url = request_public_base_url(&incoming_headers);
+    let wants_mpv_edl = req.uri().path().to_ascii_lowercase().ends_with(".edl");
     let is_hls = target_url.to_lowercase().contains(".m3u8")
         || req.uri().path().to_lowercase().contains(".m3u8");
+    let is_dash = is_dash_manifest(&target_url, req.uri().path());
 
-    if is_hls {
+    if wants_mpv_edl {
+        handle_stateful_dash_edl(
+            &state,
+            session_id,
+            &target_url,
+            &forward_headers,
+            &public_base_url,
+        )
+        .await
+    } else if is_hls {
         handle_stateful_hls_playlist(&state, session_id, &target_url, &forward_headers).await
+    } else if is_dash {
+        handle_stateful_dash_manifest(&state, session_id, &target_url, &forward_headers).await
     } else {
         handle_segment(&state, &target_url, &forward_headers).await
     }
@@ -329,9 +473,12 @@ async fn encrypted_proxy_handler(
 
     let is_hls = target_url.to_lowercase().contains(".m3u8")
         || req.uri().path().to_lowercase().contains(".m3u8");
+    let is_dash = is_dash_manifest(&target_url, req.uri().path());
 
     if is_hls {
         handle_encrypted_hls_playlist(&state, &target_url, &forward_headers, &proxy_data).await
+    } else if is_dash {
+        handle_encrypted_dash_manifest(&state, &target_url, &forward_headers, &proxy_data).await
     } else {
         handle_segment(&state, &target_url, &forward_headers).await
     }
@@ -356,7 +503,6 @@ async fn handle_stateful_hls_playlist(
                 }
             };
 
-            let password = state.password.clone();
             let rewritten = HlsPlaylistRewriter::rewrite(&content, &base_uri, |resolved_target| {
                 let resolved_uri = match Url::parse(resolved_target) {
                     Ok(u) => u,
@@ -369,11 +515,10 @@ async fn handle_stateful_hls_playlist(
                     .unwrap_or("item");
 
                 format!(
-                    "/s/{}/{}?uri={}&token={}",
+                    "/s/{}/{}?uri={}",
                     session_id,
                     filename,
-                    urlencoding::encode(resolved_target),
-                    password
+                    urlencoding::encode(resolved_target)
                 )
             });
 
@@ -391,6 +536,174 @@ async fn handle_stateful_hls_playlist(
             format!("Failed to fetch/rewrite HLS playlist: {}", e),
         )),
     }
+}
+
+async fn handle_stateful_dash_manifest(
+    state: &AppState,
+    session_id: &str,
+    target_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<Response, (StatusCode, String)> {
+    let bytes = state
+        .engine
+        .fetch_url_bytes(target_url, headers)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to fetch DASH manifest: {error}"),
+            )
+        })?;
+    let base_uri = Url::parse(target_url).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to parse DASH manifest URL: {error}"),
+        )
+    })?;
+    let content = String::from_utf8_lossy(&bytes);
+    let rewritten = DashManifestRewriter::rewrite(&content, &base_uri, |resolved_target| {
+        stateful_item_url(session_id, resolved_target)
+    });
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/dash+xml"),
+            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+        ],
+        rewritten,
+    )
+        .into_response())
+}
+
+async fn handle_stateful_dash_edl(
+    state: &AppState,
+    session_id: &str,
+    target_url: &str,
+    headers: &HashMap<String, String>,
+    public_base_url: &str,
+) -> Result<Response, (StatusCode, String)> {
+    let bytes = state
+        .engine
+        .fetch_url_bytes(target_url, headers)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to fetch DASH manifest for mpv: {error}"),
+            )
+        })?;
+    let base_uri = Url::parse(target_url).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to parse DASH manifest URL: {error}"),
+        )
+    })?;
+    let content = String::from_utf8_lossy(&bytes);
+    let edl = DashManifestRewriter::mpv_edl(&content, &base_uri, |resolved_target| {
+        format!(
+            "{}{}",
+            public_base_url,
+            stateful_item_url(session_id, resolved_target)
+        )
+    })
+    .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error))?;
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/x-mpv-edl"),
+            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+        ],
+        edl,
+    )
+        .into_response())
+}
+
+async fn local_file_handler(
+    State(state): State<AppState>,
+    AxumPath(path_str): AxumPath<String>,
+    method: Method,
+    headers: HeaderMap,
+) -> Response {
+    let grant_id = path_str.split('/').next().unwrap_or_default();
+    let Some(grant) = state.file_grants.get(grant_id) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let mut file = match tokio::fs::File::open(&grant.path).await {
+        Ok(file) => file,
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let total = match file.metadata().await {
+        Ok(metadata) => metadata.len(),
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let range = match headers
+        .get(header::RANGE)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(value) => match parse_byte_range(value, total) {
+            Some(range) => Some(range),
+            None => {
+                return Response::builder()
+                    .status(StatusCode::RANGE_NOT_SATISFIABLE)
+                    .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+                    .body(Body::empty())
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+            }
+        },
+        None => None,
+    };
+    let (status, start, end) = range
+        .map(|(start, end)| (StatusCode::PARTIAL_CONTENT, start, end))
+        .unwrap_or_else(|| (StatusCode::OK, 0, total.saturating_sub(1)));
+    let length = if total == 0 { 0 } else { end - start + 1 };
+    if start > 0 && file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+    let mut builder = Response::builder()
+        .status(status)
+        .header(header::CONTENT_TYPE, grant.content_type)
+        .header(header::CONTENT_LENGTH, length)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "private, no-store");
+    if status == StatusCode::PARTIAL_CONTENT {
+        builder = builder.header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{end}/{total}"),
+        );
+    }
+    let body = if method == Method::HEAD || length == 0 {
+        Body::empty()
+    } else {
+        Body::from_stream(ReaderStream::new(file.take(length)))
+    };
+    builder
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn parse_byte_range(value: &str, total: u64) -> Option<(u64, u64)> {
+    let raw = value.strip_prefix("bytes=")?;
+    if raw.contains(',') || total == 0 {
+        return None;
+    }
+    let (start, end) = raw.split_once('-')?;
+    if start.is_empty() {
+        let suffix = end.parse::<u64>().ok()?;
+        if suffix == 0 {
+            return None;
+        }
+        return Some((total.saturating_sub(suffix.min(total)), total - 1));
+    }
+    let start = start.parse::<u64>().ok()?;
+    if start >= total {
+        return None;
+    }
+    let end = if end.is_empty() {
+        total - 1
+    } else {
+        end.parse::<u64>().ok()?.min(total - 1)
+    };
+    (start <= end).then_some((start, end))
 }
 
 async fn handle_encrypted_hls_playlist(
@@ -450,6 +763,54 @@ async fn handle_encrypted_hls_playlist(
     }
 }
 
+async fn handle_encrypted_dash_manifest(
+    state: &AppState,
+    target_url: &str,
+    headers: &HashMap<String, String>,
+    proxy_data: &ProxyData,
+) -> Result<Response, (StatusCode, String)> {
+    let bytes = state
+        .engine
+        .fetch_url_bytes(target_url, headers)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to fetch DASH manifest: {error}"),
+            )
+        })?;
+    let base_uri = Url::parse(target_url).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to parse DASH manifest URL: {error}"),
+        )
+    })?;
+    let content = String::from_utf8_lossy(&bytes);
+    let rewritten = DashManifestRewriter::rewrite(&content, &base_uri, |resolved_target| {
+        let mut item_data = proxy_data.clone();
+        item_data.destination = resolved_target.to_string();
+        let token = state
+            .encryption_handler
+            .encrypt(&item_data)
+            .unwrap_or_default();
+        let filename = target_filename(resolved_target);
+        format!(
+            "/proxy/stream/{}?token={}",
+            urlencoding::encode(&filename),
+            token
+        )
+    });
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/dash+xml"),
+            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+        ],
+        rewritten,
+    )
+        .into_response())
+}
+
 async fn handle_segment(
     state: &AppState,
     target_url: &str,
@@ -457,39 +818,6 @@ async fn handle_segment(
 ) -> Result<Response, (StatusCode, String)> {
     match state.engine.connect_upstream(target_url, headers).await {
         Ok(upstream) => {
-            let content_type = upstream
-                .headers
-                .get(header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("")
-                .to_lowercase();
-
-            let is_dash = content_type.contains("dash+xml")
-                || target_url.to_lowercase().contains(".mpd")
-                || target_url.to_lowercase().contains("manifest/dash");
-
-            if is_dash {
-                let bytes = match axum::body::to_bytes(upstream.body, usize::MAX).await {
-                    Ok(b) => b,
-                    Err(e) => {
-                        return Err((
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            format!("Failed reading DASH bytes: {}", e),
-                        ))
-                    }
-                };
-                let raw_content = String::from_utf8_lossy(&bytes);
-                let rewritten = DashManifestRewriter::rewrite(&raw_content, Some(&state.password));
-                return Ok((
-                    [
-                        (header::CONTENT_TYPE, "application/dash+xml"),
-                        (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                    ],
-                    rewritten,
-                )
-                    .into_response());
-            }
-
             let mime = mime_for(target_url);
             let mut response_builder = Response::builder().status(upstream.status);
 
@@ -513,6 +841,51 @@ async fn handle_segment(
             format!("Failed to fetch segment: {}", e),
         )),
     }
+}
+
+fn is_dash_manifest(target_url: &str, request_path: &str) -> bool {
+    let target = target_url.to_ascii_lowercase();
+    let path = request_path.to_ascii_lowercase();
+    target.contains(".mpd")
+        || target.contains("manifest/dash")
+        || path.contains(".mpd")
+        || path.contains("manifest/dash")
+}
+
+fn request_public_base_url(headers: &HeaderMap) -> String {
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("127.0.0.1");
+    let candidate = format!("http://{host}");
+    Url::parse(&candidate)
+        .ok()
+        .filter(|url| url.host_str().is_some())
+        .map(|url| url.as_str().trim_end_matches('/').to_string())
+        .unwrap_or_else(|| "http://127.0.0.1".to_string())
+}
+
+fn stateful_item_url(session_id: &str, resolved_target: &str) -> String {
+    let filename = target_filename(resolved_target);
+    let encoded_target = urlencoding::encode(resolved_target).replace("%24", "$");
+    format!(
+        "/s/{}/{}?uri={}",
+        session_id,
+        urlencoding::encode(&filename),
+        encoded_target
+    )
+}
+
+fn target_filename(target: &str) -> String {
+    Url::parse(target)
+        .ok()
+        .and_then(|url| {
+            url.path_segments()
+                .and_then(|mut segments| segments.next_back())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "item".to_string())
 }
 
 fn resolve_target_url(
