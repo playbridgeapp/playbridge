@@ -88,6 +88,14 @@ jobs:
         working-directory: ./packages/playbridge_cast_core_dart
         run: dart analyze --fatal-infos
 
+      - name: Build native Rust FFI library
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: .
+        run: |
+          cargo build --package playbridge-cast-core-ffi --features playbridge-cast-core-ffi/sender-services
+          mkdir -p desktop/native/cast_core/linux
+          cp target/debug/libplaybridge_cast_core_ffi.so desktop/native/cast_core/linux/
+
       - name: Run tests
         if: steps.filter.outputs.relevant == 'true'
         run: flutter test
