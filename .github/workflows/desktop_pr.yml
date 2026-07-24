@@ -35,6 +35,11 @@ jobs:
           filters: |
             relevant:
               - 'desktop/**'
+              - 'packages/playbridge_cast_core_dart/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'cast/**'
+              - 'cli/**'
               - 'protocol/**'
               - '.gitmodules'
               - '.github/workflows/desktop_pr.yml'
@@ -50,18 +55,59 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Set up Rust
+        if: steps.filter.outputs.relevant == 'true'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+
       - name: Install dependencies
         if: steps.filter.outputs.relevant == 'true'
         run: flutter pub get
 
+      - name: Install Cast Core Dart dependencies
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: ./packages/playbridge_cast_core_dart
+        run: dart pub get
+
       - name: Verify formatting
         if: steps.filter.outputs.relevant == 'true'
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Verify Cast Core Dart formatting
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: ./packages/playbridge_cast_core_dart
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze
         if: steps.filter.outputs.relevant == 'true'
         run: flutter analyze
 
+      - name: Analyze Cast Core Dart package
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: ./packages/playbridge_cast_core_dart
+        run: dart analyze --fatal-infos
+
       - name: Run tests
         if: steps.filter.outputs.relevant == 'true'
         run: flutter test
+
+      - name: Test Cast Core Dart package
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: ./packages/playbridge_cast_core_dart
+        run: dart test
+
+      - name: Verify Rust formatting
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: .
+        run: cargo fmt --all -- --check
+
+      - name: Test Rust workspace
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: .
+        run: cargo test --workspace --all-targets
+
+      - name: Lint Rust workspace
+        if: steps.filter.outputs.relevant == 'true'
+        working-directory: .
+        run: cargo clippy --workspace --all-targets -- -D warnings
