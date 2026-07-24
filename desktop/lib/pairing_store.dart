@@ -268,6 +268,23 @@ class PairingStore {
     await _savePairedDevices(devices);
   }
 
+  Future<void> updateLastConnectedDigest(String digest) async {
+    final devices = pairedDevices.toList();
+    final idx = devices.indexWhere(
+      (device) =>
+          device.token == digest || _tokenDigest(device.token) == digest,
+    );
+    if (idx < 0) return;
+    final device = devices[idx];
+    devices[idx] = PairedDeviceRecord(
+      deviceUUID: device.deviceUUID,
+      deviceName: device.deviceName,
+      token: digest,
+      lastConnected: DateTime.now(),
+    );
+    await _savePairedDevices(devices);
+  }
+
   Future<void> forgetDevice(String deviceUUID) async {
     final devices =
         pairedDevices.where((d) => d.deviceUUID != deviceUUID).toList();

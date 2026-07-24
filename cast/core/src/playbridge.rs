@@ -74,6 +74,8 @@ pub enum ReceiverFrame {
     #[serde(rename = "status")]
     Status {
         #[serde(default)]
+        state: String,
+        #[serde(default)]
         position: u64,
         #[serde(default)]
         duration: u64,

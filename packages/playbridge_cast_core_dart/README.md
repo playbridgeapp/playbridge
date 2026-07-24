@@ -31,3 +31,22 @@ final browser = await services.startBrowser();
 `SenderServices` owns one embedded Rust stream proxy. The browser host is
 on-demand and pairing/status events are exposed through `services.events`.
 Dispose the service during application shutdown.
+
+Native receiver applications can use `ReceiverRuntime`. Rust owns the secure
+network and pairing boundary while the Dart application handles command events
+with its platform player:
+
+```dart
+final receiver = ReceiverRuntime.start(
+  ReceiverRuntimeConfig(
+    name: 'My Computer',
+    uuid: deviceId,
+    certificateDer: certificateDerBase64,
+    privateKeyDer: privateKeyDerBase64,
+    privateKeyKind: 'pkcs1',
+    authorizedTokens: storedTokenDigests,
+  ),
+);
+receiver.events.listen(handleReceiverEvent);
+final port = await receiver.started;
+```

@@ -1,34 +1,17 @@
-use std::{
-    collections::HashSet,
-    fs::{self, OpenOptions},
-    io::Write,
-    path::PathBuf,
-    process::Stdio,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, fs, io::Write, path::PathBuf, process::Stdio, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use futures_util::{SinkExt, StreamExt};
-use mdns_sd::{ServiceDaemon, ServiceInfo};
-use playbridge_cast_core::playbridge::{
-    CredentialBundle, ReceiverFrame, ReceiverPairingSession, SenderFrame,
+use playbridge_cast_receiver::{
+    PrivateKeyKind, ReceiverCommand, ReceiverConfig, ReceiverEvent, ReceiverHost, ReceiverIdentity,
 };
 use rcgen::{CertificateParams, KeyPair};
-use rustls::{
-    ServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 #[cfg(not(unix))]
 use tokio::process::ChildStdin;
 use tokio::{
     io::AsyncWriteExt,
-    net::{TcpListener, TcpStream},
     process::{Child, Command},
-    sync::Mutex,
 };
 #[cfg(unix)]
 use tokio::{
@@ -36,9 +19,6 @@ use tokio::{
     net::{UnixStream, unix::OwnedWriteHalf},
     time::sleep,
 };
-use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::{WebSocketStream, accept_async, tungstenite::Message};
-use x509_parser::parse_x509_certificate;
 
 const DEFAULT_PORT: u16 = 8765;
 
@@ -199,25 +179,26 @@ impl Mpv {
             .get("url")
             .and_then(Value::as_str)
             .ok_or("playlist item has no URL")?;
-        if let Some(headers) = item.get("headers").and_then(Value::as_object) {
-            let header_values = headers
-                .iter()
-                .filter_map(|(key, value)| value.as_str().map(|value| format!("{key}: {value}")))
-                .collect::<Vec<_>>();
-            if !header_values.is_empty() {
-                let header_fields = header_values.join(",");
-                let escaped = header_fields.replace('\\', "\\\\").replace('"', "\\\"");
-                self.command(
-                    vec![
-                        json!("set_property"),
-                        json!("http-header-fields"),
-                        json!(header_values),
-                    ],
-                    format!("set http-header-fields \"{escaped}\""),
-                )
-                .await?;
-            }
-        }
+        let header_values = item
+            .get("headers")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .filter_map(|(key, value)| value.as_str().map(|value| format!("{key}: {value}")))
+            .collect::<Vec<_>>();
+        let header_fields = header_values.join(",");
+        let escaped = header_fields.replace('\\', "\\\\").replace('"', "\\\"");
+        // This property is global in mpv. Always write it, including an empty
+        // value, so credentials from one stream cannot leak to the next host.
+        self.command(
+            vec![
+                json!("set_property"),
+                json!("http-header-fields"),
+                json!(header_values),
+            ],
+            format!("set http-header-fields \"{escaped}\""),
+        )
+        .await?;
         let escaped = url.replace('\\', "\\\\").replace('"', "\\\"");
         self.command(
             vec![json!("loadfile"), json!(url), json!("replace")],
@@ -387,7 +368,7 @@ fn seconds_to_millis(seconds: Option<f64>) -> u64 {
 
 pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
     let mut port = DEFAULT_PORT;
-    let mut name = host_name();
+    let mut requested_name = None;
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
@@ -401,10 +382,12 @@ pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
             }
             "--name" => {
                 index += 1;
-                name = arguments
-                    .get(index)
-                    .ok_or("--name requires a value")?
-                    .clone();
+                requested_name = Some(
+                    arguments
+                        .get(index)
+                        .ok_or("--name requires a value")?
+                        .clone(),
+                );
             }
             unknown => return Err(format!("unknown receiver option: {unknown}")),
         }
@@ -412,179 +395,117 @@ pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
     }
 
     ensure_mpv_available().await?;
-    let (state_path, mut state) = load_or_create_state(name)?;
-    let (tls, fingerprint) = tls_config(&state)?;
-    let listener = bind_next_port(port).await?;
-    let port = listener
-        .local_addr()
-        .map_err(|error| error.to_string())?
-        .port();
+    let (state_path, mut state) = load_or_create_state(requested_name)?;
     state.name = state.name.trim().to_owned();
     save_state(&state_path, &state)?;
-
-    let mdns = advertise(&state, port)?;
-    let state = Arc::new(Mutex::new(state));
-    let mpv = Arc::new(Mutex::new(Mpv::new()));
-    let acceptor = TlsAcceptor::from(Arc::new(tls));
+    let mut config = ReceiverConfig::new(
+        state.name.clone(),
+        state.uuid.clone(),
+        ReceiverIdentity {
+            certificate_der: BASE64
+                .decode(&state.certificate_der)
+                .map_err(|error| error.to_string())?,
+            private_key_der: BASE64
+                .decode(&state.private_key_der)
+                .map_err(|error| error.to_string())?,
+            private_key_kind: PrivateKeyKind::Pkcs8,
+        },
+    );
+    config.preferred_port = port;
+    config.fallback_attempts = 10;
+    config.authorized_tokens = state.tokens.iter().cloned().collect();
+    config.players = vec!["internal_mpv".into()];
+    config.advertise = true;
+    let host = ReceiverHost::start(config).await?;
+    let mut events = host.subscribe();
+    let mut playback = ReceiverPlayback::new();
+    let mut status_tick = tokio::time::interval(Duration::from_millis(500));
+    status_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     println!(
-        "PlayBridge receiver \"{}\" is ready on port {port}.",
-        state.lock().await.name
+        "PlayBridge receiver \"{}\" is ready on port {}.",
+        state.name,
+        host.port()
     );
     println!("Playback uses the installed mpv command. Press Ctrl+C to stop.");
 
     loop {
         tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _) = accepted.map_err(|error| error.to_string())?;
-                let acceptor = acceptor.clone();
-                let state = state.clone();
-                let mpv = mpv.clone();
-                let fingerprint = fingerprint.clone();
-                let state_path = state_path.clone();
-                tokio::spawn(async move {
-                    if let Err(error) = serve_connection(stream, acceptor, state, state_path, mpv, fingerprint).await {
-                        eprintln!("receiver connection ended: {error}");
+            event = events.recv() => {
+                match event {
+                    Ok(ReceiverEvent::PairingStarted { device_name, .. }) => {
+                        println!("Pairing request from {device_name}.");
                     }
-                });
+                    Ok(ReceiverEvent::PairingRequested { sas_code, .. }) => {
+                        println!("Pairing code: {sas_code}");
+                    }
+                    Ok(ReceiverEvent::Paired {
+                        device_name,
+                        token,
+                        ..
+                    }) => {
+                        state.tokens.insert(token);
+                        save_state(&state_path, &state)?;
+                        println!("Sender \"{device_name}\" paired.");
+                    }
+                    Ok(ReceiverEvent::Command { command, .. }) => {
+                        if let Err(error) = handle_command(&host, &mut playback, command).await {
+                            eprintln!("Playback command failed: {error}");
+                        }
+                    }
+                    Ok(ReceiverEvent::Error { message, .. }) => {
+                        eprintln!("receiver connection ended: {message}");
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = status_tick.tick() => {
+                broadcast_status(&host, &playback).await;
             }
             _ = tokio::signal::ctrl_c() => {
-                let _ = mdns.shutdown();
-                mpv.lock().await.stop_process().await;
+                playback.mpv.stop_process().await;
+                host.shutdown().await;
                 return Ok(());
             }
         }
     }
-}
-
-async fn serve_connection(
-    stream: TcpStream,
-    acceptor: TlsAcceptor,
-    state: Arc<Mutex<ReceiverState>>,
-    state_path: PathBuf,
-    mpv: Arc<Mutex<Mpv>>,
-    fingerprint: String,
-) -> Result<(), String> {
-    let tls = acceptor
-        .accept(stream)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mut socket = accept_async(tls).await.map_err(|error| error.to_string())?;
-    let mut authenticated = false;
-    let mut pairing: Option<ReceiverPairingSession> = None;
-    let mut status_tick = tokio::time::interval(Duration::from_millis(500));
-    status_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        let event = tokio::select! {
-            _ = status_tick.tick(), if authenticated => {
-                let player = mpv.lock().await;
-                send_status(&mut socket, &player).await?;
-                None
-            }
-            message = socket.next() => Some(message),
-        };
-        let Some(message) = event else {
-            continue;
-        };
-        let Some(message) = message else {
-            break;
-        };
-        let message = message.map_err(|error| error.to_string())?;
-        let Message::Text(text) = message else {
-            continue;
-        };
-        let frame: SenderFrame = serde_json::from_str(&text).map_err(|error| error.to_string())?;
-        match frame {
-            SenderFrame::Ping => send_json(&mut socket, &ReceiverFrame::Pong).await?,
-            SenderFrame::Auth { token } => {
-                authenticated = state.lock().await.tokens.contains(&token);
-                send_value(
-                    &mut socket,
-                    json!({
-                        "type": "auth_response",
-                        "success": authenticated,
-                        "certFingerprint": fingerprint,
-                        "players": ["internal_mpv"]
-                    }),
-                )
-                .await?;
-            }
-            SenderFrame::PairingCommit {
-                commit,
-                device_name,
-                ..
-            } if !authenticated => {
-                let (session, challenge) =
-                    ReceiverPairingSession::start(&commit).map_err(|error| error.to_string())?;
-                println!("Pairing request from {device_name}.");
-                pairing = Some(session);
-                send_json(&mut socket, &challenge).await?;
-            }
-            SenderFrame::PairingReveal {
-                sender_eph_pub,
-                nonce_s,
-            } if !authenticated => {
-                let session = pairing
-                    .as_mut()
-                    .ok_or("pairing reveal arrived without a commit")?;
-                let sas = session
-                    .accept_reveal(&sender_eph_pub, &nonce_s)
-                    .map_err(|error| error.to_string())?;
-                println!("Pairing code: {sas}");
-            }
-            SenderFrame::PairingConfirmation { mac } if !authenticated => {
-                let session = pairing
-                    .as_ref()
-                    .ok_or("pairing confirmation arrived without a reveal")?;
-                let token = random_token()?;
-                let credentials = CredentialBundle {
-                    token: token.clone(),
-                    cert_fingerprint: Some(fingerprint.clone()),
-                    players: vec!["internal_mpv".into()],
-                    browsers: vec![],
-                };
-                let approval = session
-                    .approve(&mac, &credentials)
-                    .map_err(|error| error.to_string())?;
-                {
-                    let mut stored = state.lock().await;
-                    stored.tokens.insert(token);
-                    save_state(&state_path, &stored)?;
-                }
-                authenticated = true;
-                send_json(&mut socket, &approval).await?;
-                println!("Sender paired.");
-            }
-            SenderFrame::Command { action, payload } if authenticated => {
-                println!("Received PlayBridge command: {action}");
-                if let Err(error) =
-                    handle_command(&mut socket, &mpv, &action, payload.unwrap_or(Value::Null)).await
-                {
-                    eprintln!("Playback command failed: {error}");
-                }
-            }
-            _ => {}
-        }
-    }
+    playback.mpv.stop_process().await;
+    host.shutdown().await;
     Ok(())
 }
 
-async fn handle_command<S>(
-    socket: &mut WebSocketStream<S>,
-    mpv: &Arc<Mutex<Mpv>>,
-    action: &str,
-    payload: Value,
-) -> Result<(), String>
-where
-    WebSocketStream<S>: SinkExt<Message> + Unpin,
-{
-    match action {
-        "context_query" => {
-            let player = mpv.lock().await;
-            send_value(socket, json!({"type":"context","active": if player.state == "idle" {"idle"} else {"player"}})).await?;
-            send_status(socket, &player).await?;
+struct ReceiverPlayback {
+    mpv: Mpv,
+    queue: Vec<Value>,
+    current_index: usize,
+}
+
+impl ReceiverPlayback {
+    fn new() -> Self {
+        Self {
+            mpv: Mpv::new(),
+            queue: Vec::new(),
+            current_index: 0,
         }
-        "playlist" => {
+    }
+}
+
+async fn handle_command(
+    host: &ReceiverHost,
+    playback: &mut ReceiverPlayback,
+    command: ReceiverCommand,
+) -> Result<(), String> {
+    match command {
+        ReceiverCommand::ContextQuery => {
+            host.broadcast(json!({
+                "type":"context",
+                "active": if playback.mpv.state == "idle" {"idle"} else {"player"}
+            }));
+            broadcast_status(host, playback).await;
+            broadcast_playlist(host, playback);
+        }
+        ReceiverCommand::Playlist(payload) => {
             let items = payload
                 .get("items")
                 .and_then(Value::as_array)
@@ -593,9 +514,12 @@ where
                 .get("startIndex")
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as usize;
-            let item = items
+            playback.queue = items.clone();
+            playback.current_index = index.min(playback.queue.len().saturating_sub(1));
+            let item = playback
+                .queue
                 .get(index)
-                .or_else(|| items.first())
+                .or_else(|| playback.queue.first())
                 .ok_or("playlist is empty")?;
             let title = item
                 .get("title")
@@ -605,18 +529,46 @@ where
                 "Received playlist ({} item(s)); playing \"{title}\".",
                 items.len()
             );
-            let mut player = mpv.lock().await;
-            player.load(item).await?;
+            playback.mpv.load(item).await?;
             println!("Sent playback request to mpv.");
-            send_status(socket, &player).await?;
+            broadcast_status(host, playback).await;
+            broadcast_playlist(host, playback);
         }
-        "control" => {
+        ReceiverCommand::QueueAdd(payload) => {
+            let item = payload
+                .get("item")
+                .cloned()
+                .ok_or("queue_add has no item")?;
+            let was_empty = playback.queue.is_empty();
+            playback.queue.push(item);
+            if was_empty {
+                playback.current_index = 0;
+                playback.mpv.load(&playback.queue[0]).await?;
+            }
+            broadcast_playlist(host, playback);
+        }
+        ReceiverCommand::PlaylistJump(payload) => {
+            let index = payload
+                .get("index")
+                .and_then(Value::as_u64)
+                .ok_or("playlist_jump has no index")? as usize;
+            let item = playback
+                .queue
+                .get(index)
+                .ok_or("playlist index is out of range")?;
+            playback.current_index = index;
+            playback.mpv.load(item).await?;
+            broadcast_playlist(host, playback);
+        }
+        ReceiverCommand::Control(payload) => {
             if let Some(command) = payload.get("command").and_then(Value::as_str) {
-                let mut player = mpv.lock().await;
-                player.control(command).await?;
-                send_status(socket, &player).await?;
+                playback.mpv.control(command).await?;
+                broadcast_status(host, playback).await;
                 if command == "stop" {
-                    send_value(socket, json!({"type":"context","active":"idle"})).await?;
+                    playback.queue.clear();
+                    playback.current_index = 0;
+                    host.broadcast(json!({"type":"context","active":"idle"}));
+                    broadcast_playlist(host, playback);
                 }
             }
         }
@@ -625,41 +577,35 @@ where
     Ok(())
 }
 
-async fn send_status<S>(socket: &mut WebSocketStream<S>, player: &Mpv) -> Result<(), String>
-where
-    WebSocketStream<S>: SinkExt<Message> + Unpin,
-{
-    let snapshot = player.snapshot().await;
-    send_value(
-        socket,
-        json!({
-            "type": "status",
-            "state": snapshot.state,
-            "position": snapshot.position_ms,
-            "duration": snapshot.duration_ms,
-            "title": snapshot.title
-        }),
-    )
-    .await
+async fn broadcast_status(host: &ReceiverHost, playback: &ReceiverPlayback) {
+    let snapshot = playback.mpv.snapshot().await;
+    host.broadcast(json!({
+        "type": "status",
+        "state": snapshot.state,
+        "position": snapshot.position_ms,
+        "duration": snapshot.duration_ms,
+        "title": snapshot.title
+    }));
 }
 
-async fn send_json<S, T>(socket: &mut WebSocketStream<S>, value: &T) -> Result<(), String>
-where
-    WebSocketStream<S>: SinkExt<Message> + Unpin,
-    T: Serialize,
-{
-    let text = serde_json::to_string(value).map_err(|error| error.to_string())?;
-    socket
-        .send(Message::Text(text.into()))
-        .await
-        .map_err(|_| "could not send receiver WebSocket frame".to_owned())
-}
-
-async fn send_value<S>(socket: &mut WebSocketStream<S>, value: Value) -> Result<(), String>
-where
-    WebSocketStream<S>: SinkExt<Message> + Unpin,
-{
-    send_json(socket, &value).await
+fn broadcast_playlist(host: &ReceiverHost, playback: &ReceiverPlayback) {
+    let items = playback
+        .queue
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            json!({
+                "index": index,
+                "title": item.get("title").and_then(Value::as_str).unwrap_or("untitled media")
+            })
+        })
+        .collect::<Vec<_>>();
+    host.broadcast(json!({
+        "type":"playlist_status",
+        "items":items,
+        "currentIndex":playback.current_index,
+        "totalCount":playback.queue.len()
+    }));
 }
 
 async fn ensure_mpv_available() -> Result<(), String> {
@@ -678,45 +624,6 @@ async fn ensure_mpv_available() -> Result<(), String> {
         })
 }
 
-async fn bind_next_port(start: u16) -> Result<TcpListener, String> {
-    for offset in 0..10 {
-        let port = start
-            .checked_add(offset)
-            .ok_or("receiver port range overflow")?;
-        match TcpListener::bind(("0.0.0.0", port)).await {
-            Ok(listener) => return Ok(listener),
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
-            Err(error) => return Err(error.to_string()),
-        }
-    }
-    Err(format!(
-        "ports {start} through {} are unavailable",
-        start.saturating_add(9)
-    ))
-}
-
-fn advertise(state: &ReceiverState, port: u16) -> Result<ServiceDaemon, String> {
-    let daemon = ServiceDaemon::new().map_err(|error| error.to_string())?;
-    let properties = [
-        ("uuid", state.uuid.as_str()),
-        ("wss_port", &port.to_string()),
-    ];
-    let service = ServiceInfo::new(
-        "_playbridge._tcp.local.",
-        &state.name,
-        &format!("{}.local.", state.uuid),
-        "",
-        port,
-        &properties[..],
-    )
-    .map_err(|error| error.to_string())?
-    .enable_addr_auto();
-    daemon
-        .register(service)
-        .map_err(|error| error.to_string())?;
-    Ok(daemon)
-}
-
 fn state_path() -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -724,16 +631,19 @@ fn state_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".config/playbridge/receiver.json"))
 }
 
-fn load_or_create_state(name: String) -> Result<(PathBuf, ReceiverState), String> {
+fn load_or_create_state(
+    requested_name: Option<String>,
+) -> Result<(PathBuf, ReceiverState), String> {
     let path = state_path()?;
     if let Ok(contents) = fs::read_to_string(&path) {
         let mut state: ReceiverState =
             serde_json::from_str(&contents).map_err(|error| error.to_string())?;
-        if !name.trim().is_empty() {
+        if let Some(name) = requested_name.filter(|name| !name.trim().is_empty()) {
             state.name = name;
         }
         return Ok((path, state));
     }
+    let name = requested_name.unwrap_or_else(host_name);
     let key = KeyPair::generate().map_err(|error| error.to_string())?;
     let params = CertificateParams::new(vec![name.clone(), "localhost".into()])
         .map_err(|error| error.to_string())?;
@@ -760,49 +670,21 @@ fn save_state(path: &PathBuf, state: &ReceiverState) -> Result<(), String> {
         fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
             .map_err(|error| error.to_string())?;
     }
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path).map_err(|error| error.to_string())?;
+    let mut file = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
     file.write_all(&serde_json::to_vec_pretty(state).map_err(|error| error.to_string())?)
         .map_err(|error| error.to_string())?;
-    file.sync_all().map_err(|error| error.to_string())?;
+    file.as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))
             .map_err(|error| error.to_string())?;
     }
+    file.persist(path)
+        .map_err(|error| error.error.to_string())?;
     Ok(())
-}
-
-fn tls_config(state: &ReceiverState) -> Result<(ServerConfig, String), String> {
-    let certificate = BASE64
-        .decode(&state.certificate_der)
-        .map_err(|error| error.to_string())?;
-    let private_key = BASE64
-        .decode(&state.private_key_der)
-        .map_err(|error| error.to_string())?;
-    let (_, parsed) = parse_x509_certificate(&certificate).map_err(|error| error.to_string())?;
-    let fingerprint = format!(
-        "sha256/{}",
-        BASE64.encode(Sha256::digest(parsed.public_key().raw))
-    );
-    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let config = ServerConfig::builder_with_provider(provider)
-        .with_safe_default_protocol_versions()
-        .map_err(|error| error.to_string())?
-        .with_no_client_auth()
-        .with_single_cert(
-            vec![CertificateDer::from(certificate)],
-            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(private_key)),
-        )
-        .map_err(|error| error.to_string())?;
-    Ok((config, fingerprint))
 }
 
 fn random_token() -> Result<String, String> {

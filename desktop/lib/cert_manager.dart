@@ -11,13 +11,22 @@ import 'package:path_provider/path_provider.dart';
 /// stays stable (renewing the cert without changing the key keeps existing
 /// pairings valid — see ../../protocol/README.md "TLS pinning: cert_fingerprint").
 class CertManager {
-  CertManager._({required this.securityContext, required this.fingerprint});
+  CertManager._({
+    required this.securityContext,
+    required this.fingerprint,
+    required this.certificateDer,
+    required this.privateKeyDer,
+    required this.privateKeyKind,
+  });
 
   /// Pass to `shelf_io.serve(..., securityContext: ...)`.
   final SecurityContext securityContext;
 
   /// OkHttp-style SPKI pin `sha256/<base64>`, delivered to senders at pairing.
   final String fingerprint;
+  final String certificateDer;
+  final String privateKeyDer;
+  final String privateKeyKind;
 
   static const _certFile = 'tls_cert.pem';
   static const _keyFile = 'tls_key.pem';
@@ -70,8 +79,27 @@ class CertManager {
       ..useCertificateChainBytes(utf8.encode(certPem))
       ..usePrivateKeyBytes(utf8.encode(keyPem));
 
-    return CertManager._(securityContext: ctx, fingerprint: fingerprint);
+    final certificateDer = _pemBody(certPem, 'CERTIFICATE');
+    final privateKeyKind =
+        keyPem.contains('BEGIN RSA PRIVATE KEY') ? 'pkcs1' : 'pkcs8';
+    final privateKeyDer = _pemBody(
+      keyPem,
+      privateKeyKind == 'pkcs1' ? 'RSA PRIVATE KEY' : 'PRIVATE KEY',
+    );
+
+    return CertManager._(
+      securityContext: ctx,
+      fingerprint: fingerprint,
+      certificateDer: certificateDer,
+      privateKeyDer: privateKeyDer,
+      privateKeyKind: privateKeyKind,
+    );
   }
+
+  static String _pemBody(String pem, String label) => pem
+      .replaceAll('-----BEGIN $label-----', '')
+      .replaceAll('-----END $label-----', '')
+      .replaceAll(RegExp(r'\s'), '');
 
   /// `sha256/<base64( SHA-256( DER SubjectPublicKeyInfo ) )>`.
   static String _spkiPin(RSAPublicKey pub) {

@@ -20,11 +20,19 @@ Inspect all affected consumers, including:
 - `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.kt`
 - `shared/src/androidMain/kotlin/com/playbridge/shared/protocol/IncomingMessage.kt`
 - Android sender and TV server call sites
+- `cast/core/src/playbridge.rs` and the network-facing behavior in `cast/receiver/`
 - `desktop/lib/protocol.dart` and the generated Dart dependency
 - Apple phone and TV message handling
 - `extension/src/background.ts` and related bridge code
 
 Load the corresponding PlayBridge specialist skills for consumer implementation.
+
+The `pb_receiver_runtime_*` C API and its Dart event JSON are an internal host
+ABI, not the PlayBridge WSS contract. A change limited to that ABI does not
+require an AsyncAPI change, but it must update the C header, Rust FFI worker,
+Dart wrapper, receiver ABI version when incompatible, and affected consumers
+together. Any change to frames sent over WSS still requires the normal protocol
+contract review.
 
 ## Preserve security invariants
 

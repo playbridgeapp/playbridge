@@ -1875,6 +1875,7 @@ dependencies = [
  "mdns-sd",
  "playbridge-browser-receiver",
  "playbridge-cast-core",
+ "playbridge-cast-receiver",
  "rcgen",
  "reqwest 0.13.4",
  "rustls",
@@ -1929,9 +1930,11 @@ dependencies = [
 name = "playbridge-cast-core-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "jni",
  "playbridge-browser-receiver",
  "playbridge-cast-core",
+ "playbridge-cast-receiver",
  "serde",
  "serde_json",
  "stream-proxy-rust",
@@ -1939,6 +1942,27 @@ dependencies = [
  "tokio",
  "uniffi",
  "url",
+]
+
+[[package]]
+name = "playbridge-cast-receiver"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures-util",
+ "getrandom 0.4.3",
+ "mdns-sd",
+ "playbridge-cast-core",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite 0.28.0",
+ "x509-parser",
 ]
 
 [[package]]

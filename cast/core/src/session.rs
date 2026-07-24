@@ -329,10 +329,13 @@ impl ReceiverSession {
                         .map_err(|_| CastError::Protocol("PlayBridge status timed out".into()))??
                     {
                         Some(ReceiverFrame::Status {
-                            position, duration, ..
+                            state,
+                            position,
+                            duration,
+                            ..
                         }) => {
                             return Ok(PlaybackStatus {
-                                state: PlaybackState::Unknown,
+                                state: state_from_text(&state),
                                 position_seconds: position as f64 / 1000.0,
                                 duration_seconds: duration as f64 / 1000.0,
                             });

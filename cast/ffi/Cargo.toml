@@ -18,8 +18,10 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 playbridge-cast-core = { path = "../core" }
+playbridge-cast-receiver = { path = "../receiver" }
 playbridge-browser-receiver = { path = "../../browser-receiver-rust", optional = true }
 stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true }
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }

@@ -11,6 +11,7 @@ extern "C" {
 typedef struct DiscoveryScanner DiscoveryScanner;
 typedef struct CastSession CastSession;
 typedef struct SenderServices SenderServices;
+typedef struct ReceiverRuntime ReceiverRuntime;
 
 /* Increment when the stable C ABI or its JSON event contract changes. */
 uint32_t pb_cast_core_abi_version(void);
@@ -46,6 +47,16 @@ char *pb_sender_services_next_json(const SenderServices *services,
                                    uint64_t wait_ms);
 void pb_sender_services_cancel(const SenderServices *services);
 void pb_sender_services_free(const SenderServices *services);
+
+/* Secure PlayBridge receiver runtime. Commands and events are UTF-8 JSON. */
+uint32_t pb_receiver_runtime_abi_version(void);
+ReceiverRuntime *pb_receiver_runtime_start(const char *config_json);
+bool pb_receiver_runtime_submit_json(const ReceiverRuntime *runtime,
+                                     const char *command_json);
+char *pb_receiver_runtime_next_json(const ReceiverRuntime *runtime,
+                                    uint64_t wait_ms);
+void pb_receiver_runtime_cancel(const ReceiverRuntime *runtime);
+void pb_receiver_runtime_free(const ReceiverRuntime *runtime);
 
 void pb_string_free(char *value);
 

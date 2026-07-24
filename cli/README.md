@@ -24,7 +24,9 @@ Windows binaries and manual archives for every supported platform are available
 from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 
 Receiver mode requires [`mpv`](https://mpv.io/) to be installed and available on
-`PATH`.
+`PATH`. Its TLS/WSS, pairing, authentication, limits, queue commands, and status
+transport use the same `playbridge-cast-receiver` crate as Flutter Desktop;
+only the external-mpv playback adapter remains CLI-specific.
 
 ## Examples
 

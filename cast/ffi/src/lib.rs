@@ -23,6 +23,7 @@ use serde_json::Value;
 
 uniffi::setup_scaffolding!();
 
+mod receiver_runtime;
 #[cfg(feature = "sender-services")]
 mod sender_services;
 

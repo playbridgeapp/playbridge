@@ -30,7 +30,7 @@ import 'player_engine.dart';
 import 'playback_surface.dart';
 import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
-import 'server.dart';
+import 'receiver_server.dart';
 import 'settings_screen.dart';
 import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
@@ -1230,6 +1230,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           tlsError: _server.tlsError,
           pendingRequest: _server.pendingPairingRequest,
           onDeny: _server.denyPairing,
+          onPairedDevicesChanged: _server.refreshAuthorizedTokens,
         ),
       _Dest.sendToTv => SendToTvScreen(controller: _sender),
       _Dest.nowCasting => NowCastingScreen(controller: _sender),

@@ -6,6 +6,7 @@ independent of Android, Apple, Flutter, and desktop UI lifecycles.
 ## Crates
 
 - `core`: discovery plus a unified PlayBridge, DLNA, Roku, and Google Cast session API.
+- `receiver`: secure PlayBridge WSS receiver runtime with typed command events.
 - `ffi`: UniFFI bindings for Kotlin and Swift plus a stable C ABI for Dart consumers.
 - `../cli`: cross-platform CLI built directly on `core`.
 - `../stream-proxy-rust`: embeddable and standalone media proxy.
@@ -54,6 +55,12 @@ Desktop builds enable the optional `sender-services` feature. Its separate
 `pb_sender_services_*` ABI owns the Rust proxy for the app lifetime and starts
 the web-browser receiver only on request. Keeping this lifecycle ABI separate
 allows phone builds to ship the protocol core without pulling in either server.
+
+The `pb_receiver_runtime_*` ABI exposes the shared native PlayBridge receiver.
+It accepts a caller-owned TLS identity and authorized token digests, then emits
+pairing, connection, and authenticated command events. Playback snapshots and
+other receiver responses are submitted by the host application, keeping Flutter
+and mobile player lifecycles outside Rust.
 
 A session target selects exactly one protocol and retains all known addresses:
 

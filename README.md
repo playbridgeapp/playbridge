@@ -204,7 +204,7 @@ PlayBridge is a monorepo; each component has its own documentation:
 2. **[TV Apps](tv/)** (`tv/`) — Receivers for Android TV (player + browser APKs) and Apple TV. [Changelog](tv/android/CHANGELOG.md) · [tvOS changelog](tv/apple/CHANGELOG.md)
 3. **[Desktop App](desktop/)** (`desktop/`) — A Flutter desktop receiver that plays casts via libmpv. [Changelog](desktop/CHANGELOG.md)
 4. **[Browser Extension](extension/)** (`extension/`) — A Firefox and Chromium extension that casts media from desktop browser tabs.
-5. **[Rust Core & FFI](cast/core/)** (`cast/core/`, `cast/ffi/`) — Portable Rust receiver discovery/casting engine and UniFFI/C/JNI bindings.
+5. **[Rust Cast](cast/)** (`cast/core/`, `cast/receiver/`, `cast/ffi/`) — Portable discovery/casting core, secure reusable receiver runtime, and UniFFI/C/JNI/Dart bindings.
 6. **[Rust Stream Proxy](stream-proxy-rust/)** (`stream-proxy-rust/`) — High-performance Rust streaming proxy and MediaFlow AES-256 encryption.
 7. **[Rust CLI](cli/)** (`cli/`) — Command-line client binary (`playbridge`) for Rust Core.
 8. **[Shared Module](shared/)** (`shared/`) — Kotlin Multiplatform logic, player engines, and protocol bindings.

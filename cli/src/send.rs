@@ -76,7 +76,7 @@ impl Drop for PickerTerminalGuard {
 }
 
 pub async fn run_browser_send(media_target: String) -> Result<(), String> {
-    println!("Media Target: {media_target}");
+    println!("Media Target: {}", display_media_target(&media_target));
     validate_media_target(&media_target)?;
     let (media_url, control, proxy) = cast_to_browser(&media_target, None, None).await?;
     wait_for_server_exit(&media_url, Some(control), Some(proxy)).await;
@@ -195,6 +195,20 @@ fn validate_media_target(media_target: &str) -> Result<(), String> {
     Err(format!("media file does not exist: {}", path.display()))
 }
 
+fn display_media_target(target: &str) -> String {
+    let Ok(url) = reqwest::Url::parse(target) else {
+        return target.to_owned();
+    };
+    let Some(host) = url.host_str() else {
+        return "<redacted URL>".into();
+    };
+    let port = url
+        .port()
+        .map_or_else(String::new, |port| format!(":{port}"));
+    let query = url.query().map_or("", |_| "?<redacted>");
+    format!("{}://{host}{port}{}{query}", url.scheme(), url.path())
+}
+
 fn primary_lan_host(port: u16) -> Result<String, String> {
     let url = local_urls(port)
         .into_iter()
@@ -239,7 +253,7 @@ fn media_content_type(target: &str) -> Option<String> {
 
 #[allow(clippy::collapsible_if)]
 pub async fn run_send(media_target: String) -> Result<(), String> {
-    println!("Media Target: {media_target}");
+    println!("Media Target: {}", display_media_target(&media_target));
     validate_media_target(&media_target)?;
 
     // Resolve local file vs remote URL
@@ -254,7 +268,10 @@ pub async fn run_send(media_target: String) -> Result<(), String> {
         let host = primary_lan_host(server.local_addr().port())?;
         let media =
             server.register_file(&host, resolved_path, None, Duration::from_secs(6 * 60 * 60))?;
-        println!("Local media proxy running at {}\n", media.url);
+        println!(
+            "Local media proxy running at {}\n",
+            display_media_target(&media.url)
+        );
         (media.url, Some(server))
     } else {
         (media_target.clone(), None)
@@ -1635,5 +1652,16 @@ mod tests {
         let error = validate_media_target("/definitely/missing/video.mpd").unwrap_err();
         assert!(error.contains("media file does not exist"));
         assert!(error.contains("/definitely/missing/video.mpd"));
+    }
+
+    #[test]
+    fn display_media_target_redacts_url_credentials() {
+        assert_eq!(
+            display_media_target(
+                "https://user:password@example.test/video.m3u8?token=secret#fragment"
+            ),
+            "https://example.test/video.m3u8?<redacted>"
+        );
+        assert_eq!(display_media_target("/tmp/video.mp4"), "/tmp/video.mp4");
     }
 }

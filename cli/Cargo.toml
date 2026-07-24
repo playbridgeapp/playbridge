@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 playbridge-cast-core = { path = "../cast/core" }
+playbridge-cast-receiver = { path = "../cast/receiver" }
 playbridge-browser-receiver = { path = "../browser-receiver-rust" }
 stream-proxy-rust = { path = "../stream-proxy-rust" }
 serde = { version = "1", features = ["derive"] }
@@ -30,6 +31,4 @@ tokio-tungstenite = "0.28"
 x509-parser = "0.18"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 semver = "1"
-
-[dev-dependencies]
 tempfile = "3"
