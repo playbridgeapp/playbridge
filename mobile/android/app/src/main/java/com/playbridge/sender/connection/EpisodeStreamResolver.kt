@@ -8,7 +8,7 @@ import com.playbridge.sender.player.AutoPickPrefs
 /**
  * Shared "pick the best stream for episode N of this plan" logic, used by both queue
  * coordinators: [TvQueueCoordinator] (native receiver — TV-side `queue_add`) and
- * [DlnaQueueCoordinator] (phone-driven advance on DLNA renderers).
+ * [ExternalQueueCoordinator] (phone-driven advance on third-party receivers).
  *
  * Prefers a stream in the plan's Stremio `bingeGroup` (consistent quality/source across
  * episodes), then falls back to the user's auto-pick preferences, then to anything.
