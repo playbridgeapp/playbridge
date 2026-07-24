@@ -154,8 +154,8 @@ For a known receiver, the sender establishes WSS while requiring the stored SPKI
 {"type":"auth","token":"<stored bearer token>"}
 ```
 
-The receiver replies with `auth_response`. On success it may re-assert the token, pin, and current
-capability arrays. On failure the sender forgets or marks the credentials stale, closes the
+The receiver replies with `auth_response`. On success it will assert the pin and current
+capability arrays. It must never contain the `token`. On failure the sender forgets or marks the credentials stale, closes the
 connection, and requires explicit re-pairing. A sender must not fall back from a pin mismatch to
 un-pinned trust.
 
@@ -247,9 +247,8 @@ or replacement by a new connection.
 - Protobuf does not model `tracks`, `player_settings`, browser administration, capability arrays,
   protected credential bundles, or the enriched `season` / `episode` / `imdbId` / `bingeGroup`
   fields in `playlist_status`.
-- Android receiver `auth_response` commonly omits `token` because the sender already has it;
-  Apple TV and Desktop may re-assert it. Senders must retain the existing token when a successful
-  response omits that field.
+- Legacy receivers may have included the `token` in `auth_response`. Current receivers must never
+  return the token, and senders must ignore it if present, retaining the token they already hold.
 - Apple TV still accepts the legacy `command/play` action for compatibility. Canonical senders
   emit a one-item `playlist` instead.
 - Only Android TV currently emits `player_settings` and implements receiver-browser/user-script

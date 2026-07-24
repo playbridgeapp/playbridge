@@ -252,7 +252,6 @@ String pairingDeniedJson() => jsonEncode({'type': 'pairing_denied'});
 
 String authResponseJson({
   required bool success,
-  String? token,
   String? certFingerprint,
   List<String> players = const [],
   List<String> browsers = const [],
@@ -260,7 +259,6 @@ String authResponseJson({
     jsonEncode({
       'type': 'auth_response',
       'success': success,
-      if (token != null) 'token': token,
       if (certFingerprint != null) 'certFingerprint': certFingerprint,
       if (players.isNotEmpty) 'players': players,
       if (browsers.isNotEmpty) 'browsers': browsers,

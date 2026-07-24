@@ -409,14 +409,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         if success {
             emitCapabilities(json)
             setState(.connected(serverName: serverName, secure: isSecure))
-            let token = (json["token"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            let certFp = (json["certFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-            if let token {
-                let pin = certFp ?? capturedServerPin ?? target?.pin
-                target?.token = token
-                target?.pin = pin
-                onCredentials?(IssuedCredentials(token: token, certFingerprint: pin))
-            }
+            // SEC-005: legacy echoed tokens in auth_response are ignored.
             startPing()
         } else {
             // Stale token — wipe and re-pair. Flag before close so teardown doesn't overwrite it.

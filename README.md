@@ -196,6 +196,47 @@ Browser detection depends on what each browser exposes. Protected streams may re
 
 Media and codec support ultimately depends on the selected playback engine, operating system, and device hardware. DLNA behavior varies the most between TV manufacturers and models.
 
+## Installation
+
+- **Android TV / Fire TV (receiver)**
+  - Open the **Downloader** app on your TV and enter code `9557748` to install the TV Player directly, or
+  - download the latest `tv-player` APK from [Releases](https://github.com/playbridgeapp/playbridge/releases) and sideload it.
+  - *Note:* on first launch the TV app asks for "Display over other apps" — required for the receiver to come to the foreground when a cast arrives.
+  - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing.
+- **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
+- **Desktop (receiver)**: download the build for your OS from [Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
+- **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
+- **Android Phone (sender)**:
+  - <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
+  - or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) and install it.
+- **Browser Extension (sender)**:
+  - <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="40"></a>
+  - <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="40"></a>
+- **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
+
+### Store Listings
+
+The PlayBridge senders and extensions are available on official store registries:
+
+* **Android Phone (Sender)**:
+  * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
+  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+* **Browser Extension (Sender — Firefox & Chrome)**:
+  * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
+  * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
+* **Android TV (Player) — closed testing**
+  * **Group invite**: [pbtvclosedtesters Google Group](https://groups.google.com/g/pbtvclosedtesters)
+  * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.player)
+  * **Download app**: [Google Play Store](https://play.google.com/store/apps/details?id=com.playbridge.player)
+
+## How to connect & cast
+
+1. Connect your phone and receiver to the **same Wi-Fi network**, and open the PlayBridge app on both.
+2. On the phone, tap the **device chip** (top of the Library and browser cast screens) — it lists discovered receivers. Tap yours to connect.
+   - *Not discovered?* Tap **"All devices & manual connect"** and enter the receiver's IP address (shown on its screen).
+3. On first connect, the receiver displays a **6-digit pairing code**. Enter it on the phone to verify and secure the connection — devices you've already paired reconnect automatically.
+4. Browse any video site in the phone browser, play a video, and tap cast when PlayBridge detects the stream — or send a movie/episode directly from the Library.
+
 ## Components
 
 PlayBridge is a monorepo; each component has its own documentation:

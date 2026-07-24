@@ -457,7 +457,6 @@ class ReceiverServer extends ChangeNotifier {
         if (token != null && store.isTokenAuthorized(token)) {
           channel.sink.add(authResponseJson(
             success: true,
-            token: token,
             certFingerprint: _certFingerprint,
             players: _capabilityPlayers,
           ));
