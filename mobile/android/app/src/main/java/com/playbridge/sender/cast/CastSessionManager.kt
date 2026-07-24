@@ -5,12 +5,19 @@ import android.util.Log
 import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.sender.cast.dlna.RenderingControlClient
+import com.playbridge.sender.cast.googlecast.GoogleCastTarget
+import com.playbridge.sender.cast.roku.RokuCastTarget
 import com.playbridge.sender.connection.ConnectionCoordinator
+import com.playbridge.sender.connection.ReceiverDiscoveryRepository
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.model.CastProtocol
+import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -32,10 +39,9 @@ import kotlinx.coroutines.launch
  * playback through, regardless of transport.
  *
  * Responsibilities:
- *  - Holds the **active target**: the selected DLNA renderer ([DlnaCastTarget]) or, when
- *    none is selected, the connected native receiver ([NativeCastTarget]). One at a time.
- *  - Owns the DLNA target lifecycle (moved out of ConnectionViewModel so a cast survives
- *    Activity/ViewModel death).
+ *  - Holds exactly one **active target**: a selected DLNA, Roku, or Google Cast receiver,
+ *    or, when none is selected, the connected native receiver.
+ *  - Owns external-target lifecycles so a cast survives Activity/ViewModel death.
  *  - Starts/stops [CastSessionService] (foreground service) while a session is live, so
  *    the WebSocket session, [com.playbridge.sender.connection.TvQueueCoordinator] episode
  *    top-ups, and the DLNA local proxy all survive screen-off and app backgrounding.
@@ -43,8 +49,8 @@ import kotlinx.coroutines.launch
  *    soft-close the native socket and drop the Connected FGS to save battery unless the
  *    user opts into [SettingsRepository.keepTvConnectionInBackground].
  *
- * A session is considered active while a DLNA renderer is selected, or while the native
- * receiver is in the "player" context with a live (or in-flight) connection.
+ * A session keeps the foreground service alive while external media is loaded, or while a native
+ * receiver link/reconnect is live. Merely selecting an idle third-party receiver stays lightweight.
  */
 class CastSessionManager(
     private val context: Context,
@@ -52,35 +58,34 @@ class CastSessionManager(
     private val connectionCoordinator: ConnectionCoordinator,
     private val scope: CoroutineScope,
     private val connectionStore: com.playbridge.sender.connection.ConnectionStore,
-    private val nsdHelper: com.playbridge.sender.connection.NsdHelper,
+    private val discoveryRepository: ReceiverDiscoveryRepository,
     private val settingsRepository: SettingsRepository,
 ) {
     private val TAG = "CastSessionManager"
 
     // ------------------------------------------------------------------
-    // Routing intent (authoritative) — see CONNECTION_ROUTING_PLAN.md
+    // Routing intent (authoritative)
     //
     // The single source of truth for *where playback should go*, set ONLY by explicit
     // user action in the device picker. It is deliberately decoupled from the live
     // connection state: connecting to a TV must never change the route, and choosing
     // "This Device" must never be implemented as a disconnect. Screens read [route]
-    // instead of inferring a destination from connectionState / the old `watch_on_tv`
-    // SharedPreference.
+    // instead of inferring a destination from connection state.
     // ------------------------------------------------------------------
     sealed interface Route {
         /** Play on the phone (in-app player). */
         data object ThisDevice : Route
         /** Cast to the saved native (WebSocket) TV receiver. */
         data object NativeTv : Route
-        /** Cast to a third-party DLNA renderer. */
-        data class Dlna(val deviceId: String, val name: String) : Route
+        /** Cast to one explicitly selected third-party protocol endpoint. */
+        data class External(val endpointKey: EndpointKey, val name: String) : Route
     }
 
     private val routePrefs = context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
     private val ROUTE_KEY = "cast_route" // persisted base route: "this" | "native"
 
-    // DLNA routes are live (driven by activeDlnaTarget), so only the base (this/native)
-    // is persisted; on restart a DLNA selection collapses back to its base route.
+    // External routes are live and deliberately not restored without reconnecting. Only the
+    // base (this/native) route is persisted; restart collapses to that safe base route.
     private val _route = MutableStateFlow<Route>(
         when (routePrefs.getString(ROUTE_KEY, "this")) {
             "native" -> Route.NativeTv
@@ -94,21 +99,17 @@ class CastSessionManager(
     // reconnect isn't killed mid-attempt. Declared before hasActiveSession (eager combine).
     private val _reconnecting = MutableStateFlow(false)
 
-    /** True when the active routing intent targets a TV/renderer (native or DLNA). */
+    /** True when the active routing intent targets any TV/renderer. */
     val routeTargetsTv: StateFlow<Boolean> =
         _route.map { it !is Route.ThisDevice }.stateIn(scope, SharingStarted.Eagerly, false)
 
     private fun persistBaseRoute(value: String) {
-        // Keep the legacy `watch_on_tv` mirror in lockstep so every screen that still reads
-        // it (CastSheet, PhoneFiles, …) agrees with the authoritative route.
-        routePrefs.edit()
-            .putString(ROUTE_KEY, value)
-            .putBoolean("watch_on_tv", value == "native")
-            .apply()
+        routePrefs.edit().putString(ROUTE_KEY, value).apply()
     }
 
-    /** User picked "This Device": route phone-local. Does NOT tear down any connection. */
+    /** Route phone-local. Keeps an idle native link, but stops any external receiver session. */
     fun selectThisDevice() {
+        stopAndClearExternalTarget()
         _route.value = Route.ThisDevice
         persistBaseRoute("this")
         // Leaving the TV route: stop trying to keep the native link alive.
@@ -117,7 +118,7 @@ class CastSessionManager(
 
     /**
      * Stand the reconnect supervisor down. Runs inside the manager's single-threaded
-     * scope: callers are on arbitrary threads (UI picks, DLNA selection), while the
+     * scope: callers are on arbitrary threads (UI picks, external selection), while the
      * supervisor's counters/job are otherwise only touched by scope coroutines.
      */
     private fun stopReconnectSupervisor() {
@@ -132,55 +133,181 @@ class CastSessionManager(
 
     /** User picked the native TV receiver. Connecting is a separate concern (caller/Stage B). */
     fun selectNativeRoute() {
+        stopAndClearExternalTarget()
         _route.value = Route.NativeTv
         persistBaseRoute("native")
     }
 
-    // --- DLNA target (third-party renderer; no WS session) ---
-    private val _activeDlnaTarget = MutableStateFlow<TvDevice?>(null)
-    val activeDlnaTarget: StateFlow<TvDevice?> = _activeDlnaTarget.asStateFlow()
+    // --- Third-party target (exactly one of DLNA/Roku/Google Cast) ---
+    private val _externalTarget = MutableStateFlow<CastTarget?>(null)
+    private val externalTargetSlot = CastTargetSlot()
+    private val _activeExternalDevice = MutableStateFlow<TvDevice?>(null)
+    val activeExternalDevice: StateFlow<TvDevice?> = _activeExternalDevice.asStateFlow()
 
-    private val _dlnaStatus = MutableStateFlow<PlaybackStatus?>(null)
-    val dlnaStatus: StateFlow<PlaybackStatus?> = _dlnaStatus.asStateFlow()
+    private val _externalStatus = MutableStateFlow<PlaybackStatus?>(null)
+    val externalStatus: StateFlow<PlaybackStatus?> = _externalStatus.asStateFlow()
 
-    private val _dlnaMediaTitle = MutableStateFlow<String?>(null)
-    val dlnaMediaTitle: StateFlow<String?> = _dlnaMediaTitle.asStateFlow()
+    private val _externalMediaTitle = MutableStateFlow<String?>(null)
+    val externalMediaTitle: StateFlow<String?> = _externalMediaTitle.asStateFlow()
+    /** True after a successful hand-off begins, including while paused. */
+    private val _externalMediaLoaded = MutableStateFlow(false)
 
-    /** Library identity of what's loaded on the DLNA target (null = untracked content).
-     *  Consumed by PlaybackProgressTracker so DLNA plays update the watchlist too. */
-    private val _dlnaNowPlayingMeta = MutableStateFlow<playbridge.VisualMetadata?>(null)
-    val dlnaNowPlayingMeta: StateFlow<playbridge.VisualMetadata?> = _dlnaNowPlayingMeta.asStateFlow()
+    /** Library identity of what's loaded on an external target (null = untracked content). */
+    private val _externalNowPlayingMeta = MutableStateFlow<playbridge.VisualMetadata?>(null)
+    val externalNowPlayingMeta: StateFlow<playbridge.VisualMetadata?> =
+        _externalNowPlayingMeta.asStateFlow()
 
-    private val _dlnaCast = MutableStateFlow<DlnaCastTarget?>(null)
-    private var dlnaStatusJob: Job? = null
+    private var externalStatusJob: Job? = null
+    private var externalLoadJob: Job? = null
 
     /**
-     * Fires whenever the user interrupts DLNA playback — an explicit stop, or a new
-     * user-initiated cast replacing what's playing. The DLNA episode queue
-     * ([com.playbridge.sender.connection.DlnaQueueCoordinator]) listens and abandons
+     * Fires whenever the user interrupts external playback — an explicit stop, or a new
+     * user-initiated cast replacing what's playing. The phone-driven episode queue
+     * ([com.playbridge.sender.connection.ExternalQueueCoordinator]) listens and abandons
      * its plan so it never auto-advances over content the user chose.
      */
-    private val _dlnaInterrupts = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
-    val dlnaInterrupts: SharedFlow<Unit> = _dlnaInterrupts.asSharedFlow()
+    private val _externalInterrupts = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
+    val externalInterrupts: SharedFlow<Unit> = _externalInterrupts.asSharedFlow()
 
     // --- Native target (exists while the WS session is authenticated) ---
     private val _nativeTarget = MutableStateFlow<NativeCastTarget?>(null)
-
     /**
-     * The transport behind "Cast": the selected DLNA renderer if any, else the connected
-     * native receiver, else null. UI gates features on [CastTarget.capabilities].
+     * The transport behind "Cast": the selected DLNA, Roku, or Google Cast renderer if any,
+     * else the connected native receiver, else null. UI gates features on [CastTarget.capabilities].
      */
     val activeTarget: StateFlow<CastTarget?> =
-        combine(_dlnaCast, _nativeTarget) { dlna, native -> dlna ?: native }
+        combine(_externalTarget, _nativeTarget, _route) { external, native, route ->
+            when (route) {
+                is Route.External -> external
+                Route.NativeTv -> native
+                Route.ThisDevice -> null
+            }
+        }
             .stateIn(scope, SharingStarted.Eagerly, null)
 
-    val isDlnaActive: Boolean get() = _dlnaCast.value != null
+    private val nativeDevice: StateFlow<TvDevice?> = connectionStore.tvDevice
+        .stateIn(scope, SharingStarted.Eagerly, null)
+
+    fun selectRokuTarget(device: TvDevice) {
+        selectExternalTarget(device, RokuCastTarget(device, scope, context))
+    }
+
+    fun rokuKeypress(key: String) {
+        val rokuKey = when (key) {
+            "dpad_up" -> "Up"
+            "dpad_down" -> "Down"
+            "dpad_left" -> "Left"
+            "dpad_right" -> "Right"
+            "dpad_center", "key_enter" -> "Select"
+            "back" -> "Back"
+            "home" -> "Home"
+            "volume_up" -> "VolumeUp"
+            "volume_down" -> "VolumeDown"
+            else -> return
+        }
+        (_externalTarget.value as? RokuCastTarget)?.sendKeypress(rokuKey)
+    }
+
+    fun selectGoogleCastTarget(device: TvDevice) {
+        selectExternalTarget(device, GoogleCastTarget(device, scope, context))
+    }
+
+    private val externalSessionState: StateFlow<CastSessionState> = combine(
+        _activeExternalDevice,
+        _externalTarget,
+        _externalStatus,
+        _externalMediaTitle,
+    ) { device, target, status, title ->
+        if (device == null || target == null) {
+            CastSessionState()
+        } else {
+            val phase = when (status?.state) {
+                PlaybackState.BUFFERING -> SessionPhase.CONNECTING
+                PlaybackState.PLAYING, PlaybackState.PAUSED -> SessionPhase.PLAYING
+                PlaybackState.ERROR -> SessionPhase.FAILED
+                PlaybackState.IDLE, PlaybackState.STOPPED, null ->
+                    if (title == null) SessionPhase.SELECTED else SessionPhase.CONNECTED
+            }
+            CastSessionState(
+                phase = phase,
+                endpointKey = device.endpointKey,
+                device = device,
+                targetKind = target.kind,
+                capabilities = target.capabilities,
+                playback = status,
+                mediaTitle = title,
+                error = if (phase == SessionPhase.FAILED) "Receiver operation failed" else null,
+            )
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, CastSessionState())
+
+    private val nativePlaybackState = combine(
+        connectionCoordinator.tvActiveContext,
+        connectionCoordinator.tvPlayback,
+    ) { context, playback -> context to playback }
+
+    val sessionState: StateFlow<CastSessionState> = combine(
+        externalSessionState,
+        webSocketClient.connectionState,
+        nativePlaybackState,
+        _route,
+        nativeDevice,
+    ) { external, nativeState, (nativeContext, nativePlayback), route, device ->
+        if (route is Route.External) return@combine external
+        if (route is Route.ThisDevice) return@combine CastSessionState()
+        when (nativeState) {
+            is WebSocketClient.ConnectionState.Connected -> CastSessionState(
+                phase = if (nativeContext == "player") {
+                    SessionPhase.PLAYING
+                } else {
+                    SessionPhase.CONNECTED
+                },
+                endpointKey = device?.endpointKey,
+                device = device,
+                targetKind = TargetKind.NATIVE,
+                capabilities = _nativeTarget.value?.capabilities.orEmpty(),
+                playback = nativePlayback?.let { playback ->
+                    PlaybackStatus(
+                        state = if (playback.state.equals("playing", ignoreCase = true)) {
+                            PlaybackState.PLAYING
+                        } else {
+                            PlaybackState.PAUSED
+                        },
+                        positionMs = playback.positionMs,
+                        durationMs = playback.durationMs,
+                    )
+                },
+                mediaTitle = nativePlayback?.title,
+            )
+            is WebSocketClient.ConnectionState.Connecting,
+            is WebSocketClient.ConnectionState.Retrying,
+            is WebSocketClient.ConnectionState.WaitingForApproval,
+            -> CastSessionState(
+                phase = SessionPhase.CONNECTING,
+                endpointKey = device?.endpointKey,
+                device = device,
+                targetKind = TargetKind.NATIVE,
+            )
+            is WebSocketClient.ConnectionState.Error,
+            is WebSocketClient.ConnectionState.AuthFailed,
+            is WebSocketClient.ConnectionState.PairingDenied,
+            is WebSocketClient.ConnectionState.PinMismatch,
+            -> CastSessionState(
+                phase = SessionPhase.FAILED,
+                endpointKey = device?.endpointKey,
+                device = device,
+                targetKind = TargetKind.NATIVE,
+                error = "Could not connect to PlayBridge receiver",
+            )
+            else -> CastSessionState()
+        }
+    }.stateIn(scope, SharingStarted.Eagerly, CastSessionState())
 
     /**
      * True while a cast session should keep the process alive (drives the FGS).
      *
-     * - DLNA target selected
-     * - Live native WebSocket (connected/connecting), any non-DLNA route — includes
+     * - External target selected
+     * - Live native WebSocket (connected/connecting), any non-external route — includes
      *   auto-connect while the persisted route is still "This Device", so a cold start
      *   still surfaces the Connected notification
      * - Reconnecting after an unexpected drop (NativeTv route)
@@ -189,21 +316,21 @@ class CastSessionManager(
      *   from the background after a stop)
      */
     val hasActiveSession: StateFlow<Boolean> = combine(
-        _activeDlnaTarget,
+        _externalMediaLoaded,
         webSocketClient.connectionState,
         connectionCoordinator.tvActiveContext,
         _route,
         _reconnecting,
-    ) { dlna, state, ctx, route, reconnecting ->
+    ) { externalMediaLoaded, state, ctx, route, reconnecting ->
         val connectedOrConnecting = state is WebSocketClient.ConnectionState.Connected ||
             state is WebSocketClient.ConnectionState.Connecting
         // Any live native socket — casting or idle-linked. Route.ThisDevice only means
         // "prefer local play", not "hide the link"; Disconnect closes the socket.
-        val nativeLive = connectedOrConnecting && route !is Route.Dlna
+        val nativeLive = connectedOrConnecting && route !is Route.External
         val nativeReconnecting = route is Route.NativeTv && reconnecting
         // Keep FGS across a drop while we still think content is on the TV.
-        val nativeStickyPlaying = ctx == "player" && route !is Route.Dlna
-        dlna != null || nativeLive || nativeReconnecting || nativeStickyPlaying
+        val nativeStickyPlaying = ctx == "player" && route !is Route.External
+        externalMediaLoaded || nativeLive || nativeReconnecting || nativeStickyPlaying
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
@@ -232,35 +359,34 @@ class CastSessionManager(
      * "player" context.
      */
     val isActivelyPlaying: StateFlow<Boolean> = combine(
-        _activeDlnaTarget,
-        _dlnaMediaTitle,
+        _externalMediaLoaded,
         connectionCoordinator.tvActiveContext,
-    ) { dlna, dlnaTitle, ctx ->
-        (dlna != null && dlnaTitle != null) || ctx == "player"
+    ) { externalMediaLoaded, ctx ->
+        externalMediaLoaded || ctx == "player"
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /** What the session notification shows. */
     data class SessionInfo(val deviceName: String, val title: String?)
 
     val sessionInfo: StateFlow<SessionInfo> = combine(
-        _activeDlnaTarget,
+        _activeExternalDevice,
         webSocketClient.connectionState,
         connectionCoordinator.tvPlayback,
-        _dlnaMediaTitle,
+        _externalMediaTitle,
         connectionCoordinator.tvActiveContext,
-    ) { dlna, state, playback, dlnaTitle, ctx ->
+    ) { external, state, playback, externalTitle, ctx ->
         if (state is WebSocketClient.ConnectionState.Connected) {
             lastNativeDeviceName = state.serverName
         }
-        val device = dlna?.name
+        val device = external?.name
             ?: (state as? WebSocketClient.ConnectionState.Connected)?.serverName
             ?: lastNativeDeviceName
             ?: "TV"
         // Prefer the live title; while reconnecting with sticky player context and a
         // cleared snapshot, still surface "Playing" so the notif doesn't flip to the
         // idle "Ready to cast" copy mid-drop.
-        val title = if (dlna != null) {
-            dlnaTitle
+        val title = if (external != null) {
+            externalTitle
         } else {
             playback?.title ?: if (ctx == "player") "Playing" else null
         }
@@ -277,7 +403,7 @@ class CastSessionManager(
         // saved TV may have moved (router restart → new DHCP lease), in which case the
         // backoff attempts would hammer a dead IP forever. Scan while retrying; when the
         // saved UUID re-announces, heal the stored record and reconnect immediately instead
-        // of waiting out the backoff. NsdHelper is owner-refcounted, so this never fights
+        // of waiting out the backoff. The repository is owner-refcounted, so this never fights
         // the UI's foreground scan window.
         scope.launch {
             _reconnecting.collectLatest { active ->
@@ -285,11 +411,17 @@ class CastSessionManager(
                 val saved = runCatching { connectionStore.tvDevice.first() }.getOrNull()
                     ?: return@collectLatest
                 if (saved.uuid.isEmpty()) return@collectLatest
-                nsdHelper.startDiscovery(com.playbridge.sender.connection.NsdHelper.OWNER_RECONNECT)
+                discoveryRepository.start(
+                    owner = ReceiverDiscoveryRepository.OWNER_RECONNECT,
+                    protocols = setOf(CastProtocol.PLAYBRIDGE),
+                    timeoutMs = 15_000L,
+                )
                 try {
                     var current: TvDevice = saved
-                    nsdHelper.discoveredDevices.collect { devices ->
-                        val found = devices.find { it.uuid == current.uuid } ?: return@collect
+                    discoveryRepository.devices.collect { devices ->
+                        val found = devices.find {
+                            it.resolvedProtocol == CastProtocol.PLAYBRIDGE && it.uuid == current.uuid
+                        } ?: return@collect
                         val healed = current.copy(
                             ip = found.ip,
                             port = found.port,
@@ -312,7 +444,7 @@ class CastSessionManager(
                         }
                     }
                 } finally {
-                    nsdHelper.stopDiscovery(com.playbridge.sender.connection.NsdHelper.OWNER_RECONNECT)
+                    discoveryRepository.stop(ReceiverDiscoveryRepository.OWNER_RECONNECT)
                 }
             }
         }
@@ -385,7 +517,7 @@ class CastSessionManager(
         scope.launch {
             connectionCoordinator.tvActiveContext.collect { ctx ->
                 if (ctx == "player" &&
-                    _route.value !is Route.Dlna &&
+                    _route.value !is Route.External &&
                     _route.value !is Route.NativeTv &&
                     webSocketClient.connectionState.value is WebSocketClient.ConnectionState.Connected
                 ) {
@@ -427,7 +559,7 @@ class CastSessionManager(
                         // route-capture collector ran). Sticky FGS depends on NativeTv, so
                         // promote the route here the same way live playback does.
                         val playingOnNative = connectionCoordinator.tvActiveContext.value == "player" &&
-                            _route.value !is Route.Dlna
+                            _route.value !is Route.External
                         if (playingOnNative && _route.value !is Route.NativeTv) {
                             _route.value = Route.NativeTv
                             persistBaseRoute("native")
@@ -613,9 +745,13 @@ class CastSessionManager(
                 Log.d(TAG, "Background idle stand-down skipped (actively casting)")
                 return@launch
             }
-            // DLNA target selected with no media still holds the FGS; leave it — stand-down
-            // is for the native WebSocket keep-alive path.
-            if (_activeDlnaTarget.value != null) return@launch
+            // Release an idle third-party session in the background. Saved endpoint data remains,
+            // and the next explicit pick reconnects it without keeping heartbeats/FGS alive.
+            if (_activeExternalDevice.value != null) {
+                Log.i(TAG, "Idle background stand-down: releasing external target")
+                clearExternalTarget()
+                return@launch
+            }
             val state = webSocketClient.connectionState.value
             val linked = state is WebSocketClient.ConnectionState.Connected ||
                 state is WebSocketClient.ConnectionState.Connecting
@@ -673,88 +809,160 @@ class CastSessionManager(
     }
 
     // ------------------------------------------------------------------
-    // DLNA target lifecycle (moved from ConnectionViewModel)
+    // Third-party target lifecycle
     // ------------------------------------------------------------------
 
-    /** Select a DLNA renderer as the active cast target (drops any native session). */
-    fun selectDlnaTarget(device: TvDevice) {
-        val controlUrl = device.controlUrl ?: return
-        webSocketClient.disconnect() // a single target is active at a time
-        dlnaStatusJob?.cancel()
-        _dlnaCast.value?.release()
-        val target = DlnaCastTarget(
-            id = device.uuid,
-            name = device.name,
-            avTransport = AvTransportClient(controlUrl, DlnaProxyHolder.httpClient),
-            proxy = DlnaProxyHolder.proxy(context),
-        )
-        _dlnaCast.value = target
-        _activeDlnaTarget.value = device
-        // Selecting a renderer is an explicit routing choice; it also supersedes any native
-        // link, so stop the native reconnect supervisor.
-        _route.value = Route.Dlna(device.uuid, device.name)
-        // DLNA is a cast target → mirror "watch on TV" for legacy readers.
-        routePrefs.edit().putBoolean("watch_on_tv", true).apply()
+    private fun selectExternalTarget(device: TvDevice, target: CastTarget) {
+        if (_externalTarget.value != null) _externalInterrupts.tryEmit(Unit)
+        detachExternalTarget(stopFirst = true)
+        externalTargetSlot.replace(target)
+        _externalTarget.value = externalTargetSlot.target
+        _activeExternalDevice.value = device
+        _externalStatus.value = PlaybackStatus(PlaybackState.IDLE)
+        _externalMediaTitle.value = null
+        _externalMediaLoaded.value = false
+        _externalNowPlayingMeta.value = null
+        webSocketClient.disconnect()
         stopReconnectSupervisor()
-        dlnaStatusJob = scope.launch { target.status().collect { _dlnaStatus.value = it } }
-        Log.d(TAG, "Active DLNA target: ${device.name} ($controlUrl)")
+        // External routes cannot be restored without reconnecting, so their restart/clear
+        // fallback is local playback rather than a stale native-TV route.
+        persistBaseRoute("this")
+        _route.value = Route.External(device.endpointKey, device.name)
+        externalStatusJob = scope.launch {
+            target.status().collect { status ->
+                if (_externalTarget.value !== target) return@collect
+                _externalStatus.value = status
+                if (_externalMediaLoaded.value && status.state in TERMINAL_EXTERNAL_STATES) {
+                    _externalMediaLoaded.value = false
+                    _externalMediaTitle.value = null
+                    _externalNowPlayingMeta.value = null
+                }
+            }
+        }
+        Log.d(TAG, "Selected ${target.kind} target: ${device.name}")
     }
 
-    fun clearDlnaTarget() {
-        dlnaStatusJob?.cancel()
-        dlnaStatusJob = null
-        _dlnaCast.value?.release()
-        _dlnaCast.value = null
-        _dlnaStatus.value = null
-        _dlnaMediaTitle.value = null
-        _dlnaNowPlayingMeta.value = null
-        _activeDlnaTarget.value = null
-        // Collapse the live DLNA route back to its persisted base (this/native).
-        if (_route.value is Route.Dlna) {
+    fun clearExternalTarget() = detachExternalTarget(stopFirst = false)
+
+    /** Stop media before releasing transports that disconnect on release (notably CastV2). */
+    fun stopAndClearExternalTarget() = detachExternalTarget(stopFirst = true)
+
+    private fun detachExternalTarget(stopFirst: Boolean) {
+        externalLoadJob?.cancel()
+        externalLoadJob = null
+        externalStatusJob?.cancel()
+        externalStatusJob = null
+        val detached = externalTargetSlot.take()
+        _externalTarget.value = null
+        _activeExternalDevice.value = null
+        _externalStatus.value = null
+        _externalMediaTitle.value = null
+        _externalMediaLoaded.value = false
+        _externalNowPlayingMeta.value = null
+        if (_route.value is Route.External) {
             _route.value = when (routePrefs.getString(ROUTE_KEY, "this")) {
                 "native" -> Route.NativeTv
                 else -> Route.ThisDevice
             }
         }
+        if (detached != null) {
+            if (stopFirst) {
+                scope.launch {
+                    try {
+                        detached.stop()
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Exception) {
+                        Log.w(TAG, "${detached.kind} stop before release failed: ${error.message}")
+                    } finally {
+                        detached.release()
+                    }
+                }
+            } else {
+                detached.release()
+            }
+        }
     }
 
-    /** Cast a media item to the active DLNA target (user-initiated). No-op if none selected. */
-    fun playOnDlna(media: MediaItem) {
-        _dlnaInterrupts.tryEmit(Unit) // a user cast supersedes any episode-queue plan
-        loadOnDlna(media)
+    /** Select a DLNA renderer as the active cast target (drops any native session). */
+    fun selectDlnaTarget(device: TvDevice): Boolean {
+        val controlUrl = device.controlUrl ?: return false
+        val target = DlnaCastTarget(
+            id = device.uuid,
+            name = device.name,
+            avTransport = AvTransportClient(controlUrl, DlnaProxyHolder.httpClient),
+            renderingControl = device.renderingControlUrl?.let {
+                RenderingControlClient(it, DlnaProxyHolder.httpClient)
+            },
+            proxy = DlnaProxyHolder.proxy(context),
+        )
+        selectExternalTarget(device, target)
+        return true
+    }
+
+    fun load(media: MediaItem, userInitiated: Boolean = true): Boolean {
+        val target = _externalTarget.value ?: return false
+        if (userInitiated) _externalInterrupts.tryEmit(Unit)
+        _externalMediaTitle.value = media.title ?: "Casting media"
+        _externalMediaLoaded.value = true
+        _externalNowPlayingMeta.value = media.visualMetadata
+        _externalStatus.value = PlaybackStatus(PlaybackState.BUFFERING)
+        externalLoadJob?.cancel()
+        externalLoadJob = scope.launch {
+            runCatching { target.load(media) }
+                .onFailure {
+                    if (it is CancellationException) return@onFailure
+                    if (_externalTarget.value === target) {
+                        _externalStatus.value = PlaybackStatus(PlaybackState.ERROR)
+                        _externalMediaLoaded.value = false
+                        Log.w(TAG, "${target.kind} load failed: ${it.message}")
+                    }
+                }
+        }
+        return true
+    }
+
+    fun play() = controlExternal("play") { it.play() }
+    fun pause() = controlExternal("pause") { it.pause() }
+    fun seekTo(positionMs: Long) = controlExternal("seek") { it.seekTo(positionMs) }
+    fun setVolume(percent: Int) = controlExternal("volume") { it.setVolume(percent) }
+
+    fun adjustVolume(up: Boolean) {
+        when (val target = _externalTarget.value) {
+            is GoogleCastTarget -> scope.launch {
+                runCatching { target.adjustVolume(if (up) 0.05f else -0.05f) }
+            }
+            is RokuCastTarget -> target.sendKeypress(if (up) "VolumeUp" else "VolumeDown")
+            is DlnaCastTarget -> scope.launch {
+                runCatching { target.adjustVolume(if (up) 5 else -5) }
+                    .onFailure { Log.w(TAG, "DLNA volume adjustment failed: ${it.message}") }
+            }
+            else -> Unit
+        }
+    }
+
+    fun stop() {
+        _externalInterrupts.tryEmit(Unit)
+        externalLoadJob?.cancel()
+        externalLoadJob = null
+        controlExternal("stop") { it.stop() }
+        _externalMediaTitle.value = null
+        _externalMediaLoaded.value = false
+        _externalNowPlayingMeta.value = null
+        _externalStatus.value = PlaybackStatus(PlaybackState.STOPPED)
+    }
+
+    private fun controlExternal(operation: String, block: suspend (CastTarget) -> Unit) {
+        val target = _externalTarget.value ?: return
+        scope.launch {
+            runCatching { block(target) }
+                .onFailure { Log.w(TAG, "${target.kind} $operation failed: ${it.message}") }
+        }
     }
 
     /** Episode-queue advance — same load, but does NOT interrupt the queue plan. */
-    internal fun playOnDlnaFromQueue(media: MediaItem) = loadOnDlna(media)
-
-    private fun loadOnDlna(media: MediaItem) {
-        val target = _dlnaCast.value ?: return
-        _dlnaMediaTitle.value = media.title
-        _dlnaNowPlayingMeta.value = media.visualMetadata
-        scope.launch { runCatching { target.load(media) }.onFailure { Log.w(TAG, "DLNA load failed: ${it.message}") } }
-    }
-
-    fun dlnaPlay() {
-        _dlnaCast.value?.let { t -> scope.launch { runCatching { t.play() } } }
-    }
-
-    fun dlnaPause() {
-        _dlnaCast.value?.let { t -> scope.launch { runCatching { t.pause() } } }
-    }
-
-    fun dlnaStop() {
-        _dlnaInterrupts.tryEmit(Unit) // explicit stop ends any episode-queue plan
-        _dlnaCast.value?.let { t -> scope.launch { runCatching { t.stop() } } }
-        // Treat an explicit Stop as ending the now-playing session: clear the title/meta and
-        // status so the cast bar drops to idle and the Remote no longer shows stale media.
-        // The renderer stays selected (activeDlnaTarget), so the user can cast to it again.
-        _dlnaMediaTitle.value = null
-        _dlnaNowPlayingMeta.value = null
-        _dlnaStatus.value = null
-    }
-
-    fun dlnaSeek(positionMs: Long) {
-        _dlnaCast.value?.let { t -> scope.launch { runCatching { t.seekTo(positionMs) } } }
+    internal fun playOnExternalFromQueue(media: MediaItem) {
+        load(media, userInitiated = false)
     }
 
     // ------------------------------------------------------------------
@@ -874,14 +1082,13 @@ class CastSessionManager(
      * **Disconnect** without waiting on the socket) and sends `stop` to the TV. The
      * socket and Native TV route stay so a new cast is one tap away.
      *
-     * DLNA: stops the renderer and clears the target — there is no separate "linked idle"
-     * DLNA session worth keeping.
+     * External receiver: stops playback and clears the target — there is no separate
+     * restorable linked-idle session.
      */
     fun endCastSession() {
-        val dlna = _dlnaCast.value
-        if (dlna != null) {
-            scope.launch { runCatching { dlna.stop() } }
-            clearDlnaTarget()
+        val external = _externalTarget.value
+        if (external != null) {
+            stopAndClearExternalTarget()
             return
         }
         // Idle first so isActivelyPlaying flips before the WS round-trip; the notif
@@ -901,16 +1108,16 @@ class CastSessionManager(
     /**
      * Drop the link entirely (notification **Disconnect** while connected/idle).
      *
-     * User-initiated: tears down the WebSocket (or DLNA target), routes to This Device,
+     * User-initiated: tears down the WebSocket (or external target), routes to This Device,
      * and stops the reconnect supervisor so the casting FGS does not come back.
      */
     fun disconnectSession() {
         stopEpisodeQueues()
         connectionCoordinator.markIdle()
-        val dlna = _dlnaCast.value
-        if (dlna != null) {
-            scope.launch { runCatching { dlna.stop() } }
-            clearDlnaTarget()
+        val external = _externalTarget.value
+        if (external != null) {
+            stopAndClearExternalTarget()
+            return
         }
         // Flag as user disconnect before close so the reconnect supervisor does not re-arm.
         webSocketClient.disconnect()
@@ -929,10 +1136,9 @@ class CastSessionManager(
         backgroundStandDownJob = null
         stopEpisodeQueues()
         connectionCoordinator.markIdle()
-        val dlna = _dlnaCast.value
-        if (dlna != null) {
-            scope.launch { runCatching { dlna.stop() } }
-            clearDlnaTarget()
+        val external = _externalTarget.value
+        if (external != null) {
+            clearExternalTarget()
         }
         webSocketClient.disconnect()
         selectThisDevice()
@@ -942,7 +1148,7 @@ class CastSessionManager(
         cancelReconnectGaveUpNotification()
     }
 
-    /** Best-effort stop of phone-side series queues (native + DLNA). Lazy Koin to avoid ctor cycles. */
+    /** Best-effort stop of phone-side series queues (native + external). Lazy Koin to avoid cycles. */
     private fun stopEpisodeQueues() {
         runCatching {
             org.koin.core.context.GlobalContext.get()
@@ -951,15 +1157,21 @@ class CastSessionManager(
         }.onFailure { Log.w(TAG, "TvQueueCoordinator.stop failed: ${it.message}") }
         runCatching {
             org.koin.core.context.GlobalContext.get()
-                .get<com.playbridge.sender.connection.DlnaQueueCoordinator>()
+                .get<com.playbridge.sender.connection.ExternalQueueCoordinator>()
                 .stop()
-        }.onFailure { Log.w(TAG, "DlnaQueueCoordinator.stop failed: ${it.message}") }
+        }.onFailure { Log.w(TAG, "ExternalQueueCoordinator.stop failed: ${it.message}") }
     }
 
     /** @deprecated Prefer [endCastSession] / [disconnectSession]; kept for any external call sites. */
     fun endSession() = endCastSession()
 
     companion object {
+        private val TERMINAL_EXTERNAL_STATES = setOf(
+            PlaybackState.IDLE,
+            PlaybackState.STOPPED,
+            PlaybackState.ERROR,
+        )
+
         /** How long a session may be "inactive" before the FGS is torn down. */
         private const val STOP_GRACE_MS = 3_000L
 

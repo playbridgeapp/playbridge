@@ -1,11 +1,27 @@
 package com.playbridge.sender.connection
 
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.model.CastProtocol
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ConnectionMergeTest {
+    @Test
+    fun `same advertised id from different protocols remains separate`() {
+        val native = dev("192.168.1.10", 8765, uuid = "shared-id")
+            .copy(protocol = CastProtocol.PLAYBRIDGE)
+        val dlna = dev("192.168.1.10", 1400, uuid = "shared-id").copy(
+            protocol = CastProtocol.DLNA,
+            isDlna = true,
+        )
+
+        val history = ConnectionMerge.upsertHistory(listOf(native), dlna)
+
+        assertEquals(2, history.size)
+        assertEquals(CastProtocol.DLNA, history[0].resolvedProtocol)
+        assertEquals(CastProtocol.PLAYBRIDGE, history[1].resolvedProtocol)
+    }
 
     private fun dev(
         ip: String,
@@ -33,6 +49,26 @@ class ConnectionMergeTest {
         assertEquals(9021, merged.logsPort)
         assertEquals("t", merged.token)               // token preserved
         assertEquals("sha256/x", merged.certFingerprint) // pin preserved
+    }
+
+    @Test
+    fun `DLNA endpoint healing refreshes description transport and volume URLs`() {
+        val saved = dev("192.168.1.20", 0, uuid = "renderer-1").copy(
+            protocol = CastProtocol.DLNA,
+            descriptionUrl = "http://192.168.1.20/old.xml",
+            controlUrl = "http://192.168.1.20/old-av",
+        )
+        val discovered = saved.copy(
+            descriptionUrl = "http://192.168.1.21/device.xml",
+            controlUrl = "http://192.168.1.21/avtransport",
+            renderingControlUrl = "http://192.168.1.21/rendering",
+        )
+
+        val merged = ConnectionMerge.withDiscoveredEndpoint(saved, listOf(discovered))
+
+        assertEquals(discovered.descriptionUrl, merged.descriptionUrl)
+        assertEquals(discovered.controlUrl, merged.controlUrl)
+        assertEquals(discovered.renderingControlUrl, merged.renderingControlUrl)
     }
 
     @Test
