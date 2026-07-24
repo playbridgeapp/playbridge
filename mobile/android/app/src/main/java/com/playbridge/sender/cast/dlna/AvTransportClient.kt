@@ -7,6 +7,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
 
 /**
  * Minimal AVTransport (UPnP) SOAP control client. One instance per renderer
@@ -18,18 +19,20 @@ class AvTransportClient(
 ) {
     data class PositionInfo(val trackDuration: String?, val relTime: String?)
 
-    suspend fun setAvTransportUri(uri: String, metadata: String = "") = action(
+    suspend fun setAvTransportUri(uri: String, metadata: String = "") = requiredAction(
         "SetAVTransportURI",
         "<InstanceID>0</InstanceID>" +
             "<CurrentURI>${escape(uri)}</CurrentURI>" +
             "<CurrentURIMetaData>${escape(metadata)}</CurrentURIMetaData>",
     )
 
-    suspend fun play() = action("Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
-    suspend fun pause() = action("Pause", "<InstanceID>0</InstanceID>")
-    suspend fun stop() = action("Stop", "<InstanceID>0</InstanceID>")
-    suspend fun seek(target: String) =
-        action("Seek", "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>$target</Target>")
+    suspend fun play() = requiredAction("Play", "<InstanceID>0</InstanceID><Speed>1</Speed>")
+    suspend fun pause() = requiredAction("Pause", "<InstanceID>0</InstanceID>")
+    suspend fun stop() = requiredAction("Stop", "<InstanceID>0</InstanceID>")
+    suspend fun seek(target: String) = requiredAction(
+        "Seek",
+        "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit><Target>$target</Target>",
+    )
 
     suspend fun getPositionInfo(): PositionInfo? {
         val resp = action("GetPositionInfo", "<InstanceID>0</InstanceID>") ?: return null
@@ -48,6 +51,10 @@ class AvTransportClient(
     suspend fun getMediaDuration(): String? {
         val resp = action("GetMediaInfo", "<InstanceID>0</InstanceID>") ?: return null
         return tag(resp, "MediaDuration")
+    }
+
+    private suspend fun requiredAction(name: String, args: String) {
+        if (action(name, args) == null) throw IOException("DLNA $name failed")
     }
 
     /** POST a SOAP action; returns the response body on HTTP 200, else null (logged). */
