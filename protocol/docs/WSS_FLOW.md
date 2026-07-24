@@ -21,6 +21,15 @@ schema disagree, the schema defines JSON shape and this document defines sequenc
 - Receivers use a locally generated TLS identity. Paired senders validate its SPKI pin on every
   connection. A changed key is a hard failure and requires explicit re-pairing.
 
+The fallback web-browser receiver uses a separate, reversed local transport documented by the
+`browserReceiverSocket` channel in `asyncapi.yaml`. An ordinary browser opens a page served by the
+sender and connects back to `/v1/browser/ws` over the same LAN. It is never advertised or found by
+mDNS/SSDP. Each page session displays a short-lived six-digit code that must be approved by the
+sender; v1 deliberately stores no browser credential and requires approval for every new page
+session. After approval the host sends `load` and `command` frames while the page returns
+capabilities, status, completion, and errors. Unknown fields and message types remain
+forward-compatible.
+
 The first connection cannot authenticate the receiver's self-signed certificate from a public
 CA or a previously stored pin. The TLS channel still provides encryption, while the SAS exchange
 below authenticates the endpoints and protects the credential bundle containing the pin.
