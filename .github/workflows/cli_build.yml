@@ -14,7 +14,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
 
 jobs:
   validate:
@@ -89,6 +90,8 @@ jobs:
           targets: ${{ matrix.target }}
 
       - name: Build CLI
+        env:
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-msvc' && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --locked -p playbridge-cast-cli --target ${{ matrix.target }}
 
       - name: Package CLI
@@ -105,9 +108,26 @@ jobs:
           path: ${{ matrix.asset }}.tar.gz
           if-no-files-found: error
 
+  approve:
+    name: manual release approval gate
+    needs: [validate, build]
+    if: needs.validate.outputs.skipped == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Wait for approval
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ secrets.GITHUB_TOKEN }}
+          approvers: atulmehla
+          minimum-approvals: 1
+          issue-title: "Approve PlayBridge CLI Release v${{ needs.validate.outputs.version }}"
+          issue-body: "All 5 platform builds (Linux x86_64/arm64, macOS x86_64/arm64, Windows x86_64 with static CRT) have completed successfully.\n\nPlease approve to publish the official GitHub Release for PlayBridge CLI v${{ needs.validate.outputs.version }}."
+
   release:
     name: publish CLI release
-    needs: [validate, build]
+    needs: [validate, build, approve]
     if: needs.validate.outputs.skipped == 'false'
     runs-on: ubuntu-latest
     permissions:
