@@ -1,5 +1,11 @@
 # PlayBridge CLI Changelog
 
+## 0.2.0 (2026-07-25)
+
+- Build self-contained Windows executable (`playbridge.exe`) with static MSVC C runtime linking.
+- Add manual release approval gate in GitHub Actions.
+- Upload release artifacts to Cloudflare R2 storage.
+
 ## 0.1.0 (2026-07-24)
 
 - Add cross-platform Rust command-line client (`playbridge`).
