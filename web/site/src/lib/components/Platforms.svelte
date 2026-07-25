@@ -8,7 +8,8 @@
     <span class="eyebrow">Platforms</span>
     <h2>Senders and players.</h2>
     <p>
-      Senders push content. Players receive and play it. They find each other on the local network.
+      Senders push content. Players receive and play it. Desktop and the CLI do both — cast out or
+      receive on the same machine. Everything discovers peers on your local network.
     </p>
   </div>
 
