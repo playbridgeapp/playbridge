@@ -16,7 +16,6 @@
     operatingSystem: 'Android, Android TV, tvOS, macOS, Windows, Linux',
     url: SITE.url,
     downloadUrl: `${SITE.url}/receivers`,
-    softwareVersion: SITE.version,
     license: 'https://www.gnu.org/licenses/gpl-3.0.html',
     offers: {
       '@type': 'Offer',
@@ -31,6 +30,6 @@
 
 <Hero />
 <HowItWorks />
+<InstallCta />
 <Platforms />
 <Features />
-<InstallCta />

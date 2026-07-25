@@ -12,12 +12,12 @@
     TV — or Desktop, or the CLI.
   </p>
   <div class="hero__ctas">
-    <a href="/receivers" class="btn btn--primary"
-      ><Icon name="download" size={14} /> Install receivers</a
+    <a href="/#install" class="btn btn--primary"
+      ><Icon name="download" size={14} /> Get started</a
     >
-    <a href="/senders" class="btn"><Icon name="cast" size={14} /> Install senders</a>
-    <a class="btn" href={SITE.github} rel="noopener"
-      ><Icon name="github" size={13} /> View on GitHub</a
+    <a href="/receivers" class="btn">Install receivers</a>
+    <a class="btn btn--ghost" href={SITE.github} rel="noopener noreferrer" target="_blank"
+      ><Icon name="github" size={13} /> GitHub</a
     >
   </div>
   <div class="hero__scene">

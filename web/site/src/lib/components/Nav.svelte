@@ -2,15 +2,57 @@
   import LogoMark from '$lib/icons/LogoMark.svelte';
   import Icon from '$lib/icons/Icon.svelte';
   import { SITE } from '$lib/data/site';
+  import { page } from '$app/stores';
+  import { onMount } from 'svelte';
 
   let mobileMenuOpen = $state(false);
+  let menuEl = $state<HTMLDivElement | null>(null);
+  let toggleEl = $state<HTMLButtonElement | null>(null);
 
   function closeMenu() {
     mobileMenuOpen = false;
   }
+
+  function toggleMenu() {
+    mobileMenuOpen = !mobileMenuOpen;
+  }
+
+  $effect(() => {
+    if (typeof document === 'undefined') return;
+    document.body.style.overflow = mobileMenuOpen ? 'hidden' : '';
+    return () => {
+      document.body.style.overflow = '';
+    };
+  });
+
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && mobileMenuOpen) {
+        closeMenu();
+        toggleEl?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+
+  $effect(() => {
+    if (mobileMenuOpen) {
+      queueMicrotask(() => {
+        const first = menuEl?.querySelector<HTMLElement>('a, button');
+        first?.focus();
+      });
+    }
+  });
+
+  const path = $derived($page.url.pathname);
+  const onSenders = $derived(path.startsWith('/senders'));
+  const onReceivers = $derived(path.startsWith('/receivers'));
 </script>
 
-<nav class="nav">
+<a class="skip-link" href="#main">Skip to content</a>
+
+<nav class="nav" aria-label="Primary">
   <div class="wrap nav__inner">
     <a class="logo" href="/">
       <LogoMark size={30} />
@@ -19,21 +61,30 @@
     </a>
     <div class="nav__links">
       <a href="/#how">How it works</a>
-      <a href="/#platforms">Platforms</a>
+      <a href="/senders" class:nav__link--active={onSenders} aria-current={onSenders ? 'page' : undefined}
+        >Senders</a
+      >
+      <a
+        href="/receivers"
+        class:nav__link--active={onReceivers}
+        aria-current={onReceivers ? 'page' : undefined}>Receivers</a
+      >
       <a href="/#features">Features</a>
-      <a href="/senders">Senders</a>
-      <a href="/receivers">Receivers</a>
     </div>
     <div class="nav__actions">
-      <a class="btn" href={SITE.github} rel="noopener"><Icon name="github" size={13} /> GitHub</a>
-      <a class="btn btn--primary" href="/receivers">Get started</a>
+      <a class="btn" href={SITE.github} rel="noopener noreferrer" target="_blank"
+        ><Icon name="github" size={13} /> GitHub</a
+      >
+      <a class="btn btn--primary" href="/#install">Get started</a>
     </div>
     <button
       type="button"
       class="nav__toggle"
-      onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
-      aria-label="Toggle menu"
+      bind:this={toggleEl}
+      onclick={toggleMenu}
+      aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
       aria-expanded={mobileMenuOpen}
+      aria-controls="mobile-nav"
     >
       {#if mobileMenuOpen}
         <Icon name="x" size={20} />
@@ -44,21 +95,30 @@
   </div>
 </nav>
 
-<!-- Rendered OUTSIDE <nav> on purpose: the nav's backdrop-filter would otherwise
-     become the containing block for this position:fixed overlay and clip it to the
-     nav bar. As a sibling of <nav>, it resolves against the viewport. -->
 {#if mobileMenuOpen}
-  <div class="nav__mobile-menu">
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div
+    class="nav__mobile-menu"
+    id="mobile-nav"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Menu"
+    tabindex="-1"
+    bind:this={menuEl}
+    onclick={(e) => {
+      if (e.target === e.currentTarget) closeMenu();
+    }}
+  >
     <div class="nav__mobile-links">
       <a href="/#how" onclick={closeMenu}>How it works</a>
-      <a href="/#platforms" onclick={closeMenu}>Platforms</a>
-      <a href="/#features" onclick={closeMenu}>Features</a>
       <a href="/senders" onclick={closeMenu}>Senders</a>
       <a href="/receivers" onclick={closeMenu}>Receivers</a>
+      <a href="/#features" onclick={closeMenu}>Features</a>
+      <a href="/#install" onclick={closeMenu}>Get started</a>
       <a
         class="btn btn--primary nav__mobile-github"
         href={SITE.github}
-        rel="noopener"
+        rel="noopener noreferrer"
         target="_blank"
         onclick={closeMenu}
       >

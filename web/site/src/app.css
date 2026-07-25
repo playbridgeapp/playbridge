@@ -89,6 +89,56 @@ body::after {
 a { color: inherit; text-decoration: none; }
 button { font-family: inherit; cursor: pointer; }
 
+/* Keyboard focus — visible on dark UI */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--accent) 85%, white);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -48px;
+  z-index: 100;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #06091e;
+  font-weight: 600;
+  font-size: 13px;
+  transition: top 0.15s ease;
+}
+.skip-link:focus {
+  top: 12px;
+  outline: none;
+}
+.skip-link:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.btn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.btn--ghost:hover {
+  color: var(--text);
+  background: rgba(200, 220, 255, 0.04);
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
+}
+
+.nav__link--active {
+  color: var(--text) !important;
+}
+.nav__link--active::after {
+  opacity: 1 !important;
+}
+
 .wrap {
   max-width: 1080px;
   margin: 0 auto;
@@ -508,11 +558,16 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
 }
 
 @media (max-width: 768px) {
+  /* Horizontal chip scroller — shorter than a tall vertical tab stack */
   .installer__tabs {
-    flex-direction: column;
+    flex-direction: row;
+    flex-wrap: nowrap;
     align-items: stretch;
-    padding: 16px;
-    gap: 16px;
+    padding: 10px 12px;
+    gap: 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
   }
   .installer__divider {
     display: none;
@@ -528,14 +583,16 @@ p  { line-height: 1.55; color: var(--text-dim); margin: 0; font-size: 15px; }
     flex: 0 0 100%;
   }
   .installer__tab {
-    border-radius: 6px;
+    border-radius: 999px;
     padding: 8px 14px;
     border: 1px solid var(--line);
     margin-bottom: 0;
     font-size: 12px;
+    border-bottom-color: var(--line);
   }
   .installer__tab--active {
     border-color: var(--accent);
+    border-bottom-color: var(--accent);
   }
   .installer__panel {
     padding: 20px;

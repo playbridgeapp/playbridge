@@ -4,13 +4,17 @@ export const SITE = {
   description:
     'PlayBridge is an open-source casting suite in active development. Browse on your phone, watch on your TV — no accounts, no telemetry, local network only.',
   url: 'https://playbridge.app',
-  ogImage: '/og-image.png',
+  ogImage: '/favicon.svg',
   twitter: '@playbridge',
   email: 'playbridgeapp@gmail.com',
   github: 'https://github.com/playbridgeapp/PlayBridge',
   githubOrg: 'https://github.com/playbridgeapp',
-  version: 'v2.4.1'
+  /** Suite is multi-product; do not invent a single semver for the marketing site. */
+  versionLabel: 'Alpha'
 };
+
+export const CLI_INSTALL_CMD =
+  'curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh';
 
 /** GitHub release body markers used in ?q= search links (see docs/release.md). */
 export const RELEASE_MARKERS = {
@@ -51,8 +55,8 @@ export const SENDERS: Platform[] = [
   {
     icon: 'firefox',
     name: 'Browser extension',
-    desc: 'Detect and cast media from Firefox or Chrome tabs.',
-    href: '/senders#chrome'
+    desc: 'Detect and cast media from Firefox or Chrome / Edge / Brave tabs.',
+    href: '/senders#extension'
   },
   {
     icon: 'desktop',
@@ -192,10 +196,13 @@ export type InstallDetail = {
   steps: Array<[string, string]>;
   cmd: string;
   downloadUrl?: string;
+  /** Honest metadata only (role, platform, marker, status). No fake sizes/hashes. */
   meta: Array<[string, string]>;
   notice?: { badge: string; text: string };
   /** Use DESKTOP_PLATFORMS for OS-specific download steps. */
   desktop?: boolean;
+  /** Shell one-liner shown in a copyable block (CLI). */
+  installCommand?: string;
   /** Optional plugin callout (Android TV GeckoView). */
   plugin?: {
     title: string;
@@ -203,6 +210,17 @@ export type InstallDetail = {
     downloadUrl?: string;
     cmd?: string;
   };
+};
+
+export type ExtensionBrowser = {
+  id: 'chrome' | 'firefox';
+  label: string;
+  icon: 'desktop' | 'firefox';
+  title: string;
+  steps: Array<[string, string]>;
+  cmd: string;
+  downloadUrl: string;
+  meta: Array<[string, string]>;
 };
 
 export type InstallProduct = {
@@ -315,44 +333,22 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     }
   },
   {
-    id: 'chrome',
-    label: 'Chrome',
-    icon: 'desktop',
-    sender: {
-      title: 'Chrome extension (sender)',
-      steps: [
-        ['Open Store', 'Install PlayBridge Video Detector from the Chrome Web Store.'],
-        ['Pair Desktop', 'Run PlayBridge Desktop as a receiver (or another player) to handle casting.'],
-        ['Cast videos', 'Detect streams on web pages and cast with one click.']
-      ],
-      cmd: 'chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim',
-      downloadUrl:
-        'https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en',
-      meta: [
-        ['role', 'sender'],
-        ['store', 'Chrome Web Store'],
-        ['platform', 'Chrome, Brave, Edge']
-      ]
-    }
-  },
-  {
-    id: 'firefox',
-    label: 'Firefox',
+    id: 'extension',
+    label: 'Extension',
     icon: 'firefox',
     sender: {
-      title: 'Firefox extension (sender)',
-      steps: [
-        ['Open Store', 'Install PlayBridge Video Detector from Firefox Add-ons.'],
-        ['Pair Desktop', 'Run PlayBridge Desktop as a receiver (or another player) to handle casting.'],
-        ['Cast videos', 'Detect streams on web pages and cast with one click.']
-      ],
-      cmd: 'addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector',
-      downloadUrl: 'https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/',
+      title: 'Browser extension (sender)',
+      steps: [],
+      cmd: releaseSearchUrl(RELEASE_MARKERS.extension),
       meta: [
         ['role', 'sender'],
-        ['store', 'Firefox Add-ons'],
-        ['platform', 'Firefox Desktop']
-      ]
+        ['browsers', 'Chrome, Edge, Brave, Firefox'],
+        ['marker', RELEASE_MARKERS.extension]
+      ],
+      notice: {
+        badge: 'Needs a receiver',
+        text: 'Pair with PlayBridge Desktop (or another receiver) so casted tabs have somewhere to play.'
+      }
     }
   },
   {
@@ -389,10 +385,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     sender: {
       title: 'PlayBridge CLI (sender)',
       steps: [
-        [
-          'Install',
-          'macOS/Linux: curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh'
-        ],
+        ['Install', 'macOS & Linux: run the install script below (adds playbridge to ~/.local/bin).'],
         [
           'Discover',
           'playbridge discover — list TVs, Desktop, and other receivers on your network.'
@@ -402,11 +395,12 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
           'playbridge send video.mp4 (or a stream URL) to the device you pick.'
         ],
         [
-          'Archives',
-          `Windows and multi-arch packages: GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
+          'Windows / archives',
+          `Download multi-arch packages from GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
         ]
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.cli),
+      installCommand: CLI_INSTALL_CMD,
       meta: [
         ['role', 'sender'],
         ['binary', 'playbridge'],
@@ -414,16 +408,13 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       ],
       notice: {
         badge: 'Also a receiver',
-        text: 'The same binary can receive casts with mpv. See the Receivers page for receive mode.'
+        text: 'The same binary can receive casts with mpv. Open the Receivers page for receive mode.'
       }
     },
     receiver: {
       title: 'PlayBridge CLI (receiver)',
       steps: [
-        [
-          'Install',
-          'macOS/Linux: curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh'
-        ],
+        ['Install', 'macOS & Linux: run the install script below (adds playbridge to ~/.local/bin).'],
         [
           'Install mpv',
           'Receiver mode needs mpv on PATH (brew install mpv or your distro package).'
@@ -433,11 +424,12 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
           'playbridge receiver — approve senders and play incoming casts via mpv.'
         ],
         [
-          'Archives',
-          `Windows and multi-arch packages: GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
+          'Windows / archives',
+          `Download multi-arch packages from GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
         ]
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.cli),
+      installCommand: CLI_INSTALL_CMD,
       meta: [
         ['role', 'receiver'],
         ['binary', 'playbridge'],
@@ -445,7 +437,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       ],
       notice: {
         badge: 'Also a sender',
-        text: 'The same binary can discover devices and send media. See the Senders page for cast-out setup.'
+        text: 'The same binary can discover devices and send media. Open the Senders page for cast-out setup.'
       }
     }
   },
@@ -472,7 +464,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       ],
       plugin: {
         title: 'GeckoView + uBlock Origin',
-        body: 'Optional plugin: Mozilla GeckoView with uBlock Origin for ad-free browsing on the TV. The player already includes System WebView.',
+        body: 'Optional plugin: Mozilla GeckoView with uBlock Origin for ad-free browsing on the TV. The TV receiver already includes System WebView.',
         downloadUrl: '/download/tv-browser',
         cmd: releaseSearchUrl(RELEASE_MARKERS.tvBrowser)
       }
@@ -503,10 +495,67 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
   }
 ];
 
+export const EXTENSION_BROWSERS: ExtensionBrowser[] = [
+  {
+    id: 'chrome',
+    label: 'Chrome',
+    icon: 'desktop',
+    title: 'Chrome / Edge / Brave',
+    steps: [
+      ['Open Store', 'Install PlayBridge Video Detector from the Chrome Web Store.'],
+      [
+        'Pair a receiver',
+        'Run PlayBridge Desktop (or another receiver) so the extension has a cast target.'
+      ],
+      ['Cast videos', 'Detect streams on web pages and cast with one click.']
+    ],
+    cmd: 'chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim',
+    downloadUrl:
+      'https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en',
+    meta: [
+      ['role', 'sender'],
+      ['store', 'Chrome Web Store'],
+      ['platform', 'Chrome, Brave, Edge']
+    ]
+  },
+  {
+    id: 'firefox',
+    label: 'Firefox',
+    icon: 'firefox',
+    title: 'Firefox',
+    steps: [
+      ['Open Store', 'Install PlayBridge Video Detector from Firefox Add-ons.'],
+      [
+        'Pair a receiver',
+        'Run PlayBridge Desktop (or another receiver) so the extension has a cast target.'
+      ],
+      ['Cast videos', 'Detect streams on web pages and cast with one click.']
+    ],
+    cmd: 'addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector',
+    downloadUrl: 'https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/',
+    meta: [
+      ['role', 'sender'],
+      ['store', 'Firefox Add-ons'],
+      ['platform', 'Firefox Desktop']
+    ]
+  }
+];
+
 export function productsForRole(role: InstallRole): InstallProduct[] {
   return INSTALL_PRODUCTS.filter((p) => !p.hidden && (role === 'sender' ? p.sender : p.receiver));
 }
 
 export function detailFor(product: InstallProduct, role: InstallRole): InstallDetail | undefined {
   return role === 'sender' ? product.sender : product.receiver;
+}
+
+/** Resolve product id from URL hash (supports legacy #chrome / #firefox → extension). */
+export function productIdFromHash(hash: string, role: InstallRole): string | null {
+  const raw = hash.replace(/^#/, '');
+  if (!raw) return null;
+  if (raw === 'chrome' || raw === 'firefox') {
+    return role === 'sender' ? 'extension' : null;
+  }
+  const list = productsForRole(role);
+  return list.some((p) => p.id === raw) ? raw : null;
 }

@@ -1,9 +1,14 @@
-# Short links to GitHub releases and assets
+# Short links — role pages and download helpers
 /android       /download/android                                               302
 /androidtv     /download/tv-player                                             302
 /appletv       https://github.com/playbridgeapp/playbridge/tree/main/tv/apple  302
-/desktop       https://github.com/playbridgeapp/playbridge/releases            302
+/desktop       /receivers#desktop                                              302
+/cli           /senders#cli                                                    302
+/send          /senders                                                        302
+/receive       /receivers                                                      302
 /firefox       /download/firefox                                               302
+/chrome        https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim 302
+/extension     /senders#extension                                              302
 /github        https://github.com/playbridgeapp/playbridge                     302
 /docs          https://github.com/playbridgeapp/playbridge#documentation       302
 /contribute    https://github.com/playbridgeapp/playbridge/blob/main/CONTRIBUTING.md 302
