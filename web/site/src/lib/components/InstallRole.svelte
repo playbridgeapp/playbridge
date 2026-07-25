@@ -16,7 +16,7 @@
   let { role }: Props = $props();
 
   const products = $derived(productsForRole(role));
-  let activeId = $state(productsForRole(role)[0]?.id ?? '');
+  let activeId = $state('');
   let activeDesktopOS = $state<'macos' | 'windows' | 'linux'>('macos');
 
   onMount(() => {
@@ -27,15 +27,20 @@
     else activeDesktopOS = 'macos';
 
     const fromHash = window.location.hash.replace(/^#/, '');
-    if (fromHash && products.some((p) => p.id === fromHash)) {
+    const list = productsForRole(role);
+    if (fromHash && list.some((p) => p.id === fromHash)) {
       activeId = fromHash;
+    } else if (list[0]) {
+      activeId = list[0].id;
     }
   });
 
-  // Keep selection valid if role/products change
+  // SSR + keep selection valid when products change
   $effect(() => {
-    if (activeId && !products.some((p) => p.id === activeId) && products[0]) {
-      activeId = products[0].id;
+    const list = products;
+    if (!list.length) return;
+    if (!activeId || !list.some((p) => p.id === activeId)) {
+      activeId = list[0].id;
     }
   });
 
