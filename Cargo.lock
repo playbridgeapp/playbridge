@@ -1930,13 +1930,18 @@ dependencies = [
 name = "playbridge-cast-core-ffi"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "jni",
+ "playbridge-browser-receiver",
  "playbridge-cast-core",
+ "playbridge-cast-receiver",
  "serde",
  "serde_json",
+ "stream-proxy-rust",
  "thiserror 2.0.19",
  "tokio",
  "uniffi",
+ "url",
 ]
 
 [[package]]
