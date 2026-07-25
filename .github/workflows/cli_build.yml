@@ -129,16 +129,20 @@ jobs:
           tag_name: cli-v${{ needs.validate.outputs.version }}
           name: PlayBridge CLI v${{ needs.validate.outputs.version }}
           body: |
+            <!-- tag: 7b2c9a -->
+            **CLI:** v${{ needs.validate.outputs.version }}
+
+            📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/cli-v${{ needs.validate.outputs.version }}/cli/CHANGELOG.md)
+
             Cross-platform PlayBridge sender and receiver CLI.
 
-            Install on macOS or Linux:
-
+            **Installation (macOS & Linux):**
             ```sh
             curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh
             ```
 
-            Receiver mode requires `mpv` to be installed.
+            Receiver mode requires `mpv` to be installed (`brew install mpv` or `sudo apt install mpv`).
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
-          generate_release_notes: true
+          generate_release_notes: false
