@@ -38,6 +38,22 @@ users or `install.sh` (which uses published `cli-v*` releases only).
 | Project | Version source | Tag prefix | Changelog | PR CI | Release-build | Publish |
 | --- | --- | --- | --- | --- | --- | --- |
 | **CLI** | `cli/Cargo.toml` | `cli-v*` | `cli/CHANGELOG.md` | `rust_pr.yml` | `cli_build.yml` → **draft** | `cli_publish.yml` → undraft |
+
+### GitHub release search markers
+
+Each GitHub Release body includes a stable HTML comment so the site and README can
+deep-link to that product’s releases (`?q=<marker>&expanded=true`):
+
+| Product | Marker | Example |
+| --- | --- | --- |
+| Desktop | `1a4b6c` | [releases?q=1a4b6c](https://github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true) |
+| Phone | `5c9b2f` | [releases?q=5c9b2f](https://github.com/playbridgeapp/PlayBridge/releases?q=5c9b2f&expanded=true) |
+| TV player | `8d2a1c` | [releases?q=8d2a1c](https://github.com/playbridgeapp/PlayBridge/releases?q=8d2a1c&expanded=true) |
+| TV GeckoView plugin | `3e7f9a` | [releases?q=3e7f9a](https://github.com/playbridgeapp/PlayBridge/releases?q=3e7f9a&expanded=true) |
+| Extension | `9f2d8e` | [releases?q=9f2d8e](https://github.com/playbridgeapp/PlayBridge/releases?q=9f2d8e&expanded=true) |
+| CLI | `7b2c9a` | [releases?q=7b2c9a](https://github.com/playbridgeapp/PlayBridge/releases?q=7b2c9a&expanded=true) |
+
+Keep the marker in every draft/publish body for that product. Do not reuse markers across products.
 | **Extension** | `extension/manifests/*.json` | `extension-v*` | `extension/CHANGELOG.md` | `extension_pr.yml` | `extension_build.yml` | GH undraft (+ optional store) — *target* |
 | **Desktop** | `desktop/pubspec.yaml` | `desktop-v*` | `desktop/CHANGELOG.md` | `desktop_pr.yml` | `desktop_build.yml` | GH undraft — *target* |
 | **Android phone** | `versionName` / `versionCode` | `phone-v*` | `mobile/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` | GH undraft + Play promote — *target* |

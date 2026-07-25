@@ -39,8 +39,9 @@
       : (INSTALL_TABS.find((t) => t.id === active) ?? INSTALL_TABS[0])
   );
 
-  const senderTabs = INSTALL_TABS.filter((t) => t.role === 'sender' && !t.hidden);
-  const playerTabs = INSTALL_TABS.filter((t) => t.role === 'player' && !t.hidden);
+  const senderTabs = INSTALL_TABS.filter((t) => t.roles.includes('sender') && !t.hidden);
+  const playerTabs = INSTALL_TABS.filter((t) => t.roles.includes('player') && !t.hidden);
+  const dualRole = $derived(tab.roles.includes('sender') && tab.roles.includes('player'));
 
   // The ad-blocked TV browser is presented as a GeckoView plugin of the Android TV
   // player rather than a standalone player tab.
@@ -90,6 +91,14 @@
       <div>
         <h3>{tab.title}</h3>
 
+        {#if dualRole}
+          <p class="role-note">
+            <span class="role-pill">Sender</span>
+            <span class="role-pill">Player</span>
+            Works as both — cast out to other devices or receive casts on this machine.
+          </p>
+        {/if}
+
         {#if active === 'desktop'}
           <div class="installer__sub-selector">
             {#each DESKTOP_PLATFORMS as p}
@@ -111,6 +120,17 @@
             <p>
               The Apple TV application is in active development and not yet published on TestFlight.
               Developers and testers can try it by building from source using Xcode.
+            </p>
+          </div>
+        {/if}
+
+        {#if tab.id === 'cli'}
+          <div class="notice-box">
+            <span class="notice-badge">CLI</span>
+            <p>
+              Install from the script below (macOS &amp; Linux) or grab archives from GitHub Releases
+              (search marker <code>7b2c9a</code>). Receiver mode needs
+              <code>mpv</code> on your PATH.
             </p>
           </div>
         {/if}
@@ -149,6 +169,16 @@
                 {:else}
                   <Icon name="download" size={13} stroke={2.0} /> Download
                 {/if}
+              </a>
+            {/if}
+            {#if tab.id === 'cli'}
+              <a
+                href="https://github.com/playbridgeapp/playbridge/blob/main/cli/README.md"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn"
+              >
+                <Icon name="github" size={13} /> CLI docs
               </a>
             {/if}
             <a
@@ -223,6 +253,33 @@
   .step-desc { color: var(--text-dim); }
   .panel-label { font-size: 10px; letter-spacing: 0.16em; color: var(--text-faint); margin-bottom: 8px; }
   .meta-k { color: var(--text-faint); }
+
+  .role-note {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 18px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-dim);
+  }
+  .role-pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #4a90e2;
+    background: rgba(74, 144, 226, 0.15);
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-weight: 600;
+  }
+  .notice-box code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--text);
+  }
 
   .installer__group {
     display: flex;

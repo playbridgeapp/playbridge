@@ -1,7 +1,7 @@
 <script lang="ts">
   type IconName =
     | 'phone' | 'tv' | 'cast' | 'desktop' | 'firefox' | 'apple' | 'android'
-    | 'windows' | 'linux'
+    | 'windows' | 'linux' | 'terminal'
     | 'github' | 'link' | 'plus' | 'arrow' | 'download'
     | 'menu' | 'x';
 
@@ -57,6 +57,9 @@
     <rect x="2" y="3" width="20" height="13" rx="2" />
     <path d="M7 9l2 2-2 2M11 13h6" />
     <path d="M8 20h8M12 16v4" />
+  {:else if name === 'terminal'}
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M7 9l3 3-3 3M12 15h5" />
   {:else if name === 'github'}
     <path
       d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-2c-2.7.6-3.3-1.2-3.3-1.2-.5-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.7.4-1.1.6-1.4-2.2-.3-4.5-1.1-4.5-4.9 0-1.1.4-2 1-2.7-.1-.3-.5-1.3.1-2.7 0 0 .8-.3 2.7 1 .8-.2 1.6-.3 2.5-.3s1.7.1 2.5.3c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.8-2.3 4.6-4.5 4.9.4.3.7.9.7 1.8v2.7c0 .3.2.6.7.5A10 10 0 0 0 12 2z"

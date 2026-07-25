@@ -13,20 +13,39 @@ export const SITE = {
 };
 
 export type Platform = {
-  icon: 'android' | 'firefox' | 'tv' | 'apple' | 'desktop';
+  icon: 'android' | 'firefox' | 'tv' | 'apple' | 'desktop' | 'terminal';
   name: string;
   desc: string;
 };
 
 export const SENDERS: Platform[] = [
   { icon: 'android', name: 'Android app', desc: 'Browse, search, and send anything to a player.' },
-  { icon: 'firefox', name: 'Browser extension', desc: 'Detect & cast media from Firefox or Chrome tabs.' }
+  { icon: 'firefox', name: 'Browser extension', desc: 'Detect & cast media from Firefox or Chrome tabs.' },
+  {
+    icon: 'desktop',
+    name: 'Desktop app',
+    desc: 'Cast local files and streams to TVs — also runs as a full receiver.'
+  },
+  {
+    icon: 'terminal',
+    name: 'CLI',
+    desc: 'Command-line cast: discover devices, send files/URLs, or host a receiver.'
+  }
 ];
 
 export const PLAYERS: Platform[] = [
   { icon: 'tv', name: 'Android TV', desc: 'Plays anything. Optional GeckoView + uBlock Origin browser plugin.' },
   { icon: 'apple', name: 'Apple TV', desc: 'Native tvOS receiver with AVPlayer.' },
-  { icon: 'desktop', name: 'Desktop', desc: 'macOS, Windows, and Linux receiver.' }
+  {
+    icon: 'desktop',
+    name: 'Desktop app',
+    desc: 'macOS, Windows, and Linux player — also sends to other receivers on your network.'
+  },
+  {
+    icon: 'terminal',
+    name: 'CLI',
+    desc: 'Receive casts via mpv, or run a browser receiver from the terminal.'
+  }
 ];
 
 export type Step = {
@@ -40,13 +59,13 @@ export const STEPS: Step[] = [
   {
     num: '01',
     title: 'Install a player on your TV',
-    desc: 'Put the receiver on the screen you watch on — Android TV, Apple TV, or a Mac / Windows / Linux desktop.',
+    desc: 'Put a receiver on the screen you watch on — Android TV, Apple TV, Desktop, or the CLI with mpv.',
     phase: 'Set up once'
   },
   {
     num: '02',
-    title: 'Install the sender on your phone',
-    desc: 'The Android app is your remote, search bar, and browser, all in one.',
+    title: 'Install a sender',
+    desc: 'Phone app, browser extension, Desktop, or CLI — anything that can push media to a player on your network.',
     phase: 'Set up once'
   },
   {
@@ -115,11 +134,14 @@ export const FEATURES: FeatureItem[] = [
   }
 ];
 
+export type InstallRole = 'sender' | 'player';
+
 export type InstallTab = {
   id: string;
   label: string;
-  role: 'sender' | 'player';
-  icon: 'android' | 'tv' | 'apple' | 'desktop' | 'firefox' | 'windows' | 'linux';
+  /** Products that both send and receive list both roles and appear in each install group. */
+  roles: InstallRole[];
+  icon: 'android' | 'tv' | 'apple' | 'desktop' | 'firefox' | 'windows' | 'linux' | 'terminal';
   title: string;
   steps: Array<[string, string]>;
   cmd: string;
@@ -146,54 +168,57 @@ export const DESKTOP_PLATFORMS: DesktopPlatform[] = [
     id: 'macos',
     label: 'macOS',
     icon: 'apple',
-    title: 'macOS Receiver',
+    title: 'macOS Desktop',
     steps: [
-      ['Download', 'Latest .zip from GitHub Releases.'],
+      ['Download', 'Latest .zip from GitHub Releases (search marker 1a4b6c).'],
       ['Open', 'Extract and right-click → Open (unsigned build).'],
-      ['Approve devices', 'Allow the first sender that connects.']
+      ['Play or send', 'Receive casts from phone/extension, or cast local files and streams to a TV.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true',
     downloadUrl: '/download/macos',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
-      ['min', 'macOS 12']
+      ['min', 'macOS 12'],
+      ['roles', 'sender + player']
     ]
   },
   {
     id: 'windows',
     label: 'Windows',
     icon: 'windows',
-    title: 'Windows Receiver',
+    title: 'Windows Desktop',
     steps: [
-      ['Download', 'Latest .zip from GitHub Releases.'],
+      ['Download', 'Latest .zip from GitHub Releases (search marker 1a4b6c).'],
       ['Extract & run', 'Run playbridge_desktop.exe — no installer needed.'],
-      ['Approve devices', 'Allow the first sender that connects.']
+      ['Play or send', 'Receive casts from phone/extension, or cast local files and streams to a TV.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true',
     downloadUrl: '/download/windows',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
-      ['min', 'Windows 10']
+      ['min', 'Windows 10'],
+      ['roles', 'sender + player']
     ]
   },
   {
     id: 'linux',
     label: 'Linux',
     icon: 'linux',
-    title: 'Linux Receiver',
+    title: 'Linux Desktop',
     steps: [
-      ['Download', 'Latest .tar.gz from GitHub Releases.'],
-      ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder.'],
-      ['Approve devices', 'Allow the first sender that connects.']
+      ['Download', 'Latest .tar.gz from GitHub Releases (search marker 1a4b6c).'],
+      ['Extract & run', 'Run bundle/playbridge_desktop from the extracted folder (needs libmpv2).'],
+      ['Play or send', 'Receive casts from phone/extension, or cast local files and streams to a TV.']
     ],
     cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true',
     downloadUrl: '/download/linux',
     meta: [
       ['sha256', '—'],
       ['size', '86.1 MB'],
-      ['min', 'libmpv2 required']
+      ['min', 'libmpv2 required'],
+      ['roles', 'sender + player']
     ]
   }
 ];
@@ -202,11 +227,11 @@ export const INSTALL_TABS: InstallTab[] = [
   {
     id: 'android',
     label: 'Android',
-    role: 'sender',
+    roles: ['sender'],
     icon: 'android',
     title: 'Android phones',
     steps: [
-      ['Download', 'Latest APK from GitHub Releases.'],
+      ['Download', 'Latest APK from GitHub Releases (search marker 5c9b2f).'],
       ['Allow install', 'Permit installs from unknown sources.'],
       ['Open & connect', 'Send to a player on your network.']
     ],
@@ -221,11 +246,11 @@ export const INSTALL_TABS: InstallTab[] = [
   {
     id: 'androidtv',
     label: 'Android TV',
-    role: 'player',
+    roles: ['player'],
     icon: 'tv',
     title: 'Android TV',
     steps: [
-      ['Download', 'Use Downloader app on TV with code 9557748.'],
+      ['Download', 'Use Downloader app on TV with code 9557748, or GitHub Releases (8d2a1c).'],
       ['Install', 'Sideload via adb install or follow Downloader prompts.'],
       ['Approve devices', 'Allow the first phone that connects.']
     ],
@@ -241,12 +266,12 @@ export const INSTALL_TABS: InstallTab[] = [
     // Not a standalone tab — surfaced as a GeckoView plugin inside the Android TV tab.
     id: 'tvbrowser',
     label: 'GeckoView Browser',
-    role: 'player',
+    roles: ['player'],
     icon: 'tv',
     title: 'GeckoView Browser Plugin',
     hidden: true,
     steps: [
-      ['Download', 'GeckoView browser plugin APK from GitHub Releases.'],
+      ['Download', 'GeckoView browser plugin APK from GitHub Releases (search marker 3e7f9a).'],
       ['Sideload', 'adb install or Downloader app — installs alongside the player.'],
       ['Browse ad-free', 'EasyList + cosmetic filtering on by default.']
     ],
@@ -261,7 +286,7 @@ export const INSTALL_TABS: InstallTab[] = [
   {
     id: 'appletv',
     label: 'Apple TV',
-    role: 'player',
+    roles: ['player'],
     icon: 'apple',
     title: 'Apple TV',
     steps: [
@@ -279,22 +304,54 @@ export const INSTALL_TABS: InstallTab[] = [
   {
     id: 'desktop',
     label: 'Desktop',
-    role: 'player',
+    roles: ['sender', 'player'],
     icon: 'desktop',
-    title: 'Desktop Receiver',
+    title: 'Desktop app',
     steps: [], // Loaded from DESKTOP_PLATFORMS dynamically
     cmd: '',
     meta: []
   },
   {
+    id: 'cli',
+    label: 'CLI',
+    roles: ['sender', 'player'],
+    icon: 'terminal',
+    title: 'PlayBridge CLI',
+    steps: [
+      [
+        'Install',
+        'macOS/Linux: curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh'
+      ],
+      [
+        'Send',
+        'playbridge discover — then playbridge send video.mp4 (or a stream URL) to a TV, Desktop, or other receiver.'
+      ],
+      [
+        'Receive',
+        'playbridge receiver — plays incoming casts with mpv. Requires mpv on PATH.'
+      ],
+      [
+        'Archives',
+        'Windows and multi-arch packages: GitHub Releases filtered by marker 7b2c9a.'
+      ]
+    ],
+    cmd: 'github.com/playbridgeapp/PlayBridge/releases?q=7b2c9a&expanded=true',
+    meta: [
+      ['binary', 'playbridge'],
+      ['platforms', 'macOS, Linux, Windows'],
+      ['roles', 'sender + player'],
+      ['marker', '7b2c9a']
+    ]
+  },
+  {
     id: 'chrome',
     label: 'Chrome',
-    role: 'sender',
+    roles: ['sender'],
     icon: 'desktop',
     title: 'Chrome Extension',
     steps: [
       ['Open Store', 'Install PlayBridge Video Detector from Chrome Web Store.'],
-      ['Pair Desktop', 'Run PlayBridge desktop receiver to handle casting.'],
+      ['Pair Desktop', 'Run PlayBridge Desktop as a player to handle casting from the browser.'],
       ['Cast Videos', 'Detect and cast streams from web pages with one click.']
     ],
     cmd: 'chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim',
@@ -308,12 +365,12 @@ export const INSTALL_TABS: InstallTab[] = [
   {
     id: 'firefox',
     label: 'Firefox',
-    role: 'sender',
+    roles: ['sender'],
     icon: 'firefox',
     title: 'Firefox Extension',
     steps: [
       ['Open Store', 'Install PlayBridge Video Detector from Firefox Add-ons.'],
-      ['Pair Desktop', 'Run PlayBridge desktop receiver to handle casting.'],
+      ['Pair Desktop', 'Run PlayBridge Desktop as a player to handle casting from the browser.'],
       ['Cast Videos', 'Detect and cast streams from web pages with one click.']
     ],
     cmd: 'addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector',
