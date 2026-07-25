@@ -1,6 +1,6 @@
 # PlayBridge CLI Changelog
 
-## 0.2.0 (2026-07-25)
+## 0.1.1 (2026-07-25)
 
 - Build self-contained Windows executable (`playbridge.exe`) with static MSVC C runtime linking.
 - Split CLI shipping into release-build (draft GitHub Release on uprev) and publish (`draft=false`).

@@ -97,7 +97,7 @@ No rebuild. Assets stay those attached at draft time. No app store for CLI.
 Actions → CLI Release Build → Run workflow
   force: true   # optional rebuild of draft
 Actions → CLI Publish → Run workflow
-  version: 0.2.0
+  version: 0.1.1
 ```
 
 ---
@@ -120,5 +120,5 @@ publish jobs rather than mid-build Issue bots.
 
 - Ordinary PRs must **not** bump versions unless the user asked for an uprev or
   release (`release-and-publish` skill).
-- One uprev PR per product when practical (`bump(cli): 0.2.0`).
+- One uprev PR per product when practical (`bump(cli): 0.1.1`).
 - Never log secrets, store keys, or pairing tokens in release notes or CI logs.
