@@ -499,7 +499,7 @@ function castVideo(
   titleHint?: string | null,
 ): Promise<{ ok: boolean; error?: string }> {
   return resolveStreamTitle(video.tabId, video.url, titleHint).then((title) =>
-    bridge.cast(video.url, video.headers ?? {}, title),
+    bridge.cast(video.url, video.headers ?? {}, title, video.contentType),
   );
 }
 
