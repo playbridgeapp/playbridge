@@ -7,7 +7,16 @@ output_root=${1:-"$repo_dir/desktop/native/cast_core"}
 
 add_target() {
     if command -v rustup >/dev/null 2>&1; then
-        rustup target add "$1"
+        rustup target add --toolchain stable "$1"
+    fi
+}
+
+cargo_build() {
+    if command -v rustup >/dev/null 2>&1; then
+        stable_rustc=$(rustup which --toolchain stable rustc)
+        RUSTC="$stable_rustc" rustup run stable cargo build "$@"
+    else
+        cargo build "$@"
     fi
 }
 
@@ -15,11 +24,15 @@ case "$(uname -s)" in
     Darwin)
         add_target aarch64-apple-darwin
         add_target x86_64-apple-darwin
-        cargo build --manifest-path "$repo_dir/Cargo.toml" \
-            --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
+        cargo_build --manifest-path "$repo_dir/Cargo.toml" \
+            --package playbridge-cast-core-ffi \
+            --features playbridge-cast-core-ffi/sender-services \
+            --package playbridge-cast-cli --release \
             --target aarch64-apple-darwin
-        cargo build --manifest-path "$repo_dir/Cargo.toml" \
-            --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
+        cargo_build --manifest-path "$repo_dir/Cargo.toml" \
+            --package playbridge-cast-core-ffi \
+            --features playbridge-cast-core-ffi/sender-services \
+            --package playbridge-cast-cli --release \
             --target x86_64-apple-darwin
         mkdir -p "$output_root/macos"
         lipo -create \
@@ -37,8 +50,10 @@ case "$(uname -s)" in
         ;;
     Linux)
         add_target x86_64-unknown-linux-gnu
-        cargo build --manifest-path "$repo_dir/Cargo.toml" \
-            --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
+        cargo_build --manifest-path "$repo_dir/Cargo.toml" \
+            --package playbridge-cast-core-ffi \
+            --features playbridge-cast-core-ffi/sender-services \
+            --package playbridge-cast-cli --release \
             --target x86_64-unknown-linux-gnu
         mkdir -p "$output_root/linux"
         cp "$repo_dir/target/x86_64-unknown-linux-gnu/release/libplaybridge_cast_core_ffi.so" \
@@ -50,8 +65,10 @@ case "$(uname -s)" in
         ;;
     MINGW*|MSYS*|CYGWIN*)
         add_target x86_64-pc-windows-msvc
-        cargo build --manifest-path "$repo_dir/Cargo.toml" \
-            --package playbridge-cast-core-ffi --package playbridge-cast-cli --release \
+        cargo_build --manifest-path "$repo_dir/Cargo.toml" \
+            --package playbridge-cast-core-ffi \
+            --features playbridge-cast-core-ffi/sender-services \
+            --package playbridge-cast-cli --release \
             --target x86_64-pc-windows-msvc
         mkdir -p "$output_root/windows"
         cp "$repo_dir/target/x86_64-pc-windows-msvc/release/playbridge_cast_core_ffi.dll" \
