@@ -90,9 +90,9 @@ jobs:
 
       - name: Build native Rust FFI library
         if: steps.filter.outputs.relevant == 'true'
-        working-directory: .
+        working-directory: ${{ github.workspace }}
         run: |
-          cargo build --package playbridge-cast-core-ffi --features playbridge-cast-core-ffi/sender-services
+          cargo build --manifest-path Cargo.toml --package playbridge-cast-core-ffi --features playbridge-cast-core-ffi/sender-services
           mkdir -p desktop/native/cast_core/linux
           cp target/debug/libplaybridge_cast_core_ffi.so desktop/native/cast_core/linux/
 
