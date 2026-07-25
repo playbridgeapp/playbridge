@@ -43,7 +43,7 @@
     </div>
     <div class="footer__bottom">
       <span>© 2026 PlayBridge contributors • Active Development</span>
-      <span>{SITE.version}</span>
+      <span>{SITE.versionLabel}</span>
     </div>
   </div>
 </footer>

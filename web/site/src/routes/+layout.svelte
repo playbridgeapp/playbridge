@@ -9,7 +9,7 @@
 </script>
 
 <Nav />
-<main>
+<main id="main">
   {@render children()}
 </main>
 <Footer />

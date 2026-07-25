@@ -33,10 +33,11 @@
   </div>
 
   <div class="cta-row how__cta">
-    <a href="/receivers" class="btn btn--primary"
-      ><Icon name="download" size={14} /> Install a receiver</a
+    <a href="/#install" class="btn btn--primary"
+      ><Icon name="download" size={14} /> Get started</a
     >
-    <a href="/senders" class="btn">Install a sender</a>
+    <a href="/receivers" class="btn">Receivers</a>
+    <a href="/senders" class="btn">Senders</a>
   </div>
 </section>
 
