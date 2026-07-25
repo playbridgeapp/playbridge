@@ -128,7 +128,7 @@ jobs:
         uses: trstringer/manual-approval@v1
         with:
           secret: ${{ secrets.GITHUB_TOKEN }}
-          approvers: atulmehla
+          approvers: playbridgeapp
           minimum-approvals: 1
           issue-title: "Approve PlayBridge CLI Release v${{ needs.validate.outputs.version }}"
           issue-body: "All 5 platform builds (Linux x86_64/arm64, macOS x86_64/arm64, Windows x86_64 with static CRT) have completed successfully and uploaded to Cloudflare R2.\n\nPlease approve to publish the official GitHub Release for PlayBridge CLI v${{ needs.validate.outputs.version }}."
