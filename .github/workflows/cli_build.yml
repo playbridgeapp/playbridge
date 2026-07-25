@@ -108,6 +108,14 @@ jobs:
           path: ${{ matrix.asset }}.tar.gz
           if-no-files-found: error
 
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          aws s3 cp "${{ matrix.asset }}.tar.gz" s3://${{ secrets.R2_BUCKET }}/cli-release/
+
   approve:
     name: manual release approval gate
     needs: [validate, build]
@@ -123,7 +131,7 @@ jobs:
           approvers: atulmehla
           minimum-approvals: 1
           issue-title: "Approve PlayBridge CLI Release v${{ needs.validate.outputs.version }}"
-          issue-body: "All 5 platform builds (Linux x86_64/arm64, macOS x86_64/arm64, Windows x86_64 with static CRT) have completed successfully.\n\nPlease approve to publish the official GitHub Release for PlayBridge CLI v${{ needs.validate.outputs.version }}."
+          issue-body: "All 5 platform builds (Linux x86_64/arm64, macOS x86_64/arm64, Windows x86_64 with static CRT) have completed successfully and uploaded to Cloudflare R2.\n\nPlease approve to publish the official GitHub Release for PlayBridge CLI v${{ needs.validate.outputs.version }}."
 
   release:
     name: publish CLI release
@@ -133,11 +141,16 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: playbridge-cli-*
-          path: dist
-          merge-multiple: true
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          mkdir -p dist
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/cli-release/ dist/
 
       - name: Generate checksums
         working-directory: dist
@@ -166,3 +179,12 @@ jobs:
             dist/*.tar.gz
             dist/SHA256SUMS
           generate_release_notes: false
+
+      - name: Clean up R2 after release
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+        run: |
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/cli-release/ --recursive
