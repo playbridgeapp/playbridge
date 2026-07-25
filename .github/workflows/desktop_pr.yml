@@ -92,7 +92,7 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         working-directory: .
         run: |
-          cargo build --package playbridge-cast-core-ffi --features sender-services
+          cargo build --package playbridge-cast-core-ffi --features playbridge-cast-core-ffi/sender-services
           mkdir -p desktop/native/cast_core/linux
           cp target/debug/libplaybridge_cast_core_ffi.so desktop/native/cast_core/linux/
 
