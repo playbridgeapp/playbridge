@@ -2,6 +2,13 @@ name: CLI Build & Release
 
 on:
   push:
+    branches: [ "main" ]
+    paths:
+      - 'cli/**'
+      - 'cast/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/cli_build.yml'
     tags:
       - 'cli-v*'
   workflow_dispatch:
@@ -15,8 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      skipped: ${{ steps.check_tag.outputs.skipped }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Validate version
         id: version
@@ -24,18 +34,26 @@ jobs:
         run: |
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
           test -n "$VERSION"
-          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "cli-v$VERSION" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match cli/Cargo.toml version $VERSION" >&2
-            exit 1
-          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Check tag
+        id: check_tag
+        run: |
+          if git rev-parse "cli-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "⏭️ cli-v${{ steps.version.outputs.version }} already exists, skipping."
+          else
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Validate installer
+        if: steps.check_tag.outputs.skipped == 'false'
         run: sh -n cli/install.sh
 
   build:
     name: ${{ matrix.asset }}
     needs: validate
+    if: needs.validate.outputs.skipped == 'false'
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +108,7 @@ jobs:
   release:
     name: publish CLI release
     needs: [validate, build]
-    if: github.ref_type == 'tag'
+    if: needs.validate.outputs.skipped == 'false'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -108,6 +126,7 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: cli-v${{ needs.validate.outputs.version }}
           name: PlayBridge CLI v${{ needs.validate.outputs.version }}
           body: |
             Cross-platform PlayBridge sender and receiver CLI.
