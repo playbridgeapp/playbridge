@@ -21,11 +21,12 @@
       <a href="/#how">How it works</a>
       <a href="/#platforms">Platforms</a>
       <a href="/#features">Features</a>
-      <a href="/#install">Install</a>
+      <a href="/senders">Senders</a>
+      <a href="/receivers">Receivers</a>
     </div>
     <div class="nav__actions">
       <a class="btn" href={SITE.github} rel="noopener"><Icon name="github" size={13} /> GitHub</a>
-      <a class="btn btn--primary" href="/#install">Get the app</a>
+      <a class="btn btn--primary" href="/receivers">Get started</a>
     </div>
     <button
       type="button"
@@ -52,8 +53,15 @@
       <a href="/#how" onclick={closeMenu}>How it works</a>
       <a href="/#platforms" onclick={closeMenu}>Platforms</a>
       <a href="/#features" onclick={closeMenu}>Features</a>
-      <a href="/#install" onclick={closeMenu}>Install</a>
-      <a class="btn btn--primary nav__mobile-github" href={SITE.github} rel="noopener" target="_blank" onclick={closeMenu}>
+      <a href="/senders" onclick={closeMenu}>Senders</a>
+      <a href="/receivers" onclick={closeMenu}>Receivers</a>
+      <a
+        class="btn btn--primary nav__mobile-github"
+        href={SITE.github}
+        rel="noopener"
+        target="_blank"
+        onclick={closeMenu}
+      >
         <Icon name="github" size={14} /> GitHub
       </a>
     </div>

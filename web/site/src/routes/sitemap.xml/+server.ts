@@ -2,7 +2,7 @@ import { SITE } from '$lib/data/site';
 
 export const prerender = true;
 
-const ROUTES = ['/', '/privacy', '/security'];
+const ROUTES = ['/', '/senders', '/receivers', '/privacy', '/security'];
 
 export const GET = async () => {
   const urls = ROUTES.map(

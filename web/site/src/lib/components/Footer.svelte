@@ -18,7 +18,8 @@
         <ul>
           <li><a href="/#platforms">Platforms</a></li>
           <li><a href="/#features">Features</a></li>
-          <li><a href="/#install">Install</a></li>
+          <li><a href="/senders">Senders</a></li>
+          <li><a href="/receivers">Receivers</a></li>
           <li><a href="{SITE.github}/releases" rel="noopener">Changelog</a></li>
         </ul>
       </div>
