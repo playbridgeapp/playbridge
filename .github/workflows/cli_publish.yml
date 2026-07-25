@@ -1,0 +1,50 @@
+name: CLI Publish
+
+# Stage 3: promote an existing draft cli-v* GitHub Release (no rebuild).
+# Stage 2: .github/workflows/cli_build.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'CLI version to publish (e.g. 0.2.0 or cli-v0.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: publish draft release
+    runs-on: ubuntu-latest
+    # Optional: add environment: cli-release with required reviewers in repo settings.
+    steps:
+      - name: Publish draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RAW_VERSION#cli-v}"
+          test -n "$VERSION"
+          TAG="cli-v${VERSION}"
+
+          if ! gh release view "$TAG" --json isDraft,url >/tmp/cli-release.json; then
+            echo "No GitHub Release found for $TAG." >&2
+            echo "Run CLI Release Build first (uprev or workflow_dispatch)." >&2
+            exit 1
+          fi
+
+          is_draft=$(jq -r '.isDraft' /tmp/cli-release.json)
+          url=$(jq -r '.url' /tmp/cli-release.json)
+
+          if [ "$is_draft" = "false" ]; then
+            echo "⏭️ $TAG is already published: $url"
+            exit 0
+          fi
+
+          gh release edit "$TAG" --draft=false
+          echo "Published $TAG"
+          gh release view "$TAG" --json url,isDraft,tagName

@@ -3,8 +3,8 @@
 ## 0.2.0 (2026-07-25)
 
 - Build self-contained Windows executable (`playbridge.exe`) with static MSVC C runtime linking.
-- Add manual release approval gate in GitHub Actions.
-- Upload release artifacts to Cloudflare R2 storage.
+- Split CLI shipping into release-build (draft GitHub Release on uprev) and publish (`draft=false`).
+- See `docs/release.md` for the monorepo release model.
 
 ## 0.1.0 (2026-07-24)
 
