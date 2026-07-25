@@ -1,4 +1,7 @@
-name: CLI Build & Release
+name: CLI Release Build
+
+# Stage 2: version uprev (or manual dispatch) → multi-arch packages → draft GitHub Release.
+# Stage 3 (public): .github/workflows/cli_publish.yml
 
 on:
   push:
@@ -9,46 +12,99 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - '.github/workflows/cli_build.yml'
-    tags:
-      - 'cli-v*'
   workflow_dispatch:
+    inputs:
+      force:
+        description: 'Delete existing draft cli-v* release/tag and rebuild'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
-  issues: write
 
 jobs:
   validate:
-    name: validate release
+    name: validate release-build
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.version.outputs.version }}
-      skipped: ${{ steps.check_tag.outputs.skipped }}
+      version: ${{ steps.gate.outputs.version }}
+      skipped: ${{ steps.gate.outputs.skipped }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Validate version
-        id: version
+      - name: Gate on uprev / dispatch
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
+          set -euo pipefail
           VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' cli/Cargo.toml | head -1)
           test -n "$VERSION"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      - name: Check tag
-        id: check_tag
-        run: |
-          if git rev-parse "cli-v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-            echo "⏭️ cli-v${{ steps.version.outputs.version }} already exists, skipping."
-          else
-            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          TAG="cli-v${VERSION}"
+          PREV_VERSION=$(git show HEAD^:cli/Cargo.toml 2>/dev/null | sed -n 's/^version = "\(.*\)"/\1/p' | head -1 || true)
+          PREV_VERSION=${PREV_VERSION:-none}
+          EVENT="${{ github.event_name }}"
+          FORCE=false
+          # github.event.inputs is empty on push; safe for non-dispatch events.
+          if [ "$EVENT" = "workflow_dispatch" ] && [ "${{ github.event.inputs.force }}" = "true" ]; then
+            FORCE=true
           fi
 
+          release_json=""
+          if gh release view "$TAG" --json isDraft >/dev/null 2>&1; then
+            release_json=$(gh release view "$TAG" --json isDraft)
+          fi
+
+          if [ -n "$release_json" ]; then
+            is_draft=$(printf '%s' "$release_json" | jq -r '.isDraft')
+            if [ "$is_draft" = "false" ]; then
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              echo "⏭️ $TAG is already published; skipping release-build."
+              exit 0
+            fi
+            if [ "$FORCE" != "true" ]; then
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              echo "⏭️ Draft $TAG already exists; skipping (re-run with force to rebuild)."
+              exit 0
+            fi
+            echo "Force rebuild: deleting draft $TAG"
+            gh release delete "$TAG" --yes --cleanup-tag
+          elif git rev-parse "$TAG" >/dev/null 2>&1; then
+            # Tag exists without a GitHub Release object (unusual).
+            if [ "$FORCE" != "true" ]; then
+              echo "skipped=true" >> "$GITHUB_OUTPUT"
+              echo "⏭️ Git tag $TAG exists without a managed release; skipping."
+              exit 0
+            fi
+            git push origin ":refs/tags/$TAG" || true
+          fi
+
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+            echo "✅ workflow_dispatch: building draft for $TAG"
+            exit 0
+          fi
+
+          if [ "$VERSION" = "$PREV_VERSION" ]; then
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            echo "⏭️ Version $VERSION unchanged from previous commit; skipping."
+            exit 0
+          fi
+
+          if ! grep -qE "^## ${VERSION}( |$)" cli/CHANGELOG.md; then
+            echo "cli/CHANGELOG.md must contain a '## ${VERSION}' section for this uprev." >&2
+            exit 1
+          fi
+
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+          echo "✅ Version uprev ${PREV_VERSION} → ${VERSION}; building draft $TAG"
+
       - name: Validate installer
-        if: steps.check_tag.outputs.skipped == 'false'
+        if: steps.gate.outputs.skipped == 'false'
         run: sh -n cli/install.sh
 
   build:
@@ -107,35 +163,11 @@ jobs:
           name: ${{ matrix.asset }}
           path: ${{ matrix.asset }}.tar.gz
           if-no-files-found: error
+          retention-days: 14
 
-      - name: Upload to R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-        run: |
-          aws s3 cp "${{ matrix.asset }}.tar.gz" s3://${{ secrets.R2_BUCKET }}/cli-release/
-
-  approve:
-    name: manual release approval gate
+  draft-release:
+    name: create draft GitHub release
     needs: [validate, build]
-    if: needs.validate.outputs.skipped == 'false'
-    runs-on: ubuntu-latest
-    permissions:
-      issues: write
-    steps:
-      - name: Wait for approval
-        uses: trstringer/manual-approval@v1
-        with:
-          secret: ${{ secrets.GITHUB_TOKEN }}
-          approvers: playbridgeapp
-          minimum-approvals: 1
-          issue-title: "Approve PlayBridge CLI Release v${{ needs.validate.outputs.version }}"
-          issue-body: "All 5 platform builds (Linux x86_64/arm64, macOS x86_64/arm64, Windows x86_64 with static CRT) have completed successfully and uploaded to Cloudflare R2.\n\nPlease approve to publish the official GitHub Release for PlayBridge CLI v${{ needs.validate.outputs.version }}."
-
-  release:
-    name: publish CLI release
-    needs: [validate, build, approve]
     if: needs.validate.outputs.skipped == 'false'
     runs-on: ubuntu-latest
     permissions:
@@ -143,48 +175,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifacts from R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-        run: |
-          mkdir -p dist
-          aws s3 sync s3://${{ secrets.R2_BUCKET }}/cli-release/ dist/
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: playbridge-cli-*
+          path: dist
+          merge-multiple: true
 
       - name: Generate checksums
         working-directory: dist
         run: sha256sum *.tar.gz > SHA256SUMS
 
-      - name: Publish GitHub release
+      - name: Create draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: cli-v${{ needs.validate.outputs.version }}
           name: PlayBridge CLI v${{ needs.validate.outputs.version }}
+          draft: true
           body: |
             <!-- tag: 7b2c9a -->
-            **CLI:** v${{ needs.validate.outputs.version }}
+            **CLI:** v${{ needs.validate.outputs.version }} (draft)
 
-            📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/cli-v${{ needs.validate.outputs.version }}/cli/CHANGELOG.md)
+            📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/main/cli/CHANGELOG.md)
 
             Cross-platform PlayBridge sender and receiver CLI.
 
-            **Installation (macOS & Linux):**
+            This is a **draft** candidate. Publish with **Actions → CLI Publish**
+            (sets `draft=false`). Until then, `install.sh` will not pick it up as latest.
+
+            **Installation after publish (macOS & Linux):**
             ```sh
             curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh
             ```
 
-            Receiver mode requires `mpv` to be installed (`brew install mpv` or `sudo apt install mpv`).
+            Receiver mode requires `mpv` (`brew install mpv` or `sudo apt install mpv`).
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
           generate_release_notes: false
-
-      - name: Clean up R2 after release
-        if: always()
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-        run: |
-          aws s3 rm s3://${{ secrets.R2_BUCKET }}/cli-release/ --recursive

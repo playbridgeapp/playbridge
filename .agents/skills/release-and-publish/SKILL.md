@@ -15,9 +15,12 @@ description: Prepare a PlayBridge release by explicitly requested version uprevs
 | iOS phone | `mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj/project.pbxproj` | `mobile/apple/CHANGELOG.md` |
 | Apple TV | `tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj/project.pbxproj` | `tv/apple/CHANGELOG.md` |
 | Extension | `extension/manifests/chrome.json` | `extension/CHANGELOG.md` |
+| CLI | `cli/Cargo.toml` | `cli/CHANGELOG.md` |
 | Stream proxy | `stream-proxy-dart/pubspec.yaml` | `stream-proxy-dart/CHANGELOG.md` |
 
 For Desktop, keep `version: <semver>+<build>` and `kAppVersion = '<semver>'` in lockstep. CI checks this in `desktop/test/update_test.dart`.
+
+Monorepo release policy (PR checks → draft release-build on uprev → publish): see `docs/release.md`. CLI is the reference: uprev arms `cli_build.yml` (draft `cli-v*`); `cli_publish.yml` sets `draft=false`.
 
 ## Workflow
 
@@ -30,5 +33,6 @@ For Desktop, keep `version: <semver>+<build>` and `kAppVersion = '<semver>'` in 
 5. Run focused verification for each affected project. For Desktop, always run `flutter test test/update_test.dart`.
 6. Commit with a Conventional Commit message, push the feature/release branch, and create or update the PR with `gh`.
 7. Include new versions and verification results in the PR description.
+8. After merge, for CLI: confirm the **draft** GitHub Release from `CLI Release Build`, then run **CLI Publish** when ready (do not treat draft creation as public ship).
 
 Use the environment's configured Git/GitHub authentication. Do not clear or override authentication variables unless the user or environment specifically requires it.

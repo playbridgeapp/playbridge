@@ -51,3 +51,13 @@ From the repository root:
 ```sh
 cargo build --release --locked -p playbridge-cast-cli
 ```
+
+## Releasing
+
+CLI versions are independent of other monorepo products. Shipping is **uprev-gated**:
+
+1. Bump `cli/Cargo.toml` and add a section to `cli/CHANGELOG.md`.
+2. Merge to `main` → **CLI Release Build** creates a **draft** `cli-v*` GitHub Release with multi-arch archives.
+3. Run **Actions → CLI Publish** with that version to set `draft=false` (no rebuild).
+
+Full monorepo policy: [`docs/release.md`](../docs/release.md).
