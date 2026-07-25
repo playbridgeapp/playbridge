@@ -6,16 +6,28 @@ publish = false
 license = "AGPL-3.0-or-later"
 description = "UniFFI and stable C bindings for PlayBridge Cast Core"
 
+[features]
+default = []
+sender-services = [
+    "dep:playbridge-browser-receiver",
+    "dep:stream-proxy-rust",
+]
+
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
 playbridge-cast-core = { path = "../core" }
+playbridge-cast-receiver = { path = "../receiver" }
+playbridge-browser-receiver = { path = "../../browser-receiver-rust", optional = true }
+stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true }
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 thiserror = "2"
 uniffi = "0.32"
+url = "2"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.22"
