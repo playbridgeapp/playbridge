@@ -7,11 +7,11 @@
 <section class="section wrap" id="how">
   <div class="section-head">
     <span class="eyebrow">How it works</span>
-    <h2>Two apps, one bridge.</h2>
+    <h2>Senders cast. Receivers play.</h2>
     <p>
-      PlayBridge comes in two parts: a <strong>player</strong> that runs on your TV and a
-      <strong>sender</strong> that runs on your phone. Install both, keep them on the same
-      Wi-Fi, and your phone drives the big screen — no account, no cables, no cloud.
+      PlayBridge is a local-network bridge: a <strong>sender</strong> pushes media and a
+      <strong>receiver</strong> plays it. Phone, extension, Desktop, CLI, TV — mix any pair on the
+      same Wi‑Fi. No account, no cables, no cloud.
     </p>
   </div>
 
@@ -33,13 +33,18 @@
   </div>
 
   <div class="cta-row how__cta">
-    <a href="#install" class="btn btn--primary"><Icon name="download" size={14} /> Get set up</a>
-    <a href="#platforms" class="btn">Senders &amp; players, explained</a>
+    <a href="/receivers" class="btn btn--primary"
+      ><Icon name="download" size={14} /> Install a receiver</a
+    >
+    <a href="/senders" class="btn">Install a sender</a>
   </div>
 </section>
 
 <style>
-  .section-head strong { color: var(--text); font-weight: 500; }
+  .section-head strong {
+    color: var(--text);
+    font-weight: 500;
+  }
 
   .step__phase {
     display: inline-block;
@@ -60,7 +65,11 @@
     border-color: rgba(74, 144, 226, 0.25);
   }
 
-  .how__diagram { margin: -16px 0 64px; }
+  .how__diagram {
+    margin: -16px 0 64px;
+  }
 
-  .how__cta { margin-top: 48px; }
+  .how__cta {
+    margin-top: 48px;
+  }
 </style>

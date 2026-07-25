@@ -4,7 +4,7 @@
   import HowItWorks from '$lib/components/HowItWorks.svelte';
   import Platforms from '$lib/components/Platforms.svelte';
   import Features from '$lib/components/Features.svelte';
-  import Install from '$lib/components/Install.svelte';
+  import InstallCta from '$lib/components/InstallCta.svelte';
   import { SITE } from '$lib/data/site';
 
   const jsonLd = {
@@ -15,7 +15,7 @@
     applicationCategory: 'MultimediaApplication',
     operatingSystem: 'Android, Android TV, tvOS, macOS, Windows, Linux',
     url: SITE.url,
-    downloadUrl: `${SITE.github}/releases`,
+    downloadUrl: `${SITE.url}/receivers`,
     softwareVersion: SITE.version,
     license: 'https://www.gnu.org/licenses/gpl-3.0.html',
     offers: {
@@ -33,4 +33,4 @@
 <HowItWorks />
 <Platforms />
 <Features />
-<Install />
+<InstallCta />
