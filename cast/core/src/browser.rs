@@ -116,6 +116,8 @@ pub enum BrowserToHostFrame {
         #[serde(rename = "receiverId")]
         receiver_id: String,
         name: String,
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "sessionId")]
+        session_id: Option<String>,
     },
     Capabilities {
         capabilities: BrowserCapabilities,
@@ -211,6 +213,7 @@ mod tests {
             protocol_version: BROWSER_PROTOCOL_VERSION,
             receiver_id: "browser-1".into(),
             name: "Living Room Browser".into(),
+            session_id: None,
         };
         assert_eq!(
             serde_json::to_value(frame).unwrap()["protocolVersion"],

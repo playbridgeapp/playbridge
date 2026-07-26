@@ -506,7 +506,28 @@ class BrowserTransport extends TvTransport {
     String? token,
     String? expectedPin,
   }) async {
-    await disconnect();
+    // Already bound to this browser session — do not tear it down.
+    // Re-entrancy used to call disconnectBrowser(current) and kill a live tab
+    // (e.g. when capabilities/status re-triggered activation after connect).
+    if (_sessionId == tv.uuid && _current == SenderConnectionState.connected) {
+      return;
+    }
+
+    final previous = _sessionId;
+    _sessionId = null;
+    await _events?.cancel();
+    _events = null;
+
+    // Only close a *different* host session. Never disconnect the session we
+    // are about to adopt (refresh/reconnect hands us a new sessionId).
+    if (previous != null && previous != tv.uuid) {
+      try {
+        await _services.disconnectBrowser(previous);
+      } on Object {
+        // Previous tab may already have closed during refresh.
+      }
+    }
+
     _sessionId = tv.uuid;
     _events = _services.events.listen(_onEvent);
     _setState(SenderConnectionState.connected);
@@ -533,7 +554,7 @@ class BrowserTransport extends TvTransport {
     return castBrowserMedia(
       url: video.url,
       title: video.hasTitle() ? video.title : null,
-      contentType: _contentTypeForUrl(video.url),
+      contentType: browserContentTypeForUrl(video.url),
       posterUrl: video.posterUrlOrNull,
       subtitleUrl: video.subtitlesOrNull?.first,
       startPosition: video.startPositionMsOrNull == null
@@ -558,7 +579,7 @@ class BrowserTransport extends TvTransport {
         url: url,
         title: title,
         contentType: contentType == null || contentType.isEmpty
-            ? _contentTypeForUrl(url)
+            ? browserContentTypeForUrl(url)
             : contentType,
         posterUrl: posterUrl,
         subtitleUrl: subtitleUrl,
@@ -569,13 +590,6 @@ class BrowserTransport extends TvTransport {
       _emitError('load', error);
       return false;
     }
-  }
-
-  String? _contentTypeForUrl(String url) {
-    final path = Uri.tryParse(url)?.path.toLowerCase() ?? url.toLowerCase();
-    if (path.endsWith('.mpd')) return 'application/dash+xml';
-    if (path.endsWith('.m3u8')) return 'application/vnd.apple.mpegurl';
-    return null;
   }
 
   @override
@@ -712,4 +726,35 @@ abstract class TvTransportFactory {
         return BrowserTransport();
     }
   }
+}
+
+/// Infer a browser-friendly content type from a media URL path/query.
+///
+/// Prefer an explicit type from the sender when available; this is the
+/// fallback used when casting bare URLs into the web receiver.
+@visibleForTesting
+String? browserContentTypeForUrl(String url) {
+  final uri = Uri.tryParse(url);
+  final path = (uri?.path ?? url).toLowerCase();
+  final query = uri?.query.toLowerCase() ?? '';
+
+  if (path.endsWith('.mpd') ||
+      query.contains('format=mpd') ||
+      query.contains('type=mpd')) {
+    return 'application/dash+xml';
+  }
+  if (path.endsWith('.m3u8') ||
+      path.endsWith('.m3u') ||
+      query.contains('format=m3u8') ||
+      query.contains('type=m3u8') ||
+      query.contains('ext=m3u8')) {
+    return 'application/vnd.apple.mpegurl';
+  }
+  if (path.endsWith('.webm')) return 'video/webm';
+  if (path.endsWith('.mp4') || path.endsWith('.m4v') || path.endsWith('.m4a')) {
+    return path.endsWith('.m4a') ? 'audio/mp4' : 'video/mp4';
+  }
+  if (path.endsWith('.mp3')) return 'audio/mpeg';
+  if (path.endsWith('.ogg') || path.endsWith('.ogv')) return 'video/ogg';
+  return null;
 }
