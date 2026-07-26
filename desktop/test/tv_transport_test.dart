@@ -25,6 +25,53 @@ void main() {
       expect(googleCastTransport, isA<GoogleCastTransport>());
       expect(googleCastTransport.protocol, equals(TvProtocol.googleCast));
       expect(googleCastTransport.supportsPairing, isFalse);
+
+      // BrowserTransport needs a live SenderServices worker; content-type
+      // helpers below cover the pure browser URL logic without native services.
+    });
+  });
+
+  group('browserContentTypeForUrl', () {
+    test('detects HLS and DASH from path and query', () {
+      expect(
+        browserContentTypeForUrl('https://cdn.example/video.m3u8'),
+        'application/vnd.apple.mpegurl',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/master.m3u8?token=x'),
+        'application/vnd.apple.mpegurl',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/stream?format=m3u8'),
+        'application/vnd.apple.mpegurl',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/manifest.mpd'),
+        'application/dash+xml',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/v?type=mpd'),
+        'application/dash+xml',
+      );
+    });
+
+    test('detects progressive media extensions', () {
+      expect(
+        browserContentTypeForUrl('https://cdn.example/clip.mp4'),
+        'video/mp4',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/clip.webm'),
+        'video/webm',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/track.mp3'),
+        'audio/mpeg',
+      );
+      expect(
+        browserContentTypeForUrl('https://cdn.example/unknown.bin'),
+        isNull,
+      );
     });
   });
 }

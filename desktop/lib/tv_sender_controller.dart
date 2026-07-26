@@ -45,8 +45,12 @@ class TvSenderController extends ChangeNotifier {
   List<DiscoveredTv> _discoveredRaw = const [];
   final Map<String, DiscoveredTv> _browserReceivers = {};
   final Map<String, BrowserPairingRequest> _browserPairingRequests = {};
+
+  /// sessionId → stable browser receiverId (localStorage identity).
+  final Map<String, String> _browserSessionReceiverIds = {};
   BrowserHostInfo? _browserHost;
   String? _browserSessionToActivate;
+  String? _lastBrowserError;
   bool _isScanning = false;
   SenderConnectionState _state = SenderConnectionState.disconnected;
   DiscoveredTv? _pending; // target of the in-flight / most recent connect
@@ -82,6 +86,26 @@ class TvSenderController extends ChangeNotifier {
   bool get browserReceiverRunning => _browserHost != null;
   List<BrowserPairingRequest> get browserPairingRequests =>
       List.unmodifiable(_browserPairingRequests.values);
+
+  /// Best LAN URL for a TV browser to open (non-loopback preferred).
+  String? get browserPrimaryUrl {
+    final urls = _browserHost?.urls;
+    if (urls == null || urls.isEmpty) return null;
+    for (final value in urls) {
+      final host = Uri.tryParse(value)?.host;
+      if (host != null &&
+          host.isNotEmpty &&
+          host != '127.0.0.1' &&
+          host != 'localhost' &&
+          host != '::1') {
+        return value;
+      }
+    }
+    return urls.first;
+  }
+
+  /// Last browser playback/load error (cleared on successful playback).
+  String? get lastBrowserError => _lastBrowserError;
 
   bool get castRouteThroughProxy => _identity.castRouteThroughProxy;
 
@@ -151,8 +175,10 @@ class TvSenderController extends ChangeNotifier {
     await StreamProxyServer.instance.services.stopBrowser();
     _browserHost = null;
     _browserSessionToActivate = null;
+    _lastBrowserError = null;
     _browserPairingRequests.clear();
     _browserReceivers.clear();
+    _browserSessionReceiverIds.clear();
     notifyListeners();
   }
 
@@ -160,6 +186,7 @@ class TvSenderController extends ChangeNotifier {
   /// receiver confirms the paired session.
   Future<void> approveBrowser(String sessionId, String code) async {
     _browserSessionToActivate = sessionId;
+    _lastBrowserError = null;
     try {
       await StreamProxyServer.instance.services.approveBrowser(
         sessionId: sessionId,
@@ -171,6 +198,40 @@ class TvSenderController extends ChangeNotifier {
       }
       rethrow;
     }
+  }
+
+  /// Drop auto-approve for the active browser and disconnect it.
+  ///
+  /// The next open of that tab requires a new PIN (host still running).
+  Future<void> forgetActiveBrowserReceiver() async {
+    final active = _activeTv;
+    if (active == null || active.protocol != TvProtocol.webBrowser) return;
+    final receiverId = _browserSessionReceiverIds[active.uuid];
+    if (receiverId == null || receiverId.isEmpty) {
+      await disconnect();
+      return;
+    }
+    try {
+      await StreamProxyServer.instance.services
+          .forgetBrowserReceiver(receiverId);
+    } on Object {
+      // Host may have already stopped; still clear local bookkeeping.
+    }
+    final sessionIds = _browserSessionReceiverIds.entries
+        .where((entry) => entry.value == receiverId)
+        .map((entry) => entry.key)
+        .toList();
+    for (final sessionId in sessionIds) {
+      _browserSessionReceiverIds.remove(sessionId);
+      _browserReceivers.remove(sessionId);
+    }
+    _browserPairingRequests
+        .removeWhere((_, request) => request.receiverId == receiverId);
+    if (_transport.protocol == TvProtocol.webBrowser) {
+      await _transport.disconnect();
+    }
+    _lastBrowserError = null;
+    notifyListeners();
   }
 
   void _bindTransportSubscriptions() {
@@ -604,8 +665,14 @@ class TvSenderController extends ChangeNotifier {
       if (type == 'status') {
         final state = (obj['state'] as String?)?.toLowerCase();
         if (state != null && _terminalStates.contains(state)) {
+          if (state == 'error') {
+            _lastBrowserError ??= 'Browser playback failed';
+          }
           _clearNowCasting();
           return;
+        }
+        if (state == 'playing' || state == 'buffering' || state == 'paused') {
+          _lastBrowserError = null;
         }
         _remoteState = state ?? _remoteState;
         _remotePositionMs =
@@ -614,6 +681,13 @@ class TvSenderController extends ChangeNotifier {
             (obj['duration'] as num?)?.toInt() ?? _remoteDurationMs;
         final t = obj['title'] as String?;
         if (t != null && t.isNotEmpty) _castingTitle = t;
+        notifyListeners();
+      } else if (type == 'error') {
+        final message = obj['message']?.toString();
+        _lastBrowserError = (message == null || message.isEmpty)
+            ? 'Browser playback failed'
+            : message;
+        _clearNowCasting();
         notifyListeners();
       } else if (type == 'context') {
         // The TV broadcasts context 'idle' when its player activity goes away
@@ -677,6 +751,7 @@ class TvSenderController extends ChangeNotifier {
         if (receiverId != null && receiverId.isNotEmpty) {
           _browserPairingRequests
               .removeWhere((_, request) => request.receiverId == receiverId);
+          _browserSessionReceiverIds[sessionId] = receiverId;
         }
         final receiver = DiscoveredTv(
           uuid: sessionId,
@@ -699,8 +774,15 @@ class TvSenderController extends ChangeNotifier {
                 (!wasKnown && _browserReceivers.length == 1));
         if (shouldActivate) {
           _browserSessionToActivate = null;
+          _lastBrowserError = null;
           unawaited(_activateBrowserReceiver(receiver));
         }
+      } else if (kind == 'error') {
+        final message = event['message']?.toString();
+        _lastBrowserError = (message == null || message.isEmpty)
+            ? 'Browser playback failed'
+            : message;
+        _clearNowCasting();
       }
       notifyListeners();
       return;
@@ -713,6 +795,7 @@ class TvSenderController extends ChangeNotifier {
         }
         _browserPairingRequests.remove(sessionId);
         _browserReceivers.remove(sessionId);
+        _browserSessionReceiverIds.remove(sessionId);
         // If this was only an old session dying during refresh, a newer
         // browser receiver may already be live — leave transport alone; the
         // BrowserTransport filters disconnect events by its bound sessionId.

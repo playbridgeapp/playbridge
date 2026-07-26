@@ -71,6 +71,10 @@ enum ServicesCommand {
         request_id: Value,
         session_id: String,
     },
+    BrowserForget {
+        request_id: Value,
+        receiver_id: String,
+    },
     Shutdown {
         request_id: Value,
     },
@@ -88,6 +92,7 @@ impl ServicesCommand {
             | Self::BrowserLoad { request_id, .. }
             | Self::BrowserControl { request_id, .. }
             | Self::BrowserDisconnect { request_id, .. }
+            | Self::BrowserForget { request_id, .. }
             | Self::Shutdown { request_id } => request_id,
         }
     }
@@ -103,6 +108,7 @@ impl ServicesCommand {
             Self::BrowserLoad { .. } => "browser_load",
             Self::BrowserControl { .. } => "browser_control",
             Self::BrowserDisconnect { .. } => "browser_disconnect",
+            Self::BrowserForget { .. } => "browser_forget",
             Self::Shutdown { .. } => "shutdown",
         }
     }
@@ -350,6 +356,12 @@ async fn process_command(
         },
         ServicesCommand::BrowserDisconnect { session_id, .. } => match browser_service {
             Some(service) => Ok(json!({"disconnected": service.disconnect(&session_id)})),
+            None => Err("browser receiver host is not running".into()),
+        },
+        ServicesCommand::BrowserForget { receiver_id, .. } => match browser_service {
+            Some(service) => Ok(json!({
+                "forgotten": service.forget_receiver(&receiver_id),
+            })),
             None => Err("browser receiver host is not running".into()),
         },
         ServicesCommand::Shutdown { .. } => return true,

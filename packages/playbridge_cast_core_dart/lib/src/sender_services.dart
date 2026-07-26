@@ -194,6 +194,14 @@ final class SenderServices implements Finalizable {
         'session_id': sessionId,
       }))['disconnected']! as bool;
 
+  /// Clear auto-approve for [receiverId] and disconnect any live sessions.
+  /// Returns how many sessions were closed.
+  Future<int> forgetBrowserReceiver(String receiverId) async =>
+      ((await _submitData('browser_forget', {
+        'receiver_id': receiverId,
+      }))['forgotten']! as num)
+          .toInt();
+
   Future<void> _submitVoid(
     String command, [
     Map<String, Object?> fields = const {},

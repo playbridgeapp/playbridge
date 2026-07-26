@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'context_menu_installer.dart';
 import 'native_host_installer.dart';
@@ -158,16 +159,31 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         const SizedBox(height: 20),
         _BrowserReceiverCard(
           running: controller.browserReceiverRunning,
+          primaryUrl: controller.browserPrimaryUrl,
           urls: controller.browserHost?.urls ?? const [],
+          port: controller.browserHost?.port,
           requests: controller.browserPairingRequests,
           activeReceiverName: controller.isConnected &&
                   controller.activeTv?.protocol == TvProtocol.webBrowser
               ? controller.activeTv?.name
               : null,
+          lastError: controller.activeTv?.protocol == TvProtocol.webBrowser
+              ? controller.lastBrowserError
+              : null,
           onStart: _startBrowserReceiver,
           onStop: _stopBrowserReceiver,
           onApprove: _approveBrowser,
           onCastFiles: _pickAndCast,
+          onForget: controller.isConnected &&
+                  controller.activeTv?.protocol == TvProtocol.webBrowser
+              ? () async {
+                  try {
+                    await controller.forgetActiveBrowserReceiver();
+                  } on Object catch (error) {
+                    _snack('Could not forget browser: $error');
+                  }
+                }
+              : null,
         ),
         const SizedBox(height: 20),
         _StatusBanner(
@@ -490,26 +506,38 @@ class _DropOverlay extends StatelessWidget {
 class _BrowserReceiverCard extends StatelessWidget {
   const _BrowserReceiverCard({
     required this.running,
+    required this.primaryUrl,
     required this.urls,
+    required this.port,
     required this.requests,
     required this.activeReceiverName,
+    required this.lastError,
     required this.onStart,
     required this.onStop,
     required this.onApprove,
     required this.onCastFiles,
+    required this.onForget,
   });
 
   final bool running;
+  final String? primaryUrl;
   final List<String> urls;
+  final int? port;
   final List<BrowserPairingRequest> requests;
   final String? activeReceiverName;
+  final String? lastError;
   final Future<void> Function() onStart;
   final Future<void> Function() onStop;
   final Future<void> Function(BrowserPairingRequest) onApprove;
   final Future<void> Function() onCastFiles;
+  final Future<void> Function()? onForget;
 
   @override
   Widget build(BuildContext context) {
+    final primary = primaryUrl;
+    final primaryUri = primary == null ? null : Uri.tryParse(primary);
+    final otherUrls = urls.where((url) => url != primary).toList();
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -545,26 +573,115 @@ class _BrowserReceiverCard extends StatelessWidget {
           const SizedBox(height: 6),
           Text(
             running
-                ? 'Open one of these addresses in the TV browser and enter its code here. The paired browser becomes the active cast target automatically.'
+                ? 'On the TV, open the browser and type this address. Enter the on-screen code here. QR codes are not useful on most TVs — use the large URL below.'
                 : 'Use a browser-only TV, console, or computer as a temporary receiver. The host starts only when requested.',
             style: TextStyle(
               fontSize: 12,
               color: Colors.white.withValues(alpha: 0.58),
             ),
           ),
-          if (running && urls.isNotEmpty) ...[
-            const SizedBox(height: 10),
-            for (final url in urls)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 3),
-                child: SelectableText(
-                  url,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.tealAccent,
-                  ),
+          if (running && primary != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
+              decoration: BoxDecoration(
+                color: Colors.tealAccent.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: Colors.tealAccent.withValues(alpha: 0.28),
                 ),
               ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Open on TV browser',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white.withValues(alpha: 0.55),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    primary,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.tealAccent,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  if (primaryUri != null && primaryUri.host.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      'IP ${primaryUri.host}   ·   port ${primaryUri.hasPort ? primaryUri.port : (port ?? '')}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withValues(alpha: 0.62),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () async {
+                        await Clipboard.setData(ClipboardData(text: primary));
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('URL copied')),
+                          );
+                        }
+                      },
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('Copy URL'),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (otherUrls.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Other local addresses',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.white.withValues(alpha: 0.45),
+                ),
+              ),
+              const SizedBox(height: 4),
+              for (final url in otherUrls)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 2),
+                  child: SelectableText(
+                    url,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white.withValues(alpha: 0.5),
+                    ),
+                  ),
+                ),
+            ],
+          ],
+          if (lastError != null && lastError!.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.redAccent.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: Colors.redAccent.withValues(alpha: 0.28),
+                ),
+              ),
+              child: Text(
+                lastError!,
+                style: const TextStyle(fontSize: 12, color: Colors.redAccent),
+              ),
+            ),
           ],
           if (activeReceiverName != null) ...[
             const SizedBox(height: 12),
@@ -577,25 +694,39 @@ class _BrowserReceiverCard extends StatelessWidget {
                   color: Colors.greenAccent.withValues(alpha: 0.24),
                 ),
               ),
-              child: Row(
+              child: Column(
                 children: [
-                  const Icon(
-                    Icons.cast_connected,
-                    size: 18,
-                    color: Colors.greenAccent,
+                  Row(
+                    children: [
+                      const Icon(
+                        Icons.cast_connected,
+                        size: 18,
+                        color: Colors.greenAccent,
+                      ),
+                      const SizedBox(width: 9),
+                      Expanded(
+                        child: Text(
+                          '$activeReceiverName is ready to receive media.',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      FilledButton.icon(
+                        onPressed: onCastFiles,
+                        icon: const Icon(Icons.video_file, size: 17),
+                        label: const Text('Cast files…'),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 9),
-                  Expanded(
-                    child: Text(
-                      '$activeReceiverName is ready to receive media.',
-                      style: const TextStyle(fontSize: 12),
+                  if (onForget != null) ...[
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: onForget,
+                        child: const Text('Forget this browser'),
+                      ),
                     ),
-                  ),
-                  FilledButton.icon(
-                    onPressed: onCastFiles,
-                    icon: const Icon(Icons.video_file, size: 17),
-                    label: const Text('Cast files…'),
-                  ),
+                  ],
                 ],
               ),
             ),

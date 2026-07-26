@@ -18,6 +18,8 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
   var mediaActive = false;
   var statusHideTimer = null;
   var lastPlaybackStatusKey = null;
+  /** Bumps on every load/teardown so late media events ignore stale work. */
+  var loadGeneration = 0;
 
   function receiverId() {
     var key = 'playbridge.browser.receiverId';
@@ -63,17 +65,12 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     socket = new WebSocket(scheme + '//' + location.host + '/v1/browser/ws');
     socket.onopen = function () {
       setStatus('Connected — waiting for approval');
-      var helloFrame = {
+      send({
         type: 'hello',
         protocolVersion: 1,
         receiverId: receiverId(),
         name: receiverName()
-      };
-      var savedSessionId = localStorage.getItem('playbridge.browser.sessionId');
-      if (savedSessionId) {
-        helloFrame.sessionId = savedSessionId;
-      }
-      send(helloFrame);
+      });
       sendCapabilities();
     };
     socket.onmessage = function (event) {
@@ -85,7 +82,8 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
       teardownPlayer();
       setup.style.display = 'block';
       playerWrap.style.display = 'none';
-      instructions.textContent = 'Disconnected. Reload this page to create a new session.';
+      instructions.textContent =
+        'Disconnected from PlayBridge. Reload this page after the host is running again.';
       code.textContent = '';
       setStatus('Disconnected', true);
     };
@@ -107,7 +105,7 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     send({
       type: 'capabilities',
       capabilities: {
-        nativeHls: player.canPlayType('application/vnd.apple.mpegurl') !== '',
+        nativeHls: supportsNativeHls(),
         mediaSource: typeof window.MediaSource !== 'undefined',
         hlsJs: Hls.isSupported(),
         dashJs: dashJsSupported,
@@ -116,6 +114,10 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
         mimeTypes: mimeTypes
       }
     });
+  }
+
+  function supportsNativeHls() {
+    return player.canPlayType('application/vnd.apple.mpegurl') !== '';
   }
 
   function supportsDash() {
@@ -130,6 +132,7 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     if (typeof error.message === 'string' && error.message) return error.message;
     if (error.error) return errorMessage(error.error, fallback);
     if (error.event) return errorMessage(error.event, fallback);
+    if (typeof error.type === 'string' && error.type) return error.type;
     return fallback;
   }
 
@@ -147,13 +150,9 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
         deviceName.textContent = receiverName();
         break;
       case 'pairing_approved':
-        if (frame.sessionId) {
-          localStorage.setItem('playbridge.browser.sessionId', frame.sessionId);
-        }
         showReadyScreen();
         break;
       case 'pairing_denied':
-        localStorage.removeItem('playbridge.browser.sessionId');
         instructions.textContent = frame.reason || 'Pairing failed';
         code.textContent = '';
         setStatus('Pairing failed', true);
@@ -165,7 +164,9 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
         instructions.textContent = frame.reason || 'Disconnected by PlayBridge';
         code.textContent = '';
         setStatus('Disconnected', true);
-        socket.close();
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
         break;
       case 'load':
         loadMedia(frame.requestId, frame.media);
@@ -180,16 +181,27 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
   }
 
   function teardownPlayer() {
-    // Set this before pause/load so their synchronous media events cannot
-    // report a trailing "paused" state after stop or disconnect.
+    // Invalidate in-flight load callbacks before pause/load so their media
+    // events cannot report a trailing state after stop or a newer cast.
+    loadGeneration += 1;
     mediaActive = false;
-    if (hls) { hls.destroy(); hls = null; }
-    if (dash) { dash.destroy(); dash = null; }
-    player.pause();
+    if (hls) {
+      try { hls.destroy(); } catch (_) {}
+      hls = null;
+    }
+    if (dash) {
+      try { dash.destroy(); } catch (_) {}
+      dash = null;
+    }
+    try {
+      player.pause();
+    } catch (_) {}
     player.removeAttribute('src');
     player.removeAttribute('poster');
     while (player.firstChild) player.removeChild(player.firstChild);
-    player.load();
+    try {
+      player.load();
+    } catch (_) {}
     playOverlay.style.display = 'none';
   }
 
@@ -204,8 +216,39 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     setStatus('Ready');
   }
 
+  function pathFromUrl(url) {
+    try {
+      var parsed = new URL(url, location.href);
+      return (parsed.pathname || '').toLowerCase();
+    } catch (_) {
+      return String(url || '').split('?')[0].split('#')[0].toLowerCase();
+    }
+  }
+
+  function detectStreamKind(url, contentType) {
+    var type = (contentType || '').toLowerCase();
+    var path = pathFromUrl(url);
+    if (
+      type.indexOf('mpegurl') >= 0 ||
+      type.indexOf('x-mpegurl') >= 0 ||
+      /\.m3u8$/i.test(path) ||
+      /[?&](format|type|ext)=m3u8\b/i.test(url)
+    ) {
+      return 'hls';
+    }
+    if (
+      type.indexOf('dash') >= 0 ||
+      type.indexOf('mpd') >= 0 ||
+      /\.mpd$/i.test(path)
+    ) {
+      return 'dash';
+    }
+    return 'progressive';
+  }
+
   function loadMedia(requestId, media) {
     teardownPlayer();
+    var generation = loadGeneration;
     mediaActive = true;
     currentTitle = media.title || null;
     if (media.posterUrl) player.poster = media.posterUrl;
@@ -220,17 +263,50 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     }
     setup.style.display = 'none';
     playerWrap.style.display = 'block';
+
     var url = media.url;
-    var type = (media.contentType || '').toLowerCase();
-    var isHls = type.indexOf('mpegurl') >= 0 || /\.m3u8(?:$|\?)/i.test(url);
-    var isDash = type.indexOf('dash') >= 0 || /\.mpd(?:$|\?)/i.test(url);
+    var kind = detectStreamKind(url, media.contentType);
     var nativeSource = true;
-    if (isHls && Hls.isSupported()) {
-      nativeSource = false;
-      hls = new Hls({ enableWorker: true, lowLatencyMode: true });
-      hls.loadSource(url);
-      hls.attachMedia(player);
-    } else if (isDash) {
+
+    if (kind === 'hls') {
+      // Prefer Safari/native HLS when the engine can play it; hls.js elsewhere.
+      if (supportsNativeHls()) {
+        nativeSource = true;
+        player.src = url;
+      } else if (Hls.isSupported()) {
+        nativeSource = false;
+        hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: false,
+          // Avoid noisy retries that leave Desktop thinking we are still casting.
+          manifestLoadingMaxRetry: 2,
+          levelLoadingMaxRetry: 2,
+          fragLoadingMaxRetry: 3
+        });
+        hls.on(Hls.Events.ERROR, function (_event, data) {
+          if (generation !== loadGeneration || !mediaActive) return;
+          if (!data) return;
+          if (data.fatal) {
+            reportPlaybackError(
+              requestId,
+              data.details || data.type,
+              'HLS playback error'
+            );
+            try { hls.destroy(); } catch (_) {}
+            hls = null;
+          }
+        });
+        hls.loadSource(url);
+        hls.attachMedia(player);
+      } else {
+        reportPlaybackError(
+          requestId,
+          null,
+          'This browser cannot play HLS streams'
+        );
+        return;
+      }
+    } else if (kind === 'dash') {
       if (!supportsDash()) {
         reportPlaybackError(
           requestId,
@@ -243,24 +319,42 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
       try {
         dash = DashMediaPlayer().create();
         dash.on(DashMediaPlayer.events.ERROR, function (event) {
+          if (generation !== loadGeneration || !mediaActive) return;
           reportPlaybackError(requestId, event, 'DASH playback error');
         });
         dash.initialize(player, url, false);
       } catch (error) {
-        if (dash) { dash.destroy(); dash = null; }
+        if (dash) {
+          try { dash.destroy(); } catch (_) {}
+          dash = null;
+        }
         reportPlaybackError(requestId, error, 'Could not start DASH playback');
         return;
       }
     } else {
       player.src = url;
     }
-    player.addEventListener('loadedmetadata', function once() {
-      player.removeEventListener('loadedmetadata', once);
-      if (media.startPositionMs) player.currentTime = media.startPositionMs / 1000;
+
+    function onLoadedMetadata() {
+      player.removeEventListener('loadedmetadata', onLoadedMetadata);
+      if (generation !== loadGeneration || !mediaActive) return;
+      if (media.startPositionMs) {
+        try {
+          player.currentTime = media.startPositionMs / 1000;
+        } catch (_) {}
+      }
       send({ type: 'ready', requestId: requestId });
       tryPlay(requestId);
-    });
-    if (nativeSource) player.load();
+    }
+    player.addEventListener('loadedmetadata', onLoadedMetadata);
+    if (nativeSource) {
+      try {
+        player.load();
+      } catch (error) {
+        reportPlaybackError(requestId, error, 'Could not load media');
+        return;
+      }
+    }
     sendStatus(requestId, 'buffering');
   }
 
@@ -268,6 +362,7 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     var promise = player.play();
     if (promise && promise.catch) {
       promise.catch(function () {
+        if (!mediaActive) return;
         playOverlay.style.display = 'grid';
         sendStatus(requestId, 'autoplay_blocked');
       });
@@ -287,10 +382,16 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
         showReadyScreen();
         return;
       case 'seek':
-        if (typeof frame.value === 'number') player.currentTime = Math.max(0, frame.value / 1000);
+        if (typeof frame.value === 'number') {
+          try {
+            player.currentTime = Math.max(0, frame.value / 1000);
+          } catch (_) {}
+        }
         break;
       case 'set_volume':
-        if (typeof frame.value === 'number') player.volume = Math.max(0, Math.min(1, frame.value));
+        if (typeof frame.value === 'number') {
+          player.volume = Math.max(0, Math.min(1, frame.value));
+        }
         break;
     }
     sendStatus(frame.requestId);

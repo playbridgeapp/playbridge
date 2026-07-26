@@ -39,6 +39,10 @@ const RECEIVER_JS: &str = include_str!("../web/dist/receiver.js");
 const DEFAULT_PAIRING_TTL: Duration = Duration::from_secs(120);
 const MAX_PAIRING_ATTEMPTS: u8 = 3;
 const MAX_PORT_ATTEMPTS: u16 = 10;
+/// Cap unapproved "waiting to pair" sessions (refresh spam / multi-tab storms).
+const MAX_PENDING_SESSIONS: usize = 8;
+/// Cap approved live browser sessions (tabs that can receive media).
+const MAX_APPROVED_SESSIONS: usize = 4;
 
 #[derive(Debug, Clone)]
 pub struct BrowserReceiverConfig {
@@ -299,6 +303,25 @@ impl BrowserReceiverService {
         true
     }
 
+    /// Drop auto-approve for `receiver_id` and disconnect any live sessions for it.
+    ///
+    /// The next connect from that browser must enter a new PIN. Used when the
+    /// user explicitly forgets a browser while the host is still running.
+    pub fn forget_receiver(&self, receiver_id: &str) -> usize {
+        self.state.approved_receivers.remove(receiver_id);
+        let live = self
+            .state
+            .sessions
+            .iter()
+            .filter(|entry| entry.receiver_id == receiver_id)
+            .map(|entry| entry.session_id.clone())
+            .collect::<Vec<_>>();
+        for session_id in &live {
+            self.disconnect(session_id);
+        }
+        live.len()
+    }
+
     /// Close every live session for `receiver_id` except `keep_session_id`.
     ///
     /// Used when the same browser identity reconnects (refresh / new tab) so
@@ -317,6 +340,40 @@ impl BrowserReceiverService {
             let _ = entry.sender.send(HostToBrowserFrame::Disconnect {
                 reason: "Replaced by a newer browser session".into(),
             });
+        }
+    }
+
+    fn pending_session_count(&self) -> usize {
+        self.state
+            .sessions
+            .iter()
+            .filter(|entry| !entry.approved.load(Ordering::Acquire))
+            .count()
+    }
+
+    fn approved_session_count(&self) -> usize {
+        self.state
+            .sessions
+            .iter()
+            .filter(|entry| entry.approved.load(Ordering::Acquire))
+            .count()
+    }
+
+    /// Whether a new connection for this identity can be accepted under caps.
+    /// Reconnects that supersede the same `receiver_id` always fit (they free a slot).
+    fn can_accept_connection(&self, receiver_id: &str, auto_approved: bool) -> bool {
+        let same_identity_live = self
+            .state
+            .sessions
+            .iter()
+            .any(|entry| entry.receiver_id == receiver_id);
+        if same_identity_live {
+            return true;
+        }
+        if auto_approved {
+            self.approved_session_count() < MAX_APPROVED_SESSIONS
+        } else {
+            self.pending_session_count() < MAX_PENDING_SESSIONS
         }
     }
 
@@ -350,8 +407,13 @@ impl BrowserReceiverService {
         for entry in self.state.sessions.iter() {
             entry.closed.store(true, Ordering::Release);
             entry.closed_notify.notify_waiters();
+            let _ = entry.sender.send(HostToBrowserFrame::Disconnect {
+                reason: "PlayBridge browser host stopped".into(),
+            });
         }
         self.state.sessions.clear();
+        // Host stop always forgets approved browsers (in-memory allowlist).
+        self.state.approved_receivers.clear();
     }
 }
 
@@ -521,7 +583,9 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
         protocol_version,
         receiver_id,
         name,
-        session_id: _requested_session_id,
+        // Optional client hint only; approval is keyed by receiver_id while
+        // the host process is alive. Kept for forward-compatible clients.
+        session_id: _,
     }) = hello
     else {
         let _ = socket.close().await;
@@ -536,6 +600,22 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
     }
 
     let auto_approved = service.state.approved_receivers.contains(&receiver_id);
+    if !service.can_accept_connection(&receiver_id, auto_approved) {
+        let deny = HostToBrowserFrame::PairingDenied {
+            session_id: String::new(),
+            reason: if auto_approved {
+                "Too many connected browser receivers".into()
+            } else {
+                "Too many browsers waiting to pair".into()
+            },
+        };
+        if let Ok(text) = serde_json::to_string(&deny) {
+            let _ = socket.send(Message::Text(text)).await;
+        }
+        let _ = socket.close().await;
+        return;
+    }
+
     let session_id = random_id();
 
     let pairing_code = random_code();
@@ -722,17 +802,36 @@ async fn handle_browser_frame(
 }
 
 pub fn local_urls(port: u16) -> Vec<String> {
-    let mut addresses = get_if_addrs()
-        .unwrap_or_default()
-        .into_iter()
+    let interfaces = get_if_addrs().unwrap_or_default();
+    let mut preferred = interfaces
+        .iter()
         .filter(|interface| !interface.is_loopback())
+        .filter(|interface| !is_likely_vpn_interface(&interface.name))
         .filter_map(|interface| match interface.ip() {
             IpAddr::V4(address) if address.is_private() => Some(address),
             _ => None,
         })
         .collect::<Vec<_>>();
-    addresses.sort_unstable();
-    addresses.dedup();
+    preferred.sort_unstable();
+    preferred.dedup();
+
+    // Fall back to any private IPv4 (including VPN) when nothing else is usable.
+    let addresses = if preferred.is_empty() {
+        let mut all = interfaces
+            .into_iter()
+            .filter(|interface| !interface.is_loopback())
+            .filter_map(|interface| match interface.ip() {
+                IpAddr::V4(address) if address.is_private() => Some(address),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        all.sort_unstable();
+        all.dedup();
+        all
+    } else {
+        preferred
+    };
+
     if addresses.is_empty() {
         return vec![format!("http://127.0.0.1:{port}")];
     }
@@ -740,6 +839,19 @@ pub fn local_urls(port: u16) -> Vec<String> {
         .into_iter()
         .map(|address| format!("http://{address}:{port}"))
         .collect()
+}
+
+fn is_likely_vpn_interface(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with("utun")
+        || lower.starts_with("tun")
+        || lower.starts_with("tap")
+        || lower.starts_with("wg")
+        || lower.starts_with("ppp")
+        || lower.starts_with("ipsec")
+        || lower.contains("wireguard")
+        || lower.contains("tailscale")
+        || lower.contains("zerotier")
 }
 
 fn random_id() -> String {
@@ -1112,6 +1224,157 @@ mod tests {
         assert_eq!(live[0].session_id, second_session);
 
         host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pending_session_cap_rejects_extra_identities() {
+        let host = BrowserReceiverHost::start(BrowserReceiverConfig {
+            address: "127.0.0.1".parse().unwrap(),
+            preferred_port: 0,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let ws_url = format!("ws://127.0.0.1:{}/v1/browser/ws", host.local_addr().port());
+        let mut sockets = Vec::new();
+        for i in 0..super::MAX_PENDING_SESSIONS {
+            let (mut socket, _) = connect_async(&ws_url).await.unwrap();
+            socket
+                .send(Message::Text(
+                    serde_json::to_string(&BrowserToHostFrame::Hello {
+                        protocol_version: BROWSER_PROTOCOL_VERSION,
+                        receiver_id: format!("pending-{i}"),
+                        name: format!("Pending {i}"),
+                        session_id: None,
+                    })
+                    .unwrap()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let frame = socket.next().await.unwrap().unwrap().into_text().unwrap();
+            assert!(matches!(
+                serde_json::from_str::<HostToBrowserFrame>(&frame).unwrap(),
+                HostToBrowserFrame::PairingRequired { .. }
+            ));
+            sockets.push(socket);
+        }
+
+        let (mut overflow, _) = connect_async(&ws_url).await.unwrap();
+        overflow
+            .send(Message::Text(
+                serde_json::to_string(&BrowserToHostFrame::Hello {
+                    protocol_version: BROWSER_PROTOCOL_VERSION,
+                    receiver_id: "pending-overflow".into(),
+                    name: "Overflow".into(),
+                    session_id: None,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let denied = overflow.next().await.unwrap().unwrap().into_text().unwrap();
+        match serde_json::from_str::<HostToBrowserFrame>(&denied).unwrap() {
+            HostToBrowserFrame::PairingDenied { reason, .. } => {
+                assert!(reason.to_ascii_lowercase().contains("too many"));
+            }
+            other => panic!("expected pairing denied, got {other:?}"),
+        }
+
+        // Same-identity refresh still accepted (supersedes an existing pending).
+        let (mut refresh, _) = connect_async(&ws_url).await.unwrap();
+        refresh
+            .send(Message::Text(
+                serde_json::to_string(&BrowserToHostFrame::Hello {
+                    protocol_version: BROWSER_PROTOCOL_VERSION,
+                    receiver_id: "pending-0".into(),
+                    name: "Pending 0".into(),
+                    session_id: None,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let replaced = refresh.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(matches!(
+            serde_json::from_str::<HostToBrowserFrame>(&replaced).unwrap(),
+            HostToBrowserFrame::PairingRequired { .. }
+        ));
+
+        drop(sockets);
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn forget_receiver_requires_new_pin() {
+        let host = BrowserReceiverHost::start(BrowserReceiverConfig {
+            address: "127.0.0.1".parse().unwrap(),
+            preferred_port: 0,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let service = host.service();
+        let ws_url = format!("ws://127.0.0.1:{}/v1/browser/ws", host.local_addr().port());
+
+        let (mut socket, _) = connect_async(&ws_url).await.unwrap();
+        socket
+            .send(Message::Text(
+                serde_json::to_string(&BrowserToHostFrame::Hello {
+                    protocol_version: BROWSER_PROTOCOL_VERSION,
+                    receiver_id: "forget-me".into(),
+                    name: "Forget Me".into(),
+                    session_id: None,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let pairing = socket.next().await.unwrap().unwrap().into_text().unwrap();
+        let HostToBrowserFrame::PairingRequired {
+            session_id, code, ..
+        } = serde_json::from_str(&pairing).unwrap()
+        else {
+            panic!("expected pairing required");
+        };
+        service.approve(&session_id, &code).await.unwrap();
+        let _ = socket.next().await.unwrap().unwrap(); // PairingApproved
+
+        assert_eq!(service.forget_receiver("forget-me"), 1);
+
+        let (mut socket2, _) = connect_async(&ws_url).await.unwrap();
+        socket2
+            .send(Message::Text(
+                serde_json::to_string(&BrowserToHostFrame::Hello {
+                    protocol_version: BROWSER_PROTOCOL_VERSION,
+                    receiver_id: "forget-me".into(),
+                    name: "Forget Me".into(),
+                    session_id: None,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let again = socket2.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(matches!(
+            serde_json::from_str::<HostToBrowserFrame>(&again).unwrap(),
+            HostToBrowserFrame::PairingRequired { .. }
+        ));
+
+        host.shutdown().await.unwrap();
+    }
+
+    #[test]
+    fn vpn_like_interface_names_are_detected() {
+        assert!(super::is_likely_vpn_interface("utun3"));
+        assert!(super::is_likely_vpn_interface("wg0"));
+        assert!(super::is_likely_vpn_interface("tailscale0"));
+        assert!(!super::is_likely_vpn_interface("en0"));
+        assert!(!super::is_likely_vpn_interface("eth0"));
     }
 
     fn reqwest_for_test() -> reqwest::Client {
