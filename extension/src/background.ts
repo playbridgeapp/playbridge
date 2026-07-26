@@ -34,6 +34,7 @@ import {
 import {
   buildSyntheticFromMasterBody,
   buildSyntheticFromObservations,
+  observationSyntheticImproves,
   preferredSyntheticCastUrl,
   type SyntheticMasterResult,
 } from "./synthetic-hls";
@@ -336,7 +337,6 @@ function maybeSynthesizeFromObservations(
   groupKey: string | undefined,
 ): void {
   if (!groupKey) return;
-  if (findSyntheticForGroup(tabId, groupKey)) return;
 
   const members = getTabVideos(tabId).filter(
     (v) => (v.hlsGroupKey ?? hlsStreamGroupKey(v.url)) === groupKey,
@@ -383,10 +383,38 @@ function maybeSynthesizeFromObservations(
   });
   if (!synthetic) return;
 
+  // Chrome often installs on the first 360p poll; upgrade when ABR reveals a
+  // higher chunklist rung or when audio appears later.
+  const existing = findSyntheticForGroup(tabId, groupKey);
+  if (existing) {
+    const existingVideos =
+      existing.qualities
+        ?.map((q) => (q as { url?: string }).url)
+        .filter((u): u is string => typeof u === "string" && u.length > 0) ??
+      (existing.url ? [existing.url] : []);
+    const existingAudios = existing.audioUrl ? [existing.audioUrl] : [];
+    if (
+      !observationSyntheticImproves(existingVideos, existingAudios, synthetic)
+    ) {
+      return;
+    }
+    plog(
+      "  → upgrading observation synthetic for group",
+      groupKey.slice(-48),
+      "videos:",
+      synthetic.videoUrls.length,
+    );
+  }
+
+  // Prefer headers from the highest-quality video we open, not the latest poll.
+  const bestVideo =
+    sessionVideos.find((v) => v.url === synthetic.videoUrls[0]) ??
+    sessionVideos[0];
+
   installSyntheticMaster(tabId, synthetic, {
-    headers: sessionVideos[0]?.headers ?? master?.headers,
-    originUrl: sessionVideos[0]?.originUrl ?? master?.originUrl,
-    frameId: sessionVideos[0]?.frameId ?? master?.frameId,
+    headers: bestVideo?.headers ?? master?.headers,
+    originUrl: bestVideo?.originUrl ?? master?.originUrl,
+    frameId: bestVideo?.frameId ?? master?.frameId,
   });
 }
 

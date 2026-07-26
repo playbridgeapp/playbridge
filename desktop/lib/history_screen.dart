@@ -126,16 +126,27 @@ class _HistoryTile extends StatelessWidget {
             tooltip: 'Cast now',
             icon: const Icon(Icons.cast, color: Colors.tealAccent, size: 20),
             onPressed: () {
-              player.playUrl(item.url, title: item.title);
+              _playHistoryItem(player, item);
               onNavigateToNowPlaying();
             },
           ),
         ],
       ),
       onTap: () {
-        player.playUrl(item.url, title: item.title);
+        _playHistoryItem(player, item);
         onNavigateToNowPlaying();
       },
+    );
+  }
+
+  static void _playHistoryItem(PlayerController player, PlayHistoryItem item) {
+    player.playUrl(
+      item.url,
+      title: item.title,
+      headers: item.headers,
+      playlistBody: item.playlistBody,
+      audioUrl: item.audioUrl,
+      contentType: item.contentType,
     );
   }
 

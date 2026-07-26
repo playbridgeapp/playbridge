@@ -228,6 +228,98 @@ export function buildSyntheticFromMasterBody(
 }
 
 /**
+ * mmcdn / similar LL-HLS names media playlists `chunklist_<N>_video_…` /
+ * `chunklist_<N>_audio_…`. Higher N is higher quality in observed HARs
+ * (0 ≈ 360p … 3/4 ≈ 1080p). Used when we lack master body bandwidth tags.
+ */
+export function chunklistLadderIndex(url: string): number | null {
+  try {
+    const path = new URL(url).pathname;
+    const match = path.match(/chunklist_(\d+)_(?:video|audio)_/i);
+    if (match) return parseInt(match[1]!, 10);
+  } catch {
+    /* fall through */
+  }
+  const match = url.match(/chunklist_(\d+)_(?:video|audio)_/i);
+  return match ? parseInt(match[1]!, 10) : null;
+}
+
+/**
+ * Fill missing rung indices between the lowest and highest observed
+ * `chunklist_N_*` URLs that share the same path template + query. Chrome often
+ * only polls the ABR-selected rung; siblings are still valid for the session.
+ */
+export function expandChunklistLadder(urls: string[]): string[] {
+  const unique = [...new Set(urls.filter(Boolean))];
+  if (unique.length === 0) return unique;
+
+  type Group = {
+    prefix: string;
+    suffix: string;
+    indices: Set<number>;
+    examples: Map<number, string>;
+  };
+  const groups = new Map<string, Group>();
+
+  for (const url of unique) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      continue;
+    }
+    const match = parsed.pathname.match(
+      /^(.*\/chunklist_)(\d+)(_(?:video|audio)_.+)$/i,
+    );
+    if (!match) continue;
+    const prefix = `${parsed.origin}${match[1]}`;
+    const index = parseInt(match[2]!, 10);
+    // Group by origin+dir+role+hash+query, varying only the numeric index.
+    const groupKey = `${prefix}|${match[3]}|${parsed.search}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = {
+        prefix,
+        suffix: `${match[3]}${parsed.search}`,
+        indices: new Set(),
+        examples: new Map(),
+      };
+      groups.set(groupKey, group);
+    }
+    group.indices.add(index);
+    group.examples.set(index, url);
+  }
+
+  const out = new Set(unique);
+  for (const group of groups.values()) {
+    if (group.indices.size === 0) continue;
+    const min = Math.min(...group.indices);
+    const max = Math.max(...group.indices);
+    // Only fill gaps when we already saw more than one rung, or a high rung
+    // (implies lower indices exist on the CDN ladder).
+    if (max <= min && max === 0) continue;
+    for (let i = min; i <= max; i++) {
+      if (group.examples.has(i)) {
+        out.add(group.examples.get(i)!);
+        continue;
+      }
+      out.add(`${group.prefix}${i}${group.suffix}`);
+    }
+  }
+  return [...out];
+}
+
+/** Sort media playlist URLs best-quality first (chunklist index desc). */
+export function sortMediaPlaylistsByQualityDesc(urls: string[]): string[] {
+  return [...urls].sort((a, b) => {
+    const ib = chunklistLadderIndex(b) ?? -1;
+    const ia = chunklistLadderIndex(a) ?? -1;
+    if (ib !== ia) return ib - ia;
+    return a.localeCompare(b);
+  });
+}
+
+/**
  * Fallback when the master body was never captured (e.g. Chrome MV3): build a
  * minimal multivariant from observed session media playlists.
  */
@@ -237,8 +329,14 @@ export function buildSyntheticFromObservations(input: {
   videoUrls: string[];
   audioUrls: string[];
 }): SyntheticMasterResult | null {
-  const videos = [...new Set(input.videoUrls.filter(Boolean))];
-  const audios = [...new Set(input.audioUrls.filter(Boolean))];
+  // Expand sibling rungs + prefer higher chunklist index (1080p) first so the
+  // cast open URL is not stuck on ABR's current (often 360p) poll.
+  const videos = sortMediaPlaylistsByQualityDesc(
+    expandChunklistLadder([...new Set(input.videoUrls.filter(Boolean))]),
+  );
+  const audios = sortMediaPlaylistsByQualityDesc(
+    expandChunklistLadder([...new Set(input.audioUrls.filter(Boolean))]),
+  );
   if (videos.length === 0) return null;
 
   const lines: string[] = [
@@ -259,8 +357,12 @@ export function buildSyntheticFromObservations(input: {
   }
 
   videos.forEach((uri, index) => {
-    // Unknown bandwidth — use descending placeholders so order is stable.
-    const bandwidth = Math.max(500_000, 5_000_000 - index * 400_000);
+    // Prefer real ladder index for bandwidth when present (higher N → higher BW).
+    const ladder = chunklistLadderIndex(uri);
+    const bandwidth =
+      ladder != null
+        ? Math.max(500_000, 800_000 + ladder * 1_200_000)
+        : Math.max(500_000, 5_000_000 - index * 400_000);
     if (audios.length > 0) {
       lines.push(
         `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},CODECS="avc1.42E01E,mp4a.40.2",AUDIO="${audioGroupId}"`,
@@ -274,15 +376,33 @@ export function buildSyntheticFromObservations(input: {
   });
 
   const content = lines.join("\n") + "\n";
-  const qualities: VideoQuality[] = videos.map((url, index) => ({
-    resolution: "Unknown",
-    bandwidth: Math.max(500_000, 5_000_000 - index * 400_000),
-    averageBandwidth: null,
-    url,
-    codecs: audios.length > 0 ? "avc1.42E01E,mp4a.40.2" : "avc1.42E01E",
-    audioGroupId: audios.length > 0 ? audioGroupId : null,
-    frameRate: null,
-  }));
+  const qualities: VideoQuality[] = videos.map((url, index) => {
+    const ladder = chunklistLadderIndex(url);
+    const bandwidth =
+      ladder != null
+        ? Math.max(500_000, 800_000 + ladder * 1_200_000)
+        : Math.max(500_000, 5_000_000 - index * 400_000);
+    const resolution =
+      ladder == null
+        ? "Unknown"
+        : ladder >= 3
+          ? "1080p"
+          : ladder === 2
+            ? "720p"
+            : ladder === 1
+              ? "480p"
+              : "360p";
+    return {
+      resolution,
+      bandwidth,
+      averageBandwidth: null,
+      url,
+      codecs: audios.length > 0 ? "avc1.42E01E,mp4a.40.2" : "avc1.42E01E",
+      audioGroupId: audios.length > 0 ? audioGroupId : null,
+      frameRate: null,
+    };
+  });
+  qualities.sort((a, b) => b.bandwidth - a.bandwidth);
 
   const audioTracks: AudioTrack[] = audios.map((uri, index) => ({
     groupId: audioGroupId,
@@ -294,9 +414,10 @@ export function buildSyntheticFromObservations(input: {
     channels: null,
   }));
 
+  const orderedVideos = orderVideoUrlsByBandwidth(videos, qualities);
   const source =
     input.sourceMasterUrl ??
-    videos[0] ??
+    orderedVideos[0] ??
     `synthetic://${input.groupKey}`;
 
   return {
@@ -304,10 +425,30 @@ export function buildSyntheticFromObservations(input: {
     dataUrl: playlistToDataUrl(content),
     sourceMasterUrl: source,
     hlsGroupKey: input.groupKey,
-    videoUrls: videos,
+    videoUrls: orderedVideos,
     audioUrls: audios,
     hasSeparateAudio: audios.length > 0,
     qualities,
     audioTracks,
   };
+}
+
+/** True when [next] adds a higher ladder rung or missing audio vs [existing]. */
+export function observationSyntheticImproves(
+  existingVideoUrls: string[],
+  existingAudioUrls: string[],
+  next: SyntheticMasterResult,
+): boolean {
+  const oldMax = Math.max(
+    -1,
+    ...existingVideoUrls.map((u) => chunklistLadderIndex(u) ?? -1),
+  );
+  const newMax = Math.max(
+    -1,
+    ...next.videoUrls.map((u) => chunklistLadderIndex(u) ?? -1),
+  );
+  if (newMax > oldMax) return true;
+  if (next.videoUrls.length > existingVideoUrls.length) return true;
+  if (existingAudioUrls.length === 0 && next.audioUrls.length > 0) return true;
+  return false;
 }
