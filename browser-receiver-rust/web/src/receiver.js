@@ -63,12 +63,17 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
     socket = new WebSocket(scheme + '//' + location.host + '/v1/browser/ws');
     socket.onopen = function () {
       setStatus('Connected — waiting for approval');
-      send({
+      var helloFrame = {
         type: 'hello',
         protocolVersion: 1,
         receiverId: receiverId(),
         name: receiverName()
-      });
+      };
+      var savedSessionId = localStorage.getItem('playbridge.browser.sessionId');
+      if (savedSessionId) {
+        helloFrame.sessionId = savedSessionId;
+      }
+      send(helloFrame);
       sendCapabilities();
     };
     socket.onmessage = function (event) {
@@ -142,9 +147,13 @@ import { MediaPlayer as DashMediaPlayer, supportsMediaSource as dashSupportsMedi
         deviceName.textContent = receiverName();
         break;
       case 'pairing_approved':
+        if (frame.sessionId) {
+          localStorage.setItem('playbridge.browser.sessionId', frame.sessionId);
+        }
         showReadyScreen();
         break;
       case 'pairing_denied':
+        localStorage.removeItem('playbridge.browser.sessionId');
         instructions.textContent = frame.reason || 'Pairing failed';
         code.textContent = '';
         setStatus('Pairing failed', true);

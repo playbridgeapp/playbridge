@@ -454,12 +454,25 @@ class TvSenderController extends ChangeNotifier {
         includeLoopback: false,
         includeLinkLocal: false,
       );
-      final addrs = ifaces
+      final tvPrefix = _slash24(tvHost);
+
+      // Filter out VPN interfaces (WireGuard, TUN/TAP, PPP) so physical LAN IP is preferred
+      final cleanIfaces = ifaces.where((i) {
+        final name = i.name.toLowerCase();
+        return !name.startsWith('tun') &&
+            !name.startsWith('wg') &&
+            !name.startsWith('utun') &&
+            !name.startsWith('ppp') &&
+            !name.contains('wireguard');
+      }).toList();
+
+      final candidateIfaces = cleanIfaces.isNotEmpty ? cleanIfaces : ifaces;
+      final addrs = candidateIfaces
           .expand((i) => i.addresses)
           .map((a) => a.address)
           .where((a) => !a.startsWith('169.254.'))
           .toList();
-      final tvPrefix = _slash24(tvHost);
+
       if (tvPrefix != null) {
         for (final a in addrs) {
           if (_slash24(a) == tvPrefix) return a;
@@ -641,9 +654,17 @@ class TvSenderController extends ChangeNotifier {
       final sessionId = session['sessionId']?.toString();
       final name = session['name']?.toString();
       if (sessionId == null || name == null) return;
+      final receiverId = session['receiverId']?.toString();
       if (kind == 'pairing_requested') {
+        // One pending row per browser identity — a refresh reuses receiverId
+        // with a new sessionId and should replace the stale PIN wait.
+        if (receiverId != null && receiverId.isNotEmpty) {
+          _browserPairingRequests
+              .removeWhere((_, request) => request.receiverId == receiverId);
+        }
         _browserPairingRequests[sessionId] = BrowserPairingRequest(
           sessionId: sessionId,
+          receiverId: receiverId ?? '',
           name: name,
           expiresIn: Duration(
             milliseconds: (event['expires_in_ms'] as num?)?.toInt() ?? 0,
@@ -653,6 +674,10 @@ class TvSenderController extends ChangeNotifier {
           kind == 'capabilities' ||
           kind == 'status') {
         _browserPairingRequests.remove(sessionId);
+        if (receiverId != null && receiverId.isNotEmpty) {
+          _browserPairingRequests
+              .removeWhere((_, request) => request.receiverId == receiverId);
+        }
         final receiver = DiscoveredTv(
           uuid: sessionId,
           protocol: TvProtocol.webBrowser,
@@ -661,8 +686,18 @@ class TvSenderController extends ChangeNotifier {
           port: _browserHost?.port,
           wssPort: null,
         );
+        final wasKnown = _browserReceivers.containsKey(sessionId);
         _browserReceivers[sessionId] = receiver;
-        if (_browserSessionToActivate == sessionId) {
+
+        // Activate only on `connected`. capabilities/status also carry a session
+        // but re-entering connect() used to call disconnectBrowser(current) and
+        // kill the tab right after a successful pair/refresh.
+        final shouldActivate = kind == 'connected' &&
+            (_browserSessionToActivate == sessionId ||
+                _activeTv == null ||
+                _activeTv?.protocol == TvProtocol.webBrowser ||
+                (!wasKnown && _browserReceivers.length == 1));
+        if (shouldActivate) {
           _browserSessionToActivate = null;
           unawaited(_activateBrowserReceiver(receiver));
         }
@@ -678,6 +713,9 @@ class TvSenderController extends ChangeNotifier {
         }
         _browserPairingRequests.remove(sessionId);
         _browserReceivers.remove(sessionId);
+        // If this was only an old session dying during refresh, a newer
+        // browser receiver may already be live — leave transport alone; the
+        // BrowserTransport filters disconnect events by its bound sessionId.
         notifyListeners();
       }
     }
@@ -728,11 +766,14 @@ class TvSenderController extends ChangeNotifier {
 class BrowserPairingRequest {
   const BrowserPairingRequest({
     required this.sessionId,
+    required this.receiverId,
     required this.name,
     required this.expiresIn,
   });
 
   final String sessionId;
+  /// Stable browser identity (localStorage). Used to collapse refresh duplicates.
+  final String receiverId;
   final String name;
   final Duration expiresIn;
 }

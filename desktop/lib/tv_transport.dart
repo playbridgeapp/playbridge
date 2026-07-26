@@ -506,7 +506,28 @@ class BrowserTransport extends TvTransport {
     String? token,
     String? expectedPin,
   }) async {
-    await disconnect();
+    // Already bound to this browser session — do not tear it down.
+    // Re-entrancy used to call disconnectBrowser(current) and kill a live tab
+    // (e.g. when capabilities/status re-triggered activation after connect).
+    if (_sessionId == tv.uuid && _current == SenderConnectionState.connected) {
+      return;
+    }
+
+    final previous = _sessionId;
+    _sessionId = null;
+    await _events?.cancel();
+    _events = null;
+
+    // Only close a *different* host session. Never disconnect the session we
+    // are about to adopt (refresh/reconnect hands us a new sessionId).
+    if (previous != null && previous != tv.uuid) {
+      try {
+        await _services.disconnectBrowser(previous);
+      } on Object {
+        // Previous tab may already have closed during refresh.
+      }
+    }
+
     _sessionId = tv.uuid;
     _events = _services.events.listen(_onEvent);
     _setState(SenderConnectionState.connected);

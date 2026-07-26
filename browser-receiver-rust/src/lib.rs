@@ -18,7 +18,7 @@ use axum::{
     routing::get,
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use futures_util::{SinkExt, StreamExt};
 use if_addrs::get_if_addrs;
 use playbridge_cast_core::browser::{
@@ -154,6 +154,7 @@ impl SessionEntry {
 
 struct ServiceState {
     sessions: DashMap<String, Arc<SessionEntry>>,
+    approved_receivers: DashSet<String>,
     events: broadcast::Sender<BrowserReceiverEvent>,
     pairing_ttl: Duration,
     next_request_id: AtomicU64,
@@ -170,6 +171,7 @@ impl BrowserReceiverService {
         Self {
             state: Arc::new(ServiceState {
                 sessions: DashMap::new(),
+                approved_receivers: DashSet::new(),
                 events,
                 pairing_ttl,
                 next_request_id: AtomicU64::new(1),
@@ -229,6 +231,7 @@ impl BrowserReceiverService {
             ));
         }
         entry.approved.store(true, Ordering::Release);
+        self.state.approved_receivers.insert(entry.receiver_id.clone());
         entry
             .sender
             .send(HostToBrowserFrame::PairingApproved {
@@ -292,6 +295,29 @@ impl BrowserReceiverService {
             reason: "Disconnected by PlayBridge".into(),
         });
         true
+    }
+
+    /// Close every live session for `receiver_id` except `keep_session_id`.
+    ///
+    /// Used when the same browser identity reconnects (refresh / new tab) so
+    /// stale "waiting to pair" sessions do not pile up on the host or UI.
+    fn supersede_receiver_sessions(&self, receiver_id: &str, keep_session_id: &str) {
+        let stale = self
+            .state
+            .sessions
+            .iter()
+            .filter(|entry| {
+                entry.receiver_id == receiver_id && entry.session_id != keep_session_id
+            })
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>();
+        for entry in stale {
+            entry.closed.store(true, Ordering::Release);
+            entry.closed_notify.notify_waiters();
+            let _ = entry.sender.send(HostToBrowserFrame::Disconnect {
+                reason: "Replaced by a newer browser session".into(),
+            });
+        }
     }
 
     fn send_approved(&self, session_id: &str, frame: HostToBrowserFrame) -> Result<(), String> {
@@ -495,6 +521,7 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
         protocol_version,
         receiver_id,
         name,
+        session_id: _requested_session_id,
     }) = hello
     else {
         let _ = socket.close().await;
@@ -508,42 +535,57 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
         return;
     }
 
+    let auto_approved = service.state.approved_receivers.contains(&receiver_id);
     let session_id = random_id();
+
     let pairing_code = random_code();
     let expires_at = Instant::now() + service.state.pairing_ttl;
     let (sender, mut outgoing) = mpsc::unbounded_channel();
     let entry = Arc::new(SessionEntry {
         session_id: session_id.clone(),
-        receiver_id,
+        receiver_id: receiver_id.clone(),
         name,
         pairing_code: pairing_code.clone(),
         expires_at,
         attempts: AtomicU8::new(0),
-        approved: AtomicBool::new(false),
+        approved: AtomicBool::new(auto_approved),
         closed: AtomicBool::new(false),
         closed_notify: Notify::new(),
         sender,
         capabilities: RwLock::new(BrowserCapabilities::default()),
         status: RwLock::new(BrowserSessionStatus::default()),
     });
+    // Drop earlier sessions for this browser identity before advertising the
+    // new one, so Desktop never accumulates multiple "waiting to pair" rows
+    // when the user refreshes the PIN page.
+    service.supersede_receiver_sessions(&receiver_id, &session_id);
     service
         .state
         .sessions
         .insert(session_id.clone(), entry.clone());
 
     let expires_in_ms = service.state.pairing_ttl.as_millis() as u64;
-    let _ = entry.sender.send(HostToBrowserFrame::PairingRequired {
-        session_id: session_id.clone(),
-        code: pairing_code,
-        expires_in_ms,
-    });
-    let _ = service
-        .state
-        .events
-        .send(BrowserReceiverEvent::PairingRequested {
+    if auto_approved {
+        let _ = entry.sender.send(HostToBrowserFrame::PairingApproved {
+            session_id: session_id.clone(),
+        });
+        let _ = service.state.events.send(BrowserReceiverEvent::Connected {
             session: entry.snapshot().await,
+        });
+    } else {
+        let _ = entry.sender.send(HostToBrowserFrame::PairingRequired {
+            session_id: session_id.clone(),
+            code: pairing_code,
             expires_in_ms,
         });
+        let _ = service
+            .state
+            .events
+            .send(BrowserReceiverEvent::PairingRequested {
+                session: entry.snapshot().await,
+                expires_in_ms,
+            });
+    }
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
     let writer = tokio::spawn(async move {
@@ -598,21 +640,20 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
 
     entry.closed.store(true, Ordering::Release);
     service.state.sessions.remove(&session_id);
-    let approved = entry.approved.load(Ordering::Acquire);
     let receiver_id = entry.receiver_id.clone();
     let name = entry.name.clone();
     drop(entry);
     let _ = writer.await;
-    if approved {
-        let _ = service
-            .state
-            .events
-            .send(BrowserReceiverEvent::Disconnected {
-                session_id,
-                receiver_id,
-                name,
-            });
-    }
+    // Always notify consumers — including unapproved PIN waits — so a browser
+    // refresh/expiry removes the matching "waiting to pair" row on Desktop.
+    let _ = service
+        .state
+        .events
+        .send(BrowserReceiverEvent::Disconnected {
+            session_id,
+            receiver_id,
+            name,
+        });
 }
 
 async fn handle_browser_frame(
@@ -722,7 +763,9 @@ mod tests {
     };
     use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-    use super::{BrowserReceiverConfig, BrowserReceiverEvent, BrowserReceiverHost};
+    use super::{
+        BrowserReceiverConfig, BrowserReceiverEvent, BrowserReceiverHost, BrowserSessionSnapshot,
+    };
 
     #[tokio::test]
     async fn host_starts_on_an_available_port_and_serves_assets() {
@@ -859,6 +902,7 @@ mod tests {
                     protocol_version: BROWSER_PROTOCOL_VERSION,
                     receiver_id: "browser-test".into(),
                     name: "Test Browser".into(),
+                    session_id: None,
                 })
                 .unwrap()
                 .into(),
@@ -878,6 +922,10 @@ mod tests {
             BrowserReceiverEvent::PairingRequested { .. }
         ));
         service.approve(&session_id, &code).await.unwrap();
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            BrowserReceiverEvent::Connected { .. }
+        ));
         let approved = socket.next().await.unwrap().unwrap().into_text().unwrap();
         assert!(matches!(
             serde_json::from_str(&approved).unwrap(),
@@ -926,7 +974,149 @@ mod tests {
                 break;
             }
         }
+
+        // Refresh/reconnect with the same receiver_id: old session disconnects,
+        // and the new socket is auto-approved without another PIN.
         socket.close(None).await.unwrap();
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            BrowserReceiverEvent::Disconnected {
+                session_id: ref closed_id,
+                ..
+            } if closed_id == &session_id
+        ));
+
+        let (mut socket2, _) = connect_async(format!(
+            "ws://127.0.0.1:{}/v1/browser/ws",
+            host.local_addr().port()
+        ))
+        .await
+        .unwrap();
+        socket2
+            .send(Message::Text(
+                serde_json::to_string(&BrowserToHostFrame::Hello {
+                    protocol_version: BROWSER_PROTOCOL_VERSION,
+                    receiver_id: "browser-test".into(),
+                    name: "Test Browser".into(),
+                    session_id: None,
+                })
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+
+        let auto_approved = socket2.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(matches!(
+            serde_json::from_str(&auto_approved).unwrap(),
+            HostToBrowserFrame::PairingApproved { .. }
+        ));
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            BrowserReceiverEvent::Connected { .. }
+        ));
+
+        host.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn refresh_while_waiting_for_pin_replaces_pending_session() {
+        let host = BrowserReceiverHost::start(BrowserReceiverConfig {
+            address: "127.0.0.1".parse().unwrap(),
+            preferred_port: 0,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let service = host.service();
+        let mut events = service.subscribe();
+        let ws_url = format!(
+            "ws://127.0.0.1:{}/v1/browser/ws",
+            host.local_addr().port()
+        );
+
+        let hello = serde_json::to_string(&BrowserToHostFrame::Hello {
+            protocol_version: BROWSER_PROTOCOL_VERSION,
+            receiver_id: "browser-refresh".into(),
+            name: "Refresh Browser".into(),
+            session_id: None,
+        })
+        .unwrap();
+
+        let (mut socket1, _) = connect_async(&ws_url).await.unwrap();
+        socket1
+            .send(Message::Text(hello.clone().into()))
+            .await
+            .unwrap();
+        let pairing1 = socket1.next().await.unwrap().unwrap().into_text().unwrap();
+        let HostToBrowserFrame::PairingRequired {
+            session_id: first_session,
+            ..
+        } = serde_json::from_str(&pairing1).unwrap()
+        else {
+            panic!("expected first pairing frame");
+        };
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            BrowserReceiverEvent::PairingRequested {
+                session: BrowserSessionSnapshot {
+                    session_id: ref id,
+                    ..
+                },
+                ..
+            } if id == &first_session
+        ));
+
+        // Second connect with the same receiver_id (page refresh) should
+        // supersede the first pending session.
+        let (mut socket2, _) = connect_async(&ws_url).await.unwrap();
+        socket2
+            .send(Message::Text(hello.into()))
+            .await
+            .unwrap();
+        let pairing2 = socket2.next().await.unwrap().unwrap().into_text().unwrap();
+        let HostToBrowserFrame::PairingRequired {
+            session_id: second_session,
+            ..
+        } = serde_json::from_str(&pairing2).unwrap()
+        else {
+            panic!("expected second pairing frame");
+        };
+        assert_ne!(first_session, second_session);
+
+        // First socket is told to go away, then host emits Disconnected for it.
+        let replaced = socket1.next().await.unwrap().unwrap().into_text().unwrap();
+        assert!(matches!(
+            serde_json::from_str(&replaced).unwrap(),
+            HostToBrowserFrame::Disconnect { .. }
+        ));
+
+        // Events: PairingRequested for second, and Disconnected for first
+        // (order can interleave depending on task scheduling).
+        let mut saw_second_request = false;
+        let mut saw_first_disconnect = false;
+        for _ in 0..4 {
+            match events.recv().await.unwrap() {
+                BrowserReceiverEvent::PairingRequested {
+                    session: BrowserSessionSnapshot { session_id, .. },
+                    ..
+                } if session_id == second_session => saw_second_request = true,
+                BrowserReceiverEvent::Disconnected { session_id, .. }
+                    if session_id == first_session =>
+                {
+                    saw_first_disconnect = true
+                }
+                other => panic!("unexpected event while replacing pending session: {other:?}"),
+            }
+            if saw_second_request && saw_first_disconnect {
+                break;
+            }
+        }
+        assert!(saw_second_request && saw_first_disconnect);
+        let live = service.sessions().await;
+        assert_eq!(live.len(), 1);
+        assert_eq!(live[0].session_id, second_session);
+
         host.shutdown().await.unwrap();
     }
 
