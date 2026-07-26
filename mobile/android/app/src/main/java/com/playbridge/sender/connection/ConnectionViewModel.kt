@@ -381,15 +381,32 @@ class ConnectionViewModel(
             connectionState.value is WebSocketClient.ConnectionState.Connected
         ) {
             viewModelScope.launch {
-                val proxyUrl = DlnaProxyHolder.proxy(getApplication<Application>())
-                    .publishLocal(uriString.toUri(), mime)
-                val cmd = createSingleVideoCommandJson(
-                    PlayPayload(url = proxyUrl, title = title ?: "Phone file", content_type = mime),
-                )
-                sendCommandAndRecord(cmd, "play", proxyUrl, title)
-                // The TV only reports context when queried — flip it locally like every
-                // other play path, so the session FGS + NowPlayingBar engage.
-                castSessionManager.notifyNativePlaybackStarted()
+                try {
+                    val app = getApplication<Application>()
+                    val packaged = com.playbridge.sender.cast.proxy.StreamRouteService(app)
+                        .packageForCast(
+                            media = com.playbridge.sender.cast.proxy.CastableMedia(
+                                url = uriString,
+                                contentType = mime,
+                                title = title,
+                                localUri = uriString.toUri(),
+                            ),
+                            mode = com.playbridge.sender.cast.proxy.StreamRouteMode.VIA_PHONE,
+                        )
+                    val cmd = createSingleVideoCommandJson(
+                        PlayPayload(
+                            url = packaged.url,
+                            title = title ?: "Phone file",
+                            content_type = packaged.contentType ?: mime,
+                        ),
+                    )
+                    sendCommandAndRecord(cmd, "play", packaged.url, title)
+                    // The TV only reports context when queried — flip it locally like every
+                    // other play path, so the session FGS + NowPlayingBar engage.
+                    castSessionManager.notifyNativePlaybackStarted()
+                } catch (e: Exception) {
+                    android.util.Log.e("ConnectionViewModel", "castLocalFile failed: ${e.message}")
+                }
             }
             return true
         }
@@ -412,11 +429,36 @@ class ConnectionViewModel(
         if (route.value is CastSessionManager.Route.NativeTv &&
             connectionState.value is WebSocketClient.ConnectionState.Connected
         ) {
-            val cmd = createSingleVideoCommandJson(
-                PlayPayload(url = url, title = title ?: "Channel", headers = headers, content_type = mime),
-            )
-            sendCommandAndRecord(cmd, "play", url, title)
-            castSessionManager.notifyNativePlaybackStarted()
+            viewModelScope.launch {
+                try {
+                    val app = getApplication<Application>()
+                    val settings = com.playbridge.sender.cast.proxy.StreamProxySettingsStore.load(app)
+                    val mode = settings.initialRouteMode()
+                    val packaged = com.playbridge.sender.cast.proxy.StreamRouteService(app)
+                        .packageForCast(
+                            media = com.playbridge.sender.cast.proxy.CastableMedia(
+                                url = url,
+                                headers = headers,
+                                contentType = mime,
+                                title = title,
+                            ),
+                            mode = mode,
+                            settings = settings,
+                        )
+                    val cmd = createSingleVideoCommandJson(
+                        PlayPayload(
+                            url = packaged.url,
+                            title = title ?: "Channel",
+                            headers = packaged.headers ?: emptyMap(),
+                            content_type = packaged.contentType ?: mime,
+                        ),
+                    )
+                    sendCommandAndRecord(cmd, "play", packaged.url, title)
+                    castSessionManager.notifyNativePlaybackStarted()
+                } catch (e: Exception) {
+                    android.util.Log.e("ConnectionViewModel", "castWebStream failed: ${e.message}")
+                }
+            }
             return true
         }
         return false

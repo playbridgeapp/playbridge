@@ -850,11 +850,6 @@ class BrowserActivity : ComponentActivity() {
             val prefs = remember { getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE) }
             val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
 
-            // Mediaflow proxy config (read once; user must reopen cast sheet to pick up changes)
-            val mediaflowProxyUrl      by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
-            val mediaflowProxyPassword by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "") }
-            val mediaflowAutoSelect    by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_AUTO_SELECT, true)) }
-            val mediaflowProxyEnabled  by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_ENABLED, true)) }
 
             // Persist the active main screen so it survives app restarts and Settings navigation
             LaunchedEffect(currentScreen) {
@@ -2120,10 +2115,6 @@ class BrowserActivity : ComponentActivity() {
                         currentScreen = Screen.Browser
                     },
                     initialMode = castSheetInitialMode,
-                    mediaflowProxyUrl = mediaflowProxyUrl ?: "",
-                    mediaflowProxyPassword = mediaflowProxyPassword ?: "",
-                    mediaflowAutoSelect = mediaflowAutoSelect,
-                    mediaflowProxyEnabled = mediaflowProxyEnabled,
                     onContentClick = onContentClick@ { payload ->
                         when (castRoute) {
                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {

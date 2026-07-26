@@ -39,6 +39,10 @@ tokio-rustls = "0.26"
 native-tls = "0.2"
 tokio-native-tls = "0.3"
 
+# Android NDK cross-builds lack a host-visible OpenSSL; compile from source.
+[target.'cfg(target_os = "android")'.dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
 [dev-dependencies]
 wiremock = "0.6"
 

@@ -123,8 +123,15 @@ data class ExportedSettings(
     val iptvPlaylists: List<ExportedIptvPlaylist>? = null,
     val collections: List<ExportedCollection>? = null,
     val appSettings: ExportedAppSettings? = null,
+    /** @deprecated Prefer [streamProxyRemoteUrl]; kept for import of older backups. */
     val mediaflowProxyUrl: String? = null,
+    /** @deprecated Prefer [streamProxyRemotePassword]. */
     val mediaflowProxyPassword: String? = null,
+    @Deprecated("Removed with MediaFlow retirement")
     val mediaflowAutoSelect: Boolean? = null,
+    @Deprecated("Removed with MediaFlow retirement")
     val mediaflowProxyEnabled: Boolean? = null,
+    val streamProxyRemoteUrl: String? = null,
+    val streamProxyRemotePassword: String? = null,
+    val streamRouteDefault: String? = null,
 )
