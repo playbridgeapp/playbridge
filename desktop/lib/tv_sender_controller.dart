@@ -772,6 +772,7 @@ class BrowserPairingRequest {
   });
 
   final String sessionId;
+
   /// Stable browser identity (localStorage). Used to collapse refresh duplicates.
   final String receiverId;
   final String name;

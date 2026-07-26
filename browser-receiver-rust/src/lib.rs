@@ -231,7 +231,9 @@ impl BrowserReceiverService {
             ));
         }
         entry.approved.store(true, Ordering::Release);
-        self.state.approved_receivers.insert(entry.receiver_id.clone());
+        self.state
+            .approved_receivers
+            .insert(entry.receiver_id.clone());
         entry
             .sender
             .send(HostToBrowserFrame::PairingApproved {
@@ -306,9 +308,7 @@ impl BrowserReceiverService {
             .state
             .sessions
             .iter()
-            .filter(|entry| {
-                entry.receiver_id == receiver_id && entry.session_id != keep_session_id
-            })
+            .filter(|entry| entry.receiver_id == receiver_id && entry.session_id != keep_session_id)
             .map(|entry| entry.value().clone())
             .collect::<Vec<_>>();
         for entry in stale {
@@ -1030,10 +1030,7 @@ mod tests {
         .unwrap();
         let service = host.service();
         let mut events = service.subscribe();
-        let ws_url = format!(
-            "ws://127.0.0.1:{}/v1/browser/ws",
-            host.local_addr().port()
-        );
+        let ws_url = format!("ws://127.0.0.1:{}/v1/browser/ws", host.local_addr().port());
 
         let hello = serde_json::to_string(&BrowserToHostFrame::Hello {
             protocol_version: BROWSER_PROTOCOL_VERSION,
@@ -1070,10 +1067,7 @@ mod tests {
         // Second connect with the same receiver_id (page refresh) should
         // supersede the first pending session.
         let (mut socket2, _) = connect_async(&ws_url).await.unwrap();
-        socket2
-            .send(Message::Text(hello.into()))
-            .await
-            .unwrap();
+        socket2.send(Message::Text(hello.into())).await.unwrap();
         let pairing2 = socket2.next().await.unwrap().unwrap().into_text().unwrap();
         let HostToBrowserFrame::PairingRequired {
             session_id: second_session,
