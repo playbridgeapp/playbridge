@@ -10,16 +10,33 @@ import {
 } from "./data-consent";
 import { HlsParser } from "./hls-parser";
 import {
+  classifyHlsUrl,
+  effectiveHlsRole,
+  filterPrimaryCastCandidates,
+  hlsIdentityKey,
+  hlsStreamGroupKey,
   isBlobOrDataUrl,
   isDomSourceDetection,
-  isExcludedMediaCandidate,
+  isExclusiveBootstrapMaster,
+  isHlsUrl,
+  matchResolvedCastRecord,
+  pickCompanionAudio,
+  playlistSessionId,
   rankMediaCandidate,
+  resolveCastableHlsUrl,
+  type HlsRole,
 } from "./media-candidate";
 import * as bridge from "./native-bridge";
 import {
   getVideoCastOverlayPreferences,
   siteKeyFromUrl,
 } from "./settings";
+import {
+  buildSyntheticFromMasterBody,
+  buildSyntheticFromObservations,
+  preferredSyntheticCastUrl,
+  type SyntheticMasterResult,
+} from "./synthetic-hls";
 
 const DATA_CONSENT_REQUIRED = requiresLocalDataConsent(
   browser.runtime.getManifest().manifest_version,
@@ -80,6 +97,345 @@ interface VideoData {
   subtitles?: string[];
   subtitlePreview?: string;
   qualities?: unknown[];
+  /** HLS classification (URL heuristics, refined by playlist body when available). */
+  hlsRole?: HlsRole;
+  hlsIdentityKey?: string;
+  hlsGroupKey?: string;
+  /** Master references external audio media playlists (demuxed A/V). */
+  hasSeparateAudio?: boolean;
+  /** Last observation of this stream or a sibling in its HLS group. */
+  lastSeen?: number;
+  /** Companion demuxed audio media playlist (same edge session). */
+  audioUrl?: string;
+  /** Synthetic multivariant built from a captured master / observed session media. */
+  isSyntheticMaster?: boolean;
+  syntheticPlaylist?: string;
+}
+
+/** Dedup / header keys: collapse LL-HLS blocking-reload query variants. */
+function detectionKey(url: string): string {
+  return isHlsUrl(url) ? hlsIdentityKey(url) : url;
+}
+
+function annotateHlsFields(video: VideoData): VideoData {
+  if (!isHlsUrl(video.url, video.contentType)) {
+    return { ...video, hlsRole: video.hlsRole ?? "not_hls" };
+  }
+  const role = video.hlsRole && video.hlsRole !== "not_hls"
+    ? video.hlsRole
+    : classifyHlsUrl(video.url);
+  return {
+    ...video,
+    hlsRole: role,
+    hlsIdentityKey: video.hlsIdentityKey ?? hlsIdentityKey(video.url),
+    hlsGroupKey: video.hlsGroupKey ?? hlsStreamGroupKey(video.url),
+    lastSeen: video.lastSeen ?? video.timestamp,
+  };
+}
+
+/**
+ * When any playlist in an HLS group is observed (e.g. LL-HLS media polls), keep
+ * the master's lastSeen fresh so ranking still treats it as the live stream.
+ */
+function touchHlsGroupActivity(
+  tabId: number,
+  groupKey: string | undefined,
+  now: number,
+): void {
+  if (!groupKey) return;
+  const videos = getTabVideos(tabId);
+  let changed = false;
+  for (const video of videos) {
+    const group = video.hlsGroupKey ?? (
+      isHlsUrl(video.url, video.contentType) ? hlsStreamGroupKey(video.url) : null
+    );
+    if (group !== groupKey) continue;
+    if ((video.lastSeen ?? 0) < now) {
+      video.lastSeen = now;
+      changed = true;
+    }
+  }
+  if (changed) persistVideos(tabId);
+}
+
+function findVideoByIdentity(videos: VideoData[], url: string): VideoData | undefined {
+  const key = detectionKey(url);
+  return videos.find(
+    (candidate) =>
+      detectionKey(candidate.url) === key ||
+      candidate.hlsIdentityKey === key ||
+      candidate.url === url,
+  );
+}
+
+/**
+ * Wire demuxed audio companions onto video media rows in a group so cast can
+ * pass `audioUrl` without re-fetching the exclusive bootstrap master.
+ */
+function attachCompanionAudioToGroup(
+  tabId: number,
+  groupKey: string | undefined,
+): void {
+  if (!groupKey) return;
+  const videos = getTabVideos(tabId);
+  const groupMembers = videos.filter(
+    (v) => (v.hlsGroupKey ?? hlsStreamGroupKey(v.url)) === groupKey,
+  );
+  if (groupMembers.length === 0) return;
+
+  const rankable = groupMembers.map(toRankableCandidate);
+  for (const video of groupMembers) {
+    const role = effectiveHlsRole(toRankableCandidate(video));
+    if (role !== "video_media" && role !== "media") continue;
+    const audio = pickCompanionAudio(toRankableCandidate(video), rankable);
+    if (audio?.url && video.audioUrl !== audio.url) {
+      video.audioUrl = audio.url;
+      video.hasSeparateAudio = true;
+    }
+  }
+}
+
+function findSyntheticForGroup(
+  tabId: number,
+  groupKey: string | undefined,
+): VideoData | undefined {
+  if (!groupKey) return undefined;
+  return getTabVideos(tabId).find(
+    (v) =>
+      v.isSyntheticMaster &&
+      (v.hlsGroupKey === groupKey || hlsStreamGroupKey(v.url) === groupKey),
+  );
+}
+
+/**
+ * Install (or refresh) a synthetic multivariant as the preferred cast target
+ * for a stream group. Only used for exclusive / demuxed-session groups.
+ */
+function installSyntheticMaster(
+  tabId: number,
+  synthetic: SyntheticMasterResult,
+  base: {
+    headers?: Record<string, string>;
+    originUrl?: string;
+    frameId?: number;
+  },
+): void {
+  const now = Date.now();
+  const existing = findSyntheticForGroup(tabId, synthetic.hlsGroupKey);
+  // Prefer a real https session media URL as the cast target — mpv/desktop cannot
+  // open data: URLs (they get treated as filesystem paths under TMPDIR).
+  // Keep the full multivariant text in syntheticPlaylist for desktop materialization.
+  // Use highest-bandwidth video as the fallback open URL if body is dropped.
+  const castUrl =
+    preferredSyntheticCastUrl(synthetic) ??
+    existing?.url ??
+    synthetic.dataUrl;
+  const record: VideoData = {
+    url: castUrl,
+    tabId,
+    contentType: "application/vnd.apple.mpegurl",
+    detectedBy: "synthetic_hls_master",
+    originUrl: base.originUrl ?? existing?.originUrl ?? "",
+    timestamp: existing?.timestamp ?? now,
+    lastSeen: now,
+    frameId: base.frameId ?? existing?.frameId,
+    headers: base.headers ?? existing?.headers,
+    hlsRole: "master",
+    hlsGroupKey: synthetic.hlsGroupKey,
+    // Stable synthetic identity — never equal to a live video identity key.
+    hlsIdentityKey: `synthetic:${synthetic.hlsGroupKey}`,
+    hasSeparateAudio: synthetic.hasSeparateAudio,
+    qualities: synthetic.qualities,
+    audioUrl: synthetic.audioUrls[0],
+    isSyntheticMaster: true,
+    syntheticPlaylist: synthetic.content,
+  };
+
+  // Bypass exclusive-master path: store under synthetic identity.
+  const videos = getTabVideos(tabId);
+  const seen = getTabSeenUrls(tabId);
+  const key = record.hlsIdentityKey!;
+  const idx = videos.findIndex(
+    (v) => v.isSyntheticMaster && v.hlsGroupKey === synthetic.hlsGroupKey,
+  );
+  if (idx !== -1) {
+    videos[idx] = {
+      ...videos[idx],
+      ...record,
+      headers: record.headers ?? videos[idx].headers,
+      timestamp: videos[idx].timestamp,
+    };
+  } else {
+    videos.push(record);
+    if (videos.length > 50) videos.shift();
+  }
+  seen.add(key);
+  if (base.headers && Object.keys(base.headers).length > 0) {
+    getTabHeadersCaptured(tabId).add(key);
+  }
+
+  // Seed children from the synthetic so Chrome observation stays consistent.
+  for (const url of synthetic.videoUrls) {
+    notifyContentScript(
+      {
+        url,
+        tabId,
+        contentType: "application/vnd.apple.mpegurl",
+        detectedBy: "synthetic_variant",
+        originUrl: record.originUrl,
+        timestamp: now,
+        frameId: record.frameId,
+        hlsRole: "video_media",
+      },
+      tabId,
+      base.headers ?? null,
+    );
+  }
+  for (const url of synthetic.audioUrls) {
+    notifyContentScript(
+      {
+        url,
+        tabId,
+        contentType: "application/vnd.apple.mpegurl",
+        detectedBy: "synthetic_audio",
+        originUrl: record.originUrl,
+        timestamp: now,
+        frameId: record.frameId,
+        hlsRole: "audio_media",
+      },
+      tabId,
+      base.headers ?? null,
+    );
+  }
+
+  plog(
+    "  → synthetic master for group",
+    synthetic.hlsGroupKey.slice(-48),
+    "videos:",
+    synthetic.videoUrls.length,
+    "audio:",
+    synthetic.audioUrls.length,
+  );
+  updateBadge(tabId);
+  persistVideos(tabId);
+  browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
+  if (tabId >= 0) {
+    browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
+  }
+}
+
+/**
+ * When we have live session video (+ optional audio) but never captured the
+ * exclusive bootstrap master body (Chrome MV3), synthesize a minimal multivariant.
+ *
+ * Do **not** invent synthetics for ordinary reusable masters — only exclusive
+ * token masters or demuxed session A/V when no reusable master is present.
+ */
+function maybeSynthesizeFromObservations(
+  tabId: number,
+  groupKey: string | undefined,
+): void {
+  if (!groupKey) return;
+  if (findSyntheticForGroup(tabId, groupKey)) return;
+
+  const members = getTabVideos(tabId).filter(
+    (v) => (v.hlsGroupKey ?? hlsStreamGroupKey(v.url)) === groupKey,
+  );
+  const videos = members.filter((v) => {
+    const role = effectiveHlsRole(toRankableCandidate(v));
+    return (
+      (role === "video_media" || role === "media") &&
+      playlistSessionId(v.url)
+    );
+  });
+  const audios = members.filter(
+    (v) => effectiveHlsRole(toRankableCandidate(v)) === "audio_media",
+  );
+  if (videos.length === 0) return;
+
+  // Prefer same session as the most recent video.
+  videos.sort(
+    (a, b) => (b.lastSeen ?? b.timestamp) - (a.lastSeen ?? a.timestamp),
+  );
+  const session = playlistSessionId(videos[0]!.url);
+  const sessionVideos = session
+    ? videos.filter((v) => playlistSessionId(v.url) === session)
+    : videos;
+  const sessionAudios = session
+    ? audios.filter((v) => playlistSessionId(v.url) === session)
+    : audios;
+
+  const master = members.find(
+    (v) =>
+      effectiveHlsRole(toRankableCandidate(v)) === "master" &&
+      !v.isSyntheticMaster,
+  );
+
+  if (!shouldInstallObservationSynthetic(master, sessionVideos, sessionAudios)) {
+    return;
+  }
+
+  const synthetic = buildSyntheticFromObservations({
+    groupKey,
+    sourceMasterUrl: master?.url,
+    videoUrls: sessionVideos.map((v) => v.url),
+    audioUrls: sessionAudios.map((v) => v.url),
+  });
+  if (!synthetic) return;
+
+  installSyntheticMaster(tabId, synthetic, {
+    headers: sessionVideos[0]?.headers ?? master?.headers,
+    originUrl: sessionVideos[0]?.originUrl ?? master?.originUrl,
+    frameId: sessionVideos[0]?.frameId ?? master?.frameId,
+  });
+}
+
+/**
+ * Gate observation-based synthetics so ordinary reusable HLS keeps its master.
+ */
+function shouldInstallObservationSynthetic(
+  master: VideoData | undefined,
+  sessionVideos: VideoData[],
+  sessionAudios: VideoData[],
+): boolean {
+  if (sessionVideos.length === 0) return false;
+
+  if (master) {
+    const role = effectiveHlsRole(toRankableCandidate(master));
+    if (isExclusiveBootstrapMaster(master.url, role)) {
+      // Exclusive token master + live session video (audio optional until seen).
+      return true;
+    }
+    // Reusable master present — cast it; do not replace with a synthetic ladder.
+    return false;
+  }
+
+  // Chrome never saw the master: only invent a synthetic for demuxed session A/V.
+  return sessionAudios.length > 0;
+}
+
+/**
+ * Prefer the stronger HLS role when merging detections (body-confirmed master
+ * must not be downgraded by a later URL-only media classification).
+ */
+function mergeHlsRole(existing?: HlsRole, incoming?: HlsRole): HlsRole | undefined {
+  const rank = (role?: HlsRole): number => {
+    switch (role) {
+      case "master":
+        return 4;
+      case "video_media":
+        return 3;
+      case "media":
+        return 2;
+      case "audio_media":
+        return 1;
+      case "not_hls":
+        return 0;
+      default:
+        return -1;
+    }
+  };
+  return rank(incoming) >= rank(existing) ? incoming ?? existing : existing;
 }
 
 interface StoredHeaders {
@@ -219,9 +575,11 @@ const hydrated: Promise<void> = (async () => {
       const existing = getTabVideos(tabId);
       const seen = getTabSeenUrls(tabId);
       for (const item of v as VideoData[]) {
-        if (!seen.has(item.url)) {
-          existing.push(item);
-          seen.add(item.url);
+        const annotated = annotateHlsFields(item);
+        const key = detectionKey(annotated.url);
+        if (!seen.has(key)) {
+          existing.push(annotated);
+          seen.add(key);
         }
       }
     }
@@ -240,7 +598,8 @@ try {
 
 function updateBadge(tabId: number) {
   if (!actionApi || tabId < 0) return;
-  const n = tabVideos.get(tabId)?.length ?? 0;
+  // Count only castable primaries (masters win over demuxed media siblings).
+  const n = filterPrimaryCastCandidates(tabVideos.get(tabId) ?? []).length;
   try {
     actionApi.setBadgeText({ tabId, text: n > 0 ? String(n) : "" }).catch(() => {});
   } catch (_) {}
@@ -267,34 +626,131 @@ if (browser.webNavigation) {
 }
 
 function notifyContentScript(video: VideoData, tabId: number, headers: Record<string, string> | null) {
+  const annotated = annotateHlsFields({
+    ...video,
+    tabId,
+    lastSeen: video.lastSeen ?? video.timestamp ?? Date.now(),
+  });
+
+  // Audio media is stored (for companion audioUrl on cast) but never ranked as
+  // a primary cast target — filterPrimaryCastCandidates excludes it.
   const hasHeaders = headers && Object.keys(headers).length > 0;
   const seenUrls = getTabSeenUrls(tabId);
   const headersCaptured = getTabHeadersCaptured(tabId);
   const videos = getTabVideos(tabId);
-  const existing = videos.find((candidate) => candidate.url === video.url);
+  const key = detectionKey(annotated.url);
+  const existing = findVideoByIdentity(videos, annotated.url);
   const upgradesDomDetection =
-    existing?.detectedBy === "dom_source" && video.detectedBy !== "dom_source";
+    existing?.detectedBy === "dom_source" && annotated.detectedBy !== "dom_source";
+  const upgradesRole =
+    !!existing &&
+    mergeHlsRole(existing.hlsRole, annotated.hlsRole) !== existing.hlsRole;
 
-  if (seenUrls.has(video.url)) {
-    if (!upgradesDomDetection && (headersCaptured.has(video.url) || !hasHeaders)) return;
+  // Identity already known with headers: refresh activity / optional upgrades only.
+  if (seenUrls.has(key) && existing) {
+    const now = Date.now();
+    existing.lastSeen = now;
+    existing.timestamp = Math.max(existing.timestamp, annotated.timestamp);
+    if (upgradesDomDetection) {
+      existing.detectedBy = annotated.detectedBy;
+      existing.contentType = annotated.contentType || existing.contentType;
+    }
+    existing.hlsRole = mergeHlsRole(existing.hlsRole, annotated.hlsRole);
+    if (typeof annotated.frameId === "number") existing.frameId = annotated.frameId;
+    if (hasHeaders && !headersCaptured.has(key)) {
+      existing.headers = headers!;
+      headersCaptured.add(key);
+      if (headersCaptured.size > 500) {
+        headersCaptured.delete(headersCaptured.keys().next().value!);
+      }
+    }
+    touchHlsGroupActivity(tabId, existing.hlsGroupKey, now);
+    // Avoid noisy rebroadcasts on pure LL-HLS media polls unless something useful changed.
+    if (upgradesDomDetection || upgradesRole || (hasHeaders && !videoHasReplayHeaders(existing))) {
+      persistVideos(tabId);
+      updateBadge(tabId);
+      browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
+      if (tabId >= 0) {
+        browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
+      }
+    } else {
+      persistVideos(tabId);
+    }
+    return;
   }
 
-  seenUrls.add(video.url);
+  if (seenUrls.has(key) && !upgradesDomDetection && (headersCaptured.has(key) || !hasHeaders)) {
+    touchHlsGroupActivity(tabId, annotated.hlsGroupKey, Date.now());
+    return;
+  }
+
+  seenUrls.add(key);
   if (seenUrls.size > 500) seenUrls.delete(seenUrls.keys().next().value!);
 
   if (hasHeaders) {
-    video.headers = headers!;
-    headersCaptured.add(video.url);
-    if (headersCaptured.size > 500) headersCaptured.delete(headersCaptured.keys().next().value!);
+    annotated.headers = headers!;
+    headersCaptured.add(key);
+    if (headersCaptured.size > 500) {
+      headersCaptured.delete(headersCaptured.keys().next().value!);
+    }
   }
 
-  const idx = videos.findIndex((v) => v.url === video.url);
-  if (idx !== -1) videos[idx] = { ...videos[idx], ...video };
-  else {
-    videos.push(video);
+  // Prefer the cleaner identity URL (without ephemeral LL-HLS query params) when
+  // first storing, so cast/replay uses a stable playlist URL + session/token.
+  if (isHlsUrl(annotated.url)) {
+    try {
+      const stable = new URL(annotated.url);
+      for (const param of [...stable.searchParams.keys()]) {
+        if (/^(?:_HLS_.*|hls_.*)$/i.test(param)) stable.searchParams.delete(param);
+      }
+      annotated.url = stable.toString();
+      annotated.hlsIdentityKey = hlsIdentityKey(annotated.url);
+    } catch {
+      /* keep original */
+    }
+  }
+
+  const idx = existing
+    ? videos.indexOf(existing)
+    : videos.findIndex((v) => detectionKey(v.url) === key);
+  if (idx !== -1) {
+    const prev = videos[idx];
+    videos[idx] = {
+      ...prev,
+      ...annotated,
+      hlsRole: mergeHlsRole(prev.hlsRole, annotated.hlsRole),
+      headers: annotated.headers ?? prev.headers,
+      qualities: annotated.qualities ?? prev.qualities,
+      hasSeparateAudio: annotated.hasSeparateAudio ?? prev.hasSeparateAudio,
+      lastSeen: Math.max(prev.lastSeen ?? 0, annotated.lastSeen ?? annotated.timestamp),
+      timestamp: Math.max(prev.timestamp, annotated.timestamp),
+    };
+  } else {
+    videos.push(annotated);
     if (videos.length > 50) videos.shift();
   }
-  plog("  → reported to tab", tabId, "(tab now has", videos.length, "videos):", short(video.url));
+
+  touchHlsGroupActivity(tabId, annotated.hlsGroupKey, annotated.lastSeen ?? Date.now());
+  attachCompanionAudioToGroup(tabId, annotated.hlsGroupKey);
+  // Chrome path: once session video+audio are observed, mint a synthetic master.
+  if (
+    annotated.hlsRole === "video_media" ||
+    annotated.hlsRole === "audio_media" ||
+    annotated.hlsRole === "media"
+  ) {
+    maybeSynthesizeFromObservations(tabId, annotated.hlsGroupKey);
+  }
+
+  plog(
+    "  → reported to tab",
+    tabId,
+    "role:",
+    annotated.hlsRole,
+    "(tab now has",
+    videos.length,
+    "videos):",
+    short(annotated.url),
+  );
   updateBadge(tabId);
   persistVideos(tabId);
 
@@ -320,13 +776,112 @@ function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Pr
 // otherwise drop this follow-up because the URL was already seen.
 function updateStoredVideo(video: VideoData, tabId: number) {
   const videos = getTabVideos(tabId);
-  const idx = videos.findIndex((v) => v.url === video.url);
-  if (idx !== -1) videos[idx] = { ...videos[idx], ...video };
+  const existing = findVideoByIdentity(videos, video.url);
+  if (!existing) return;
+  const idx = videos.indexOf(existing);
+  videos[idx] = {
+    ...existing,
+    ...video,
+    url: existing.url, // keep stable identity URL
+    hlsRole: mergeHlsRole(existing.hlsRole, video.hlsRole),
+    headers: video.headers ?? existing.headers,
+    qualities: video.qualities ?? existing.qualities,
+    hasSeparateAudio: video.hasSeparateAudio ?? existing.hasSeparateAudio,
+    lastSeen: Math.max(existing.lastSeen ?? 0, video.lastSeen ?? video.timestamp ?? 0),
+  };
   persistVideos(tabId);
   browser.runtime.sendMessage({ type: "video_detected" }).catch(() => {});
   if (tabId >= 0) {
     browser.tabs.sendMessage(tabId, { type: "video_detected" }).catch(() => {});
   }
+}
+
+function applyHlsPlaylistEnrichment(
+  stored: VideoData,
+  playlist: Awaited<ReturnType<typeof HlsParser.parsePlaylist>>,
+  tabId: number,
+  rawBody?: string,
+): void {
+  const bodyRole = playlist.role !== "not_hls" ? playlist.role : undefined;
+  const nextRole = mergeHlsRole(stored.hlsRole, bodyRole);
+  let changed = false;
+
+  if (nextRole && nextRole !== stored.hlsRole) {
+    stored.hlsRole = nextRole;
+    changed = true;
+  }
+  if (playlist.videoQualities.length > 0) {
+    stored.qualities = playlist.videoQualities;
+    stored.hlsRole = "master";
+    if (playlist.hasSeparateAudio) stored.hasSeparateAudio = true;
+    changed = true;
+
+    // Exclusive bootstrap only: rewrite absolute session children into a
+    // synthetic multivariant. Reusable masters stay as the cast target.
+    if (
+      rawBody &&
+      isExclusiveBootstrapMaster(stored.url, stored.hlsRole ?? "master")
+    ) {
+      const synthetic = buildSyntheticFromMasterBody(rawBody, stored.url);
+      if (synthetic) {
+        if (changed) updateStoredVideo(stored, tabId);
+        installSyntheticMaster(tabId, synthetic, {
+          headers: stored.headers,
+          originUrl: stored.originUrl,
+          frameId: stored.frameId,
+        });
+        return;
+      }
+    }
+
+    // Fallback: seed children only (Chrome without body text, reusable master,
+    // or parse miss).
+    for (const quality of playlist.videoQualities) {
+      if (!quality.url) continue;
+      notifyContentScript(
+        {
+          url: quality.url,
+          tabId,
+          contentType: "application/vnd.apple.mpegurl",
+          detectedBy: "hls_master_variant",
+          originUrl: stored.originUrl,
+          timestamp: Date.now(),
+          frameId: stored.frameId,
+          hlsRole: "video_media",
+        },
+        tabId,
+        stored.headers ?? null,
+      );
+    }
+    for (const track of playlist.audioTracks) {
+      if (!track.uri) continue;
+      notifyContentScript(
+        {
+          url: track.uri,
+          tabId,
+          contentType: "application/vnd.apple.mpegurl",
+          detectedBy: "hls_master_audio",
+          originUrl: stored.originUrl,
+          timestamp: Date.now(),
+          frameId: stored.frameId,
+          hlsRole: "audio_media",
+        },
+        tabId,
+        stored.headers ?? null,
+      );
+    }
+  } else if (playlist.hasSeparateAudio) {
+    stored.hasSeparateAudio = true;
+    changed = true;
+  }
+
+  if (stored.hlsRole === "audio_media") {
+    if (changed) updateStoredVideo(stored, tabId);
+    return;
+  }
+  if (changed) updateStoredVideo(stored, tabId);
+  attachCompanionAudioToGroup(tabId, stored.hlsGroupKey);
+  maybeSynthesizeFromObservations(tabId, stored.hlsGroupKey);
 }
 
 function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Record<string, string> | null) {
@@ -335,23 +890,30 @@ function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Rec
   // missing Referer/Origin would hang that fetch forever and the video would
   // never be reported. Enrichment is sent as a non-blocking follow-up update.
   // This mirrors the phone, which reports on webRequest and parses lazily after.
-  notifyContentScript(videoData, tabId, headers);
+  const annotated = annotateHlsFields(videoData);
+  notifyContentScript(annotated, tabId, headers);
 
-  if (videoData.url.toLowerCase().includes("m3u8")) {
-    HlsParser.parsePlaylist(videoData.url, headers ?? undefined)
-      .then((playlist) => {
-        if (playlist.videoQualities.length > 0) {
-          videoData.qualities = playlist.videoQualities;
-          updateStoredVideo(videoData, tabId);
-        }
-      })
-      .catch(() => {});
+  if (isHlsUrl(annotated.url, annotated.contentType)) {
+    // Never re-fetch exclusive bootstrap masters — the edge session is already
+    // held by the page (`session_duplicated` / claims_denied). Prefer Firefox
+    // body sniff on the original response, or observed session media playlists.
+    if (isExclusiveBootstrapMaster(annotated.url, annotated.hlsRole)) {
+      plog("  skip re-fetch of exclusive bootstrap master:", short(annotated.url));
+    } else {
+      HlsParser.parsePlaylist(annotated.url, headers ?? undefined)
+        .then((playlist) => {
+          const stored = findVideoByIdentity(getTabVideos(tabId), annotated.url);
+          if (!stored) return;
+          applyHlsPlaylistEnrichment(stored, playlist, tabId);
+        })
+        .catch(() => {});
+    }
   } else if (
-    videoData.detectedBy === "subtitle_extension" ||
-    videoData.url.endsWith(".srt") ||
-    videoData.url.endsWith(".vtt")
+    annotated.detectedBy === "subtitle_extension" ||
+    annotated.url.endsWith(".srt") ||
+    annotated.url.endsWith(".vtt")
   ) {
-    fetchWithTimeout(videoData.url, { method: "GET", headers: { Range: "bytes=0-1500" } }, 8000)
+    fetchWithTimeout(annotated.url, { method: "GET", headers: { Range: "bytes=0-1500" } }, 8000)
       .then((r) => r.text())
       .then((text) => {
         const lines = text.split(/\r?\n/);
@@ -365,8 +927,8 @@ function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Rec
           if (validLines.length >= 6) break;
         }
         if (validLines.length > 0) {
-          videoData.subtitlePreview = validLines.join(" • ") + "...";
-          updateStoredVideo(videoData, tabId);
+          annotated.subtitlePreview = validLines.join(" • ") + "...";
+          updateStoredVideo(annotated, tabId);
         }
       })
       .catch(() => {});
@@ -497,9 +1059,46 @@ async function resolveStreamTitle(
 function castVideo(
   video: VideoData,
   titleHint?: string | null,
+  tabRecords?: VideoData[],
 ): Promise<{ ok: boolean; error?: string }> {
-  return resolveStreamTitle(video.tabId, video.url, titleHint).then((title) =>
-    bridge.cast(video.url, video.headers ?? {}, title, video.contentType),
+  const pool = tabRecords ?? (video.tabId >= 0 ? getTabVideos(video.tabId) : [video]);
+  // Ensure companion audio is attached from demuxed siblings before cast.
+  attachCompanionAudioToGroup(video.tabId, video.hlsGroupKey ?? hlsStreamGroupKey(video.url));
+  // Prefer synthetic identity over URL match — synthetic rows reuse a live
+  // video URL as the open target and must keep syntheticPlaylist.
+  const freshRecord =
+    findPlayableRecord(toRankableCandidate(video), pool) ?? video;
+  const audio =
+    freshRecord.audioUrl ??
+    pickCompanionAudio(
+      toRankableCandidate(freshRecord),
+      pool.map(toRankableCandidate),
+    )?.url;
+
+  // Never cast data: playlists — desktop/mpv treats them as local file paths.
+  let castUrl = freshRecord.url;
+  if (castUrl.startsWith("data:")) {
+    const liveVideo = pool.find(
+      (v) =>
+        (v.hlsGroupKey ?? hlsStreamGroupKey(v.url)) ===
+          (freshRecord.hlsGroupKey ?? hlsStreamGroupKey(freshRecord.url)) &&
+        (effectiveHlsRole(toRankableCandidate(v)) === "video_media" ||
+          effectiveHlsRole(toRankableCandidate(v)) === "media") &&
+        !v.url.startsWith("data:") &&
+        !v.isSyntheticMaster,
+    );
+    if (liveVideo) castUrl = liveVideo.url;
+  }
+
+  return resolveStreamTitle(freshRecord.tabId, castUrl, titleHint).then((title) =>
+    bridge.cast(
+      castUrl,
+      freshRecord.headers ?? {},
+      title,
+      freshRecord.contentType,
+      audio,
+      freshRecord.syntheticPlaylist,
+    ),
   );
 }
 
@@ -508,10 +1107,60 @@ function videoHasReplayHeaders(video: VideoData): boolean {
 }
 
 function isPlayableCastRecord(video: VideoData): boolean {
+  // Include audio_media in the pool for companion resolution; ranking still
+  // excludes them via filterPrimaryCastCandidates / isExcludedMediaCandidate.
   return (
     !!video.url &&
     !isBlobOrDataUrl(video.url) &&
-    !isExcludedMediaCandidate(video.url, video.detectedBy)
+    video.detectedBy !== "subtitle_extension" &&
+    !video.url.endsWith(".vtt") &&
+    !video.url.endsWith(".srt")
+  );
+}
+
+function toRankableCandidate(video: VideoData) {
+  return {
+    url: video.url,
+    contentType: video.contentType,
+    detectedBy: video.detectedBy,
+    timestamp: video.timestamp,
+    frameId: video.frameId,
+    qualities: video.qualities,
+    hasHeaders: videoHasReplayHeaders(video),
+    hlsRole: video.hlsRole,
+    hlsIdentityKey: video.hlsIdentityKey,
+    hlsGroupKey: video.hlsGroupKey,
+    hasSeparateAudio: video.hasSeparateAudio,
+    lastSeen: video.lastSeen,
+    audioUrl: video.audioUrl,
+    isSyntheticMaster: video.isSyntheticMaster,
+    syntheticPlaylist: video.syntheticPlaylist,
+  };
+}
+
+/**
+ * Map a resolved rankable candidate back to a stored VideoData row without
+ * losing syntheticPlaylist when the open URL collides with live video media.
+ */
+function findPlayableRecord(
+  resolved: ReturnType<typeof toRankableCandidate>,
+  pool: VideoData[],
+): VideoData | undefined {
+  const matched = matchResolvedCastRecord(
+    resolved,
+    pool.map(toRankableCandidate),
+  );
+  return (
+    pool.find(
+      (item) =>
+        (matched.isSyntheticMaster &&
+          item.isSyntheticMaster &&
+          (item.hlsIdentityKey === matched.hlsIdentityKey ||
+            item.hlsGroupKey === matched.hlsGroupKey)) ||
+        (!matched.isSyntheticMaster &&
+          item.url === matched.url &&
+          !item.isSyntheticMaster),
+    ) ?? pool.find((item) => item.url === matched.url)
   );
 }
 
@@ -520,30 +1169,35 @@ function isPlayableCastRecord(video: VideoData): boolean {
  * headers, while the popup list includes a CDN request (Cookie/Referer) for the
  * same player. Prefer a header-bearing network record from the tab when the
  * content-script hint is weak.
+ *
+ * Demuxed HLS: always prefer the master playlist so separate audio is retained.
  */
 function resolveOverlayCastVideo(
   preferred: VideoData,
   tabRecords: VideoData[],
   sender: browser.Runtime.MessageSender,
 ): VideoData {
+  const playable = tabRecords.filter(isPlayableCastRecord);
+
+  const finish = (video: VideoData): VideoData => {
+    const resolved = resolveCastableHlsUrl(
+      toRankableCandidate(video),
+      playable.map(toRankableCandidate),
+    );
+    return findPlayableRecord(resolved, playable) ?? video;
+  };
+
+  // Exclusive bootstrap masters are not castable once the page holds the
+  // session — fall through to ranking so live video media wins.
   if (
     videoHasReplayHeaders(preferred) &&
-    !isDomSourceDetection(preferred.detectedBy)
+    !isDomSourceDetection(preferred.detectedBy) &&
+    effectiveHlsRole(toRankableCandidate(preferred)) === "master" &&
+    !isExclusiveBootstrapMaster(preferred.url, preferred.hlsRole)
   ) {
-    return preferred;
+    return finish(preferred);
   }
 
-  const toCandidate = (video: VideoData) => ({
-    url: video.url,
-    contentType: video.contentType,
-    detectedBy: video.detectedBy,
-    timestamp: video.timestamp,
-    frameId: video.frameId,
-    qualities: video.qualities,
-    hasHeaders: videoHasReplayHeaders(video),
-  });
-
-  const playable = tabRecords.filter(isPlayableCastRecord);
   const frameMatched = playable.filter((video) =>
     videoMatchesSender(video, sender),
   );
@@ -553,7 +1207,7 @@ function resolveOverlayCastVideo(
   const pool = frameHasHeaders || frameMatched.length === 0 ? frameMatched : playable;
   const searchPool = pool.length > 0 ? pool : playable;
 
-  const ranked = rankMediaCandidate(searchPool.map(toCandidate), {
+  const ranked = rankMediaCandidate(searchPool.map(toRankableCandidate), {
     domUrls: [preferred.url],
     senderFrameId:
       typeof sender.frameId === "number" && sender.frameId >= 0
@@ -563,7 +1217,8 @@ function resolveOverlayCastVideo(
   });
   if (ranked) {
     const match = searchPool.find((video) => video.url === ranked.url);
-    if (match && videoHasReplayHeaders(match)) return match;
+    if (match && videoHasReplayHeaders(match)) return finish(match);
+    if (match) return finish(match);
   }
 
   const headerBearing = searchPool
@@ -572,8 +1227,77 @@ function resolveOverlayCastVideo(
         videoHasReplayHeaders(video) &&
         !isDomSourceDetection(video.detectedBy),
     )
-    .sort((left, right) => right.timestamp - left.timestamp);
-  return headerBearing[0] ?? preferred;
+    .sort(
+      (left, right) =>
+        (right.lastSeen ?? right.timestamp) - (left.lastSeen ?? left.timestamp),
+    );
+  return finish(headerBearing[0] ?? preferred);
+}
+
+/**
+ * Popup/quality cast: map demuxed media or a quality variant back to the master
+ * when the stream has separate audio (or a master sibling exists).
+ */
+function resolveCastVideoForPlayback(
+  video: VideoData,
+  tabRecords: VideoData[],
+  options: { allowMuxedMediaVariant?: boolean } = {},
+): VideoData {
+  const playable = tabRecords.filter(isPlayableCastRecord);
+  // If the user picked a quality variant URL that is not yet a stored record,
+  // synthesize a candidate so group resolution can still find the master.
+  const preferred = annotateHlsFields(
+    findVideoByIdentity(tabRecords, video.url) ?? video,
+  );
+  // Quality picks are media playlists even when not yet classified.
+  if (
+    options.allowMuxedMediaVariant &&
+    isHlsUrl(preferred.url) &&
+    (!preferred.hlsRole || preferred.hlsRole === "not_hls" || preferred.hlsRole === "master") &&
+    !findVideoByIdentity(tabRecords, preferred.url)
+  ) {
+    preferred.hlsRole = "video_media";
+  }
+  const pool = playable.some((item) => item.url === preferred.url)
+    ? playable
+    : [...playable, preferred];
+  const resolved = resolveCastableHlsUrl(
+    toRankableCandidate(preferred),
+    pool.map(toRankableCandidate),
+    { allowMuxedMediaVariant: options.allowMuxedMediaVariant },
+  );
+  const match = findPlayableRecord(resolved, pool);
+  if (match) {
+    return {
+      ...preferred,
+      ...match,
+      url: match.url,
+      headers: match.headers ?? preferred.headers,
+      // Preserve synthetic handoff even when preferred was a live media URL.
+      isSyntheticMaster: match.isSyntheticMaster ?? preferred.isSyntheticMaster,
+      syntheticPlaylist: match.syntheticPlaylist ?? preferred.syntheticPlaylist,
+      audioUrl: match.audioUrl ?? preferred.audioUrl,
+      hlsIdentityKey: match.hlsIdentityKey ?? preferred.hlsIdentityKey,
+      hlsGroupKey: match.hlsGroupKey ?? preferred.hlsGroupKey,
+      hasSeparateAudio: match.hasSeparateAudio ?? preferred.hasSeparateAudio,
+    };
+  }
+  // Resolved to the preferred media URL itself (muxed quality pick).
+  if (resolved.url === preferred.url) {
+    // Replay headers: prefer master's headers for same-group auth when the
+    // variant was never observed as its own webRequest.
+    const group = preferred.hlsGroupKey ?? hlsStreamGroupKey(preferred.url);
+    const master = pool.find(
+      (item) =>
+        effectiveHlsRole(toRankableCandidate(item)) === "master" &&
+        (item.hlsGroupKey ?? hlsStreamGroupKey(item.url)) === group,
+    );
+    return {
+      ...preferred,
+      headers: preferred.headers ?? master?.headers,
+    };
+  }
+  return preferred;
 }
 
 // ==================== Request header capture ====================
@@ -639,8 +1363,19 @@ browser.webRequest.onHeadersReceived.addListener(
 
     const captured = getTabHeadersCaptured(tabId);
     const seen = getTabSeenUrls(tabId);
-    if (seen.has(details.url) && (captured.has(details.url) || !stored)) {
-      if (details.url.toLowerCase().includes("m3u8")) plog("  skip (already seen / no new headers):", short(details.url));
+    const detKey = detectionKey(details.url);
+    if (seen.has(detKey) && (captured.has(detKey) || !stored)) {
+      // LL-HLS media playlists re-poll continuously; keep the group's master live
+      // without re-entering full detection for every _HLS_msn bump.
+      if (isHlsUrl(details.url)) {
+        const role = classifyHlsUrl(details.url);
+        if (role === "audio_media" || role === "video_media" || role === "media") {
+          touchHlsGroupActivity(tabId, hlsStreamGroupKey(details.url), Date.now());
+        }
+      }
+      if (details.url.toLowerCase().includes("m3u8")) {
+        plog("  skip (already seen / no new headers):", short(details.url));
+      }
       if (stored) requestHeadersMap.delete(details.requestId);
       return;
     }
@@ -682,7 +1417,23 @@ browser.webRequest.onHeadersReceived.addListener(
         : undefined;
 
     if (isVideo) {
-      plog("  ✓ DETECTED:", detectedBy, "| ct:", contentType || "(none)", "| tabId:", tabId, "| frameId:", frameId, "|", short(details.url));
+      const hlsRole = isHlsUrl(details.url, contentType)
+        ? classifyHlsUrl(details.url)
+        : "not_hls";
+      plog(
+        "  ✓ DETECTED:",
+        detectedBy,
+        "| role:",
+        hlsRole,
+        "| ct:",
+        contentType || "(none)",
+        "| tabId:",
+        tabId,
+        "| frameId:",
+        frameId,
+        "|",
+        short(details.url),
+      );
       processAndNotifyVideo(
         {
           url: details.url,
@@ -692,10 +1443,63 @@ browser.webRequest.onHeadersReceived.addListener(
           originUrl: details.originUrl ?? "",
           timestamp: Date.now(),
           frameId,
+          hlsRole,
         },
         tabId,
         stored?.headers ?? null,
       );
+
+      // Firefox: capture exclusive bootstrap master body on the first response.
+      // A follow-up fetch gets session_duplicated; child session= URLs are what
+      // we cast. Seeding variants from this body helps before children poll.
+      if (
+        FILTER_AVAILABLE &&
+        details.statusCode === 200 &&
+        isExclusiveBootstrapMaster(details.url, hlsRole)
+      ) {
+        try {
+          const filter = (browser.webRequest as any).filterResponseData(
+            details.requestId,
+          );
+          const decoder = new TextDecoder("utf-8");
+          let acc = "";
+          filter.ondata = (ev: any) => {
+            filter.write(ev.data);
+            if (acc.length < 96_000) {
+              acc += decoder.decode(ev.data, { stream: true });
+            }
+          };
+          filter.onstop = () => {
+            try {
+              const text = acc.trim();
+              if (text.startsWith("#EXTM3U") && /#EXT-X-STREAM-INF:/i.test(text)) {
+                const playlist = HlsParser.parsePlaylistContent(
+                  text,
+                  details.url,
+                );
+                const storedVideo = findVideoByIdentity(
+                  getTabVideos(tabId),
+                  details.url,
+                );
+                if (storedVideo) {
+                  applyHlsPlaylistEnrichment(
+                    storedVideo,
+                    playlist,
+                    tabId,
+                    text,
+                  );
+                }
+              }
+            } catch (e) {
+              plog("  exclusive master body parse failed:", (e as Error)?.message);
+            }
+            try { filter.disconnect(); } catch (_) {}
+          };
+          filter.onerror = () => {};
+        } catch (e) {
+          plog("  filterResponseData (exclusive master) threw:", (e as Error)?.message);
+        }
+      }
     } else {
       const skipTypes = ["image", "font", "stylesheet", "script"];
       const sniffable = details.statusCode === 200 && !skipTypes.includes(details.type) && FILTER_AVAILABLE;
@@ -707,34 +1511,75 @@ browser.webRequest.onHeadersReceived.addListener(
         try {
           const filter = (browser.webRequest as any).filterResponseData(details.requestId);
           const decoder = new TextDecoder("utf-8");
-          let checked = false;
+          let decided = false;
+          let finished = false;
           let acc = "";
-          filter.ondata = (ev: any) => {
-            filter.write(ev.data);
-            if (checked) return;
-            acc += decoder.decode(ev.data, { stream: true });
-            if (acc.length >= 7) {
-              checked = true;
-              if (acc.trim().startsWith("#EXTM3U")) {
-                plog("  ✓ DETECTED via body sniff (#EXTM3U):", short(details.url));
-                processAndNotifyVideo(
-                  {
-                    url: details.url,
-                    tabId,
-                    contentType,
-                    detectedBy: "body_content_m3u8",
-                    originUrl: details.originUrl ?? "",
-                    timestamp: Date.now(),
-                    frameId,
-                  },
-                  tabId,
-                  stored?.headers ?? null,
+          const maybeHandleMasterBody = (body: string) => {
+            const text = body.trim();
+            if (!text.startsWith("#EXTM3U")) return;
+            plog("  ✓ DETECTED via body sniff (#EXTM3U):", short(details.url));
+            const role = classifyHlsUrl(details.url);
+            processAndNotifyVideo(
+              {
+                url: details.url,
+                tabId,
+                contentType,
+                detectedBy: "body_content_m3u8",
+                originUrl: details.originUrl ?? "",
+                timestamp: Date.now(),
+                frameId,
+                hlsRole: role,
+              },
+              tabId,
+              stored?.headers ?? null,
+            );
+            // Capture exclusive bootstrap master body on the first response —
+            // a second fetch will fail with session_duplicated.
+            if (
+              isExclusiveBootstrapMaster(details.url, role) ||
+              /#EXT-X-STREAM-INF:/i.test(text)
+            ) {
+              try {
+                const playlist = HlsParser.parsePlaylistContent(text, details.url);
+                const storedVideo = findVideoByIdentity(
+                  getTabVideos(tabId),
+                  details.url,
                 );
+                if (storedVideo) {
+                  applyHlsPlaylistEnrichment(
+                    storedVideo,
+                    playlist,
+                    tabId,
+                    text,
+                  );
+                }
+              } catch (e) {
+                plog("  master body parse failed:", (e as Error)?.message);
               }
-              filter.disconnect();
             }
           };
-          filter.onstop = () => { try { filter.disconnect(); } catch (_) {} };
+          filter.ondata = (ev: any) => {
+            filter.write(ev.data);
+            acc += decoder.decode(ev.data, { stream: true });
+            // Exclusive masters need enough of the body for STREAM-INF lines;
+            // keep buffering up to a small cap then parse.
+            if (!decided && acc.trim().startsWith("#EXTM3U") && acc.length >= 256) {
+              decided = true;
+            }
+            if (decided && acc.length > 64_000 && !finished) {
+              finished = true;
+              maybeHandleMasterBody(acc);
+              try { filter.disconnect(); } catch (_) {}
+            }
+          };
+          filter.onstop = () => {
+            if (!finished && acc.trim().startsWith("#EXTM3U")) {
+              maybeHandleMasterBody(acc);
+            } else if (!finished && acc.trim().startsWith("#EXTM3U") === false && acc.length >= 7) {
+              // non-playlist
+            }
+            try { filter.disconnect(); } catch (_) {}
+          };
           filter.onerror = () => {};
         } catch (e) { plog("  filterResponseData threw:", (e as Error)?.message); }
       }
@@ -1067,14 +1912,17 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
       }
       const tabVideosList = getTabVideos(sender.tab!.id!);
-      const stored = tabVideosList.find((v) => v.url === url);
+      const stored =
+        findVideoByIdentity(tabVideosList, url) ??
+        tabVideosList.find((v) => v.url === url);
       if (!stored) {
         sendResponse({ success: false, reason: "Video not found" });
         return true;
       }
       // Prefer the live tab title from sender (website title).
       const titleHint = sender.tab?.title;
-      castVideo(stored, titleHint).then((r) =>
+      const toCast = resolveCastVideoForPlayback(stored, tabVideosList);
+      castVideo(toCast, titleHint, tabVideosList).then((r) =>
         sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
       );
       return true;
@@ -1083,7 +1931,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const tabId = (sender.tab?.id ?? msg.tabId) as number | undefined;
     const videos = tabId != null ? getTabVideos(tabId) : [];
     const video =
-      (typeof msg.url === "string" ? videos.find((v) => v.url === msg.url) : undefined) ??
+      (typeof msg.url === "string"
+        ? findVideoByIdentity(videos, msg.url) ?? videos.find((v) => v.url === msg.url)
+        : undefined) ??
       (msg.video as VideoData | undefined);
     if (!video) {
       sendResponse({ success: false, reason: "Video not found" });
@@ -1092,11 +1942,25 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // Prefer stored headers for the same URL when available (popup quality pick
     // may change the URL to a variant that still lacks a stored record).
     const stored =
+      findVideoByIdentity(videos, video.url) ??
       videos.find((v) => v.url === video.url) ??
-      (video.tabId != null ? getTabVideos(video.tabId).find((v) => v.url === video.url) : undefined);
-    const toCast: VideoData = stored
-      ? { ...stored, ...video, headers: stored.headers ?? video.headers }
+      (video.tabId != null
+        ? findVideoByIdentity(getTabVideos(video.tabId), video.url)
+        : undefined);
+    const requestedUrl =
+      typeof video.url === "string" && video.url.length > 0 ? video.url : stored?.url;
+    let toCast: VideoData = stored
+      ? { ...stored, ...video, headers: stored.headers ?? video.headers, url: requestedUrl ?? stored.url }
       : { ...video };
+    // Quality picks change the URL away from the stored master. Allow muxed
+    // media variants; demuxed masters (hasSeparateAudio) still win inside resolver.
+    const urlChanged =
+      !!stored && typeof requestedUrl === "string" && requestedUrl !== stored.url;
+    toCast = resolveCastVideoForPlayback(
+      toCast,
+      videos.length > 0 ? videos : [toCast],
+      { allowMuxedMediaVariant: urlChanged },
+    );
     if (msg.subtitleUrl) toCast.subtitles = [msg.subtitleUrl as string];
 
     // Popup messages have no sender.tab — use the video's tabId or the active tab
@@ -1118,7 +1982,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
 
     ensureTabId()
-      .then(() => castVideo(toCast))
+      .then(() => castVideo(toCast, null, videos.length > 0 ? videos : [toCast]))
       .then((r) =>
         sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
       );
@@ -1140,6 +2004,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const videos = getTabVideos(tabId);
     const stored =
       videos.find((v) => v.url === url && videoMatchesSender(v, sender)) ??
+      findVideoByIdentity(videos, url) ??
       videos.find((v) => v.url === url);
     if (!stored) {
       sendResponse({ success: false, reason: "Video not found" });
@@ -1147,8 +2012,9 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     // Content may point at a headerless DOM/get_file URL; upgrade to the
     // header-bearing network record the popup would cast for this player.
+    // Demuxed HLS is further resolved to the group master.
     const toCast = resolveOverlayCastVideo(stored, videos, sender);
-    castVideo({ ...toCast, tabId }, sender.tab?.title).then((r) =>
+    castVideo({ ...toCast, tabId }, sender.tab?.title, videos).then((r) =>
       sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
     );
     return true;

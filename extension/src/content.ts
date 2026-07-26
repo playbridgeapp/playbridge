@@ -257,7 +257,7 @@ function domSourceUrls(video: HTMLVideoElement): string[] {
 
 async function reportDomSources(video: HTMLVideoElement): Promise<void> {
   const urls = domSourceUrls(video).filter((url) => {
-    if (isBlobOrDataUrl(url) || isExcludedMediaCandidate(url)) return false;
+    if (isBlobOrDataUrl(url) || isExcludedMediaCandidate(url, undefined)) return false;
     try {
       return /^https?:$/.test(new URL(url).protocol);
     } catch {
@@ -306,7 +306,7 @@ function resolveCandidate(
     (record) =>
       record.url &&
       !isBlobOrDataUrl(record.url) &&
-      !isExcludedMediaCandidate(record.url, record.detectedBy),
+      !isExcludedMediaCandidate(record.url, record.detectedBy, record.hlsRole),
   );
 
   const exactUrls = domSourceUrls(video).filter(

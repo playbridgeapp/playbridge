@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart';
 
+import 'engines/tv_cast_media_preparer.dart';
 import 'pairing_store.dart';
 import 'protocol.dart';
 import 'stream_proxy_server.dart';
@@ -345,37 +346,70 @@ class TvSenderController extends ChangeNotifier {
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth) and a [title].
-  Future<bool> castUrl(String url,
-      {Map<String, String>? headers,
-      String? title,
-      String? contentType}) async {
+  ///
+  /// For demuxed LL-HLS, pass [playlistBody] / [audioUrl] from the extension.
+  /// External receivers only accept one HTTP URL, so synthetic demuxed masters
+  /// are always hosted on the stream proxy (LAN) — never sent as `data:`/`file:`.
+  Future<bool> castUrl(
+    String url, {
+    Map<String, String>? headers,
+    String? title,
+    String? contentType,
+    String? playlistBody,
+    String? audioUrl,
+  }) async {
     var targetUrl = url;
     var targetHeaders = headers;
+    var targetContentType = contentType;
 
+    final hasSynthetic = playlistBody != null &&
+        playlistBody.trim().startsWith('#EXTM3U');
+    final hasCompanionAudio = audioUrl != null && audioUrl.trim().isNotEmpty;
     final requiresHeaderProxy = headers != null &&
         headers.isNotEmpty &&
         _transport.protocol != TvProtocol.playBridge;
+    // Synthetic/demuxed: always proxy for every external target (incl. browser
+    // and PlayBridge protocol) so A/V + headers land on a LAN-reachable master.
+    final forceProxyForSynthetic = hasSynthetic || hasCompanionAudio;
     final alreadyProxied = StreamProxyServer.instance.ownsUrl(url);
-    if ((castRouteThroughProxy || requiresHeaderProxy || alreadyProxied) &&
+
+    if ((castRouteThroughProxy ||
+            requiresHeaderProxy ||
+            alreadyProxied ||
+            forceProxyForSynthetic) &&
         isConnected &&
         _activeTv != null) {
       final active = _activeTv!;
       final lanIp = await _localLanIp(active.host);
       if (lanIp != null) {
         final proxy = StreamProxyServer.instance;
-        if (alreadyProxied) {
+        if (alreadyProxied && !forceProxyForSynthetic) {
           // demo.html and the extension can hand us a URL already backed by
           // this proxy. Re-registering it creates a nested DASH proxy that
           // browser players cannot initialize. Only publish the same session
           // on the LAN address the receiver can reach.
           targetUrl = proxy.urlForHost(url, lanIp);
         } else {
-          final registration = await proxy.registerRemote(
-            url,
-            headers ?? {},
-            host: lanIp,
-          );
-          targetUrl = registration.url;
+          try {
+            final prepared = await TvCastMediaPreparer.prepare(
+              url: url,
+              lanHost: lanIp,
+              headers: headers,
+              playlistBody: playlistBody,
+              audioUrl: audioUrl,
+              proxy: proxy,
+            );
+            targetUrl = prepared.url;
+            targetContentType = prepared.contentType ?? targetContentType;
+          } catch (e) {
+            debugPrint('[tv-cast] prepare failed ($e); falling back to registerRemote');
+            final registration = await proxy.registerRemote(
+              url,
+              headers ?? {},
+              host: lanIp,
+            );
+            targetUrl = registration.url;
+          }
         }
         // The proxy session owns the upstream request headers.
         targetHeaders = null;
@@ -393,7 +427,7 @@ class TvSenderController extends ChangeNotifier {
       return browser.castBrowserMedia(
         url: targetUrl,
         title: title,
-        contentType: contentType,
+        contentType: targetContentType,
       );
     }
     return await castVideo(payload);

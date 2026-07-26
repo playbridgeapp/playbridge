@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
 import 'hls_master_resolver.dart';
+import 'playlist_materializer.dart';
 
 /// Headers that must NOT be forwarded to the player. They're browser-request
 /// artifacts captured by the extension; passing them to mpv breaks playback —
@@ -313,17 +314,43 @@ class MpvEngine extends PlayerEngine {
     // Ensure demuxer/network tuning is live before the first open (race fix).
     await _configured;
 
-    // Resolve any HLS *master* playlist to a single H.264 variant first — see
-    // hls_master_resolver.dart for why mpv chokes on multi-rendition masters.
-    final medias = await Future.wait(items.map((i) async {
+    // Extension demuxed LL-HLS: prefer https session video + audio-add so
+    // Media.httpHeaders apply to CDN children. A local file:// multivariant
+    // often yields a black "playing" picture (headers not on absolute children).
+    // Remote masters may still collapse to one H.264 variant — hls_master_resolver.
+    final plans = await Future.wait(items.map((i) async {
       final headers = sanitizePlayerHeaders(i.headers);
-      final resolvedUrl = preselectHlsQuality
-          ? await resolveHlsMaster(i.url, headers: headers)
-          : i.url;
-      return Media(resolvedUrl, httpHeaders: headers);
+      final plan = await PlaylistMaterializer.resolveOpen(
+        url: i.url,
+        playlistBody: i.playlistBody,
+        audioUrl: i.audioUrl,
+      );
+      var playUrl = plan.openUrl;
+      if (preselectHlsQuality && !plan.isLocalPlaylist) {
+        playUrl = await resolveHlsMaster(playUrl, headers: headers);
+      }
+      return (media: Media(playUrl, httpHeaders: headers), plan: plan);
     }));
+    final medias = plans.map((p) => p.media).toList();
     final playlist = Playlist(medias, index: startIndex);
     await player.open(playlist, play: play);
+
+    // Companion demuxed audio (same live session). Prefer the open-plan audio
+    // (from body extract or extension audioUrl) over opening a multivariant.
+    final opened = items[startIndex.clamp(0, items.length - 1)];
+    final openedPlan = plans[startIndex.clamp(0, plans.length - 1)].plan;
+    final audioUrl = openedPlan.companionAudioUrl ?? opened.audioUrl;
+    if (audioUrl != null &&
+        audioUrl.isNotEmpty &&
+        player.platform is NativePlayer) {
+      try {
+        debugPrint('[mpv] audio-add companion (${openedPlan.strategy})');
+        await (player.platform as NativePlayer)
+            .command(['audio-add', audioUrl, 'select', 'Companion audio']);
+      } catch (e) {
+        debugPrint('[mpv] audio-add failed: $e');
+      }
+    }
 
     // External subtitles for the current item
     final item = items[startIndex.clamp(0, items.length - 1)];

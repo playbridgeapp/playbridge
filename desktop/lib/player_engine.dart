@@ -26,6 +26,8 @@ class QueueItem {
     this.originalUrl,
     this.originalHeaders,
     this.contentType,
+    this.playlistBody,
+    this.audioUrl,
   });
 
   final String url;
@@ -38,6 +40,13 @@ class QueueItem {
   final String? originalUrl;
   final Map<String, String>? originalHeaders;
   final String? contentType;
+
+  /// Synthetic multivariant playlist text from the extension (absolute child
+  /// URIs). Materialized to a temp `.m3u8` before mpv open — not a data: URL.
+  final String? playlistBody;
+
+  /// Companion demuxed audio media playlist URL (same live session), if any.
+  final String? audioUrl;
 
   /// Resume point (ms) seeded from the phone's resume store. Mutable because
   /// it is consumed (nulled) after the first seek, so re-playing this item

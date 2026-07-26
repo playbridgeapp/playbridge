@@ -111,6 +111,8 @@ class PlaybackRequestPreparer {
         originalUrl: item.originalUrl ?? originalUrl,
         originalHeaders: item.originalHeaders ?? originalHeaders,
         contentType: item.contentType,
+        playlistBody: item.playlistBody,
+        audioUrl: item.audioUrl,
         bingeGroup: item.bingeGroup,
         season: item.season,
         episode: item.episode,

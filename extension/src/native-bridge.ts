@@ -133,6 +133,15 @@ export function cast(
   headers?: Record<string, string>,
   title?: string,
   contentType?: string,
+  /**
+   * Companion demuxed audio media playlist (same live session).
+   */
+  audioUrl?: string | null,
+  /**
+   * Full synthetic multivariant playlist text (absolute child URIs). Desktop
+   * should write this to a temp .m3u8 and open that — never a data: URL.
+   */
+  playlistBody?: string | null,
 ): Promise<{ ok: boolean; error?: string }> {
   return request({
     cmd: "cast",
@@ -140,6 +149,8 @@ export function cast(
     headers: headers ?? {},
     title: title ?? "",
     ...(contentType ? { contentType } : {}),
+    ...(audioUrl ? { audioUrl } : {}),
+    ...(playlistBody ? { playlistBody } : {}),
   });
 }
 

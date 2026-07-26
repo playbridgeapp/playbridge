@@ -181,6 +181,8 @@ class PlayerController extends ChangeNotifier {
     Map<String, String>? headers,
     List<String>? subtitles,
     String? contentType,
+    String? playlistBody,
+    String? audioUrl,
     bool isRemote = false,
   }) async {
     await playPlaylist(
@@ -191,6 +193,8 @@ class PlayerController extends ChangeNotifier {
           headers: headers,
           subtitles: subtitles,
           contentType: contentType,
+          playlistBody: playlistBody,
+          audioUrl: audioUrl,
         ),
       ],
       0,
@@ -417,7 +421,12 @@ class PlayerController extends ChangeNotifier {
         final url = currentItem.url;
         final isAlreadyProxied = url.startsWith('http://127.0.0.1') ||
             url.startsWith('http://localhost');
-        if (!isAlreadyProxied && url.toLowerCase().contains('.m3u8')) {
+        final isDataOrFile = url.startsWith('data:') ||
+            url.startsWith('file:') ||
+            (url.startsWith('/') && url.toLowerCase().endsWith('.m3u8'));
+        if (!isAlreadyProxied &&
+            !isDataOrFile &&
+            url.toLowerCase().contains('.m3u8')) {
           // Direct HLS playback failed. Mark the host to route through local proxy on retry.
           PlaybackRequestPreparer.markHostFailed(url);
           debugPrint(
@@ -522,6 +531,9 @@ class PlayerController extends ChangeNotifier {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
         contentType: item.contentType,
+        // Keep demuxed LL-HLS handoff across proxy toggles.
+        playlistBody: item.playlistBody,
+        audioUrl: item.audioUrl,
       );
       debugPrint('[player] toggling to direct playback at ${currentPos}ms');
     } else {
@@ -535,6 +547,17 @@ class PlayerController extends ChangeNotifier {
         debugPrint(
             '[player] proxy toggle unavailable (${error.runtimeType}); keeping direct playback');
         return false;
+      }
+      // Proxy the video media playlist. Companion audio (if any) still hits the
+      // CDN with session= auth — playlistBody stays for re-open strategy.
+      String? proxiedAudio = item.audioUrl;
+      if (proxiedAudio != null && proxiedAudio.isNotEmpty) {
+        try {
+          proxiedAudio = await StreamProxyServer.instance
+              .registerSession(proxiedAudio, headers);
+        } catch (_) {
+          // Keep direct audio URL; session= often works without proxy.
+        }
       }
       replacement = QueueItem(
         url: loopbackUrl,
@@ -557,6 +580,8 @@ class PlayerController extends ChangeNotifier {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
         contentType: item.contentType,
+        playlistBody: item.playlistBody,
+        audioUrl: proxiedAudio,
       );
       debugPrint('[player] toggling to proxied playback at ${currentPos}ms');
     }
