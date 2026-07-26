@@ -362,8 +362,8 @@ class TvSenderController extends ChangeNotifier {
     var targetHeaders = headers;
     var targetContentType = contentType;
 
-    final hasSynthetic = playlistBody != null &&
-        playlistBody.trim().startsWith('#EXTM3U');
+    final hasSynthetic =
+        playlistBody != null && playlistBody.trim().startsWith('#EXTM3U');
     final hasCompanionAudio = audioUrl != null && audioUrl.trim().isNotEmpty;
     final requiresHeaderProxy = headers != null &&
         headers.isNotEmpty &&
@@ -402,7 +402,8 @@ class TvSenderController extends ChangeNotifier {
             targetUrl = prepared.url;
             targetContentType = prepared.contentType ?? targetContentType;
           } catch (e) {
-            debugPrint('[tv-cast] prepare failed ($e); falling back to registerRemote');
+            debugPrint(
+                '[tv-cast] prepare failed ($e); falling back to registerRemote');
             final registration = await proxy.registerRemote(
               url,
               headers ?? {},

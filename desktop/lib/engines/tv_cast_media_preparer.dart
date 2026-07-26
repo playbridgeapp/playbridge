@@ -60,8 +60,7 @@ class TvCastMediaPreparer {
 
     final hdrs = headers ?? const <String, String>{};
     final body = playlistBody?.trim();
-    final hasSyntheticBody =
-        body != null && body.startsWith('#EXTM3U');
+    final hasSyntheticBody = body != null && body.startsWith('#EXTM3U');
 
     // Best path for demuxed LL-HLS: rewrite full synthetic master so external
     // players get every quality + separate audio (not video-only / low rung).

@@ -154,10 +154,9 @@ class PlaylistMaterializer {
       if (trimmed.isEmpty) continue;
 
       if (trimmed.startsWith('#EXT-X-MEDIA:TYPE=AUDIO')) {
-        final group =
-            RegExp(r'GROUP-ID="([^"]+)"', caseSensitive: false)
-                .firstMatch(trimmed)
-                ?.group(1);
+        final group = RegExp(r'GROUP-ID="([^"]+)"', caseSensitive: false)
+            .firstMatch(trimmed)
+            ?.group(1);
         if (group != null) {
           audioByGroup.putIfAbsent(group, () => []).add(trimmed);
         }
@@ -254,8 +253,8 @@ class PlaylistMaterializer {
         final uri = RegExp(r'URI="([^"]+)"', caseSensitive: false)
             .firstMatch(line)
             ?.group(1);
-        final isDefault = RegExp(r'DEFAULT=YES', caseSensitive: false)
-            .hasMatch(line);
+        final isDefault =
+            RegExp(r'DEFAULT=YES', caseSensitive: false).hasMatch(line);
         if (group != null && uri != null && _isHttpUrl(uri)) {
           audioUris.putIfAbsent(group, () => uri);
           if (isDefault) defaultAudioUri = uri;

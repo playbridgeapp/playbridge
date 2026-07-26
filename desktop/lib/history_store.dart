@@ -132,8 +132,7 @@ class HistoryStore extends ChangeNotifier {
         title: title,
         playedAt: DateTime.now(),
         isFavorite: wasFavorite,
-        playlistBody:
-            body != null && body.startsWith('#EXTM3U') ? body : null,
+        playlistBody: body != null && body.startsWith('#EXTM3U') ? body : null,
         audioUrl: audio != null && audio.isNotEmpty ? audio : null,
         headers: hdrs,
         contentType: contentType?.trim().isEmpty == true ? null : contentType,

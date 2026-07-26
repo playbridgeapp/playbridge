@@ -7,10 +7,8 @@ import 'package:playbridge_desktop/engines/playlist_materializer.dart';
 void main() {
   test('demuxed cast prefers network video + audio-add over local file',
       () async {
-    const video =
-        'https://cdn.example/chunklist_0_video.m3u8?session=s1';
-    const audio =
-        'https://cdn.example/chunklist_5_audio.m3u8?session=s1';
+    const video = 'https://cdn.example/chunklist_0_video.m3u8?session=s1';
+    const audio = 'https://cdn.example/chunklist_5_audio.m3u8?session=s1';
     const body = '''
 #EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="A",DEFAULT=YES,URI="$audio"
@@ -32,10 +30,8 @@ $video
   });
 
   test('body without audioUrl still extracts network demuxed open', () async {
-    const video =
-        'https://cdn.example/chunklist_3_video.m3u8?session=s1';
-    const audio =
-        'https://cdn.example/chunklist_5_audio.m3u8?session=s1';
+    const video = 'https://cdn.example/chunklist_3_video.m3u8?session=s1';
+    const audio = 'https://cdn.example/chunklist_5_audio.m3u8?session=s1';
     const body = '''
 #EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="A",DEFAULT=YES,URI="$audio"

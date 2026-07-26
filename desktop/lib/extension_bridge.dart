@@ -168,8 +168,7 @@ class ExtensionBridge {
               headers: headers,
               title: title,
               contentType: contentType,
-              playlistBody:
-                  playlistBody?.isEmpty == true ? null : playlistBody,
+              playlistBody: playlistBody?.isEmpty == true ? null : playlistBody,
               audioUrl: audioUrl?.isEmpty == true ? null : audioUrl,
             );
             _send(socket, {
