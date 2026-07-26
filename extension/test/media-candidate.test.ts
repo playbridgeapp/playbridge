@@ -14,11 +14,11 @@ import {
   rankMediaCandidate,
   resolveCastableHlsUrl,
   type MediaCandidate,
-} from "../src/media-candidate";
+} from "../src/core/media-candidate";
 import {
   buildSyntheticFromMasterBody,
   preferredSyntheticCastUrl,
-} from "../src/synthetic-hls";
+} from "../src/core/synthetic-hls";
 
 function candidate(
   url: string,

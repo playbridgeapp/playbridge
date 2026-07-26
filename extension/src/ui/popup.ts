@@ -3,7 +3,7 @@ import browser from "../browser";
 import {
     effectiveHlsRole,
     filterPrimaryCastCandidates,
-} from "../media-candidate";
+} from "../core/media-candidate";
 import {
     VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
     VIDEO_CAST_OVERLAY_STORAGE_KEYS,

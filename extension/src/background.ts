@@ -8,7 +8,7 @@ import {
   requiresLocalDataConsent,
   setDataConsentGranted,
 } from "./data-consent";
-import { HlsParser } from "./hls-parser";
+import { HlsParser } from "./core/hls-parser";
 import {
   classifyHlsUrl,
   effectiveHlsRole,
@@ -25,7 +25,7 @@ import {
   rankMediaCandidate,
   resolveCastableHlsUrl,
   type HlsRole,
-} from "./media-candidate";
+} from "./core/media-candidate";
 import * as bridge from "./native-bridge";
 import {
   getVideoCastOverlayPreferences,
@@ -37,7 +37,7 @@ import {
   observationSyntheticImproves,
   preferredSyntheticCastUrl,
   type SyntheticMasterResult,
-} from "./synthetic-hls";
+} from "./core/synthetic-hls";
 
 const DATA_CONSENT_REQUIRED = requiresLocalDataConsent(
   browser.runtime.getManifest().manifest_version,

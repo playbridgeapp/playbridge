@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { HlsParser } from "../src/hls-parser";
+import { HlsParser } from "../src/core/hls-parser";
 
 const MASTER_URL =
   "https://edge.example/streams/origin.user.id/llhls.m3u8?token=t";

@@ -11,7 +11,7 @@ import {
   preferredSyntheticCastUrl,
   rewriteMasterBodyAbsolute,
   sortMediaPlaylistsByQualityDesc,
-} from "../src/synthetic-hls";
+} from "../src/core/synthetic-hls";
 
 const MASTER =
   "https://edge2-atl.live.mmcdn.com/v1/edge/streams/origin.user.01ABC/llhls.m3u8?token=tok";
