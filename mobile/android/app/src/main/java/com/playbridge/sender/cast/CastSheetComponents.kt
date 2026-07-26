@@ -389,6 +389,16 @@ internal fun VideoItemDetailed(
                     overflow = TextOverflow.Ellipsis
                 )
 
+                if (video.hasSyntheticHandoff) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Demuxed / exclusive · cast with Via phone · keep phone on",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(4.dp))
 
                 // Full URL (truncated)

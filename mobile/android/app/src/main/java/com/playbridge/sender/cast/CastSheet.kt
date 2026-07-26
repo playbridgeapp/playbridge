@@ -104,14 +104,8 @@ fun CastSheet(
     val streamRouteService = remember { StreamRouteService(context.applicationContext) }
     var routeMode by remember { mutableStateOf(streamProxySettings.initialRouteMode()) }
     var packaging by remember { mutableStateOf(false) }
-    // Separate distinct videos and subtitles, and sort videos by priority
-    val playableVideos = remember(videos) {
-        videos.filter { !it.isSubtitle }
-              .sortedWith(
-                  compareByDescending<DetectedVideo> { it.castScore() }
-                      .thenByDescending { it.timestamp }
-              )
-    }
+    // Promote synthetic handoff into a dedicated first row; rank the rest below.
+    val playableVideos = remember(videos) { buildCastSheetVideos(videos) }
 
     // The action chosen in the header dropdown. It drives both the body layout and what the
     // Send button does when tapped — nothing is sent on selection:
@@ -160,10 +154,19 @@ fun CastSheet(
     val tmdbRepository = remember { TmdbRepository(context) }
     val scope = rememberCoroutineScope()
 
-    // Global selection state
-    var selectedVideo by remember { mutableStateOf<DetectedVideo?>(playableVideos.firstOrNull()) }
+    // Global selection state — prefer the synthetic row when present.
+    var selectedVideo by remember(playableVideos) {
+        mutableStateOf(playableVideos.firstOrNull())
+    }
     var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
     var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Synthetic / exclusive handoff must use the phone proxy (body is served locally).
+    LaunchedEffect(selectedVideo?.url, selectedVideo?.playlistBody, selectedVideo?.audioUrl) {
+        if (selectedVideo?.hasSyntheticHandoff == true) {
+            routeMode = StreamRouteMode.VIA_PHONE
+        }
+    }
 
     // In-app preview state
     var previewVideo by remember { mutableStateOf<DetectedVideo?>(null) }
@@ -737,10 +740,16 @@ fun CastSheet(
                                 onClick = {
                                     selectedVideo = video
                                     selectedQualityUrl = null
+                                    if (video.hasSyntheticHandoff) {
+                                        routeMode = StreamRouteMode.VIA_PHONE
+                                    }
                                 },
                                 onQualityClick = { specificUrl ->
                                     selectedVideo = video
                                     selectedQualityUrl = specificUrl
+                                    if (video.hasSyntheticHandoff) {
+                                        routeMode = StreamRouteMode.VIA_PHONE
+                                    }
                                 },
                                 onDownloadClick = { onDownload(video) },
                                 onCopyClick = {

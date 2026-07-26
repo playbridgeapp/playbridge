@@ -67,7 +67,19 @@ data class DetectedVideo(
                 contentType?.contains("subrip", ignoreCase = true) == true ||
                 url.endsWith(".vtt", ignoreCase = true) ||
                 url.endsWith(".srt", ignoreCase = true)
+
+    /**
+     * True when detection captured a synthetic/exclusive handoff that should be cast
+     * via the phone proxy (playlist body and/or demuxed audio), not as a bare Direct URL.
+     */
+    val hasSyntheticHandoff: Boolean
+        get() = isSyntheticMaster ||
+            !playlistBody.isNullOrBlank() ||
+            !audioUrl.isNullOrBlank()
 }
+
+/** Title used for the dedicated cast-sheet row for synthetic demuxed/exclusive masters. */
+const val SYNTHETIC_CAST_ITEM_TITLE = "Synthetic playlist (Via phone)"
 
 /**
  * Ranking score for ordering and auto-picking detected videos (higher = better).
@@ -84,10 +96,13 @@ data class DetectedVideo(
  * the sheet was dismissed and reopened (by which point the async work had finished).
  * We only demote below progressive video when the probe has *verified* it unplayable.
  *
+ * Synthetic handoff masters outrank everything else so the cast sheet prefers them.
+ *
  * Kept in one place so the cast sheet and the quick-cast / DLNA auto-pick paths can
  * never diverge.
  */
 fun DetectedVideo.castScore(): Int {
+    if (hasSyntheticHandoff) return 100
     val isDash = url.contains(".mpd", ignoreCase = true) ||
                  contentType?.contains("dash", ignoreCase = true) == true
     val isHlsUrl = url.contains(".m3u8", ignoreCase = true) ||
@@ -109,6 +124,48 @@ fun DetectedVideo.castScore(): Int {
     // Master playlists (multi-variant entry points) edge out same-tier single renditions.
     return if (url.contains("master", ignoreCase = true)) base + 1 else base
 }
+
+/**
+ * Builds the Videos-tab list for [CastSheet]: when any detection carries synthetic
+ * handoff data, prepends a single dedicated row ("Synthetic playlist (Via phone)")
+ * and keeps the remaining non-synthetic streams ranked below it.
+ */
+fun buildCastSheetVideos(videos: List<DetectedVideo>): List<DetectedVideo> {
+    val playable = videos.filter { !it.isSubtitle }
+    val handoffSources = playable.filter { it.hasSyntheticHandoff }
+    if (handoffSources.isEmpty()) {
+        return playable.sortedWith(castSheetComparator())
+    }
+
+    // Prefer a detector-emitted synthetic master with a body; else any body; else newest.
+    val source = handoffSources.firstOrNull {
+        it.isSyntheticMaster && !it.playlistBody.isNullOrBlank()
+    }
+        ?: handoffSources.firstOrNull { !it.playlistBody.isNullOrBlank() }
+        ?: handoffSources.maxByOrNull { it.timestamp }
+        ?: return playable.sortedWith(castSheetComparator())
+
+    val syntheticRow = source.copy(
+        title = SYNTHETIC_CAST_ITEM_TITLE,
+        detectedBy = "synthetic",
+        isSyntheticMaster = true,
+        contentType = source.contentType
+            ?: "application/vnd.apple.mpegurl",
+    )
+
+    // Drop other synthetic masters and the handoff source URL (replaced by syntheticRow).
+    val rest = playable
+        .filter { video ->
+            !video.isSyntheticMaster && video.url != source.url
+        }
+        .sortedWith(castSheetComparator())
+
+    return listOf(syntheticRow) + rest
+}
+
+private fun castSheetComparator(): Comparator<DetectedVideo> =
+    compareByDescending<DetectedVideo> { it.castScore() }
+        .thenByDescending { it.timestamp }
 
 /**
  * Data class representing an active subtitle period
