@@ -1,6 +1,10 @@
 // @ts-nocheck
 import browser from "../browser";
 import {
+    effectiveHlsRole,
+    filterPrimaryCastCandidates,
+} from "../core/media-candidate";
+import {
     VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
     VIDEO_CAST_OVERLAY_STORAGE_KEYS,
     getVideoCastOverlayPreferences,
@@ -283,16 +287,51 @@ function updateStatusUI(status, activeTv) {
     }
 }
 
+function hlsRoleLabel(video) {
+    if (video.isSyntheticMaster) {
+        return video.hasSeparateAudio
+            ? 'HLS synthetic master (session A/V)'
+            : 'HLS synthetic master';
+    }
+    const role = effectiveHlsRole(video);
+    switch (role) {
+        case 'master':
+            return video.hasSeparateAudio ? 'HLS master (demuxed A/V)' : 'HLS master';
+        case 'video_media':
+            return video.audioUrl || video.hasSeparateAudio
+                ? 'HLS live video (+ audio session)'
+                : 'HLS video';
+        case 'media':
+            return 'HLS media';
+        default:
+            return null;
+    }
+}
+
 function renderVideos() {
-    videoItems = currentVideos.filter(v => 
-        v.detectedBy !== 'subtitle_extension' && !v.url.endsWith('.srt') && !v.url.endsWith('.vtt')
+    // Hide demuxed audio and demuxed video media when a master exists for the group.
+    const castable = filterPrimaryCastCandidates(
+        currentVideos.filter(v =>
+            v.detectedBy !== 'subtitle_extension' && !v.url.endsWith('.srt') && !v.url.endsWith('.vtt')
+        )
     );
+    videoItems = castable;
     subtitleItems = currentVideos.filter(v => 
         v.detectedBy === 'subtitle_extension' || v.url.endsWith('.srt') || v.url.endsWith('.vtt')
     );
     
-    // Priority Sort: M3U8 > MP4 > others
+    // Priority Sort: HLS master > other M3U8 > MP4 > others; then recency
     videoItems.sort((a, b) => {
+        const roleRank = (v) => {
+            const role = effectiveHlsRole(v);
+            if (role === 'master') return 4;
+            if (role === 'video_media' || role === 'media') return 3;
+            if (String(v.url).includes('m3u8')) return 2;
+            if (String(v.url).includes('.mp4')) return 1;
+            return 0;
+        };
+        const rd = roleRank(b) - roleRank(a);
+        if (rd !== 0) return rd;
         const aM3u8 = a.url.includes('m3u8');
         const bM3u8 = b.url.includes('m3u8');
         if (aM3u8 && !bM3u8) return -1;
@@ -301,9 +340,15 @@ function renderVideos() {
         const bMp4 = b.url.includes('.mp4');
         if (aMp4 && !bMp4) return -1;
         if (!aMp4 && bMp4) return 1;
-        return Math.sign(b.timestamp - a.timestamp);
+        const aSeen = a.lastSeen ?? a.timestamp ?? 0;
+        const bSeen = b.lastSeen ?? b.timestamp ?? 0;
+        return Math.sign(bSeen - aSeen);
     });
 
+    // Drop selection if it was a demuxed child that is no longer listed.
+    if (selectedVideoUrl && !videoItems.some((v) => v.url === selectedVideoUrl)) {
+        selectedVideoUrl = null;
+    }
     if (!selectedVideoUrl && videoItems.length > 0) {
         selectedVideoUrl = videoItems[0].url; // Select first by default
     }
@@ -350,29 +395,39 @@ function renderVideos() {
             metaDiv.className = 'vid-meta';
             const typeSpan = document.createElement('span');
             typeSpan.className = 'vid-type';
-            typeSpan.textContent = typeStr;
+            const roleLabel = hlsRoleLabel(video);
+            typeSpan.textContent = roleLabel ? `${roleLabel} · ${typeStr}` : typeStr;
             const detectSpan = document.createElement('span');
             detectSpan.textContent = detectStr;
             metaDiv.appendChild(typeSpan);
             metaDiv.appendChild(detectSpan);
             item.appendChild(metaDiv);
             
-            // Qualities Dropdown for HLS
+            // Qualities Dropdown for HLS masters.
+            // Demuxed A/V masters must stay on Auto — picking a video media
+            // playlist would drop the separate audio track.
             if (video.qualities && video.qualities.length > 0) {
                 const select = document.createElement('select');
                 select.className = 'quality-select';
                 
                 const autoOpt = document.createElement('option');
                 autoOpt.value = 'auto';
-                autoOpt.textContent = 'Auto (Master Playlist)';
+                autoOpt.textContent = video.hasSeparateAudio
+                    ? 'Auto (master · includes audio)'
+                    : 'Auto (Master Playlist)';
                 select.appendChild(autoOpt);
                 
-                video.qualities.forEach((q, idx) => {
-                    const opt = document.createElement('option');
-                    opt.value = idx.toString();
-                    opt.textContent = `${q.resolution} (${Math.round(q.bandwidth / 1024)} kbps)`;
-                    select.appendChild(opt);
-                });
+                if (!video.hasSeparateAudio) {
+                    video.qualities.forEach((q, idx) => {
+                        const opt = document.createElement('option');
+                        opt.value = idx.toString();
+                        opt.textContent = `${q.resolution} (${Math.round(q.bandwidth / 1024)} kbps)`;
+                        select.appendChild(opt);
+                    });
+                } else {
+                    select.disabled = true;
+                    select.title = 'Demuxed live stream: cast the master so audio stays attached';
+                }
                 
                 select.addEventListener('click', e => e.stopPropagation()); // prevent row select toggle
                 item.appendChild(select);

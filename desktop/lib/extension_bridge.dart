@@ -151,14 +151,25 @@ class ExtensionBridge {
         final contentType = rawContentType == null || rawContentType.isEmpty
             ? null
             : rawContentType;
+        final audioUrl = (obj['audioUrl'] as String?)?.trim();
+        final playlistBody = (obj['playlistBody'] as String?)?.trim();
         debugLogExtensionCastRequest(url: url, headers: headers);
         if (_sender.isConnected) {
           unawaited(() async {
+            if (kDebugMode) {
+              debugPrint(
+                '[ext-bridge] cast → tv'
+                '${playlistBody != null && playlistBody.isNotEmpty ? " (synthetic body)" : ""}'
+                '${audioUrl != null && audioUrl.isNotEmpty ? " + audioUrl" : ""}',
+              );
+            }
             final ok = await _sender.castUrl(
               url,
               headers: headers,
               title: title,
               contentType: contentType,
+              playlistBody: playlistBody?.isEmpty == true ? null : playlistBody,
+              audioUrl: audioUrl?.isEmpty == true ? null : audioUrl,
             );
             _send(socket, {
               'type': 'result',
@@ -178,6 +189,8 @@ class ExtensionBridge {
             headers: headers,
             title: title,
             contentType: contentType,
+            playlistBody: playlistBody?.isEmpty == true ? null : playlistBody,
+            audioUrl: audioUrl?.isEmpty == true ? null : audioUrl,
             isRemote: true,
           ));
           _send(socket, {

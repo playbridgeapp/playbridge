@@ -34,6 +34,7 @@ import 'receiver_server.dart';
 import 'settings_screen.dart';
 import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
+import 'engines/tv_cast_media_preparer.dart';
 import 'shader_background.dart';
 import 'stats_overlay.dart';
 import 'still_watching_controller.dart';
@@ -514,14 +515,23 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       if (mounted) setState(() {});
     }
 
-    // Record history when the active track changes.
+    // Record history when the active track changes. Prefer original CDN URL
+    // and keep demuxed synthetic handoff so History/Favorites resume with A/V.
     if (hasMedia) {
       final idx = _player.currentIndex;
       if (idx >= 0 && idx < _player.queue.length) {
         final item = _player.queue[idx];
-        if (item.url != _lastTrackedUrl) {
-          _lastTrackedUrl = item.url;
-          unawaited(widget.history.addOrBump(item.url, item.title));
+        final historyUrl = item.originalUrl ?? item.url;
+        if (historyUrl != _lastTrackedUrl) {
+          _lastTrackedUrl = historyUrl;
+          unawaited(widget.history.addOrBump(
+            url: historyUrl,
+            title: item.title,
+            playlistBody: item.playlistBody,
+            audioUrl: item.audioUrl,
+            headers: item.originalHeaders ?? item.headers,
+            contentType: item.contentType,
+          ));
         }
       }
     }
@@ -1863,7 +1873,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                                 }
                                 final currentItem = p.queue[p.currentIndex];
                                 await _openInExternalPlayer(
-                                    context, currentItem.url);
+                                    context, currentItem);
                               }
                             : null,
                       ),
@@ -1897,24 +1907,40 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     return h > 0 ? '$h:$m:$s' : '$m:$s';
   }
 
-  Future<void> _openInExternalPlayer(BuildContext context, String url) async {
-    String proxiedUrl = url;
+  Future<void> _openInExternalPlayer(
+    BuildContext context,
+    QueueItem item,
+  ) async {
+    // Prefer original CDN URL + demuxed handoff fields. A bare proxied
+    // video-only playlist loses companion audio and the quality ladder.
+    final sourceUrl = item.originalUrl ?? item.url;
+    final headers = item.originalHeaders ?? item.headers ?? const {};
+    String proxiedUrl = item.url;
 
-    // Check if the URL is already a loopback address.
-    // If not, force register a proxy session for it so headers are included.
-    if (!url.contains('127.0.0.1') && !url.contains('localhost')) {
-      final p = widget.player;
-      final currentItem = p.currentIndex >= 0 && p.currentIndex < p.queue.length
-          ? p.queue[p.currentIndex]
-          : null;
-
-      final Map<String, String> headers = currentItem?.headers ?? {};
-      try {
-        proxiedUrl =
-            await StreamProxyServer.instance.registerSession(url, headers);
-      } catch (e) {
-        stdout
-            .writeln('[external-player] Failed to register proxy session: $e');
+    try {
+      final prepared = await TvCastMediaPreparer.prepare(
+        url: sourceUrl,
+        lanHost: '127.0.0.1',
+        headers: headers,
+        playlistBody: item.playlistBody,
+        audioUrl: item.audioUrl,
+      );
+      proxiedUrl = prepared.url;
+      stdout.writeln(
+        '[external-player] prepared ${prepared.strategy} → $proxiedUrl',
+      );
+    } catch (e) {
+      stdout.writeln('[external-player] prepare failed: $e');
+      // Fall back: proxy the single URL if it is not already loopback.
+      if (!sourceUrl.contains('127.0.0.1') &&
+          !sourceUrl.contains('localhost')) {
+        try {
+          proxiedUrl = await StreamProxyServer.instance
+              .registerSession(sourceUrl, headers);
+        } catch (e2) {
+          stdout.writeln(
+              '[external-player] Failed to register proxy session: $e2');
+        }
       }
     }
     if (!context.mounted) return;

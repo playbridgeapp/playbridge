@@ -17,6 +17,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -52,7 +54,13 @@ data class DetectedVideo(
     var isPlayable: Boolean? = null,
     @kotlinx.serialization.Transient
     val playlistPayload: List<playbridge.PlayPayload>? = null,
-    val title: String? = null
+    val title: String? = null,
+    /** Synthetic multivariant playlist text from the shared detection core. */
+    val playlistBody: String? = null,
+    /** Companion demuxed audio media playlist (same live session). */
+    val audioUrl: String? = null,
+    val hlsRole: String? = null,
+    val isSyntheticMaster: Boolean = false,
 ) {
     val isSubtitle: Boolean
         get() = contentType?.contains("vtt", ignoreCase = true) == true ||
@@ -233,14 +241,29 @@ object VideoDetector {
 
                 if (existingIndex != -1) {
                     val existing = videos[existingIndex]
-                    // If we have new headers, update them
-                    if (headers != null && headers.isNotEmpty()) {
-                        Log.i(TAG, "Updating ${headers.size} header(s) for video in tab $kotlinTabId")
+                    val playlistBody = message["playlistBody"]?.jsonPrimitive?.contentOrNull
+                    val audioUrl = message["audioUrl"]?.jsonPrimitive?.contentOrNull
+                    val isSynthetic =
+                        message["isSyntheticMaster"]?.jsonPrimitive?.booleanOrNull ?: false
+                    val shouldUpdate =
+                        (headers != null && headers.isNotEmpty()) ||
+                            !playlistBody.isNullOrBlank() ||
+                            !audioUrl.isNullOrBlank() ||
+                            isSynthetic
+                    if (shouldUpdate) {
+                        Log.i(TAG, "Updating detection for tab $kotlinTabId (headers/synth)")
                         videos[existingIndex] = existing.copy(
-                            headers = headers,
-                            originUrl = message["originUrl"]?.jsonPrimitive?.content ?: existing.originUrl,
-                            contentType = message["contentType"]?.jsonPrimitive?.content ?: existing.contentType,
-                            originalMessage = message.toString()
+                            headers = headers ?: existing.headers,
+                            originUrl = message["originUrl"]?.jsonPrimitive?.content
+                                ?: existing.originUrl,
+                            contentType = message["contentType"]?.jsonPrimitive?.content
+                                ?: existing.contentType,
+                            originalMessage = message.toString(),
+                            playlistBody = playlistBody ?: existing.playlistBody,
+                            audioUrl = audioUrl ?: existing.audioUrl,
+                            hlsRole = message["hlsRole"]?.jsonPrimitive?.contentOrNull
+                                ?: existing.hlsRole,
+                            isSyntheticMaster = isSynthetic || existing.isSyntheticMaster,
                         )
                     }
                     return
@@ -254,7 +277,12 @@ object VideoDetector {
                     originUrl = message["originUrl"]?.jsonPrimitive?.content,
                     headers = headers,
                     timestamp = message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
-                    originalMessage = message.toString()
+                    originalMessage = message.toString(),
+                    playlistBody = message["playlistBody"]?.jsonPrimitive?.contentOrNull,
+                    audioUrl = message["audioUrl"]?.jsonPrimitive?.contentOrNull,
+                    hlsRole = message["hlsRole"]?.jsonPrimitive?.contentOrNull,
+                    isSyntheticMaster = message["isSyntheticMaster"]?.jsonPrimitive?.booleanOrNull
+                        ?: false,
                 )
 
                 Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId")

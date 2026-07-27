@@ -9,26 +9,64 @@ class PlayHistoryItem {
     required this.title,
     required this.playedAt,
     this.isFavorite = false,
+    this.playlistBody,
+    this.audioUrl,
+    this.headers,
+    this.contentType,
   });
 
+  /// Primary play URL (prefer original CDN / session media, not loopback proxy).
   final String url;
   final String title;
   final DateTime playedAt;
   bool isFavorite;
+
+  /// Synthetic multivariant text (absolute child URIs) for demuxed LL-HLS.
+  final String? playlistBody;
+
+  /// Companion demuxed audio media playlist (same live session).
+  final String? audioUrl;
+
+  /// Replay headers (Referer / Cookie / UA). Never log values.
+  final Map<String, String>? headers;
+
+  final String? contentType;
+
+  bool get hasSyntheticHandoff =>
+      (playlistBody != null && playlistBody!.trim().startsWith('#EXTM3U')) ||
+      (audioUrl != null && audioUrl!.trim().isNotEmpty);
 
   Map<String, dynamic> toJson() => {
         'url': url,
         'title': title,
         'playedAt': playedAt.toIso8601String(),
         'isFavorite': isFavorite,
+        if (playlistBody != null && playlistBody!.isNotEmpty)
+          'playlistBody': playlistBody,
+        if (audioUrl != null && audioUrl!.isNotEmpty) 'audioUrl': audioUrl,
+        if (headers != null && headers!.isNotEmpty) 'headers': headers,
+        if (contentType != null && contentType!.isNotEmpty)
+          'contentType': contentType,
       };
 
-  factory PlayHistoryItem.fromJson(Map<String, dynamic> j) => PlayHistoryItem(
-        url: j['url'] as String,
-        title: j['title'] as String,
-        playedAt: DateTime.parse(j['playedAt'] as String),
-        isFavorite: (j['isFavorite'] as bool?) ?? false,
-      );
+  factory PlayHistoryItem.fromJson(Map<String, dynamic> j) {
+    Map<String, String>? headers;
+    final rawHeaders = j['headers'];
+    if (rawHeaders is Map) {
+      headers = rawHeaders.map((k, v) => MapEntry('$k', '$v'));
+      if (headers.isEmpty) headers = null;
+    }
+    return PlayHistoryItem(
+      url: j['url'] as String,
+      title: j['title'] as String,
+      playedAt: DateTime.parse(j['playedAt'] as String),
+      isFavorite: (j['isFavorite'] as bool?) ?? false,
+      playlistBody: j['playlistBody'] as String?,
+      audioUrl: j['audioUrl'] as String?,
+      headers: headers,
+      contentType: j['contentType'] as String?,
+    );
+  }
 }
 
 class HistoryStore extends ChangeNotifier {
@@ -58,14 +96,47 @@ class HistoryStore extends ChangeNotifier {
     return store;
   }
 
-  Future<void> addOrBump(String url, String title) async {
+  /// Record or bump a play. Prefer the original CDN URL (not a loopback proxy
+  /// URL) so resume can re-apply headers / synthetic demuxed handoff.
+  Future<void> addOrBump({
+    required String url,
+    required String title,
+    String? playlistBody,
+    String? audioUrl,
+    Map<String, String>? headers,
+    String? contentType,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool('pb.enable_history') ?? true)) return;
+    if (url.isEmpty) return;
+    // Never persist local temp / data playlists as history keys.
+    if (url.startsWith('file:') || url.startsWith('data:')) return;
 
-    _items.removeWhere((i) => i.url == url);
+    final body = playlistBody?.trim();
+    final audio = audioUrl?.trim();
+    final hdrs = (headers == null || headers.isEmpty)
+        ? null
+        : Map<String, String>.from(headers);
+
+    var wasFavorite = false;
+    _items.removeWhere((i) {
+      if (i.url != url) return false;
+      wasFavorite = wasFavorite || i.isFavorite;
+      return true;
+    });
+
     _items.insert(
       0,
-      PlayHistoryItem(url: url, title: title, playedAt: DateTime.now()),
+      PlayHistoryItem(
+        url: url,
+        title: title,
+        playedAt: DateTime.now(),
+        isFavorite: wasFavorite,
+        playlistBody: body != null && body.startsWith('#EXTM3U') ? body : null,
+        audioUrl: audio != null && audio.isNotEmpty ? audio : null,
+        headers: hdrs,
+        contentType: contentType?.trim().isEmpty == true ? null : contentType,
+      ),
     );
     if (_items.length > _kMax) _items.removeRange(_kMax, _items.length);
     notifyListeners();

@@ -16,7 +16,7 @@ import {
   isExcludedMediaCandidate,
   rankMediaCandidate,
   type MediaCandidate,
-} from "./media-candidate";
+} from "./core/media-candidate";
 import {
   VIDEO_CAST_OVERLAY_DEFAULT_POSITION,
   VIDEO_CAST_OVERLAY_STORAGE_KEYS,
@@ -257,7 +257,7 @@ function domSourceUrls(video: HTMLVideoElement): string[] {
 
 async function reportDomSources(video: HTMLVideoElement): Promise<void> {
   const urls = domSourceUrls(video).filter((url) => {
-    if (isBlobOrDataUrl(url) || isExcludedMediaCandidate(url)) return false;
+    if (isBlobOrDataUrl(url) || isExcludedMediaCandidate(url, undefined)) return false;
     try {
       return /^https?:$/.test(new URL(url).protocol);
     } catch {
@@ -306,7 +306,7 @@ function resolveCandidate(
     (record) =>
       record.url &&
       !isBlobOrDataUrl(record.url) &&
-      !isExcludedMediaCandidate(record.url, record.detectedBy),
+      !isExcludedMediaCandidate(record.url, record.detectedBy, record.hlsRole),
   );
 
   const exactUrls = domSourceUrls(video).filter(

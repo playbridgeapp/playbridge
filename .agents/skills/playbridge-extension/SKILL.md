@@ -8,9 +8,13 @@ description: Work on the PlayBridge browser extension. Use for TypeScript, WebEx
 ## Establish ownership
 
 - Work from `extension/`; source lives primarily under `extension/src/` and is built with TypeScript and esbuild.
-- Modify source and manifests rather than generated `dist/` output.
+- Shared pure detection logic lives in `extension/src/core/` (media-candidate, synthetic-hls, hls-parser). Desktop store hosts and the phone GeckoView detector both import it.
+- Desktop hosts: `src/background.ts`, `src/content.ts`, popup → `dist/firefox` / `dist/chrome`.
+- Phone host: `src/geckoview/*` → `dist/geckoview`, copied on build into `mobile/android/app/src/main/assets/extensions/video_detector/`.
+- Modify source and manifests rather than hand-editing generated `dist/` or Android asset JS.
 - Load `playbridge-desktop-proxy` when native messaging, Desktop discovery, reconnection, or proxy routing changes.
 - Load `playbridge-protocol` when message envelopes, payloads, pairing, or authentication change.
+- Load `playbridge-android` when Kotlin `VideoDetector` / cast consumption of `playlistBody` / `audioUrl` changes.
 
 ## Work safely
 
