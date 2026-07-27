@@ -998,10 +998,20 @@ mod android_jni {
         EnvUnowned,
         errors::ThrowRuntimeExAndDefault,
         objects::{JClass, JString},
-        sys::{jint, jlong},
+        sys::{jboolean, jint, jlong},
     };
+    use std::ffi::{CStr, CString, c_char};
 
     use super::{DiscoveryScanner, pb_discovery_cancel, pb_discovery_free, pb_discovery_start};
+
+    #[cfg(feature = "sender-services")]
+    use super::pb_string_free;
+    #[cfg(feature = "sender-services")]
+    use super::sender_services::{
+        SenderServices, pb_sender_services_abi_version, pb_sender_services_cancel,
+        pb_sender_services_free, pb_sender_services_next_json, pb_sender_services_start,
+        pb_sender_services_submit_json,
+    };
 
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_connection_RustDiscoveryNative_start<
@@ -1074,6 +1084,123 @@ mod android_jni {
         let _ = std::panic::catch_unwind(|| {
             if handle != 0 {
                 unsafe { pb_discovery_free(handle as *const DiscoveryScanner) };
+            }
+        });
+    }
+
+    #[cfg(feature = "sender-services")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_abiVersion(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jint {
+        std::panic::catch_unwind(|| pb_sender_services_abi_version()).unwrap_or(0) as jint
+    }
+
+    #[cfg(feature = "sender-services")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_start(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jlong {
+        std::panic::catch_unwind(|| pb_sender_services_start() as jlong).unwrap_or(0)
+    }
+
+    #[cfg(feature = "sender-services")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_submitJson<
+        'local,
+    >(
+        mut unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        command_json: JString<'local>,
+    ) -> jboolean {
+        let accepted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if handle == 0 {
+                return false;
+            }
+            // Mirror discovery JNI: extract JSON via nextEvent-style env helpers.
+            let command = unowned_env
+                .with_env(|env| -> Result<String, jni::errors::Error> {
+                    let java = env.get_string(&command_json)?;
+                    Ok(java.to_str().into_owned())
+                })
+                .resolve::<ThrowRuntimeExAndDefault>();
+            if command.is_empty() {
+                return false;
+            }
+            let Ok(c_command) = CString::new(command) else {
+                return false;
+            };
+            unsafe {
+                pb_sender_services_submit_json(handle as *const SenderServices, c_command.as_ptr())
+            }
+        }))
+        .unwrap_or(false);
+        accepted
+    }
+
+    #[cfg(feature = "sender-services")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_nextEvent<
+        'local,
+    >(
+        mut unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        wait_ms: jlong,
+    ) -> JString<'local> {
+        let json = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if handle == 0 {
+                return None;
+            }
+            let ptr = unsafe {
+                pb_sender_services_next_json(handle as *const SenderServices, wait_ms.max(0) as u64)
+            };
+            if ptr.is_null() {
+                return None;
+            }
+            let owned = unsafe { CStr::from_ptr(ptr as *const c_char) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { pb_string_free(ptr) };
+            Some(owned)
+        }))
+        .unwrap_or(None);
+
+        unowned_env
+            .with_env(|env| match json {
+                Some(json) => env.new_string(json),
+                None => Ok(JString::default()),
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    #[cfg(feature = "sender-services")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_cancel(
+        _env: EnvUnowned,
+        _class: JClass,
+        handle: jlong,
+    ) {
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_sender_services_cancel(handle as *const SenderServices) };
+            }
+        });
+    }
+
+    #[cfg(feature = "sender-services")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_free(
+        _env: EnvUnowned,
+        _class: JClass,
+        handle: jlong,
+    ) {
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_sender_services_free(handle as *const SenderServices) };
             }
         });
     }

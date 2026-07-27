@@ -143,10 +143,18 @@ object BackupUtils {
             iptvPlaylists = currentIptvPlaylists,
             collections = currentCollections,
             appSettings = appSettings,
-            mediaflowProxyUrl = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, ""),
-            mediaflowProxyPassword = tmdbPrefs.getString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, ""),
-            mediaflowAutoSelect = tmdbPrefs.getBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_AUTO_SELECT, true),
-            mediaflowProxyEnabled = tmdbPrefs.getBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_ENABLED, true),
+            streamProxyRemoteUrl = tmdbPrefs.getString(
+                com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_REMOTE_URL,
+                "",
+            ),
+            streamProxyRemotePassword = tmdbPrefs.getString(
+                com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_REMOTE_PASSWORD,
+                "",
+            ),
+            streamRouteDefault = tmdbPrefs.getString(
+                com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_DEFAULT_ROUTE,
+                com.playbridge.sender.cast.proxy.StreamRouteMode.DIRECT.prefsValue,
+            ),
         )
 
         Json { prettyPrint = true; encodeDefaults = false }.encodeToString(exported)
@@ -179,10 +187,27 @@ object BackupUtils {
                 imported.debridApiKeys?.forEach { (provider, key) ->
                     putString(DebridRepository.apiKeyPrefName(provider), key)
                 }
-                if (imported.mediaflowProxyUrl != null) putString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_URL, imported.mediaflowProxyUrl)
-                if (imported.mediaflowProxyPassword != null) putString(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_PASSWORD, imported.mediaflowProxyPassword)
-                if (imported.mediaflowAutoSelect != null) putBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_AUTO_SELECT, imported.mediaflowAutoSelect)
-                if (imported.mediaflowProxyEnabled != null) putBoolean(com.playbridge.sender.cast.MediaflowProxy.PREFS_KEY_ENABLED, imported.mediaflowProxyEnabled)
+                val remoteUrl = imported.streamProxyRemoteUrl ?: imported.mediaflowProxyUrl
+                val remotePassword =
+                    imported.streamProxyRemotePassword ?: imported.mediaflowProxyPassword
+                if (remoteUrl != null) {
+                    putString(
+                        com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_REMOTE_URL,
+                        remoteUrl,
+                    )
+                }
+                if (remotePassword != null) {
+                    putString(
+                        com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_REMOTE_PASSWORD,
+                        remotePassword,
+                    )
+                }
+                if (imported.streamRouteDefault != null) {
+                    putString(
+                        com.playbridge.sender.cast.proxy.StreamProxySettingsStore.KEY_DEFAULT_ROUTE,
+                        imported.streamRouteDefault,
+                    )
+                }
                 apply()
             }
 

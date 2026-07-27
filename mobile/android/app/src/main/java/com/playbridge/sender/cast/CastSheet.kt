@@ -60,10 +60,16 @@ import kotlinx.coroutines.launch
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.cast.proxy.CastableMedia
+import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
+import com.playbridge.sender.cast.proxy.StreamRouteException
+import com.playbridge.sender.cast.proxy.StreamRouteMode
+import com.playbridge.sender.cast.proxy.StreamRouteService
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
 /**
- * Bottom sheet for casting media to a TV — pick a video or browse URL, choose a device and player, send.
+ * Bottom sheet for casting media to a TV — pick a video or browse URL, choose a stream route, send.
+ * Device selection lives on the global connection UI, not on this sheet.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -83,10 +89,6 @@ fun CastSheet(
     onBrowseClick: ((String, Boolean) -> Unit)? = null,
     onOpenNewTab: ((String) -> Unit)? = null,
     initialMode: String = "play",
-    mediaflowProxyUrl: String = "",
-    mediaflowProxyPassword: String = "",
-    mediaflowAutoSelect: Boolean = true,
-    mediaflowProxyEnabled: Boolean = true,
     subtitleService: StremioSubtitleService = StremioSubtitleService(),
     contentPayload: playbridge.PlayPayload? = null,
     onContentClick: (playbridge.PlayPayload) -> Unit = {},
@@ -98,14 +100,12 @@ fun CastSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
-    // Separate distinct videos and subtitles, and sort videos by priority
-    val playableVideos = remember(videos) {
-        videos.filter { !it.isSubtitle }
-              .sortedWith(
-                  compareByDescending<DetectedVideo> { it.castScore() }
-                      .thenByDescending { it.timestamp }
-              )
-    }
+    val streamProxySettings = remember { StreamProxySettingsStore.load(context) }
+    val streamRouteService = remember { StreamRouteService(context.applicationContext) }
+    var routeMode by remember { mutableStateOf(streamProxySettings.initialRouteMode()) }
+    var packaging by remember { mutableStateOf(false) }
+    // Promote synthetic handoff into a dedicated first row; rank the rest below.
+    val playableVideos = remember(videos) { buildCastSheetVideos(videos) }
 
     // The action chosen in the header dropdown. It drives both the body layout and what the
     // Send button does when tapped — nothing is sent on selection:
@@ -154,57 +154,25 @@ fun CastSheet(
     val tmdbRepository = remember { TmdbRepository(context) }
     val scope = rememberCoroutineScope()
 
-    // Global selection state
-    var selectedVideo by remember { mutableStateOf<DetectedVideo?>(playableVideos.firstOrNull()) }
+    // Global selection state — prefer the synthetic row when present.
+    var selectedVideo by remember(playableVideos) {
+        mutableStateOf(playableVideos.firstOrNull())
+    }
     var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
     var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Synthetic / exclusive handoff must use the phone proxy (body is served locally).
+    LaunchedEffect(selectedVideo?.url, selectedVideo?.playlistBody, selectedVideo?.audioUrl) {
+        if (selectedVideo?.hasSyntheticHandoff == true) {
+            routeMode = StreamRouteMode.VIA_PHONE
+        }
+    }
 
     // In-app preview state
     var previewVideo by remember { mutableStateOf<DetectedVideo?>(null) }
 
     // Browse-mode desktop/mobile toggle
     var browseDesktopMode by remember { mutableStateOf(false) }
-
-    // Proxy mode — only relevant in play mode, only shown when proxy is configured AND enabled
-    val proxyAvailable = mediaflowProxyEnabled && mediaflowProxyUrl.isNotBlank()
-    var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
-
-    // Auto-select proxy mode whenever the selected video changes (not on proxyMode changes,
-    // which would cause a feedback loop). Only fires when auto-select is enabled AND the
-    // proxy is configured. The user can still override the chip manually afterward.
-    LaunchedEffect(selectedVideo?.url) {
-        if (proxyAvailable && mediaflowAutoSelect && selectedVideo != null) {
-            val suggested = MediaflowProxy.autoSelect(selectedVideo!!)
-            if (suggested != MediaflowProxy.Mode.OFF) {
-                proxyMode = suggested
-            }
-        }
-    }
-
-    /** Rewrite [video] URL through mediaflow-proxy if a mode is selected. */
-    fun applyProxy(video: DetectedVideo): DetectedVideo {
-        if (proxyMode == MediaflowProxy.Mode.OFF || !proxyAvailable) return video
-
-        // Use the same filtered header set that BrowserActivity would send to the TV:
-        //   - strips browser-context headers (Sec-Fetch-*, Sec-CH-UA-*, etc.) that CDNs
-        //     reject when they arrive from a different origin (the proxy server)
-        //   - ensures a sane User-Agent is always present
-        val proxyHeaders = VideoDetector.mediaHeaders(video)
-
-        val result = MediaflowProxy.rewrite(
-            mode = proxyMode,
-            proxyBase = mediaflowProxyUrl,
-            password = mediaflowProxyPassword,
-            sourceUrl = video.url,
-            headers = proxyHeaders,
-        )
-        // Headers are encoded into the proxy URL — clear them so the TV doesn't re-send them.
-        return video.copy(
-            url = result.url,
-            contentType = result.contentType ?: video.contentType,
-            headers = if (result.url != video.url) null else video.headers,
-        )
-    }
 
     // Selected subtitles mapped to player tracks, labelled from the
     // detected subtitle's title (falling back to its filename).
@@ -295,35 +263,69 @@ fun CastSheet(
                 val playEnabled = selectedVideo != null || contentPayload != null
                 val canQueue = isTvPlaying
 
-                // Resolve the current selection (quality / HLS filtering / proxy) once, then
-                // either play it now or append it to the TV's queue.
+                // Resolve quality / HLS filtering, then package through the selected stream route.
                 fun dispatch(queue: Boolean) {
+                    if (packaging) return
                     if (contentPayload != null && selectedVideo == null) {
                         if (queue) onQueueContent(contentPayload) else onContentClick(contentPayload)
                         return
                     }
                     val specificUrl = selectedQualityUrl
-                    val resolved = if (specificUrl != null) {
+                    val base = if (specificUrl != null) {
                         val selectedQuality = selectedVideo!!.qualities.find { it.url == specificUrl }
                         val playlist = selectedVideo!!.hlsPlaylist
                         if (playlist != null && selectedQuality != null) {
-                            // Generate filtered playlist (data: URI — applyProxy skips these)
                             val filteredContent = HlsParser.generateFilteredPlaylist(playlist, selectedQuality)
-                            val base64Content = android.util.Base64.encodeToString(filteredContent.toByteArray(), android.util.Base64.NO_WRAP)
+                            val base64Content = android.util.Base64.encodeToString(
+                                filteredContent.toByteArray(),
+                                android.util.Base64.NO_WRAP,
+                            )
                             val dataUri = "data:application/x-mpegurl;base64,$base64Content"
-                            applyProxy(selectedVideo!!.copy(url = dataUri, contentType = "application/x-mpegurl"))
+                            selectedVideo!!.copy(url = dataUri, contentType = "application/x-mpegurl")
                         } else {
-                            applyProxy(selectedVideo!!.copy(url = specificUrl))
+                            selectedVideo!!.copy(url = specificUrl)
                         }
                     } else {
-                        applyProxy(selectedVideo!!)
+                        selectedVideo!!
                     }
                     val subs = selectedSubtitles.toList()
-                    if (queue) onQueueVideo(resolved, subs) else onVideoClick(resolved, subs)
+                    packaging = true
+                    scope.launch {
+                        try {
+                            val packaged = streamRouteService.packageForCast(
+                                media = CastableMedia(
+                                    url = base.url,
+                                    headers = VideoDetector.mediaHeaders(base),
+                                    contentType = base.contentType,
+                                    title = base.title,
+                                    playlistBody = base.playlistBody,
+                                    audioUrl = base.audioUrl,
+                                ),
+                                mode = routeMode,
+                                settings = streamProxySettings,
+                            )
+                            val resolved = base.copy(
+                                url = packaged.url,
+                                contentType = packaged.contentType ?: base.contentType,
+                                headers = packaged.headers,
+                            )
+                            if (queue) onQueueVideo(resolved, subs) else onVideoClick(resolved, subs)
+                        } catch (e: StreamRouteException) {
+                            Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                context,
+                                e.message ?: "Failed to package stream",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } finally {
+                            packaging = false
+                        }
+                    }
                 }
 
                 // Whether the Send button can fire for the currently-selected action.
-                val sendEnabled = when (castAction) {
+                val sendEnabled = !packaging && when (castAction) {
                     "browse" -> canBrowse && browseUrl.isNotBlank()
                     "queue"  -> playEnabled && canQueue
                     else     -> playEnabled
@@ -402,14 +404,22 @@ fun CastSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Shared device picker (TV-only here — no "This Device" when casting). Pinned
-                    // width so a long device name ellipsises instead of pushing Send off the edge.
-                    DeviceChip(
-                        showThisDevice = false,
-                        castStatusLabel = true,
-                        fixedWidth = 140.dp,
-                        onOpenAllDevices = onOpenAllDevices
-                    )
+                    if (castAction != "browse") {
+                        ChipDropdown(
+                            selectedLabel = routeMode.label,
+                            options = StreamRouteMode.entries
+                                .filter {
+                                    it != StreamRouteMode.VIA_PROXY ||
+                                        streamProxySettings.isRemoteConfigured
+                                }
+                                .map { it.prefsValue to it.label },
+                            selectedValue = routeMode.prefsValue,
+                            onSelect = { value ->
+                                routeMode = StreamRouteMode.fromPrefs(value)
+                            },
+                            fixedWidth = 140.dp,
+                        )
+                    }
                     if (castAction != "browse" && videos.isNotEmpty()) {
                         IconButton(onClick = onClear) {
                             Icon(
@@ -440,10 +450,7 @@ fun CastSheet(
                 }
             }
 
-            // Engine + proxy selectors side by side.
-            // The player-engine picker was removed from the cast sheet — play/queue always use
-            // the TV's own default player. In Browse mode we still offer the browser-engine
-            // picker (a separate capability), derived from what the selected TV reported.
+            // Browse mode still offers the browser-engine picker from TV capabilities.
             val browserOptions = if (castAction == "browse") {
                 TvCapabilityOptions.browserOptions(selectedTvDevice)
             } else {
@@ -463,14 +470,6 @@ fun CastSheet(
                         options = browserOptions,
                         selectedValue = playerMode,
                         onSelect = onPlayerModeChange
-                    )
-                }
-                if (castAction != "browse" && proxyAvailable) {
-                    ChipDropdown(
-                        selectedLabel = proxyMode.label,
-                        options = MediaflowProxy.Mode.entries.map { it.name to it.label },
-                        selectedValue = proxyMode.name,
-                        onSelect = { value -> proxyMode = MediaflowProxy.Mode.valueOf(value) }
                     )
                 }
                 if (castAction == "browse") {
@@ -741,10 +740,16 @@ fun CastSheet(
                                 onClick = {
                                     selectedVideo = video
                                     selectedQualityUrl = null
+                                    if (video.hasSyntheticHandoff) {
+                                        routeMode = StreamRouteMode.VIA_PHONE
+                                    }
                                 },
                                 onQualityClick = { specificUrl ->
                                     selectedVideo = video
                                     selectedQualityUrl = specificUrl
+                                    if (video.hasSyntheticHandoff) {
+                                        routeMode = StreamRouteMode.VIA_PHONE
+                                    }
                                 },
                                 onDownloadClick = { onDownload(video) },
                                 onCopyClick = {
@@ -916,7 +921,39 @@ fun CastSheet(
                 onDismiss = { previewVideo = null },
                 onSendToTv = {
                     previewVideo = null
-                    onVideoClick(applyProxy(pv), selectedSubtitles.toList())
+                    packaging = true
+                    scope.launch {
+                        try {
+                            val packaged = streamRouteService.packageForCast(
+                                media = CastableMedia(
+                                    url = pv.url,
+                                    headers = VideoDetector.mediaHeaders(pv),
+                                    contentType = pv.contentType,
+                                    title = pv.title,
+                                    playlistBody = pv.playlistBody,
+                                    audioUrl = pv.audioUrl,
+                                ),
+                                mode = routeMode,
+                                settings = streamProxySettings,
+                            )
+                            onVideoClick(
+                                pv.copy(
+                                    url = packaged.url,
+                                    contentType = packaged.contentType ?: pv.contentType,
+                                    headers = packaged.headers,
+                                ),
+                                selectedSubtitles.toList(),
+                            )
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                context,
+                                e.message ?: "Failed to package stream",
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        } finally {
+                            packaging = false
+                        }
+                    }
                 }
             )
         }

@@ -325,9 +325,10 @@ internal fun SplitPlayButton(
     onWatchOnTvLongClick: (() -> Unit)? = null,
     onWatchOnPhone: () -> Unit = {},
     onWatchOnPhoneLongClick: (() -> Unit)? = null,
-    proxyAvailable: Boolean = false,
-    proxyMode: MediaflowProxy.Mode = MediaflowProxy.Mode.OFF,
-    onProxyModeChange: (MediaflowProxy.Mode) -> Unit = {},
+    routeMode: com.playbridge.sender.cast.proxy.StreamRouteMode =
+        com.playbridge.sender.cast.proxy.StreamRouteMode.DIRECT,
+    onRouteModeChange: (com.playbridge.sender.cast.proxy.StreamRouteMode) -> Unit = {},
+    remoteProxyConfigured: Boolean = false,
     themeColor: Color = MaterialTheme.colorScheme.primary
 ) {
     var showProvidersSheet by remember { mutableStateOf(false) }
@@ -344,12 +345,8 @@ internal fun SplitPlayButton(
             .padding(horizontal = 24.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        // ── Proxy chip ────────────────────────────────────────────────────────
-        // The "Watching on" device chip and the player-engine chip used to live
-        // here too; both were duplicates. Destination now lives solely in the
-        // app-wide NowPlayingBar, and the engine picker sits under the connected
-        // TV in the device connection sheet.
-        if (watchOnTv && proxyAvailable) {
+        // Stream route for TV casts (Direct / Via phone / Via proxy).
+        if (watchOnTv) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -358,10 +355,19 @@ internal fun SplitPlayButton(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 ChipDropdown(
-                    selectedLabel = proxyMode.label,
-                    options = MediaflowProxy.Mode.entries.map { it.name to it.label },
-                    selectedValue = proxyMode.name,
-                    onSelect = { value -> onProxyModeChange(MediaflowProxy.Mode.valueOf(value)) },
+                    selectedLabel = routeMode.label,
+                    options = com.playbridge.sender.cast.proxy.StreamRouteMode.entries
+                        .filter {
+                            it != com.playbridge.sender.cast.proxy.StreamRouteMode.VIA_PROXY ||
+                                remoteProxyConfigured
+                        }
+                        .map { it.prefsValue to it.label },
+                    selectedValue = routeMode.prefsValue,
+                    onSelect = { value ->
+                        onRouteModeChange(
+                            com.playbridge.sender.cast.proxy.StreamRouteMode.fromPrefs(value),
+                        )
+                    },
                     themeColor = themeColor
                 )
             }

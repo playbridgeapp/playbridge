@@ -175,12 +175,16 @@ fun LibraryDetailScreen(
     // Player mode (mirrors CastSheet; persisted to browser_prefs/tv_player_mode)
     val tmdbRepository: com.playbridge.sender.data.library.TmdbRepository = org.koin.compose.koinInject()
 
-    // Mediaflow proxy config (read once — user reopens the screen to pick up changes)
-    val mediaflowProxyUrl by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_URL, "") ?: "") }
-    val mediaflowProxyPassword by remember { mutableStateOf(browserSettings.getString(MediaflowProxy.PREFS_KEY_PASSWORD, "") ?: "") }
-    val mediaflowProxyEnabled by remember { mutableStateOf(browserSettings.getBoolean(MediaflowProxy.PREFS_KEY_ENABLED, true)) }
-    val proxyAvailable = mediaflowProxyEnabled && mediaflowProxyUrl.isNotBlank()
-    var proxyMode by remember { mutableStateOf(MediaflowProxy.Mode.OFF) }
+    // Stream route (seeded from settings; user can override on this screen)
+    val streamProxySettings = remember {
+        com.playbridge.sender.cast.proxy.StreamProxySettingsStore.load(context)
+    }
+    val streamRouteService = remember {
+        com.playbridge.sender.cast.proxy.StreamRouteService(context.applicationContext)
+    }
+    var routeMode by remember {
+        mutableStateOf(streamProxySettings.initialRouteMode())
+    }
 
     // Intentionally NO auto-connect on this screen (entry or Watch/Resume). Connecting
     // is left to the Connection sheet — see onOpenConnectionScreen. Watch only resolves
@@ -614,11 +618,8 @@ fun LibraryDetailScreen(
     }
 
     /**
-     * Proxy path: resolve on the phone, pick the best stream, rewrite via
-     * mediaflow-proxy, then send as a direct `play` command to the TV.
-     *
-     * Used when [proxyMode] != OFF — bypasses the Hub instant-play path so
-     * the proxy-rewritten URL is sent directly instead.
+     * Proxied cast path: resolve on the phone, pick the best stream, package via
+     * [StreamRouteService] (Via phone / Via proxy), then send play to the TV.
      */
     val startProxiedResolution: (String, String, String, StremioVideo?) -> Unit = startProxy@{ streamId, streamType, resTitle, episode ->
         if (!canResolveStreams) return@startProxy
@@ -683,19 +684,27 @@ fun LibraryDetailScreen(
                 return@launch
             }
 
-            // Resolved streams from addons don't carry request headers (the addon
-            // already signed / debrid-resolved them); pass null so the proxy encodes
-            // nothing extra into the rewritten URL.
-            val result = MediaflowProxy.rewrite(
-                mode = proxyMode,
-                proxyBase = mediaflowProxyUrl,
-                password = mediaflowProxyPassword,
-                sourceUrl = streamUrl,
-                headers = null
-            )
-            onSendStreamToTv(result.url, resTitle, null, result.contentType)
-            if (isSeries && episode != null) {
-                onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, episode.episode ?: 1)
+            try {
+                val packaged = streamRouteService.packageForCast(
+                    media = com.playbridge.sender.cast.proxy.CastableMedia(
+                        url = streamUrl,
+                        headers = null,
+                        contentType = null,
+                        title = resTitle,
+                    ),
+                    mode = routeMode,
+                    settings = streamProxySettings,
+                )
+                onSendStreamToTv(packaged.url, resTitle, packaged.headers, packaged.contentType)
+                if (isSeries && episode != null) {
+                    onNowPlayingStarted(resolvedTmdbId ?: 0, selectedSeason, episode.episode ?: 1)
+                }
+            } catch (e: Exception) {
+                Toast.makeText(
+                    context,
+                    e.message ?: "Failed to package stream",
+                    Toast.LENGTH_LONG,
+                ).show()
             }
         }
     }
@@ -704,8 +713,8 @@ fun LibraryDetailScreen(
         // Do not reconnect from Watch/Resume — pairing lives on the Connection sheet.
         // If the TV route is selected but offline, cast will fail cleanly; user reconnects there.
 
-        // 1. Proxy path (only for auto-play; long-press should still use picker)
-        if (!forPhone && !forcePicker && proxyMode != MediaflowProxy.Mode.OFF && proxyAvailable) {
+        // 1. Proxied cast path (Via phone / Via proxy only; Direct uses hub/picker paths)
+        if (!forPhone && !forcePicker && routeMode != com.playbridge.sender.cast.proxy.StreamRouteMode.DIRECT) {
             startProxiedResolution(streamId, streamType, resTitle, episode)
             return@triggerWatch
         }
@@ -921,9 +930,9 @@ fun LibraryDetailScreen(
                                         triggerWatch(streamId, addonType, displayTitle, true, true, null)
                                     }
                                 },
-                                proxyAvailable = proxyAvailable,
-                                proxyMode = proxyMode,
-                                onProxyModeChange = { proxyMode = it },
+                                routeMode = routeMode,
+                                onRouteModeChange = { routeMode = it },
+                                remoteProxyConfigured = streamProxySettings.isRemoteConfigured,
                                 themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                             )
                         } else {
@@ -988,9 +997,9 @@ fun LibraryDetailScreen(
                                         val title = "$displayTitle S${selectedSeason}E${nextUnwatchedEpisode.episode ?: 1}"
                                         triggerWatch(streamId, streamType, title, true, true, nextUnwatchedEpisode)
                                     },
-                                    proxyAvailable = proxyAvailable,
-                                    proxyMode = proxyMode,
-                                    onProxyModeChange = { proxyMode = it },
+                                    routeMode = routeMode,
+                                    onRouteModeChange = { routeMode = it },
+                                    remoteProxyConfigured = streamProxySettings.isRemoteConfigured,
                                     themeColor = dominantColor ?: MaterialTheme.colorScheme.primary
                                 )
                             }

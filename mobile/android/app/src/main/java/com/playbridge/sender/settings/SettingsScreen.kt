@@ -2,7 +2,7 @@ package com.playbridge.sender.settings
 
 import com.playbridge.sender.library.DebridSettingsScreen
 import com.playbridge.sender.library.LibrarySettingsScreen
-import com.playbridge.sender.cast.MediaflowSettingsScreen
+import com.playbridge.sender.cast.proxy.StreamProxySettingsScreen
 import com.playbridge.sender.browser.PopupBlockerSettingsScreen
 import com.playbridge.sender.cast.StreamingSettingsScreen
 import com.playbridge.sender.cast.TVSettingsScreen
@@ -116,7 +116,7 @@ fun SettingsScreen(
         SettingsSection.Debrid -> DebridSettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
-        SettingsSection.Proxy -> MediaflowSettingsScreen(
+        SettingsSection.Proxy -> StreamProxySettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Streaming -> StreamingSettingsScreen(
@@ -244,8 +244,8 @@ private fun SettingsHubContent(
                     add(
                         SettingsHubRow.Item(
                             icon = Icons.Default.SwapHoriz,
-                            title = "Proxy",
-                            subtitle = "mediaflow-proxy for stream passthrough & transcoding",
+                            title = "Stream proxy",
+                            subtitle = "Default cast route and remote stream-proxy URL",
                             onClick = onProxy,
                         )
                     )
