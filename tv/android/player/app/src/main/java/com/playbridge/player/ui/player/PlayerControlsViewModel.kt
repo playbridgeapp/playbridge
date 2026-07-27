@@ -130,15 +130,24 @@ class PlayerControlsViewModel : ViewModel() {
         _controlsState.update { it.copy(isPlaying = playing) }
     }
 
+    /**
+     * Set absolute subtitle delay (ms). Positive advances cues relative to video.
+     * Always pushes to the engine and external overlay manager — do not only update UI state.
+     */
     fun setSubtitleDelay(delayMs: Long) {
-        _controlsState.update { it.copy(subtitleDelayMs = delayMs) }
+        val clamped = delayMs.coerceIn(-120_000L, 120_000L)
+        engine?.setSubtitleDelay(clamped)
+        subtitleManager?.setOffset(clamped)
+        _controlsState.update { it.copy(subtitleDelayMs = clamped) }
     }
 
     fun adjustSubtitleDelay(deltaMs: Long) {
-        val newDelay = _controlsState.value.subtitleDelayMs + deltaMs
-        engine?.setSubtitleDelay(newDelay)
-        subtitleManager?.setOffset(newDelay)
-        setSubtitleDelay(newDelay)
+        setSubtitleDelay(_controlsState.value.subtitleDelayMs + deltaMs)
+    }
+
+    /** Zero the offset (used by the subtitle Sync "Reset" control). */
+    fun resetSubtitleDelay() {
+        setSubtitleDelay(0L)
     }
 
     fun toggleAudioBoost() {

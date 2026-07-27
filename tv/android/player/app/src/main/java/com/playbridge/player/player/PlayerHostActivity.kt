@@ -469,6 +469,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         syncPlaybackContext()
                         broadcastPlayerSettings()
                     },
+                    onResetSubtitleDelay = {
+                        controlsViewModel.resetSubtitleDelay()
+                        syncPlaybackContext()
+                        broadcastPlayerSettings()
+                    },
                     onPreloadSubtitles = controlsViewModel::preloadSubtitleCues,
                     onSkipSegment = controlsViewModel::skipCurrentSegment,
                     onSkipButtonFocusChanged = controlsViewModel::setSkipButtonFocused,

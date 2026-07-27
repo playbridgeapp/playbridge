@@ -353,6 +353,7 @@ class ExoPlayerActivity : PlayerActivity() {
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
                         onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
+                        onResetSubtitleDelay = { controlsViewModel.resetSubtitleDelay() },
                         onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) },
                     )
                 }

@@ -490,6 +490,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                         },
                         onToggleAudioBoost = { controlsViewModel.toggleAudioBoost() },
                         onAdjustSubtitleDelay = { controlsViewModel.adjustSubtitleDelay(it) },
+                        onResetSubtitleDelay = { controlsViewModel.resetSubtitleDelay() },
                         onPreloadSubtitles = { controlsViewModel.preloadSubtitleCues(it) },
                     )
                 }

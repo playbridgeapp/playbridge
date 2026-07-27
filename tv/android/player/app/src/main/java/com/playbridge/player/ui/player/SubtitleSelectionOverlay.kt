@@ -210,6 +210,7 @@ fun SubtitleSelectionOverlay(
     onPreloadLanguage: (List<String>) -> Unit,
     onTrackSelected: (UnifiedTrack) -> Unit,
     onAdjustDelay: (Long) -> Unit,
+    onResetDelay: () -> Unit = {},
     onDismiss: () -> Unit,
     activeMetadata: playbridge.VisualMetadata? = null,
 ) {
@@ -348,7 +349,11 @@ fun SubtitleSelectionOverlay(
 
                 // ---- Sync rail ----
                 RailColumn(title = "Sync", width = 250.dp) {
-                    SyncControl(delayMs = subtitleDelayMs, onAdjust = onAdjustDelay)
+                    SyncControl(
+                        delayMs = subtitleDelayMs,
+                        onAdjust = onAdjustDelay,
+                        onReset = onResetDelay,
+                    )
                 }
             }
         }
@@ -485,7 +490,11 @@ private fun EmptyRailCard(text: String) {
 }
 
 @Composable
-private fun SyncControl(delayMs: Long, onAdjust: (Long) -> Unit) {
+private fun SyncControl(
+    delayMs: Long,
+    onAdjust: (Long) -> Unit,
+    onReset: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -503,8 +512,10 @@ private fun SyncControl(delayMs: Long, onAdjust: (Long) -> Unit) {
         SyncRow(label = "Fine", minus = "−100ms", plus = "+100ms", step = 100L, onAdjust = onAdjust)
         SyncRow(label = "Coarse", minus = "−1s", plus = "+1s", step = 1000L, onAdjust = onAdjust)
         if (delayMs != 0L) {
+            // Absolute zero — do not use onAdjust(-delayMs): that depends on a captured delay
+            // value and is easy to mis-wire. Reset must always force 0 on engine + UI.
             Button(
-                onClick = { onAdjust(-delayMs) },
+                onClick = onReset,
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.colors(
                     containerColor = Color.White.copy(alpha = 0.1f),
