@@ -92,6 +92,15 @@ class UpdateChecker private constructor(
                         )
                         _state.value = UpdateState.Idle
                     }
+                    // "Later" snooze: suppress auto prompts for this exact version until a
+                    // newer release ships (or the user taps Check for updates).
+                    !manual && isSnoozed(info.version) -> {
+                        Log.i(
+                            TAG,
+                            "check: ${info.version} available but snoozed after Later — suppressing"
+                        )
+                        _state.value = UpdateState.Idle
+                    }
                     else -> {
                         Log.i(TAG, "check: update available ${info.version} (${info.source})")
                         _state.value = UpdateState.Available(info)
@@ -203,7 +212,18 @@ class UpdateChecker private constructor(
         runCatching { appContext.startActivity(intent) }
     }
 
+    /**
+     * Dismiss the available-update dialog ("Later").
+     *
+     * Persists a per-version snooze so automatic cold-start checks do not re-open the
+     * dialog on every Activity recreate (common in debug) or app relaunch. Manual
+     * "Check for updates" still surfaces the same version.
+     */
     fun dismiss() {
+        val current = _state.value
+        if (current is UpdateState.Available) {
+            snooze(current.info.version)
+        }
         _state.value = UpdateState.Idle
     }
 
@@ -263,12 +283,32 @@ class UpdateChecker private constructor(
         return done
     }
 
+    /** Remember that the user chose Later for [version] (auto-check only). */
+    private fun snooze(version: AppVersion) {
+        prefs().edit().putString(KEY_SNOOZED_VERSION, version.toString()).apply()
+        Log.i(TAG, "snooze: will not auto-prompt for $version again")
+    }
+
+    /**
+     * True when [version] was dismissed via Later and is not newer than the snoozed
+     * version. A *newer* release always clears the snooze path by failing this check.
+     */
+    private fun isSnoozed(version: AppVersion): Boolean {
+        val raw = prefs().getString(KEY_SNOOZED_VERSION, null) ?: return false
+        val snoozed = AppVersion.parse(raw) ?: return false
+        // Snooze covers this version and any older one; a strictly newer release re-prompts.
+        val matches = version <= snoozed
+        Log.d(TAG, "isSnoozed($version): snoozed=$snoozed -> $matches")
+        return matches
+    }
+
     companion object {
         private const val TAG = "UpdateChecker"
         private const val DOWNLOAD_ENDPOINT = "https://playbridge.app/download/tv-player"
         private const val PLAY_STORE_PACKAGE = "com.android.vending"
         private const val PLAY_WEB_URL =
             "https://play.google.com/store/apps/details?id=com.playbridge.player"
+        private const val KEY_SNOOZED_VERSION = "snoozed_version"
 
         /**
          * How long after first detecting a new version we wait before nudging a Play Store
