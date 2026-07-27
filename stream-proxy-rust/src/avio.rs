@@ -69,25 +69,96 @@ impl AvioClient {
     }
 
     fn load_libraries(custom_path: Option<&str>) -> Option<Arc<AvioFunctions>> {
-        let (avutil_path, avformat_path) = find_ffmpeg_libraries(custom_path)?;
+        let (avutil_path, avformat_path) = match find_ffmpeg_libraries(custom_path) {
+            Some(paths) => paths,
+            None => {
+                error!(
+                    "[pb-proxy-avio] Could not locate libavutil/libavformat (set FFMPEG_PATH or install ffmpeg-libs)"
+                );
+                return None;
+            }
+        };
         info!(
             "[pb-proxy-avio] Loading FFmpeg libraries: avutil={:?}, avformat={:?}",
             avutil_path, avformat_path
         );
 
         unsafe {
-            let avutil_lib = Library::new(&avutil_path).ok()?;
-            let avformat_lib = Library::new(&avformat_path).ok()?;
+            let avutil_lib = match Library::new(&avutil_path) {
+                Ok(lib) => lib,
+                Err(e) => {
+                    error!(
+                        "[pb-proxy-avio] Failed to load avutil {:?}: {}",
+                        avutil_path, e
+                    );
+                    return None;
+                }
+            };
+            let avformat_lib = match Library::new(&avformat_path) {
+                Ok(lib) => lib,
+                Err(e) => {
+                    error!(
+                        "[pb-proxy-avio] Failed to load avformat {:?}: {}",
+                        avformat_path, e
+                    );
+                    return None;
+                }
+            };
 
-            let av_dict_set: Symbol<AvDictSetFn> = avutil_lib.get(b"av_dict_set\0").ok()?;
-            let av_dict_free: Symbol<AvDictFreeFn> = avutil_lib.get(b"av_dict_free\0").ok()?;
-            let av_strerror: Symbol<AvStrErrorFn> = avutil_lib.get(b"av_strerror\0").ok()?;
+            let av_dict_set: Symbol<AvDictSetFn> = match avutil_lib.get(b"av_dict_set\0") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("[pb-proxy-avio] Missing symbol av_dict_set: {}", e);
+                    return None;
+                }
+            };
+            let av_dict_free: Symbol<AvDictFreeFn> = match avutil_lib.get(b"av_dict_free\0") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("[pb-proxy-avio] Missing symbol av_dict_free: {}", e);
+                    return None;
+                }
+            };
+            let av_strerror: Symbol<AvStrErrorFn> = match avutil_lib.get(b"av_strerror\0") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("[pb-proxy-avio] Missing symbol av_strerror: {}", e);
+                    return None;
+                }
+            };
 
             let avformat_network_init: Symbol<AvFormatNetworkInitFn> =
-                avformat_lib.get(b"avformat_network_init\0").ok()?;
-            let avio_open2: Symbol<AvioOpen2Fn> = avformat_lib.get(b"avio_open2\0").ok()?;
-            let avio_read: Symbol<AvioReadFn> = avformat_lib.get(b"avio_read\0").ok()?;
-            let avio_close: Symbol<AvioCloseFn> = avformat_lib.get(b"avio_close\0").ok()?;
+                match avformat_lib.get(b"avformat_network_init\0") {
+                    Ok(s) => s,
+                    Err(e) => {
+                        error!(
+                            "[pb-proxy-avio] Missing symbol avformat_network_init: {}",
+                            e
+                        );
+                        return None;
+                    }
+                };
+            let avio_open2: Symbol<AvioOpen2Fn> = match avformat_lib.get(b"avio_open2\0") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("[pb-proxy-avio] Missing symbol avio_open2: {}", e);
+                    return None;
+                }
+            };
+            let avio_read: Symbol<AvioReadFn> = match avformat_lib.get(b"avio_read\0") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("[pb-proxy-avio] Missing symbol avio_read: {}", e);
+                    return None;
+                }
+            };
+            let avio_close: Symbol<AvioCloseFn> = match avformat_lib.get(b"avio_close\0") {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("[pb-proxy-avio] Missing symbol avio_close: {}", e);
+                    return None;
+                }
+            };
 
             let av_dict_set_fn = *av_dict_set;
             let av_dict_free_fn = *av_dict_free;
@@ -264,7 +335,16 @@ fn find_ffmpeg_libraries(custom_path: Option<&str>) -> Option<(PathBuf, PathBuf)
 
     #[cfg(target_os = "linux")]
     {
-        let sys_dirs = ["/usr/lib", "/usr/lib/x86_64-linux-gnu", "/usr/local/lib"];
+        // Alpine (/usr/lib), Debian multiarch, and local installs.
+        // FFmpeg 8+ uses independent SONAME majors (e.g. libavutil.so.60 +
+        // libavformat.so.62), so discovery must not require matching versions.
+        let sys_dirs = [
+            "/usr/lib",
+            "/usr/lib64",
+            "/usr/lib/x86_64-linux-gnu",
+            "/usr/lib/aarch64-linux-gnu",
+            "/usr/local/lib",
+        ];
         for dir in sys_dirs {
             let p = Path::new(dir);
             if let Some(pair) = check_dir_for_ffmpeg(p) {
@@ -273,7 +353,8 @@ fn find_ffmpeg_libraries(custom_path: Option<&str>) -> Option<(PathBuf, PathBuf)
         }
     }
 
-    // Default dynamic loader lookup
+    // Last resort: bare sonames for the dynamic loader (works when unversioned
+    // symlinks exist, e.g. Homebrew or -dev packages). Prefer real paths above.
     let util_name = if cfg!(target_os = "macos") {
         "libavutil.dylib"
     } else if cfg!(target_os = "windows") {
@@ -293,46 +374,171 @@ fn find_ffmpeg_libraries(custom_path: Option<&str>) -> Option<(PathBuf, PathBuf)
     Some((PathBuf::from(util_name), PathBuf::from(format_name)))
 }
 
-fn check_dir_for_ffmpeg(dir: &Path) -> Option<(PathBuf, PathBuf)> {
-    let (util_ext, fmt_ext) = if cfg!(target_os = "macos") {
-        ("libavutil.dylib", "libavformat.dylib")
-    } else if cfg!(target_os = "windows") {
-        ("avutil.dll", "avformat.dll")
-    } else {
-        ("libavutil.so", "libavformat.so")
-    };
-
-    let u_path = dir.join(util_ext);
-    let f_path = dir.join(fmt_ext);
-
-    if u_path.exists() && f_path.exists() {
-        return Some((u_path, f_path));
-    }
-
-    for v in (58..=62).rev() {
-        let u_ver = if cfg!(target_os = "macos") {
-            format!("libavutil.{}.dylib", v)
-        } else if cfg!(target_os = "windows") {
-            format!("avutil-{}.dll", v)
-        } else {
-            format!("libavutil.so.{}", v)
-        };
-
-        let f_ver = if cfg!(target_os = "macos") {
-            format!("libavformat.{}.dylib", v)
-        } else if cfg!(target_os = "windows") {
-            format!("avformat-{}.dll", v)
-        } else {
-            format!("libavformat.so.{}", v)
-        };
-
-        let u_p = dir.join(u_ver);
-        let f_p = dir.join(f_ver);
-
-        if u_p.exists() && f_p.exists() {
-            return Some((u_p, f_p));
+/// Pick the best available shared library for a logical FFmpeg component.
+///
+/// Prefer unversioned names (`libavutil.so`), then the highest major SONAME
+/// found via directory scan. Avutil and avformat **must** be discovered
+/// independently — FFmpeg 8 ships e.g. `libavutil.so.60` with `libavformat.so.62`.
+fn find_best_lib(dir: &Path, basenames: &[&str]) -> Option<PathBuf> {
+    for name in basenames {
+        let p = dir.join(name);
+        if p.exists() {
+            return Some(p);
         }
     }
 
-    None
+    // Scan versioned SONAMEs: libavutil.so.60, libavutil.60.dylib, avutil-60.dll
+    let mut best: Option<(u32, PathBuf)> = None;
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        for base in basenames {
+            // libavutil.so.60[.x.y] or libavutil.60.dylib
+            let prefix_so = format!("{}.", base); // libavutil.so.
+            let prefix_dylib = base.strip_suffix(".dylib").map(|stem| format!("{}.", stem)); // libavutil.
+            let prefix_dll = base.strip_suffix(".dll").map(|stem| format!("{}-", stem)); // avutil-
+
+            let major = if name.starts_with(&prefix_so) {
+                name[prefix_so.len()..]
+                    .split('.')
+                    .next()
+                    .and_then(|s| s.parse::<u32>().ok())
+            } else if let Some(ref pfx) = prefix_dylib {
+                if name.starts_with(pfx) && name.ends_with(".dylib") {
+                    name[pfx.len()..]
+                        .strip_suffix(".dylib")
+                        .and_then(|s| s.parse::<u32>().ok())
+                } else {
+                    None
+                }
+            } else if let Some(ref pfx) = prefix_dll {
+                if name.starts_with(pfx) && name.ends_with(".dll") {
+                    name[pfx.len()..]
+                        .strip_suffix(".dll")
+                        .and_then(|s| s.parse::<u32>().ok())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            if let Some(maj) = major {
+                let path = entry.path();
+                // Prefer higher major; on ties prefer the short SONAME symlink
+                // (libavutil.so.60) over the fully versioned file (.60.26.102).
+                let better = match &best {
+                    None => true,
+                    Some((best_maj, best_path)) => {
+                        maj > *best_maj
+                            || (maj == *best_maj
+                                && path.as_os_str().len() < best_path.as_os_str().len())
+                    }
+                };
+                if better {
+                    best = Some((maj, path));
+                }
+            }
+        }
+    }
+
+    best.map(|(_, p)| p)
+}
+
+fn check_dir_for_ffmpeg(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    if !dir.is_dir() {
+        return None;
+    }
+
+    let (util_names, fmt_names): (&[&str], &[&str]) = if cfg!(target_os = "macos") {
+        (&["libavutil.dylib"], &["libavformat.dylib"])
+    } else if cfg!(target_os = "windows") {
+        (&["avutil.dll"], &["avformat.dll"])
+    } else {
+        (&["libavutil.so"], &["libavformat.so"])
+    };
+
+    let util = find_best_lib(dir, util_names)?;
+    let format = find_best_lib(dir, fmt_names)?;
+    Some((util, format))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn discovers_independent_soname_majors_like_ffmpeg8() {
+        let dir = std::env::temp_dir().join(format!(
+            "pb-avio-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        // Alpine FFmpeg 8 layout: different majors for util vs format.
+        #[cfg(target_os = "macos")]
+        {
+            fs::write(dir.join("libavutil.60.dylib"), b"").unwrap();
+            fs::write(dir.join("libavformat.62.dylib"), b"").unwrap();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            fs::write(dir.join("libavutil.so.60"), b"").unwrap();
+            fs::write(dir.join("libavformat.so.62"), b"").unwrap();
+        }
+
+        let (util, format) = check_dir_for_ffmpeg(&dir).expect("should find mismatched majors");
+        assert!(util.to_string_lossy().contains("libavutil"));
+        assert!(format.to_string_lossy().contains("libavformat"));
+        assert!(util.to_string_lossy().contains("60"));
+        assert!(format.to_string_lossy().contains("62"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prefers_unversioned_soname_when_present() {
+        let dir = std::env::temp_dir().join(format!(
+            "pb-avio-unversioned-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        #[cfg(target_os = "macos")]
+        {
+            fs::write(dir.join("libavutil.dylib"), b"").unwrap();
+            fs::write(dir.join("libavformat.dylib"), b"").unwrap();
+            fs::write(dir.join("libavutil.59.dylib"), b"").unwrap();
+            fs::write(dir.join("libavformat.61.dylib"), b"").unwrap();
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            fs::write(dir.join("libavutil.so"), b"").unwrap();
+            fs::write(dir.join("libavformat.so"), b"").unwrap();
+            fs::write(dir.join("libavutil.so.59"), b"").unwrap();
+            fs::write(dir.join("libavformat.so.61"), b"").unwrap();
+        }
+
+        let (util, format) = check_dir_for_ffmpeg(&dir).expect("should prefer unversioned");
+        assert!(
+            util.file_name().unwrap().to_string_lossy() == "libavutil.so"
+                || util.file_name().unwrap().to_string_lossy() == "libavutil.dylib"
+        );
+        assert!(
+            format.file_name().unwrap().to_string_lossy() == "libavformat.so"
+                || format.file_name().unwrap().to_string_lossy() == "libavformat.dylib"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
