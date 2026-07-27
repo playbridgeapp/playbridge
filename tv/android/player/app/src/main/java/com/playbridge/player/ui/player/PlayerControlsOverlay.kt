@@ -65,6 +65,7 @@ fun PlayerControlsOverlay(
     onPlayerSwitched: (String) -> Unit = {},
     onToggleAudioBoost: () -> Unit = {},
     onAdjustSubtitleDelay: (Long) -> Unit = {},
+    onResetSubtitleDelay: () -> Unit = {},
     onPreloadSubtitles: (List<String>) -> Unit = {},
     onSkipSegment: () -> Unit = {},
     onSkipButtonFocusChanged: (Boolean) -> Unit = {},
@@ -116,6 +117,7 @@ fun PlayerControlsOverlay(
                         onPreloadLanguage = onPreloadSubtitles,
                         onTrackSelected = onTrackSelected,
                         onAdjustDelay = onAdjustSubtitleDelay,
+                        onResetDelay = onResetSubtitleDelay,
                         onDismiss = onOverlayDismiss,
                         activeMetadata = state.activeMetadata,
                     )

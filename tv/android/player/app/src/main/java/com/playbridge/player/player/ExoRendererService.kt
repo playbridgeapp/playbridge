@@ -10,11 +10,15 @@ import android.os.RemoteException
 import android.media.audiofx.LoudnessEnhancer
 import android.view.Surface
 import android.util.Log
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.C
 import androidx.media3.common.Tracks
 import androidx.media3.common.VideoSize
 import androidx.media3.common.text.CueGroup
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.ExoPlaybackException
+import androidx.media3.exoplayer.source.UnrecognizedInputFormatException
 import com.playbridge.shared.player.ExoPlayerEngine
 import com.playbridge.shared.protocol.decodePlayPayloadListJson
 import kotlinx.coroutines.CoroutineScope
@@ -66,8 +70,22 @@ class ExoRendererService : Service() {
     private var desiredPlaybackSpeed = 1f
     private var desiredScalingMode = "Fit"
     private var desiredLooping = false
+    private var desiredSubtitleDelayMs = 0L
     private var pendingExternalSubtitle: PendingExternalSubtitle? = null
     private var externalSubtitleTimeout: Runnable? = null
+
+    // In-engine recovery budgets for the current session (reset on prepare / stable play).
+    private var liveEdgeRecoveryCount = 0
+    private var reprepareRecoveryCount = 0
+    private var audioDiscontinuityRecoveryCount = 0
+    private var decodeRecoveryCount = 0
+    private val stableRecoveryResetRunnable = Runnable {
+        val player = engine?.getExoPlayer() ?: return@Runnable
+        if (player.playbackState == Player.STATE_READY && (player.isPlaying || playWhenReady)) {
+            resetRecoveryBudgets()
+            Log.d(TAG, "Recovery budgets reset after stable playback")
+        }
+    }
 
     private val binder = object : IRendererService.Stub() {
         override fun setCallback(callback: IRendererCallback?) = onMain {
@@ -83,6 +101,8 @@ class ExoRendererService : Service() {
             firstFrameSessionId = 0L
             endedSessionId = 0L
             selectedVideoTrackId = null
+            resetRecoveryBudgets()
+            mainHandler.removeCallbacks(stableRecoveryResetRunnable)
             val payload = request.getString(RendererProtocol.KEY_PAYLOAD_JSON)
                 ?.let(::decodePlayPayloadListJson)
                 ?.firstOrNull()
@@ -168,7 +188,11 @@ class ExoRendererService : Service() {
             applyAudioBoost()
         }
 
-        override fun setSubtitleDelay(delayMs: Long, requestedSessionId: Long) = Unit
+        override fun setSubtitleDelay(delayMs: Long, requestedSessionId: Long) = onMain {
+            if (!isCurrent(requestedSessionId)) return@onMain
+            desiredSubtitleDelayMs = delayMs
+            engine?.setSubtitleDelay(delayMs)
+        }
 
         override fun setVideoQuality(maxHeight: Int, requestedSessionId: Long) = onMain {
             if (!isCurrent(requestedSessionId)) return@onMain
@@ -246,7 +270,7 @@ class ExoRendererService : Service() {
                 }
             }
 
-            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            override fun onPlayerError(error: PlaybackException) {
                 pendingExternalSubtitle?.let { pending ->
                     completeExternalSubtitleAttachment(
                         pending.uri,
@@ -254,20 +278,28 @@ class ExoRendererService : Service() {
                         success = false,
                     )
                 }
-                sendError(error.errorCodeName)
+                handlePlaybackError(error)
             }
 
             override fun onPlaybackStateChanged(playbackState: Int) {
                 when (playbackState) {
-                    Player.STATE_READY -> sendReadyOnce()
+                    Player.STATE_READY -> {
+                        sendReadyOnce()
+                        scheduleStableRecoveryReset()
+                    }
                     Player.STATE_ENDED -> if (
                         readySessionId == sessionId && endedSessionId != sessionId
                     ) {
                         endedSessionId = sessionId
                         sendEvent(RendererProtocol.EVENT_ENDED)
                     }
+                    Player.STATE_BUFFERING -> mainHandler.removeCallbacks(stableRecoveryResetRunnable)
                     else -> Unit
                 }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) scheduleStableRecoveryReset()
             }
 
             override fun onTracksChanged(tracks: Tracks) {
@@ -363,6 +395,7 @@ class ExoRendererService : Service() {
 
     private fun applyDesiredSettings(renderer: ExoPlayerEngine) {
         renderer.setRate(desiredPlaybackSpeed)
+        renderer.setSubtitleDelay(desiredSubtitleDelayMs)
         val player = renderer.getExoPlayer() ?: return
         player.videoScalingMode = when (desiredScalingMode) {
             "Zoom" -> C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
@@ -621,6 +654,8 @@ class ExoRendererService : Service() {
 
     private fun releaseEngine() {
         clearPendingExternalSubtitle()
+        mainHandler.removeCallbacks(stableRecoveryResetRunnable)
+        resetRecoveryBudgets()
         stateJob?.cancel()
         stateJob = null
         engine?.let { renderer ->
@@ -713,9 +748,205 @@ class ExoRendererService : Service() {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
     }
 
-    private fun sendError(message: String) {
+    private fun handlePlaybackError(error: PlaybackException) {
+        mainHandler.removeCallbacks(stableRecoveryResetRunnable)
+        val player = engine?.getExoPlayer()
+        if (player == null) {
+            sendError(
+                message = error.errorCodeName,
+                severity = RendererProtocol.ERROR_SEVERITY_TERMINAL,
+                errorCodeName = error.errorCodeName,
+            )
+            return
+        }
+
+        val hasFirstFrame = firstFrameSessionId == sessionId
+        val isLive = player.isCurrentMediaItemLive
+        val httpStatus = findHttpStatus(error)
+        val disposition = ExoPlaybackErrorPolicy.classify(
+            ExoPlaybackErrorPolicy.ErrorFacts(
+                errorCode = error.errorCode,
+                errorCodeName = error.errorCodeName,
+                isLive = isLive,
+                hasFirstFrame = hasFirstFrame,
+                positionMs = player.currentPosition.coerceAtLeast(0L),
+                durationMs = player.duration.takeIf { it > 0L } ?: 0L,
+                causeClassSimpleName = deepestCause(error)?.javaClass?.simpleName,
+                message = error.message,
+                httpStatus = httpStatus,
+                isUnrecognizedFormat = findCause(error, UnrecognizedInputFormatException::class.java) != null,
+                budget = ExoPlaybackErrorPolicy.AttemptBudget(
+                    liveEdge = liveEdgeRecoveryCount,
+                    reprepare = reprepareRecoveryCount,
+                    audioDiscontinuity = audioDiscontinuityRecoveryCount,
+                    decode = decodeRecoveryCount,
+                ),
+            ),
+        )
+
+        when (disposition) {
+            is ExoPlaybackErrorPolicy.Disposition.Recover -> {
+                Log.w(
+                    TAG,
+                    "Recovering from ${error.errorCodeName} via ${disposition.strategy} " +
+                        "(live=$isLive firstFrame=$hasFirstFrame " +
+                        "budget=le:$liveEdgeRecoveryCount/rp:$reprepareRecoveryCount/" +
+                        "ad:$audioDiscontinuityRecoveryCount/dec:$decodeRecoveryCount)",
+                )
+                applyRecovery(player, disposition.strategy, error)
+            }
+            is ExoPlaybackErrorPolicy.Disposition.TreatAsEnded -> {
+                Log.i(TAG, "Treating ${error.errorCodeName} as end-of-stream: ${disposition.reason}")
+                if (endedSessionId != sessionId) {
+                    endedSessionId = sessionId
+                    sendEvent(RendererProtocol.EVENT_ENDED)
+                }
+            }
+            is ExoPlaybackErrorPolicy.Disposition.Escalate -> {
+                if (isDecoderError(error)) {
+                    learnDecoderCompatibilityFlags(error)
+                }
+                Log.e(
+                    TAG,
+                    "Escalating ${error.errorCodeName} as ${disposition.severity} " +
+                        "(${disposition.reason}, firstFrame=$hasFirstFrame)",
+                    error,
+                )
+                sendError(
+                    message = "${error.errorCodeName}: ${disposition.reason}",
+                    severity = ExoPlaybackErrorPolicy.severityWireValue(disposition.severity),
+                    errorCodeName = error.errorCodeName,
+                )
+            }
+        }
+    }
+
+    private fun applyRecovery(
+        player: androidx.media3.exoplayer.ExoPlayer,
+        strategy: ExoPlaybackErrorPolicy.RecoveryStrategy,
+        error: PlaybackException,
+    ) {
+        when (strategy) {
+            ExoPlaybackErrorPolicy.RecoveryStrategy.LIVE_EDGE -> {
+                liveEdgeRecoveryCount++
+                player.seekToDefaultPosition()
+                player.prepare()
+                if (playWhenReady) player.play()
+            }
+            ExoPlaybackErrorPolicy.RecoveryStrategy.REPREPARE -> {
+                if (isDecoderError(error)) {
+                    decodeRecoveryCount++
+                } else {
+                    reprepareRecoveryCount++
+                }
+                val isLive = player.isCurrentMediaItemLive
+                val positionMs = player.currentPosition.coerceAtLeast(0L)
+                // stop() drops the error state so prepare() can restart the same media item.
+                player.stop()
+                player.prepare()
+                if (!isLive && positionMs > 0L) {
+                    player.seekTo(positionMs)
+                } else if (isLive) {
+                    player.seekToDefaultPosition()
+                }
+                player.playWhenReady = playWhenReady
+            }
+            ExoPlaybackErrorPolicy.RecoveryStrategy.SEEK_RETRY -> {
+                audioDiscontinuityRecoveryCount++
+                val positionMs = player.currentPosition.coerceAtLeast(0L)
+                player.seekTo(positionMs)
+                player.prepare()
+                if (playWhenReady) player.play()
+            }
+        }
+    }
+
+    private fun isDecoderError(error: PlaybackException): Boolean =
+        error.errorCode == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODER_QUERY_FAILED ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES ||
+            error.errorCode == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED ||
+            findCause(error, androidx.media3.exoplayer.mediacodec.MediaCodecRenderer.DecoderInitializationException::class.java) != null ||
+            findCause(error, androidx.media3.exoplayer.video.MediaCodecVideoDecoderException::class.java) != null
+
+    /**
+     * Persist decoder compatibility flags so the *next* ExoPlayer session avoids a broken path
+     * (tunneling / Dolby Vision / async MediaCodec) — same learning as ExoPlayerActivity.
+     */
+    private fun learnDecoderCompatibilityFlags(error: PlaybackException) {
+        val prefs = getSharedPreferences("browser_prefs", MODE_PRIVATE)
+        val wasTunneled = prefs.getBoolean("tunneled_playback", false) &&
+            !prefs.getBoolean("tunneling_auto_blocked", false)
+        val failingDolbyVision =
+            (error as? ExoPlaybackException)?.rendererFormat?.sampleMimeType ==
+                androidx.media3.common.MimeTypes.VIDEO_DOLBY_VISION
+        when {
+            wasTunneled -> {
+                Log.w(TAG, "Decoder failure in tunneled mode — blocking tunneling for future sessions")
+                prefs.edit().putBoolean("tunneling_auto_blocked", true).apply()
+            }
+            failingDolbyVision && !prefs.getBoolean("dv_decoders_blocked", false) -> {
+                Log.w(TAG, "Decoder failure on Dolby Vision — future sessions use HEVC/AVC base layer")
+                prefs.edit().putBoolean("dv_decoders_blocked", true).apply()
+            }
+            !prefs.getBoolean("codec_async_blocked", false) -> {
+                Log.w(TAG, "Decoder failure in async codec mode — future sessions use sync MediaCodec")
+                prefs.edit().putBoolean("codec_async_blocked", true).apply()
+            }
+            else -> Log.w(TAG, "Decoder failure with all compatibility flags already set")
+        }
+    }
+
+    private fun scheduleStableRecoveryReset() {
+        mainHandler.removeCallbacks(stableRecoveryResetRunnable)
+        mainHandler.postDelayed(stableRecoveryResetRunnable, STABLE_RECOVERY_RESET_MS)
+    }
+
+    private fun resetRecoveryBudgets() {
+        liveEdgeRecoveryCount = 0
+        reprepareRecoveryCount = 0
+        audioDiscontinuityRecoveryCount = 0
+        decodeRecoveryCount = 0
+    }
+
+    private fun findHttpStatus(error: PlaybackException): Int? {
+        val invalid = findCause(error, HttpDataSource.InvalidResponseCodeException::class.java)
+        return invalid?.responseCode
+    }
+
+    private fun deepestCause(error: Throwable): Throwable? {
+        var current: Throwable? = error.cause
+        var deepest: Throwable? = error.cause
+        while (current != null) {
+            deepest = current
+            current = current.cause
+        }
+        return deepest
+    }
+
+    private fun <T : Throwable> findCause(error: Throwable, type: Class<T>): T? {
+        var current: Throwable? = error
+        while (current != null) {
+            if (type.isInstance(current)) {
+                @Suppress("UNCHECKED_CAST")
+                return current as T
+            }
+            current = current.cause
+        }
+        return null
+    }
+
+    private fun sendError(
+        message: String,
+        severity: String = RendererProtocol.ERROR_SEVERITY_TERMINAL,
+        errorCodeName: String? = null,
+    ) {
         sendEvent(RendererProtocol.EVENT_ERROR, Bundle().apply {
             putString(RendererProtocol.KEY_ERROR, message)
+            putString(RendererProtocol.KEY_ERROR_SEVERITY, severity)
+            putBoolean(RendererProtocol.KEY_HAD_FIRST_FRAME, firstFrameSessionId == sessionId)
+            errorCodeName?.let { putString(RendererProtocol.KEY_ERROR_CODE, it) }
         })
     }
 
@@ -734,6 +965,8 @@ class ExoRendererService : Service() {
     private companion object {
         const val TAG = "ExoRendererService"
         const val EXTERNAL_SUBTITLE_ATTACH_TIMEOUT_MS = 8_000L
+        /** After this long of healthy READY/playing, recovery attempt counters reset. */
+        const val STABLE_RECOVERY_RESET_MS = 5_000L
     }
 
     private data class PendingExternalSubtitle(

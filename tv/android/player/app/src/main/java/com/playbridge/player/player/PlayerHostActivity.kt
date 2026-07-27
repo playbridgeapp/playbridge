@@ -469,6 +469,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         syncPlaybackContext()
                         broadcastPlayerSettings()
                     },
+                    onResetSubtitleDelay = {
+                        controlsViewModel.resetSubtitleDelay()
+                        syncPlaybackContext()
+                        broadcastPlayerSettings()
+                    },
                     onPreloadSubtitles = controlsViewModel::preloadSubtitleCues,
                     onSkipSegment = controlsViewModel::skipCurrentSegment,
                     onSkipButtonFocusChanged = controlsViewModel::setSkipButtonFocused,
@@ -1635,7 +1640,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 finish()
             }
             RendererProtocol.EVENT_ERROR -> handleRendererFailure(
-                event.getString(RendererProtocol.KEY_ERROR) ?: "Renderer error",
+                message = event.getString(RendererProtocol.KEY_ERROR) ?: "Renderer error",
+                severity = ExoPlaybackErrorPolicy.parseSeverity(
+                    event.getString(RendererProtocol.KEY_ERROR_SEVERITY),
+                ),
+                hadFirstFrame = event.getBoolean(
+                    RendererProtocol.KEY_HAD_FIRST_FRAME,
+                    sessionCoordinator.current().phase == RendererSessionPhase.PLAYING,
+                ),
             )
         }
         refreshKeepScreenOn()
@@ -1947,10 +1959,40 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         ServerService.broadcastStatus(this, status)
     }
 
-    private fun handleRendererFailure(message: String) {
+    /**
+     * Handle a renderer failure.
+     *
+     * Auto engine switch is restricted to **startup** hard failures (no first frame yet),
+     * matching Nuvio's model: mid-playback glitches must not flip Exo↔MPV. Watchdog
+     * timeouts while still PREPARING remain eligible for one-shot failover.
+     */
+    private fun handleRendererFailure(
+        message: String,
+        severity: ExoPlaybackErrorPolicy.EscalationSeverity? = null,
+        hadFirstFrame: Boolean = false,
+    ) {
         if (finishingSession || isFinishing || isDestroyed) return
         val failedKind = rendererKind
-        FileLogger.w(TAG, "Renderer $failedKind failed: $message")
+        val firstFrameSeen = hadFirstFrame ||
+            sessionCoordinator.current().phase == RendererSessionPhase.PLAYING
+        val isStartupWatchdog = message.contains("did not become ready", ignoreCase = true)
+        val effectiveSeverity = severity
+            ?: if (isStartupWatchdog || !firstFrameSeen) {
+                // Legacy/MPV errors without severity: allow one startup failover only.
+                ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER
+            } else {
+                ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL
+            }
+        val allowEngineFailover = ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
+            severity = effectiveSeverity,
+            hasFirstFrame = firstFrameSeen,
+        )
+
+        FileLogger.w(
+            TAG,
+            "Renderer $failedKind failed: $message " +
+                "(severity=$effectiveSeverity firstFrame=$firstFrameSeen allowFailover=$allowEngineFailover)",
+        )
         val failedSession = session
         requestedStartPositionMs = lastPositionMs.takeIf { it > 0L } ?: requestedStartPositionMs
         pendingSeekTracker.clear()
@@ -1967,7 +2009,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             RendererKind.EXO -> RendererKind.MPV
             else -> null
         }
-        if (fallback == null || fallback in attemptedRenderers) {
+        if (!allowEngineFailover || fallback == null || fallback in attemptedRenderers) {
             showTransition(R.string.player_failed, force = true)
             finishingSession = true
             val finishRunnable = Runnable {

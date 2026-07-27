@@ -103,6 +103,13 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     private var currentPayload: PlayPayload? = null
 
+    /**
+     * Subtitle timing offset in milliseconds. Positive values advance subtitles relative to
+     * video (same convention as TV SubtitleManager / remote UI). Applied by [OffsetTextRenderer].
+     */
+    @Volatile
+    private var subtitleDelayMs: Long = 0L
+
     init {
         // Player is initialized lazily or when first loaded if needed,
         // but for now we initialize it immediately as the original code did.
@@ -450,12 +457,9 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 extensionRendererMode: Int,
                 out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>
             ) {
-                super.buildTextRenderers(context, output, outputLooper, extensionRendererMode, out)
-                out.forEach {
-                    if (it is androidx.media3.exoplayer.text.TextRenderer) {
-                        it.experimentalSetLegacyDecodingEnabled(true)
-                    }
-                }
+                // OffsetTextRenderer wraps final TextRenderer so setSubtitleDelay can shift
+                // cue selection for embedded and sideloaded text tracks.
+                out.add(OffsetTextRenderer(output, outputLooper) { subtitleDelayMs })
             }
         }
 
@@ -522,10 +526,11 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             .setMediaSourceFactory(perItem.mediaSourceFactory)
             .setSeekForwardIncrementMs(10_000)
             .setReleaseTimeoutMs(3_000) // Prevent hanging during engine transitions
-            // Many proxy/debrid streams reach the end without signalling EOS, so the player sits
-            // "playing but not ending" and Media3's default 60s STUCK_PLAYING_NOT_ENDING timeout
-            // delays end-of-episode auto-advance. Lower it so the timeout (handled as end-of-stream
-            // in the player Activity) fires quickly. This case only triggers at the end of content.
+            // Proxy/debrid VOD often reaches the end without signalling EOS, so Media3's default
+            // 60s STUCK_PLAYING_NOT_ENDING timeout delays end-of-episode advance. Keep a short
+            // timeout so that case surfaces quickly. Live/mid-stream freezes also raise
+            // ERROR_CODE_TIMEOUT; ExoRendererService recovers those (live edge / re-prepare)
+            // instead of treating them as fatal engine failures.
             .setStuckPlayingNotEndingTimeoutMs(6_000)
             .build()
             .also { exoPlayer ->
@@ -654,6 +659,25 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             selector.parameters = params
         } else {
             // Implementation for specific track selection
+        }
+    }
+
+    /**
+     * Apply a subtitle timing offset. Positive advances subtitles (look-ahead in the cue
+     * timeline); negative delays them. Takes effect on the next text render tick; when paused
+     * a no-op seek forces an immediate refresh.
+     */
+    fun setSubtitleDelay(delayMs: Long) {
+        val clamped = delayMs.coerceIn(-120_000L, 120_000L)
+        if (subtitleDelayMs == clamped) return
+        logger.i(TAG, "setSubtitleDelay($clamped)")
+        subtitleDelayMs = clamped
+        val exoPlayer = player ?: return
+        // When paused, render() may not run until the next interaction — nudge position so
+        // OffsetTextRenderer re-evaluates active cues with the new offset immediately.
+        if (!exoPlayer.isPlaying) {
+            val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
+            exoPlayer.seekTo(pos)
         }
     }
 
