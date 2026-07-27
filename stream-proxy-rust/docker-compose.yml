@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   stream-proxy-rust:
     build:
@@ -12,7 +10,7 @@ services:
     environment:
       - PORT=8888
       - ADDRESS=0.0.0.0
-      - API_PASSWORD=playbridge_token
+      - PB_PROXY_PASSWORD=playbridge_token
     restart: unless-stopped
     ulimits:
       nofile:

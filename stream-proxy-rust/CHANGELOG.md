@@ -5,6 +5,17 @@ All notable changes to the `stream-proxy-rust` project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-27
+
+### Fixed
+- **Docker AVIO fallback**: Discover FFmpeg shared libraries with independent SONAME majors (e.g. FFmpeg 8 `libavutil.so.60` + `libavformat.so.62`) instead of requiring matching versions.
+- **Docker dynamic loading**: Build and run the container on Debian Bookworm (glibc) so `libloading` can `dlopen` libavutil/libavformat. Alpine/musl produced a static binary that failed with "Dynamic loading not supported", so CDN 403 → AVIO fallback never worked in Docker while the host binary did.
+- **AVIO diagnostics**: Log concrete library path and load/symbol errors when FFmpeg FFI setup fails.
+
+### Changed
+- `Dockerfile` base images: `rust:bookworm` + `debian:bookworm-slim` with runtime `libavformat59` / `libavutil57` (and deps).
+- Removed obsolete Compose `version:` field from `docker-compose.yml`.
+
 ## [0.1.0] - 2026-07-22
 
 ### Added
