@@ -1005,13 +1005,13 @@ mod android_jni {
     use super::{DiscoveryScanner, pb_discovery_cancel, pb_discovery_free, pb_discovery_start};
 
     #[cfg(feature = "sender-services")]
+    use super::pb_string_free;
+    #[cfg(feature = "sender-services")]
     use super::sender_services::{
         SenderServices, pb_sender_services_abi_version, pb_sender_services_cancel,
         pb_sender_services_free, pb_sender_services_next_json, pb_sender_services_start,
         pb_sender_services_submit_json,
     };
-    #[cfg(feature = "sender-services")]
-    use super::pb_string_free;
 
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_connection_RustDiscoveryNative_start<
@@ -1134,10 +1134,7 @@ mod android_jni {
                 return false;
             };
             unsafe {
-                pb_sender_services_submit_json(
-                    handle as *const SenderServices,
-                    c_command.as_ptr(),
-                )
+                pb_sender_services_submit_json(handle as *const SenderServices, c_command.as_ptr())
             }
         }))
         .unwrap_or(false);
