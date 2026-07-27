@@ -677,8 +677,21 @@ browser.webRequest.onHeadersReceived.addListener(
     const tabId = resolveTabId(details.tabId, details.url);
     const urlFull = details.url.toLowerCase();
     const urlPath = urlFull.split("?")[0] ?? urlFull;
+    const hasSubExt = SUBTITLE_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
+    const isSubtitleContentType =
+      contentType.includes("text/vtt") ||
+      contentType.includes("subrip") ||
+      contentType.includes("application/x-subrip");
 
-    if (SEGMENT_OR_SUB_RE.test(details.url) && !urlFull.includes("m3u8")) {
+    // Drop HLS segments / fMP4 fragments early — but never subtitles. Desktop
+    // filters only .ts/.m4s/segment/frag; GeckoView used to also match .vtt/.srt
+    // via SEGMENT_OR_SUB_RE and silently never reported them to the phone.
+    if (
+      SEGMENT_OR_SUB_RE.test(details.url) &&
+      !urlFull.includes("m3u8") &&
+      !hasSubExt &&
+      !isSubtitleContentType
+    ) {
       requestHeadersMap.delete(details.requestId);
       return;
     }
@@ -689,9 +702,13 @@ browser.webRequest.onHeadersReceived.addListener(
     const isM3u8Url = urlFull.includes("m3u8");
     const isMpdUrl = urlPath.endsWith(".mpd") || urlFull.includes(".mpd?");
     const hasVideoExt = VIDEO_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
-    const hasSubExt = SUBTITLE_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
     const isVideo =
-      isVideoContentType || isM3u8Url || isMpdUrl || hasVideoExt || hasSubExt;
+      isVideoContentType ||
+      isM3u8Url ||
+      isMpdUrl ||
+      hasVideoExt ||
+      hasSubExt ||
+      isSubtitleContentType;
 
     const frameId =
       typeof details.frameId === "number" && details.frameId >= 0
