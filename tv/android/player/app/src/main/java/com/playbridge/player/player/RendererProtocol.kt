@@ -10,6 +10,10 @@ internal object RendererProtocol {
     const val KEY_PAYLOAD_JSON = "payload_json"
     const val KEY_EVENT = "event"
     const val KEY_ERROR = "error"
+    /** [ERROR_SEVERITY_STARTUP_FAILOVER] or [ERROR_SEVERITY_TERMINAL]. */
+    const val KEY_ERROR_SEVERITY = "error_severity"
+    const val KEY_ERROR_CODE = "error_code"
+    const val KEY_HAD_FIRST_FRAME = "had_first_frame"
     const val KEY_STATE = "state"
     const val KEY_POSITION_MS = "position_ms"
     const val KEY_DURATION_MS = "duration_ms"
@@ -49,4 +53,12 @@ internal object RendererProtocol {
     const val EVENT_CAPABILITIES = "capabilities"
     const val EVENT_STOPPED = "stopped"
     const val EVENT_ERROR = "error"
+
+    /**
+     * Hard capability/format failure before first frame — host may switch engines once.
+     * Mid-playback recoverable exhaustion must use [ERROR_SEVERITY_TERMINAL] instead.
+     */
+    const val ERROR_SEVERITY_STARTUP_FAILOVER = "startup_failover"
+    /** Give up on this engine/item; do not auto-switch engines after playback has started. */
+    const val ERROR_SEVERITY_TERMINAL = "terminal"
 }

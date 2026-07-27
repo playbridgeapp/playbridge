@@ -415,7 +415,9 @@ class ExoPlayerActivity : PlayerActivity() {
             }
 
             override fun setSubtitleDelay(delayMs: Long) {
-                // Now handled internally by controlsViewModel.subtitleManager
+                // Embedded / native Exo text tracks: shift selection via OffsetTextRenderer.
+                // External overlay cues still go through SubtitleManager.setOffset from the VM.
+                engine?.setSubtitleDelay(delayMs)
             }
 
             override fun setPlaybackSpeed(speed: Float) {
