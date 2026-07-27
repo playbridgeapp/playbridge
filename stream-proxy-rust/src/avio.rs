@@ -396,12 +396,8 @@ fn find_best_lib(dir: &Path, basenames: &[&str]) -> Option<PathBuf> {
         for base in basenames {
             // libavutil.so.60[.x.y] or libavutil.60.dylib
             let prefix_so = format!("{}.", base); // libavutil.so.
-            let prefix_dylib = base
-                .strip_suffix(".dylib")
-                .map(|stem| format!("{}.", stem)); // libavutil.
-            let prefix_dll = base
-                .strip_suffix(".dll")
-                .map(|stem| format!("{}-", stem)); // avutil-
+            let prefix_dylib = base.strip_suffix(".dylib").map(|stem| format!("{}.", stem)); // libavutil.
+            let prefix_dll = base.strip_suffix(".dll").map(|stem| format!("{}-", stem)); // avutil-
 
             let major = if name.starts_with(&prefix_so) {
                 name[prefix_so.len()..]
