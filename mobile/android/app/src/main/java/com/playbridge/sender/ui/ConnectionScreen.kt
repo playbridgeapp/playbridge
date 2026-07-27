@@ -1,54 +1,103 @@
 package com.playbridge.sender.ui
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Cast
-import androidx.compose.material.icons.filled.Computer
-import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Gamepad
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.ui.graphics.Color
-import androidx.compose.material3.*
-import androidx.compose.ui.res.painterResource
-import com.playbridge.sender.R
-import androidx.compose.foundation.Image
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.WifiOff
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
-import kotlinx.coroutines.launch
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import kotlinx.coroutines.delay
-import com.playbridge.sender.connection.ConnectionViewModel
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.connection.ConnectionMerge
+import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.sender.connection.NetworkStatusRepository
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
+import kotlinx.coroutines.launch
 
+private val OnlineGreen = Color(0xFF4CAF50)
+private val WarningAmber = Color(0xFFFFA000)
+
+/**
+ * Full-screen device manager: current destination, paired PlayBridge TVs, and live network
+ * discovery (sticky, quiet background rescans while open). No tabs / protocol filter chips.
+ *
+ * @param initialTab legacy: non-zero opens with the "Other devices" section expanded
+ *   (used when the cast sheet routes here via "Find more devices").
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectionScreen(
@@ -56,79 +105,86 @@ fun ConnectionScreen(
     onMenuClick: () -> Unit,
     modifier: Modifier = Modifier,
     onRemoteClick: (() -> Unit)? = null,
-    initialTab: Int = 0
+    initialTab: Int = 0,
 ) {
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
     val pings by viewModel.savedDevicesOnlineStatus.collectAsState()
-
     val connectionState by viewModel.connectionState.collectAsState()
     val autoConnectEnabled by viewModel.autoConnectEnabled.collectAsState()
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
     val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
     val route by viewModel.route.collectAsState()
+    val isScanning by viewModel.isScanning.collectAsState()
+    val networkStatus by viewModel.networkStatus.collectAsState()
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
-    val isScanning by viewModel.isScanning.collectAsState()
-    val discoveryProtocols by viewModel.selectedDiscoveryProtocols.collectAsState()
+    val nativeSelected = route is CastSessionManager.Route.NativeTv
+    val isConnecting = nativeSelected && (
+        connectionState is WebSocketClient.ConnectionState.Connecting ||
+            connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
+            connectionState is WebSocketClient.ConnectionState.Retrying
+        )
 
-    var selectedTab by remember { mutableStateOf(initialTab) }
-
-    // Start discovery ONLY when the Discover tab is active
-    DisposableEffect(selectedTab) {
-        if (selectedTab == 1) {
-            viewModel.startDiscovery()
-        }
-        onDispose {
-            viewModel.stopDiscovery()
-        }
+    DisposableEffect(Unit) {
+        viewModel.retainDiscovery()
+        onDispose { viewModel.releaseDiscovery() }
     }
 
-    // Ping saved devices when history changes or Your Devices tab is active
-    LaunchedEffect(history, selectedTab) {
-        if (selectedTab == 0) {
-            viewModel.pingSavedDevices(history)
-        }
+    LaunchedEffect(history) {
+        viewModel.pingSavedDevices(history)
     }
 
-    val savedUnified = history.map { saved ->
-        val isOnline = pings[saved.endpointKey.toString()] == true
-        UnifiedDevice(
-            connectDevice = saved,
-            historyEntry = saved,
-            isOnline = isOnline,
-            lastConnected = saved.lastConnected
-        )
-    }.filterNot { u ->
-        activeExternalDevice?.let { ConnectionMerge.isSameDevice(u.connectDevice, it) } == true ||
-            (isConnected && tvDevice?.let { c ->
-                ConnectionMerge.isSameDevice(u.connectDevice, c)
-            } == true)
-    }.sortedWith(
-        compareByDescending<UnifiedDevice> { it.isOnline }
-            .thenByDescending { it.lastConnected ?: Long.MAX_VALUE }
-    )
+    val playBridgeSaved = remember(history, pings, activeExternalDevice, isConnected, tvDevice) {
+        ConnectionMerge.playBridgeHistory(history).map { saved ->
+            UnifiedDevice(
+                connectDevice = saved,
+                historyEntry = saved,
+                isOnline = pings[saved.endpointKey.toString()] == true ||
+                    discoveredDevices.any { ConnectionMerge.isSameDevice(it, saved) },
+                lastConnected = saved.lastConnected,
+            )
+        }.filterNot { u -> isActiveTarget(u.connectDevice, activeExternalDevice, isConnected, tvDevice) }
+            .sortedWith(
+                compareByDescending<UnifiedDevice> { it.isOnline }
+                    .thenByDescending { it.lastConnected ?: 0L },
+            )
+    }
 
-    val discoveredUnified = discoveredDevices.map { discovered ->
-        val historyEntry = history.find { ConnectionMerge.isSameDevice(it, discovered) }
-        UnifiedDevice(
-            connectDevice = discovered,
-            historyEntry = historyEntry,
-            isOnline = true,
-            lastConnected = historyEntry?.lastConnected
-        )
-    }.filterNot { u ->
-        activeExternalDevice?.let { ConnectionMerge.isSameDevice(u.connectDevice, it) } == true ||
-            (isConnected && tvDevice?.let { c ->
-                ConnectionMerge.isSameDevice(u.connectDevice, c)
-            } == true)
+    val recentExternal = remember(history, pings, activeExternalDevice, isConnected, tvDevice) {
+        ConnectionMerge.recentExternalHistory(history).map { saved ->
+            UnifiedDevice(
+                connectDevice = saved,
+                historyEntry = saved,
+                isOnline = pings[saved.endpointKey.toString()] == true ||
+                    discoveredDevices.any { ConnectionMerge.isSameDevice(it, saved) },
+                lastConnected = saved.lastConnected,
+            )
+        }.filterNot { u -> isActiveTarget(u.connectDevice, activeExternalDevice, isConnected, tvDevice) }
+    }
+
+    val discoveredByProtocol = remember(discoveredDevices, history, activeExternalDevice, isConnected, tvDevice) {
+        discoveredDevices
+            .filterNot { d -> isActiveTarget(d, activeExternalDevice, isConnected, tvDevice) }
+            .map { discovered ->
+                val historyEntry = history.find { ConnectionMerge.isSameDevice(it, discovered) }
+                UnifiedDevice(
+                    connectDevice = discovered,
+                    historyEntry = historyEntry,
+                    isOnline = true,
+                    lastConnected = historyEntry?.lastConnected,
+                )
+            }
+            .groupBy { it.connectDevice.resolvedProtocol }
     }
 
     var showManualDialog by remember { mutableStateOf(false) }
+    var otherExpanded by remember { mutableStateOf(initialTab != 0) }
+    var overflowOpen by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
-    // Show a snackbar when pairing is denied or a stale token is rejected.
     LaunchedEffect(connectionState) {
         when (val state = connectionState) {
             is WebSocketClient.ConnectionState.PairingDenied ->
@@ -142,14 +198,13 @@ fun ConnectionScreen(
             is WebSocketClient.ConnectionState.PinMismatch ->
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(
-                        "Security warning: ${state.serverName}'s certificate changed. Forget the device and re-pair."
+                        "Security warning: ${state.serverName}'s certificate changed. Forget the device and re-pair.",
                     )
                 }
             else -> Unit
         }
     }
 
-    // When a device is selected, check history for a saved token (shared with the device-picker sheet).
     fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") =
         connectKnownOrPair(viewModel, history, ip, port, name, uuid)
 
@@ -179,452 +234,761 @@ fun ConnectionScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("TV Connection") },
+                title = { Text("Devices") },
                 navigationIcon = {
                     IconButton(
                         onClick = onMenuClick,
                         modifier = Modifier.semantics {
                             contentDescription = "Dashboard"
                             role = androidx.compose.ui.semantics.Role.Button
-                        }
+                        },
                     ) {
-                        DashboardBlocksIcon(
-                            modifier = Modifier.size(22.dp)
-                        )
+                        DashboardBlocksIcon(modifier = Modifier.size(22.dp))
                     }
                 },
                 actions = {
-                    if (onRemoteClick != null) {
-                        IconButton(onClick = onRemoteClick) {
-                            Icon(Icons.Default.Gamepad, contentDescription = "Remote Control", tint = MaterialTheme.colorScheme.primary)
+                    if (isScanning) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .padding(end = 4.dp)
+                                .size(18.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        IconButton(onClick = { viewModel.rescan() }) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Rescan network",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
                         }
                     }
-                }
+                    if (onRemoteClick != null) {
+                        IconButton(onClick = onRemoteClick) {
+                            Icon(
+                                Icons.Default.Gamepad,
+                                contentDescription = "Remote Control",
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                    }
+                    Box {
+                        IconButton(onClick = { overflowOpen = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Connect by IP…") },
+                                onClick = {
+                                    overflowOpen = false
+                                    showManualDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) },
+                            )
+                        }
+                    }
+                },
             )
         },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showManualDialog = true },
-                icon = { Icon(Icons.Default.Add, "Manual Connect") },
-                text = { Text("Manual Connect") }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { paddingValues ->
-        Column(
+        LazyColumn(
+            state = listState,
             modifier = modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(top = 12.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            TabRow(selectedTabIndex = selectedTab) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("Your Devices") }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Discover") }
+            // ── NOW ──────────────────────────────────────────────────────────
+            item(key = "now-header") {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    LocalNetworkBanners(status = networkStatus)
+                    SectionLabel("Now")
+                }
+            }
+            item(key = "now-card") {
+                NowDestinationCard(
+                    connectionState = connectionState,
+                    route = route,
+                    tvDevice = tvDevice,
+                    activeExternalDevice = activeExternalDevice,
+                    autoConnectEnabled = autoConnectEnabled,
+                    showAutoConnect = true,
+                    onAutoConnectChange = { viewModel.setAutoConnectEnabled(it) },
+                    onCastHere = { viewModel.selectNativeRoute() },
+                    onDisconnectNative = {
+                        viewModel.selectThisDevice()
+                        viewModel.disconnect()
+                    },
+                    onDisconnectExternal = { viewModel.disconnectExternalTarget() },
+                    isConnecting = isConnecting,
                 )
             }
 
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(top = 16.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            item(key = "this-phone") {
+                ThisDeviceDestinationRow(
+                    selected = route is CastSessionManager.Route.ThisDevice &&
+                        activeExternalDevice == null &&
+                        !isConnecting,
+                    onClick = { viewModel.selectThisDevice() },
+                )
+            }
+
+            // ── PlayBridge ───────────────────────────────────────────────────
+            item(key = "pb-header") {
+                SectionLabel("PlayBridge")
+            }
+
+            if (playBridgeSaved.isEmpty() &&
+                (discoveredByProtocol[CastProtocol.PLAYBRIDGE].orEmpty().isEmpty())
             ) {
-                if (selectedTab == 0) {
-                    // TAB 0: YOUR DEVICES
-                    // Exactly one external protocol session can own playback at a time.
-                    val externalDevice = activeExternalDevice
-                    if (externalDevice != null) {
-                        item {
+                item(key = "pb-empty") {
+                    EmptyHintCard(
+                        if (isScanning) {
+                            "Looking for PlayBridge TVs on your network…"
+                        } else {
+                            "No PlayBridge TVs yet. Open the PlayBridge app on your TV (same Wi‑Fi), then pull to refresh."
+                        },
+                    )
+                }
+            } else {
+                items(
+                    items = playBridgeSaved,
+                    key = { "pb-saved-${it.connectDevice.endpointKey}" },
+                ) { device ->
+                    TvDeviceRow(
+                        device = device,
+                        showProtocolBadge = false,
+                        onClick = { selectEndpoint(device.connectDevice) },
+                        onRemove = device.historyEntry?.let { entry ->
+                            { viewModel.removeDeviceFromHistory(entry) }
+                        },
+                    )
+                }
+                val unpairedDiscovered = discoveredByProtocol[CastProtocol.PLAYBRIDGE]
+                    .orEmpty()
+                    .filter { d ->
+                        playBridgeSaved.none { ConnectionMerge.isSameDevice(it.connectDevice, d.connectDevice) }
+                    }
+                items(
+                    items = unpairedDiscovered,
+                    key = { "pb-new-${it.connectDevice.endpointKey}" },
+                ) { device ->
+                    TvDeviceRow(
+                        device = device,
+                        showProtocolBadge = false,
+                        onClick = { selectEndpoint(device.connectDevice) },
+                        onRemove = null,
+                    )
+                }
+            }
+
+            // ── Recent other (saved external shortcuts) ──────────────────────
+            if (recentExternal.isNotEmpty()) {
+                item(key = "recent-header") {
+                    SectionLabel("Recent other")
+                }
+                items(
+                    items = recentExternal,
+                    key = { "ext-${it.connectDevice.endpointKey}" },
+                ) { device ->
+                    TvDeviceRow(
+                        device = device,
+                        showProtocolBadge = true,
+                        onClick = { selectEndpoint(device.connectDevice) },
+                        onRemove = device.historyEntry?.let { entry ->
+                            { viewModel.removeDeviceFromHistory(entry) }
+                        },
+                    )
+                }
+            }
+
+            // ── Other devices on this network ────────────────────────────────
+            item(key = "other-header") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { otherExpanded = !otherExpanded }
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        SectionLabel("Other devices on this network")
+                        Text(
+                            text = if (isScanning) "Scanning quietly…" else "DLNA, Roku, Google Cast",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        imageVector = if (otherExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (otherExpanded) "Collapse" else "Expand",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            if (otherExpanded) {
+                val otherProtocols = listOf(
+                    CastProtocol.DLNA,
+                    CastProtocol.ROKU,
+                    CastProtocol.GOOGLE_CAST,
+                )
+                var anyOther = false
+                otherProtocols.forEach { protocol ->
+                    val devices = discoveredByProtocol[protocol].orEmpty()
+                    if (devices.isNotEmpty()) {
+                        anyOther = true
+                        item(key = "proto-label-${protocol.name}") {
                             Text(
-                                text = "Casting via ${externalDevice.resolvedProtocol.displayName}",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
+                                text = protocol.displayName,
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp),
                             )
                         }
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Cast,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = externalDevice.name,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                            Text(
-                                                text = "${externalDevice.ip} · ${externalDevice.resolvedProtocol.displayName}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                            )
-                                        }
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.End
-                                    ) {
-                                        Button(
-                                            onClick = {
-                                                viewModel.disconnectExternalTarget()
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                                        ) {
-                                            Text("Disconnect")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        item { Spacer(modifier = Modifier.height(8.dp)) }
-                    }
-
-                    // Connected TV Section
-                    if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                        val connected = connectionState as WebSocketClient.ConnectionState.Connected
-                        val serverName = connected.serverName
-                        item {
-                            Text(
-                                text = if (route is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
-                                    "Casting via ${CastProtocol.PLAYBRIDGE.displayName}"
-                                } else {
-                                    "Connected via ${CastProtocol.PLAYBRIDGE.displayName}"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                                )
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Tv,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            modifier = Modifier.size(32.dp)
-                                        )
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(
-                                                text = serverName,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                fontWeight = FontWeight.SemiBold,
-                                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                                            )
-                                            if (tvDevice != null) {
-                                                Text(
-                                                    text = "${tvDevice?.ip}:${if (connected.secure) (tvDevice?.wssPort ?: tvDevice?.port) else tvDevice?.port}",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                                )
-                                            }
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                                modifier = Modifier.padding(top = 2.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = if (connected.secure) Icons.Default.Lock else Icons.Default.LockOpen,
-                                                    contentDescription = null,
-                                                    modifier = Modifier.size(14.dp),
-                                                    tint = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
-                                                )
-                                                Text(
-                                                    text = if (connected.secure) "Secure (wss)" else "Not secure (ws)",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = if (connected.secure) Color(0xFF4CAF50) else Color(0xFFFFA000)
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Checkbox(
-                                            checked = autoConnectEnabled,
-                                            onCheckedChange = { viewModel.setAutoConnectEnabled(it) }
-                                        )
-                                        Text("Auto-connect to this TV", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                                    }
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    ) {
-                                        if (route !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
-                                            TextButton(onClick = { viewModel.selectNativeRoute() }) {
-                                                Text("Cast here")
-                                            }
-                                        }
-                                        Button(
-                                            onClick = { viewModel.disconnect() },
-                                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                                        ) {
-                                            Text("Disconnect")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        item {
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                    }
-
-                    // Your TVs list (Saved Devices only, online status checked via direct socket pings)
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Your TVs",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            IconButton(onClick = { viewModel.pingSavedDevices(history) }) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Refresh TV status",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
-                    }
-
-                    if (savedUnified.isEmpty()) {
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                )
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        "No saved TVs. Tap 'Discover' to scan for new TVs.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        items(savedUnified) { device ->
+                        items(
+                            items = devices,
+                            key = { "live-${it.connectDevice.endpointKey}" },
+                        ) { device ->
                             TvDeviceRow(
                                 device = device,
+                                showProtocolBadge = false,
                                 onClick = { selectEndpoint(device.connectDevice) },
                                 onRemove = device.historyEntry?.let { entry ->
                                     { viewModel.removeDeviceFromHistory(entry) }
-                                }
-                            )
-                        }
-                    }
-                } else {
-                    // TAB 1: DISCOVER
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Discover Devices",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (isScanning) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-                                    Text(
-                                        "Scanning…",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            } else {
-                                IconButton(onClick = { viewModel.rescan() }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Refresh,
-                                        contentDescription = "Rescan for TVs",
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            FilterChip(
-                                selected = discoveryProtocols.size == CastProtocol.entries.size,
-                                onClick = {
-                                    viewModel.setDiscoveryProtocols(CastProtocol.entries.toSet())
                                 },
-                                label = { Text("All") },
                             )
-                            CastProtocol.entries.forEach { protocol ->
-                                FilterChip(
-                                    selected = protocol in discoveryProtocols,
-                                    onClick = {
-                                        val next = if (discoveryProtocols.size == CastProtocol.entries.size) {
-                                            setOf(protocol)
-                                        } else if (protocol in discoveryProtocols && discoveryProtocols.size > 1) {
-                                            discoveryProtocols - protocol
-                                        } else {
-                                            discoveryProtocols + protocol
-                                        }
-                                        viewModel.setDiscoveryProtocols(next)
-                                    },
-                                    label = { Text(protocol.displayName) },
-                                )
-                            }
                         }
                     }
-
-                    if (discoveredUnified.isEmpty()) {
-                        item {
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                )
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        if (isScanning) "Looking for TVs on your network…"
-                                        else "No TVs found. Tap the refresh icon to scan again.",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    } else {
-                        CastProtocol.entries.forEach { protocol ->
-                            val protocolDevices = discoveredUnified.filter {
-                                it.connectDevice.resolvedProtocol == protocol
-                            }
-                            if (protocolDevices.isNotEmpty()) {
-                                item(key = "protocol-${protocol.name}") {
-                                    Text(
-                                        text = protocol.displayName,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.padding(top = 4.dp),
-                                    )
-                                }
-                                items(
-                                    items = protocolDevices,
-                                    key = { it.connectDevice.endpointKey.toString() },
-                                ) { device ->
-                                    TvDeviceRow(
-                                        device = device,
-                                        onClick = { selectEndpoint(device.connectDevice) },
-                                        onRemove = device.historyEntry?.let { entry ->
-                                            { viewModel.removeDeviceFromHistory(entry) }
-                                        },
-                                    )
-                                }
-                            }
-                        }
+                }
+                if (!anyOther) {
+                    item(key = "other-empty") {
+                        EmptyHintCard(
+                            if (isScanning) "Looking for cast devices…"
+                            else "No other devices found. Tap refresh to scan again.",
+                        )
                     }
                 }
             }
         }
     }
-    
-    // Manual Dialog
+
     if (showManualDialog) {
         ManualConnectionDialog(
             onDismiss = { showManualDialog = false },
             onConnect = { ip, port ->
                 showManualDialog = false
-                // Check history first
                 onDeviceSelected(ip, port, "Manual TV")
-            }
+            },
         )
     }
+}
 
+private fun isActiveTarget(
+    device: TvDevice,
+    activeExternal: TvDevice?,
+    isConnected: Boolean,
+    tvDevice: TvDevice?,
+): Boolean {
+    if (activeExternal != null && ConnectionMerge.isSameDevice(device, activeExternal)) return true
+    if (isConnected && tvDevice != null && ConnectionMerge.isSameDevice(device, tvDevice)) return true
+    return false
+}
 
+@Composable
+internal fun SectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold,
+    )
 }
 
 /**
- * A device in the unified "Your TVs" list: the device to connect with, whether it's
- * currently reachable on the network, and (if saved) its history entry + last-connected
- * time so the row can show "Online" vs. "Last seen …".
+ * Sticky cast/discovery banners for missing Wi‑Fi/Ethernet and active VPN.
+ * Used on the Devices screen and the cast sheet.
+ */
+@Composable
+fun LocalNetworkBanners(
+    status: NetworkStatusRepository.Status,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    var vpnDismissed by remember { mutableStateOf(false) }
+
+    // Re-show the VPN tip if the VPN toggles off then on again this session.
+    LaunchedEffect(status.vpnActive) {
+        if (!status.vpnActive) vpnDismissed = false
+    }
+
+    val showWifi = !status.onLocalNetwork
+    val showVpn = status.onLocalNetwork && status.vpnActive && !vpnDismissed
+    if (!showWifi && !showVpn) return
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (showWifi) {
+            NetworkBanner(
+                icon = Icons.Default.WifiOff,
+                title = "Not on Wi‑Fi",
+                body = "Connect this phone to the same Wi‑Fi as your TV to cast and discover devices.",
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                actionLabel = "Wi‑Fi settings",
+                onAction = {
+                    runCatching {
+                        context.startActivity(
+                            Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                },
+            )
+        } else if (showVpn) {
+            NetworkBanner(
+                icon = Icons.Default.Shield,
+                title = "VPN may block casting",
+                body = "Some VPNs hide your local network. If devices don’t appear, pause the VPN and try again.",
+                containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                actionLabel = null,
+                onAction = null,
+                onDismiss = { vpnDismissed = true },
+            )
+        }
+    }
+}
+
+@Composable
+private fun NetworkBanner(
+    icon: ImageVector,
+    title: String,
+    body: String,
+    containerColor: Color,
+    contentColor: Color,
+    actionLabel: String?,
+    onAction: (() -> Unit)?,
+    onDismiss: (() -> Unit)? = null,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = contentColor,
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .size(22.dp),
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = contentColor,
+                    )
+                    Text(
+                        text = body,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = contentColor.copy(alpha = 0.9f),
+                    )
+                }
+                if (onDismiss != null) {
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Dismiss",
+                            tint = contentColor,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+            if (actionLabel != null && onAction != null) {
+                TextButton(
+                    onClick = onAction,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                ) {
+                    Text(actionLabel, color = contentColor, fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptyHintCard(message: String) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        ),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Active cast destination card shared by the Devices screen and the cast sheet.
+ */
+@Composable
+fun NowDestinationCard(
+    connectionState: WebSocketClient.ConnectionState,
+    route: CastSessionManager.Route,
+    tvDevice: TvDevice?,
+    activeExternalDevice: TvDevice?,
+    autoConnectEnabled: Boolean = false,
+    showAutoConnect: Boolean = false,
+    onAutoConnectChange: (Boolean) -> Unit = {},
+    onCastHere: () -> Unit = {},
+    onDisconnectNative: () -> Unit,
+    onDisconnectExternal: () -> Unit,
+    isConnecting: Boolean = false,
+) {
+    val external = activeExternalDevice
+    when {
+        external != null -> {
+            ActiveDestinationCard(
+                name = external.name,
+                subtitle = "${external.ip} · cast a video to play here",
+                icon = Icons.Default.Cast,
+                badge = external.resolvedProtocol.displayName,
+                statusPill = "Casting",
+                statusFilled = true,
+                onDisconnect = onDisconnectExternal,
+            )
+        }
+        connectionState is WebSocketClient.ConnectionState.Connected -> {
+            val connected = connectionState
+            val castingHere = route is CastSessionManager.Route.NativeTv
+            ActiveDestinationCard(
+                name = connected.serverName,
+                subtitle = tvDevice?.let {
+                    "${it.ip}:${if (connected.secure) (it.wssPort ?: it.port) else it.port}"
+                },
+                icon = Icons.Default.Tv,
+                badge = null,
+                statusPill = when {
+                    castingHere -> if (connected.secure) "Casting" else "Casting"
+                    connected.secure -> "Linked"
+                    else -> "Connected"
+                },
+                statusFilled = castingHere,
+                trailing = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(
+                            imageVector = if (connected.secure) Icons.Default.Lock else Icons.Default.LockOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = if (connected.secure) OnlineGreen else WarningAmber,
+                        )
+                        Text(
+                            text = if (connected.secure) "wss" else "ws",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (connected.secure) OnlineGreen else WarningAmber,
+                        )
+                    }
+                },
+                footer = {
+                    if (showAutoConnect) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = autoConnectEnabled,
+                                onCheckedChange = onAutoConnectChange,
+                            )
+                            Text(
+                                "Auto-connect to this TV",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
+                },
+                onDisconnect = onDisconnectNative,
+                secondaryAction = if (!castingHere) "Cast here" to onCastHere else null,
+            )
+        }
+        isConnecting -> {
+            ActiveDestinationCard(
+                name = tvDevice?.name ?: "TV",
+                subtitle = "Connecting…",
+                icon = Icons.Default.Tv,
+                badge = null,
+                statusPill = "Connecting",
+                statusFilled = false,
+                onDisconnect = onDisconnectNative,
+            )
+        }
+        else -> {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Smartphone,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Column {
+                        Text(
+                            "Nothing selected",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            "Pick a TV below, or play on this phone.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ActiveDestinationCard(
+    name: String,
+    subtitle: String?,
+    icon: ImageVector,
+    badge: String?,
+    statusPill: String? = null,
+    statusFilled: Boolean = false,
+    trailing: (@Composable () -> Unit)? = null,
+    footer: (@Composable () -> Unit)? = null,
+    secondaryAction: Pair<String, () -> Unit>? = null,
+    onDisconnect: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // Name alone on the first line so protocol/status chips never truncate it.
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (badge != null || statusPill != null) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            if (badge != null) ProtocolBadge(badge)
+                            if (statusPill != null) {
+                                StatusPill(statusPill, filled = statusFilled)
+                            }
+                        }
+                    }
+                    if (subtitle != null) {
+                        Text(
+                            text = subtitle,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                        )
+                    }
+                    trailing?.invoke()
+                }
+            }
+            footer?.invoke()
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                if (secondaryAction != null) {
+                    TextButton(onClick = secondaryAction.second) {
+                        Text(secondaryAction.first)
+                    }
+                }
+                Button(
+                    onClick = onDisconnect,
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                ) {
+                    Text("Disconnect")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ThisDeviceDestinationRow(selected: Boolean, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Icon(
+                Icons.Default.Smartphone,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                "This phone",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+            )
+            if (selected) {
+                Icon(Icons.Default.Check, contentDescription = "Selected", tint = OnlineGreen)
+            }
+        }
+    }
+}
+
+@Composable
+fun FindMoreDevicesRow(onClick: () -> Unit) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        color = Color.Transparent,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "Find more devices…",
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+fun ProtocolBadge(text: String) {
+    Surface(
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+        shape = RoundedCornerShape(4.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@Composable
+fun StatusPill(text: String, filled: Boolean) {
+    val bg = if (filled) OnlineGreen.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (filled) OnlineGreen else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(color = bg, contentColor = fg, shape = RoundedCornerShape(50)) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/**
+ * A device in a destination list: the device to connect with, whether it's reachable,
+ * and (if saved) its history entry + last-connected time.
  */
 data class UnifiedDevice(
     val connectDevice: TvDevice,
     val historyEntry: TvDevice?,
     val isOnline: Boolean,
-    val lastConnected: Long?
+    val lastConnected: Long?,
 ) {
     val isKnown: Boolean get() = historyEntry != null
 }
@@ -640,22 +1004,29 @@ fun connectKnownOrPair(
     ip: String,
     port: Int,
     name: String,
-    uuid: String = ""
+    uuid: String = "",
 ) {
-    val nativeHistory = history.filter { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
+    val nativeHistory = ConnectionMerge.playBridgeHistory(history)
     val existing = if (uuid.isNotEmpty()) {
         nativeHistory.find { it.uuid == uuid } ?: nativeHistory.find { it.ip == ip && it.port == port }
     } else {
         nativeHistory.find { it.ip == ip && it.port == port }
     }
     if (existing != null && existing.token.isNotEmpty()) {
-        viewModel.connect(existing.copy(name = name, ip = ip, port = port, uuid = if (uuid.isNotEmpty()) uuid else existing.uuid))
+        viewModel.connect(
+            existing.copy(
+                name = name,
+                ip = ip,
+                port = port,
+                uuid = if (uuid.isNotEmpty()) uuid else existing.uuid,
+            ),
+        )
     } else {
         viewModel.connect(TvDevice(ip = ip, port = port, token = "", name = name, uuid = uuid))
     }
 }
 
-private fun formatLastSeen(millis: Long): String {
+fun formatLastSeen(millis: Long): String {
     val diff = System.currentTimeMillis() - millis
     return when {
         diff < 60_000L -> "Last seen just now"
@@ -670,64 +1041,53 @@ private fun formatLastSeen(millis: Long): String {
 fun TvDeviceRow(
     device: UnifiedDevice,
     onClick: () -> Unit,
-    onRemove: (() -> Unit)? = null
+    onRemove: (() -> Unit)? = null,
+    showProtocolBadge: Boolean = true,
 ) {
-    val onlineColor = Color(0xFF4CAF50)
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer
-        )
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
     ) {
         Row(
             modifier = Modifier
                 .padding(16.dp)
                 .fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             ) {
                 Icon(
-                    imageVector = if (
-                        device.connectDevice.resolvedProtocol == CastProtocol.DLNA ||
-                        device.connectDevice.resolvedProtocol == CastProtocol.GOOGLE_CAST
-                    ) Icons.Default.Cast else Icons.Default.Tv,
+                    imageVector = when (device.connectDevice.resolvedProtocol) {
+                        CastProtocol.DLNA, CastProtocol.GOOGLE_CAST -> Icons.Default.Cast
+                        else -> Icons.Default.Tv
+                    },
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(28.dp),
                 )
 
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = device.connectDevice.name,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        Surface(
-                            color = MaterialTheme.colorScheme.tertiaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
-                            shape = RoundedCornerShape(4.dp)
-                        ) {
-                            Text(
-                                text = device.connectDevice.resolvedProtocol.displayName,
-                                style = MaterialTheme.typography.labelSmall,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
-                    }
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    // Full-width title: protocol badge lives on the meta row so long
+                    // TV names (e.g. "Samsung QN90B Living Room") are not clipped.
+                    Text(
+                        text = device.connectDevice.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Text(
                         text = if (device.connectDevice.port > 0) {
                             "${device.connectDevice.ip}:${device.connectDevice.port}"
@@ -735,20 +1095,20 @@ fun TvDeviceRow(
                             device.connectDevice.ip
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.padding(top = 2.dp)
+                        modifier = Modifier.padding(top = 2.dp),
                     ) {
-                        val dotColor = if (device.isOnline) onlineColor
-                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        val dotColor = if (device.isOnline) OnlineGreen
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(dotColor)
+                                .background(dotColor),
                         )
                         val statusText = when {
                             device.isOnline && !device.isKnown -> "Online · New"
@@ -759,9 +1119,12 @@ fun TvDeviceRow(
                         Text(
                             text = statusText,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (device.isOnline) onlineColor
-                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            color = if (device.isOnline) OnlineGreen
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        if (showProtocolBadge) {
+                            ProtocolBadge(device.connectDevice.resolvedProtocol.displayName)
+                        }
                     }
                 }
             }
@@ -772,12 +1135,12 @@ fun TvDeviceRow(
                     modifier = Modifier.semantics {
                         contentDescription = "Remove"
                         role = androidx.compose.ui.semantics.Role.Button
-                    }
+                    },
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.error
+                        tint = MaterialTheme.colorScheme.error,
                     )
                 }
             }
@@ -788,14 +1151,16 @@ fun TvDeviceRow(
 @Composable
 fun ManualConnectionDialog(
     onDismiss: () -> Unit,
-    onConnect: (String, Int) -> Unit
+    onConnect: (String, Int) -> Unit,
 ) {
     var ip by remember { mutableStateOf("") }
-    var port by remember { mutableStateOf(com.playbridge.shared.protocol.Config.DEFAULT_PORT.toString()) }
+    var port by remember {
+        mutableStateOf(com.playbridge.shared.protocol.Config.DEFAULT_PORT.toString())
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Manual Connection") },
+        title = { Text("Connect by IP") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 OutlinedTextField(
@@ -803,7 +1168,7 @@ fun ManualConnectionDialog(
                     onValueChange = { ip = it },
                     label = { Text("IP Address") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = port,
@@ -811,7 +1176,7 @@ fun ManualConnectionDialog(
                     label = { Text("Port") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
@@ -823,7 +1188,7 @@ fun ManualConnectionDialog(
                         onConnect(ip, portInt)
                     }
                 },
-                enabled = ip.isNotEmpty() && port.isNotEmpty()
+                enabled = ip.isNotEmpty() && port.isNotEmpty(),
             ) {
                 Text("Connect")
             }
@@ -832,6 +1197,6 @@ fun ManualConnectionDialog(
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
             }
-        }
+        },
     )
 }

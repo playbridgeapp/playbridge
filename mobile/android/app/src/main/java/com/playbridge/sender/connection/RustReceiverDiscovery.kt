@@ -48,6 +48,9 @@ data class RustDiscoverySummary(
 /**
  * Runs Rust discovery (mDNS + DLNA SSDP + Roku ECP + Google Cast mDNS) using native Rust cast-core engine.
  * Emits protocol-qualified receivers via [discoveredEndpoints].
+ *
+ * Results are sticky across rescans: starting a new window seeds from the last known map and never
+ * flashes an empty list. Entries age out after [STICKY_TTL_MS] without a fresh sighting.
  */
 internal class RustReceiverDiscovery(context: Context) {
     private val wifiManager = context.applicationContext.getSystemService(WifiManager::class.java)
@@ -57,6 +60,9 @@ internal class RustReceiverDiscovery(context: Context) {
     private val descriptionParser = DeviceDescription(DlnaProxyHolder.httpClient)
     private val descriptionCache = ConcurrentHashMap<String, DeviceDescription.Renderer>()
     private val descriptionsInFlight = ConcurrentHashMap.newKeySet<String>()
+
+    /** Process-lifetime discovery cache keyed by [EndpointKey] string. */
+    private val stickyEndpoints = ConcurrentHashMap<String, StickyEndpoint>()
 
     private val _discoveredEndpoints = MutableStateFlow<List<ReceiverEndpoint>>(emptyList())
     val discoveredEndpoints: StateFlow<List<ReceiverEndpoint>> = _discoveredEndpoints.asStateFlow()
@@ -68,7 +74,8 @@ internal class RustReceiverDiscovery(context: Context) {
         onFinished: ((RustDiscoverySummary) -> Unit)? = null,
     ) {
         stop()
-        _discoveredEndpoints.value = emptyList()
+        // Keep prior results visible while the new scan fills in — Web Video Caster style.
+        publishSticky()
         val multicastLock = acquireMulticastLock()
         val handle = try {
             RustDiscoveryNative.start(
@@ -94,6 +101,7 @@ internal class RustReceiverDiscovery(context: Context) {
             // Keep the authoritative map concurrent so a later mDNS/SSDP event cannot replace an
             // enriched DLNA endpoint with the earlier description-only snapshot.
             val deviceMap = ConcurrentHashMap<String, ReceiverEndpoint>()
+            stickyEndpoints.forEach { (key, sticky) -> deviceMap[key] = sticky.endpoint }
             val receivers = mutableMapOf<String, MutableSet<String>>()
             var errors = 0
             val deadline = SystemClock.elapsedRealtime() + timeoutMs + FINISH_GRACE_MS
@@ -110,8 +118,10 @@ internal class RustReceiverDiscovery(context: Context) {
 
                             val parsed = parseDiscoveredDevice(receiver)
                             if (parsed != null) {
-                                deviceMap[parsed.key.toString()] = parsed
-                                _discoveredEndpoints.value = deviceMap.values.toList()
+                                val key = parsed.key.toString()
+                                deviceMap[key] = parsed
+                                rememberSticky(key, parsed)
+                                publishMap(deviceMap)
                                 if (parsed.protocol == CastProtocol.DLNA &&
                                     parsed.descriptionUrl != null && parsed.controlUrl == null &&
                                     descriptionsInFlight.add(parsed.descriptionUrl)
@@ -122,7 +132,6 @@ internal class RustReceiverDiscovery(context: Context) {
                                             val description = descriptionParser.fetch(location)
                                             if (description != null) {
                                                 descriptionCache[location] = description
-                                                val key = parsed.key.toString()
                                                 deviceMap.computeIfPresent(key) { _, endpoint ->
                                                     if (endpoint.descriptionUrl == location) {
                                                         endpoint.copy(
@@ -134,7 +143,8 @@ internal class RustReceiverDiscovery(context: Context) {
                                                         endpoint
                                                     }
                                                 }
-                                                _discoveredEndpoints.value = deviceMap.values.toList()
+                                                deviceMap[key]?.let { rememberSticky(key, it) }
+                                                publishMap(deviceMap)
                                             }
                                         } finally {
                                             descriptionsInFlight.remove(location)
@@ -149,6 +159,8 @@ internal class RustReceiverDiscovery(context: Context) {
             } catch (error: LinkageError) {
                 Log.w(TAG, "Rust discovery stopped: ${error.javaClass.simpleName}")
             } finally {
+                pruneSticky()
+                publishSticky()
                 onFinished?.invoke(
                     RustDiscoverySummary(
                         playBridgeDevices = receivers["PlayBridge"]?.size ?: receivers["playbridge"]?.size ?: 0,
@@ -187,6 +199,31 @@ internal class RustReceiverDiscovery(context: Context) {
                 Log.w(TAG, "Rust discovery cleanup failed: ${error.javaClass.simpleName}")
             }
         }
+        // Leave sticky results published so the UI does not collapse when a scan window ends.
+        pruneSticky()
+        publishSticky()
+    }
+
+    private data class StickyEndpoint(
+        val endpoint: ReceiverEndpoint,
+        val lastSeenElapsedMs: Long,
+    )
+
+    private fun rememberSticky(key: String, endpoint: ReceiverEndpoint) {
+        stickyEndpoints[key] = StickyEndpoint(endpoint, SystemClock.elapsedRealtime())
+    }
+
+    private fun pruneSticky() {
+        val now = SystemClock.elapsedRealtime()
+        stickyEndpoints.entries.removeIf { now - it.value.lastSeenElapsedMs > STICKY_TTL_MS }
+    }
+
+    private fun publishSticky() {
+        _discoveredEndpoints.value = stickyEndpoints.values.map { it.endpoint }
+    }
+
+    private fun publishMap(deviceMap: ConcurrentHashMap<String, ReceiverEndpoint>) {
+        _discoveredEndpoints.value = deviceMap.values.toList()
     }
 
     private fun parseDiscoveredDevice(receiver: JSONObject): ReceiverEndpoint? {
@@ -263,6 +300,8 @@ internal class RustReceiverDiscovery(context: Context) {
         const val PROTOCOL_GOOGLE_CAST = 16
         const val EVENT_WAIT_MS = 250L
         const val FINISH_GRACE_MS = 1_000L
+        /** Keep last-seen devices across rescans so the list never flashes empty. */
+        const val STICKY_TTL_MS = 180_000L
         const val MULTICAST_LOCK_TAG = "playbridge:rust-discovery"
     }
 }

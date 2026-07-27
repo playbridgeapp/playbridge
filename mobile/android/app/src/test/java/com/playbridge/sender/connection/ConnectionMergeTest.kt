@@ -19,8 +19,27 @@ class ConnectionMergeTest {
         val history = ConnectionMerge.upsertHistory(listOf(native), dlna)
 
         assertEquals(2, history.size)
-        assertEquals(CastProtocol.DLNA, history[0].resolvedProtocol)
-        assertEquals(CastProtocol.PLAYBRIDGE, history[1].resolvedProtocol)
+        // PlayBridge stays first-class; external shortcuts follow.
+        assertEquals(CastProtocol.PLAYBRIDGE, history[0].resolvedProtocol)
+        assertEquals(CastProtocol.DLNA, history[1].resolvedProtocol)
+    }
+
+    @Test
+    fun externalHistoryIsCappedAndDoesNotEvictPlayBridge() {
+        val pb = dev("1.1.1.1", 8765, uuid = "pb1", token = "t")
+            .copy(protocol = CastProtocol.PLAYBRIDGE)
+        val externals = (1..5).map { i ->
+            dev("2.2.2.$i", 1400 + i, uuid = "dlna$i").copy(
+                protocol = CastProtocol.DLNA,
+                isDlna = true,
+            )
+        }
+        var history = listOf(pb)
+        externals.forEach { history = ConnectionMerge.upsertHistory(history, it) }
+
+        assertEquals(1, ConnectionMerge.playBridgeHistory(history).size)
+        assertEquals(ConnectionMerge.MAX_EXTERNAL_HISTORY, ConnectionMerge.recentExternalHistory(history).size)
+        assertEquals(pb.uuid, ConnectionMerge.playBridgeHistory(history).first().uuid)
     }
 
     private fun dev(
