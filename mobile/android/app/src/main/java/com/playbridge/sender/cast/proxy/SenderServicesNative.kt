@@ -4,7 +4,7 @@ import android.util.Log
 
 /**
  * Minimal JNI surface for the embedded Rust sender-services worker
- * (stream proxy + unused-for-now browser host).
+ * (stream proxy + browser-receiver host).
  */
 internal object SenderServicesNative {
     private const val TAG = "SenderServicesNative"
@@ -29,4 +29,13 @@ internal object SenderServicesNative {
     external fun nextEvent(handle: Long, waitMs: Long): String?
     external fun cancel(handle: Long)
     external fun free(handle: Long)
+
+    /**
+     * stream-proxy-rust `upstream-jni` callback ABI version (Android builds).
+     * Returns 0 if the native lib was not built with sender-services-android.
+     */
+    external fun upstreamAbiVersion(): Int
+
+    /** True when host origin-fetch callbacks are installed (PR3+ HttpURLConnection). */
+    external fun upstreamCallbacksRegistered(): Boolean
 }

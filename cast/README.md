@@ -51,10 +51,12 @@ must be released with `pb_string_free`; handles must be cancelled and released.
 Consumers must check `pb_cast_core_abi_version` before resolving the rest of the
 session API.
 
-Desktop builds enable the optional `sender-services` feature. Its separate
-`pb_sender_services_*` ABI owns the Rust proxy for the app lifetime and starts
-the web-browser receiver only on request. Keeping this lifecycle ABI separate
-allows phone builds to ship the protocol core without pulling in either server.
+Desktop builds enable the optional `sender-services` feature (reqwest upstream).
+Android phone builds use `sender-services-android` (JNI upstream callbacks via
+`pb_proxy_upstream_*`). Both expose the same `pb_sender_services_*` lifecycle
+ABI for the embedded stream proxy and on-demand browser-receiver host. Keeping
+this lifecycle separate allows other builds to ship the protocol core without
+pulling in either server.
 
 The `pb_receiver_runtime_*` ABI exposes the shared native PlayBridge receiver.
 It accepts a caller-owned TLS identity and authorized token digests, then emits

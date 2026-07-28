@@ -60,7 +60,19 @@ pub struct ProxyServer {
 
 impl ProxyServer {
     /// Start with the feature-default origin fetcher (reqwest on Docker/Desktop).
+    ///
+    /// When built with **only** `upstream-jni`, the host should register callbacks
+    /// before remote origin fetches; local file grants still work without them.
     pub async fn start(config: ProxyServerConfig) -> Result<Self, String> {
+        #[cfg(all(feature = "upstream-jni", not(feature = "upstream-reqwest")))]
+        {
+            if !crate::upstream::jni_fetcher::upstream_callbacks_registered() {
+                tracing::warn!(
+                    "[stream-proxy] JNI upstream callbacks not registered yet; \
+                     remote /s/ origin fetches will fail until the host installs them"
+                );
+            }
+        }
         let engine = Arc::new(ConnectionEngine::new(config.ffmpeg_path.clone()));
         Self::start_with_engine(config, engine).await
     }

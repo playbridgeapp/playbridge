@@ -74,7 +74,7 @@ build_target() {
         cargo build \
             --manifest-path "$repo_dir/Cargo.toml" \
             --package playbridge-cast-core-ffi \
-            --features playbridge-cast-core-ffi/sender-services \
+            --features playbridge-cast-core-ffi/sender-services-android \
             --release \
             --target "$rust_target"
 
