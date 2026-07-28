@@ -4,13 +4,22 @@ version = "0.1.1"
 edition = "2021"
 description = "High-performance PlayBridge streaming proxy server in Rust with MediaFlow AES-256 encryption & stateful sessions"
 
+[features]
+default = ["upstream-reqwest", "upstream-avio"]
+# HTTP origin fetch via reqwest (Docker, Desktop, CLI).
+upstream-reqwest = ["dep:reqwest"]
+# Optional FFmpeg AVIO fallback after reqwest failure (needs libavformat at runtime).
+upstream-avio = ["upstream-reqwest", "dep:libloading"]
+# Host-provided origin fetch (Android JNI → HttpURLConnection). Implemented in PR2+.
+upstream-jni = []
+
 [dependencies]
 tokio = { version = "1.38", features = ["full"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["io"] }
 axum = "0.7"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
-reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls-webpki-roots"] }
+reqwest = { version = "0.12", default-features = false, features = ["stream", "json", "rustls-tls-webpki-roots"], optional = true }
 bytes = "1.6"
 futures = "0.3"
 url = "2.5"
@@ -24,7 +33,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4.5", features = ["derive", "env"] }
 dashmap = "6.0"
-libloading = "0.8"
+libloading = { version = "0.8", optional = true }
 base64 = "0.22"
 rand = "0.8"
 mime_guess = "2"

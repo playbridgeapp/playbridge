@@ -1,3 +1,4 @@
+#[cfg(feature = "upstream-avio")]
 pub mod avio;
 pub mod config;
 pub mod crypto;
@@ -14,3 +15,6 @@ pub use config::Config;
 pub use crypto::{EncryptionHandler, ProxyData};
 pub use server::{create_router, ProxyService, RegisteredMedia};
 pub use service::{ProxyServer, ProxyServerConfig};
+pub use upstream::{
+    default_upstream_fetcher, ConnectionEngine, UpstreamFetcher, UpstreamResponse,
+};

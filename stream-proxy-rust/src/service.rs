@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 
@@ -12,6 +13,7 @@ use tokio::{net::TcpListener, sync::oneshot, task::JoinHandle};
 use crate::{
     config::Config,
     server::{ProxyService, RegisteredMedia},
+    upstream::{ConnectionEngine, UpstreamFetcher},
 };
 
 #[derive(Debug, Clone)]
@@ -57,7 +59,25 @@ pub struct ProxyServer {
 }
 
 impl ProxyServer {
+    /// Start with the feature-default origin fetcher (reqwest on Docker/Desktop).
     pub async fn start(config: ProxyServerConfig) -> Result<Self, String> {
+        let engine = Arc::new(ConnectionEngine::new(config.ffmpeg_path.clone()));
+        Self::start_with_engine(config, engine).await
+    }
+
+    /// Start with an explicit origin fetcher (tests / Android JNI embed).
+    pub async fn start_with_fetcher(
+        config: ProxyServerConfig,
+        fetcher: Arc<dyn UpstreamFetcher>,
+    ) -> Result<Self, String> {
+        let engine = Arc::new(ConnectionEngine::with_fetcher(fetcher));
+        Self::start_with_engine(config, engine).await
+    }
+
+    pub async fn start_with_engine(
+        config: ProxyServerConfig,
+        engine: Arc<ConnectionEngine>,
+    ) -> Result<Self, String> {
         if config.password.trim().is_empty() {
             return Err("proxy password cannot be empty".into());
         }
@@ -67,7 +87,7 @@ impl ProxyServer {
         let local_addr = listener
             .local_addr()
             .map_err(|error| format!("failed to inspect proxy listener: {error}"))?;
-        let service = ProxyService::new(config.password, config.ffmpeg_path);
+        let service = ProxyService::with_engine(config.password, engine);
         let app = service.router();
         let (shutdown, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {

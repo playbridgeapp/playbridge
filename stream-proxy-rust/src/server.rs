@@ -69,6 +69,10 @@ pub struct ProxyService {
 
 impl ProxyService {
     pub fn new(password: String, ffmpeg_path: Option<String>) -> Self {
+        Self::with_engine(password, Arc::new(ConnectionEngine::new(ffmpeg_path)))
+    }
+
+    pub fn with_engine(password: String, engine: Arc<ConnectionEngine>) -> Self {
         let encryption_handler = EncryptionHandler::new(password.as_bytes());
         Self {
             state: AppState {
@@ -76,7 +80,7 @@ impl ProxyService {
                 session_manager: SessionManager::new(),
                 file_grants: FileGrantManager::new(),
                 epg_cache: EpgCache::new(Duration::from_secs(14400)),
-                engine: Arc::new(ConnectionEngine::new(ffmpeg_path)),
+                engine,
                 encryption_handler,
             },
         }
