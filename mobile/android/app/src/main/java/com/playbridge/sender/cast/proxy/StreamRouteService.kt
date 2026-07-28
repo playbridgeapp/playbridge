@@ -3,6 +3,7 @@ package com.playbridge.sender.cast.proxy
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -38,8 +39,11 @@ class StreamRouteException(message: String) : Exception(message)
 /**
  * Packages media for cast according to [StreamRouteMode].
  *
- * Via phone uses the embedded Rust stream proxy; Via proxy uses a remote
- * stream-proxy-rust `/register`; Direct passes origin URL + headers through.
+ * Via phone **remote** HTTP(S) uses the embedded Rust stream-proxy `/s/...` with
+ * Android JNI upstream ([JniUpstreamHttpClient] / HttpURLConnection ≈ Media3).
+ * Local `content://` files still use [DlnaProxyHolder]/[LocalProxyServer].
+ * Via proxy uses a remote stream-proxy-rust `/register`; Direct passes origin URL
+ * + headers through.
  */
 class StreamRouteService(
     private val context: Context,
@@ -85,22 +89,11 @@ class StreamRouteService(
     }
 
     private suspend fun packageViaPhone(media: CastableMedia): PackagedMedia {
-        val services = PhoneSenderServices.get()
-            ?: throw StreamRouteException("Embedded stream proxy is unavailable")
-        val host = lanIpv4()
-            ?: throw StreamRouteException("No LAN address for Via phone")
-
         if (!media.playlistBody.isNullOrBlank()) {
             val path = writePlaylistTemp(media.playlistBody)
-            val registered = services.registerFile(
-                host = host,
-                path = path.absolutePath,
+            return packageViaPhoneRustFile(
+                path = path,
                 contentType = media.contentType ?: "application/vnd.apple.mpegurl",
-            )
-            return PackagedMedia(
-                url = registered.url,
-                contentType = media.contentType ?: "application/vnd.apple.mpegurl",
-                headers = null,
             )
         }
 
@@ -109,45 +102,159 @@ class StreamRouteService(
                 ?.let { Uri.parse(it) }
 
         if (localUri != null) {
-            val path = materializeLocalPath(localUri, media.contentType)
-            val registered = services.registerFile(
-                host = host,
-                path = path.absolutePath,
-                contentType = media.contentType,
-            )
-            return PackagedMedia(
-                url = registered.url,
-                contentType = media.contentType,
-                headers = null,
-            )
+            try {
+                val proxy = DlnaProxyHolder.proxy(context)
+                val url = proxy.publishLocal(localUri, media.contentType)
+                return PackagedMedia(
+                    url = url,
+                    contentType = media.contentType,
+                    headers = null,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "LocalProxy publishLocal failed, falling back to Rust: ${e.message}")
+                val path = materializeLocalPath(localUri, media.contentType)
+                return packageViaPhoneRustFile(path, media.contentType)
+            }
         }
 
         if (media.url.startsWith("data:")) {
             val body = decodeDataUri(media.url)
                 ?: throw StreamRouteException("Unsupported data URI")
             val path = writePlaylistTemp(body)
-            val registered = services.registerFile(
-                host = host,
-                path = path.absolutePath,
+            return packageViaPhoneRustFile(
+                path = path,
                 contentType = media.contentType ?: "application/vnd.apple.mpegurl",
             )
+        }
+
+        if (media.url.startsWith("http://") || media.url.startsWith("https://")) {
+            return packageViaPhoneRemote(media)
+        }
+
+        throw StreamRouteException("Unsupported media URL for Via phone")
+    }
+
+    /**
+     * Remote streams: primary path is embedded Rust `registerUrl` → `/s/...` with
+     * JNI HttpURLConnection upstream. Falls back to LocalProxy if JNI callbacks
+     * are missing or register fails (one-release safety net).
+     */
+    private suspend fun packageViaPhoneRemote(media: CastableMedia): PackagedMedia {
+        // Already packaged for Via phone — do not double-wrap.
+        if (PhoneProxyUrls.isAnyPhoneProxyUrl(media.url)) {
             return PackagedMedia(
-                url = registered.url,
-                contentType = media.contentType ?: "application/vnd.apple.mpegurl",
+                url = media.url,
+                contentType = media.contentType,
                 headers = null,
             )
         }
 
+        val jniReady = SenderServicesNative.libraryLoaded &&
+            runCatching { SenderServicesNative.upstreamCallbacksRegistered() }.getOrDefault(false)
+
+        if (jniReady) {
+            try {
+                return packageViaPhoneRemoteRust(media)
+            } catch (e: Exception) {
+                Log.w(
+                    TAG,
+                    "Rust Via phone registerUrl failed; LocalProxy fallback: ${e.message}",
+                )
+            }
+        } else {
+            Log.w(TAG, "JNI upstream not ready; Via phone remote uses LocalProxy")
+        }
+        return packageViaPhoneRemoteLocalProxy(media)
+    }
+
+    private suspend fun packageViaPhoneRemoteRust(media: CastableMedia): PackagedMedia {
+        val services = PhoneSenderServices.get()
+            ?: throw StreamRouteException("Embedded stream proxy is unavailable")
+        val host = lanIpv4()
+            ?: throw StreamRouteException("No LAN address for Via phone")
+        val headers = ensureProxyUpstreamHeaders(media.headers.orEmpty())
         val registered = services.registerUrl(
             host = host,
             url = media.url,
-            headers = media.headers.orEmpty(),
+            headers = headers,
+        )
+        if (!PhoneProxyUrls.isRustEmbeddedProxyUrl(registered.url)) {
+            throw StreamRouteException("Via phone produced unexpected proxy URL shape")
+        }
+        Log.i(TAG, "Via phone remote via Rust /s/ (origin host only, not full stream URL)")
+        return PackagedMedia(
+            url = registered.url,
+            contentType = media.contentType ?: guessRemoteMime(media.url),
+            headers = null,
+        )
+    }
+
+    /** Legacy / fallback remote packaging through LocalProxyServer. */
+    private fun packageViaPhoneRemoteLocalProxy(media: CastableMedia): PackagedMedia {
+        val headers = ensureProxyUpstreamHeaders(media.headers.orEmpty())
+        val mime = media.contentType ?: guessRemoteMime(media.url)
+        val proxy = try {
+            DlnaProxyHolder.proxy(context)
+        } catch (e: Exception) {
+            throw StreamRouteException("Could not start Via phone proxy: ${e.message}")
+        }
+        val url = try {
+            proxy.publish(media.url, headers, mime)
+        } catch (e: Exception) {
+            throw StreamRouteException("Via phone publish failed: ${e.message}")
+        }
+        Log.i(TAG, "Via phone remote via LocalProxy (fallback)")
+        return PackagedMedia(url = url, contentType = mime, headers = null)
+    }
+
+    private fun guessRemoteMime(url: String): String? = when {
+        url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) ||
+            url.contains(".m3u8?", ignoreCase = true) ||
+            url.contains("mpegurl", ignoreCase = true) ||
+            url.contains("manifest/hls", ignoreCase = true) ->
+            "application/vnd.apple.mpegurl"
+        url.substringBefore('?').endsWith(".mpd", ignoreCase = true) ||
+            url.contains("manifest/dash", ignoreCase = true) ->
+            "application/dash+xml"
+        else -> null
+    }
+
+    private suspend fun packageViaPhoneRustFile(
+        path: File,
+        contentType: String?,
+    ): PackagedMedia {
+        val services = PhoneSenderServices.get()
+            ?: throw StreamRouteException("Embedded stream proxy is unavailable")
+        val host = lanIpv4()
+            ?: throw StreamRouteException("No LAN address for Via phone")
+        val registered = services.registerFile(
+            host = host,
+            path = path.absolutePath,
+            contentType = contentType,
         )
         return PackagedMedia(
             url = registered.url,
-            contentType = media.contentType,
+            contentType = contentType,
             headers = null,
         )
+    }
+
+    private fun ensureProxyUpstreamHeaders(headers: Map<String, String>): Map<String, String> {
+        val out = headers.toMutableMap()
+        // Match PhoneExoPlayerFactory / VideoDetector defaults so Via phone and
+        // on-phone ExoPlayer present the same client identity to the CDN.
+        if (out.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
+            out["User-Agent"] =
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+        }
+        // Prefer browser-generic Accept. A narrow mpegurl-only Accept made some
+        // live CDNs return 403 while ExoPlayer (*/*) succeeded.
+        if (out.keys.none { it.equals("Accept", ignoreCase = true) }) {
+            out["Accept"] = "*/*"
+        }
+        // Never forward page Origin through the phone proxy.
+        out.keys.filter { it.equals("Origin", ignoreCase = true) }.forEach { out.remove(it) }
+        return out
     }
 
     private fun packageViaRemote(

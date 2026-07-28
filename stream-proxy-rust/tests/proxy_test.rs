@@ -237,7 +237,12 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
         .nth(1)
         .and_then(|value| value.split("</BaseURL>").next())
         .unwrap();
-    assert!(rewritten_base.starts_with("/s/"));
+    // Stateful DASH rewrites use absolute proxy URLs (Host-based) so browser
+    // players on a different port never resolve children against the wrong origin.
+    assert!(
+        rewritten_base.contains("/s/"),
+        "expected proxied BaseURL, got {rewritten_base}"
+    );
     assert!(!rewritten_base.contains("blockorigin"));
     assert!(!rewritten_base.contains("_root_"));
 
@@ -256,8 +261,14 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
     assert!(edl.contains(&format!("{}/s/", proxy.base_url("127.0.0.1"))));
     assert!(!edl.contains("blockorigin"));
 
+    let segment_url = if rewritten_base.starts_with("http://") || rewritten_base.starts_with("https://")
+    {
+        rewritten_base.to_string()
+    } else {
+        format!("{}{}", proxy.base_url("127.0.0.1"), rewritten_base)
+    };
     let segment_response = client
-        .get(format!("{}{}", proxy.base_url("127.0.0.1"), rewritten_base))
+        .get(segment_url)
         .header(header::RANGE, "bytes=0-3")
         .send()
         .await

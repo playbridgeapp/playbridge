@@ -424,9 +424,23 @@ async fn stateful_proxy_handler(
         )
         .await
     } else if is_hls {
-        handle_stateful_hls_playlist(&state, session_id, &target_url, &forward_headers).await
+        handle_stateful_hls_playlist(
+            &state,
+            session_id,
+            &target_url,
+            &forward_headers,
+            &public_base_url,
+        )
+        .await
     } else if is_dash {
-        handle_stateful_dash_manifest(&state, session_id, &target_url, &forward_headers).await
+        handle_stateful_dash_manifest(
+            &state,
+            session_id,
+            &target_url,
+            &forward_headers,
+            &public_base_url,
+        )
+        .await
     } else {
         handle_segment(&state, &target_url, &forward_headers).await
     }
@@ -493,10 +507,18 @@ async fn handle_stateful_hls_playlist(
     session_id: &str,
     target_url: &str,
     headers: &HashMap<String, String>,
+    public_base_url: &str,
 ) -> Result<Response, (StatusCode, String)> {
     match state.engine.fetch_url_bytes(target_url, headers).await {
         Ok(bytes) => {
             let content = String::from_utf8_lossy(&bytes);
+            // Guard against serving HTML/error pages as playlists (Brave demuxer parse errors).
+            if !content.trim_start().starts_with("#EXTM3U") {
+                return Err((
+                    StatusCode::BAD_GATEWAY,
+                    "Upstream did not return an HLS playlist (#EXTM3U)".to_string(),
+                ));
+            }
             let base_uri = match Url::parse(target_url) {
                 Ok(u) => u,
                 Err(e) => {
@@ -507,22 +529,14 @@ async fn handle_stateful_hls_playlist(
                 }
             };
 
+            // Absolute proxy URLs so hls.js on the browser-receiver page (different port)
+            // never resolves child playlists against the wrong origin.
+            let base = public_base_url.trim_end_matches('/');
             let rewritten = HlsPlaylistRewriter::rewrite(&content, &base_uri, |resolved_target| {
-                let resolved_uri = match Url::parse(resolved_target) {
-                    Ok(u) => u,
-                    Err(_) => return resolved_target.to_string(),
-                };
-
-                let filename = resolved_uri
-                    .path_segments()
-                    .and_then(|mut s| s.next_back())
-                    .unwrap_or("item");
-
                 format!(
-                    "/s/{}/{}?uri={}",
-                    session_id,
-                    filename,
-                    urlencoding::encode(resolved_target)
+                    "{}{}",
+                    base,
+                    stateful_item_url(session_id, resolved_target)
                 )
             });
 
@@ -536,7 +550,8 @@ async fn handle_stateful_hls_playlist(
                 .into_response())
         }
         Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
+            // 502 = origin fetch failed (common on Via phone without FFmpeg AVIO).
+            StatusCode::BAD_GATEWAY,
             format!("Failed to fetch/rewrite HLS playlist: {}", e),
         )),
     }
@@ -547,6 +562,7 @@ async fn handle_stateful_dash_manifest(
     session_id: &str,
     target_url: &str,
     headers: &HashMap<String, String>,
+    public_base_url: &str,
 ) -> Result<Response, (StatusCode, String)> {
     let bytes = state
         .engine
@@ -565,8 +581,9 @@ async fn handle_stateful_dash_manifest(
         )
     })?;
     let content = String::from_utf8_lossy(&bytes);
+    let base = public_base_url.trim_end_matches('/');
     let rewritten = DashManifestRewriter::rewrite(&content, &base_uri, |resolved_target| {
-        stateful_item_url(session_id, resolved_target)
+        format!("{}{}", base, stateful_item_url(session_id, resolved_target))
     });
 
     Ok((
