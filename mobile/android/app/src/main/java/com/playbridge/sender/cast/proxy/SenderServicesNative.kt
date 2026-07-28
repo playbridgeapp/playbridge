@@ -17,6 +17,12 @@ internal object SenderServicesNative {
         try {
             System.loadLibrary("playbridge_cast_core_ffi")
             libraryLoaded = true
+            // Wire Media3-equivalent HttpURLConnection origin fetch into the
+            // embedded stream-proxy (upstream-jni). Safe to call before start().
+            val installed = runCatching { installUpstreamHttpClient() }.getOrDefault(false)
+            if (!installed) {
+                Log.w(TAG, "Upstream HttpURLConnection callbacks not installed")
+            }
         } catch (e: Throwable) {
             Log.w(TAG, "Native library unavailable: ${e.message}")
             libraryLoaded = false
@@ -36,6 +42,12 @@ internal object SenderServicesNative {
      */
     external fun upstreamAbiVersion(): Int
 
-    /** True when host origin-fetch callbacks are installed (PR3+ HttpURLConnection). */
+    /** True when host origin-fetch callbacks are installed. */
     external fun upstreamCallbacksRegistered(): Boolean
+
+    /**
+     * Register [JniUpstreamHttpClient] as the proxy origin transport.
+     * @return true when callbacks are live.
+     */
+    external fun installUpstreamHttpClient(): Boolean
 }

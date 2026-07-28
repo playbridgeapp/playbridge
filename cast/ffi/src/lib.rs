@@ -27,6 +27,10 @@ mod receiver_runtime;
 #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
 mod sender_services;
 
+/// Android-only: JNI trampolines for stream-proxy-rust upstream-jni.
+#[cfg(all(target_os = "android", feature = "sender-services-android"))]
+mod android_upstream;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 pub enum Protocol {
     PlayBridge,
@@ -1227,6 +1231,18 @@ mod android_jni {
         })
         .unwrap_or(false);
         ready as jboolean
+    }
+
+    /// Register Kotlin HttpURLConnection open/read/close as proxy upstream.
+    #[cfg(all(target_os = "android", feature = "sender-services-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_installUpstreamHttpClient<
+        'local,
+    >(
+        env: EnvUnowned<'local>,
+        class: JClass<'local>,
+    ) -> jboolean {
+        super::android_upstream::java_install_upstream(env, class)
     }
 }
 
