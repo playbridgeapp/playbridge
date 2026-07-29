@@ -2,6 +2,7 @@ package com.playbridge.player.player
 
 import android.content.Context
 import android.util.Log
+import com.playbridge.player.logging.DebugNetworkLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -95,8 +96,11 @@ object SkipSegmentFetcher {
             }
         }
 
+        val request = requestBuilder.build()
+        DebugNetworkLogger.request(TAG, "IntroDB", request)
         return try {
-            client.newCall(requestBuilder.build()).execute().use { response ->
+            client.newCall(request).execute().use { response ->
+                DebugNetworkLogger.response(TAG, "IntroDB", response)
                 if (!response.isSuccessful) {
                     Log.w(TAG, "IntroDB fetch failed: HTTP ${response.code}")
                     return emptyList()
@@ -155,9 +159,11 @@ object SkipSegmentFetcher {
             .url(url)
             .header("User-Agent", "PlayBridgeTV/1.0")
             .build()
+        DebugNetworkLogger.request(TAG, "TheIntroDB", request)
 
         return try {
             client.newCall(request).execute().use { response ->
+                DebugNetworkLogger.response(TAG, "TheIntroDB", response)
                 if (!response.isSuccessful) {
                     Log.w(TAG, "TheIntroDB fetch failed: HTTP ${response.code}")
                     return emptyList()

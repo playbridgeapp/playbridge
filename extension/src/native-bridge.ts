@@ -7,6 +7,8 @@
 
 import browser from "./browser";
 
+declare const __PB_DEBUG__: boolean;
+
 export interface BridgeDevice {
   uuid: string;
   name: string;
@@ -143,6 +145,10 @@ export function cast(
    */
   playlistBody?: string | null,
 ): Promise<{ ok: boolean; error?: string }> {
+  if (__PB_DEBUG__) {
+    console.debug("[PB Debug][native bridge] cast URL:", url);
+    console.debug("[PB Debug][native bridge] cast headers:", headers ?? {});
+  }
   return request({
     cmd: "cast",
     url,

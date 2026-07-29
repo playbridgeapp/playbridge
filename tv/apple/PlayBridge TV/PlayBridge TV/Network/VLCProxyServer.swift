@@ -64,9 +64,13 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         states[task.taskIdentifier] = state
         lock.unlock()
 
-        print("[Proxy] T\(task.taskIdentifier) upstream request: \(request.httpMethod ?? "GET") \(request.url?.absoluteString ?? "?")")
-        if let headers = request.allHTTPHeaderFields, !headers.isEmpty {
-            print("[Proxy] T\(task.taskIdentifier) request headers: \(headers.count) field(s)")
+        if let url = request.url {
+            debugLogNetworkRequest(
+                "Proxy T\(task.taskIdentifier)",
+                url: url,
+                method: request.httpMethod ?? "GET",
+                headers: request.allHTTPHeaderFields
+            )
         }
 
         // Watch for VLC closing its end of the connection. Capture only the
@@ -187,6 +191,12 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
         }
 
         print("[Proxy] T\(dataTask.taskIdentifier) upstream response: \(http.statusCode) content-length=\(http.value(forHTTPHeaderField: "Content-Length") ?? "unknown") type=\(http.value(forHTTPHeaderField: "Content-Type") ?? "unknown")")
+        debugLogNetworkResponse(
+            "Proxy T\(dataTask.taskIdentifier)",
+            url: http.url,
+            statusCode: http.statusCode,
+            headers: http.allHeaderFields
+        )
 
         // HLS playlists: buffer the body so we can rewrite every URI inside to
         // route back through this proxy. Headers + rewritten body are flushed

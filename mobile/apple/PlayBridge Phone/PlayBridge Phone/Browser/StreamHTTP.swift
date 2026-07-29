@@ -1,5 +1,36 @@
 import Foundation
 
+enum SenderDebugNetwork {
+    static func request(
+        _ source: String,
+        url: String,
+        method: String = "GET",
+        headers: [String: String] = [:]
+    ) {
+#if DEBUG
+        print("[DebugNetwork][\(source)] request: \(method) \(url)")
+        print("[DebugNetwork][\(source)] request headers (\(headers.count)):")
+        for (name, value) in headers.sorted(by: { $0.key.lowercased() < $1.key.lowercased() }) {
+            print("[DebugNetwork][\(source)]   \(name): \(value)")
+        }
+#endif
+    }
+
+    static func response(_ source: String, response: URLResponse) {
+#if DEBUG
+        guard let http = response as? HTTPURLResponse else { return }
+        print("[DebugNetwork][\(source)] response: HTTP \(http.statusCode) \(http.url?.absoluteString ?? "?")")
+        print("[DebugNetwork][\(source)] response headers (\(http.allHeaderFields.count)):")
+        let fields = http.allHeaderFields
+            .map { (String(describing: $0.key), String(describing: $0.value)) }
+            .sorted { $0.0.lowercased() < $1.0.lowercased() }
+        for (name, value) in fields {
+            print("[DebugNetwork][\(source)]   \(name): \(value)")
+        }
+#endif
+    }
+}
+
 /// Shared HTTP helpers for fetching playlists/manifests with the stream's captured headers.
 enum StreamHTTP {
     static let fallbackUA =
@@ -14,8 +45,14 @@ enum StreamHTTP {
         if !headers.keys.contains(where: { $0.caseInsensitiveCompare("User-Agent") == .orderedSame }) {
             req.setValue(fallbackUA, forHTTPHeaderField: "User-Agent")
         }
+        SenderDebugNetwork.request(
+            "StreamHTTP",
+            url: url.absoluteString,
+            headers: req.allHTTPHeaderFields ?? [:]
+        )
         do {
-            let (data, _) = try await URLSession.shared.data(for: req)
+            let (data, response) = try await URLSession.shared.data(for: req)
+            SenderDebugNetwork.response("StreamHTTP", response: response)
             return String(data: data, encoding: .utf8)
         } catch {
             return nil

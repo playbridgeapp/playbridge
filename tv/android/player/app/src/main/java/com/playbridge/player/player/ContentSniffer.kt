@@ -2,6 +2,7 @@ package com.playbridge.player.player
 
 import android.net.Uri
 import android.util.Log
+import com.playbridge.player.logging.DebugNetworkLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.InetAddress
@@ -98,19 +99,18 @@ class ContentSniffer {
                        .hostnameVerifier(LocalHostnameVerifier(::isLocalHost))
             }
 
-            if (headers != null && headers.isNotEmpty()) {
-                builder.addInterceptor { chain ->
-                    val requestBuilder = chain.request().newBuilder()
-                    val url = chain.request().url.toString()
-                    headers.forEach { (key, value) ->
+            builder.addInterceptor { chain ->
+                val requestBuilder = chain.request().newBuilder()
+                headers.orEmpty().forEach { (key, value) ->
                         // Use .header() instead of .addHeader() to overwrite any existing
                         // duplicate headers that ExoPlayer might have set (like double User-Agent)
-                        requestBuilder.header(key, value)
-                    }
-                    val finalRequest = requestBuilder.build()
-                    Log.d("OkHttpInterceptor", "Prepared request with ${finalRequest.headers.size} header(s)")
-                    chain.proceed(finalRequest)
+                    requestBuilder.header(key, value)
                 }
+                val finalRequest = requestBuilder.build()
+                DebugNetworkLogger.request("OkHttpInterceptor", "Playback", finalRequest)
+                val response = chain.proceed(finalRequest)
+                DebugNetworkLogger.response("OkHttpInterceptor", "Playback", response)
+                response
             }
 
             return builder.build()

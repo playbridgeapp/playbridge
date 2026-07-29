@@ -260,6 +260,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             print("[VLC] setupPlayer: drawable=videoView bounds=\(videoView.bounds) view.bounds=\(view.bounds)")
 
             guard let url = url else { return }
+            debugLogNetworkRequest("VLC playback", url: url, headers: headers)
             originalURL = url
             let scheme = url.scheme?.lowercased()
             guard scheme == "http" || scheme == "https" else {
@@ -349,6 +350,12 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             if let headers = headers {
                 for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
             }
+            debugLogNetworkRequest(
+                "VLC redirect resolver",
+                url: url,
+                method: req.httpMethod ?? "GET",
+                headers: req.allHTTPHeaderFields
+            )
             redirectResolver = RedirectResolver(request: req) { [weak self] finalURL in
                 self?.redirectResolver = nil
                 completion(finalURL)   // nil on failure → caller relays through the proxy
@@ -981,6 +988,14 @@ private final class RedirectResolver: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        if let http = response as? HTTPURLResponse {
+            debugLogNetworkResponse(
+                "VLC redirect resolver",
+                url: http.url,
+                statusCode: http.statusCode,
+                headers: http.allHeaderFields
+            )
+        }
         finish(response.url)               // response.url is the final URL after any redirects
         completionHandler(.cancel)
     }

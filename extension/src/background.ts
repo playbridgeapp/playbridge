@@ -1,5 +1,4 @@
 import browser from "./browser";
-
 import {
   DATA_CONSENT_KEY,
   DATA_CONSENT_VERSION,
@@ -38,6 +37,8 @@ import {
   preferredSyntheticCastUrl,
   type SyntheticMasterResult,
 } from "./core/synthetic-hls";
+
+declare const __PB_DEBUG__: boolean;
 
 const DATA_CONSENT_REQUIRED = requiresLocalDataConsent(
   browser.runtime.getManifest().manifest_version,
@@ -1089,6 +1090,10 @@ function castVideo(
   titleHint?: string | null,
   tabRecords?: VideoData[],
 ): Promise<{ ok: boolean; error?: string }> {
+  if (__PB_DEBUG__) {
+    console.debug("[PB Debug][sender input] candidate URL:", video.url);
+    console.debug("[PB Debug][sender input] candidate headers:", video.headers ?? {});
+  }
   const pool = tabRecords ?? (video.tabId >= 0 ? getTabVideos(video.tabId) : [video]);
   // Ensure companion audio is attached from demuxed siblings before cast.
   attachCompanionAudioToGroup(video.tabId, video.hlsGroupKey ?? hlsStreamGroupKey(video.url));
@@ -1118,6 +1123,13 @@ function castVideo(
     if (liveVideo) castUrl = liveVideo.url;
   }
 
+  if (__PB_DEBUG__) {
+    console.debug("[PB Debug][sender output] cast URL:", castUrl);
+    console.debug(
+      "[PB Debug][sender output] cast headers:",
+      freshRecord.headers ?? {},
+    );
+  }
   return resolveStreamTitle(freshRecord.tabId, castUrl, titleHint).then((title) =>
     bridge.cast(
       castUrl,

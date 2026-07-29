@@ -2,16 +2,11 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
-const bool extensionRequestDebugLoggingEnabled = kDebugMode &&
-    bool.fromEnvironment(
-      'PLAYBRIDGE_DEBUG_EXTENSION_REQUESTS',
-      defaultValue: false,
-    );
+const bool extensionRequestDebugLoggingEnabled = kDebugMode;
 
 /// Writes the HTTP request context received from the browser extension.
 ///
-/// This is disabled unless a debug build explicitly enables
-/// `PLAYBRIDGE_DEBUG_EXTENSION_REQUESTS`. Output goes directly to stderr so it
+/// This is enabled only in debug builds. Output goes directly to stderr so it
 /// is not captured by PlayBridge's persistent `debugPrint` diagnostics.
 void debugLogExtensionCastRequest({
   required String url,
@@ -23,6 +18,38 @@ void debugLogExtensionCastRequest({
     headers: headers,
   )) {
     stderr.writeln(line);
+  }
+}
+
+void debugLogNetworkRequest({
+  required String source,
+  required String url,
+  Map<String, String>? headers,
+}) {
+  if (!kDebugMode) return;
+  for (final line in formatExtensionCastRequestForDebug(
+    url: url,
+    headers: headers,
+  )) {
+    stderr.writeln(line.replaceFirst('[ext-bridge]', '[$source]'));
+  }
+}
+
+void debugLogNetworkResponse({
+  required String source,
+  required String url,
+  required int statusCode,
+  required Map<String, String> headers,
+}) {
+  if (!kDebugMode) return;
+  stderr.writeln('[$source] response: HTTP $statusCode '
+      '${_escapeControlCharacters(url)}');
+  stderr.writeln('[$source] response headers (${headers.length}):');
+  final entries = headers.entries.toList()
+    ..sort((a, b) => a.key.toLowerCase().compareTo(b.key.toLowerCase()));
+  for (final entry in entries) {
+    stderr.writeln('[$source]   ${_escapeControlCharacters(entry.key)}: '
+        '${_escapeControlCharacters(entry.value)}');
   }
 }
 

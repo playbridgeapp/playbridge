@@ -5,6 +5,7 @@ import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
 import 'engines/playback_request_preparer.dart';
 import 'stream_proxy_server.dart';
+import 'extension_request_debug_log.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
@@ -213,6 +214,13 @@ class PlayerController extends ChangeNotifier {
   }) async {
     await _waitForProxyToggle();
     if (items.isEmpty) return;
+    for (var index = 0; index < items.length; index++) {
+      debugLogNetworkRequest(
+        source: 'player',
+        url: items[index].url,
+        headers: items[index].headers,
+      );
+    }
     // Mask before queue/reveal so stop→unfocus→play B never flashes video A.
     // Do not disable the mpv video track — that left a permanent black picture.
     _opening = true;

@@ -16,6 +16,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import com.playbridge.player.logging.DebugNetworkLogger
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -936,6 +937,12 @@ class SystemWebViewEngine(
 
         override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
             val url = request?.url?.toString() ?: return null
+            DebugNetworkLogger.urlAndHeaders(
+                TAG,
+                "WebView ${request.method} request",
+                url,
+                request.requestHeaders,
+            )
 
             val resourceType = getResourceType(request)
 
@@ -944,6 +951,23 @@ class SystemWebViewEngine(
             }
 
             return null
+        }
+
+        override fun onReceivedHttpError(
+            view: WebView?,
+            request: WebResourceRequest?,
+            errorResponse: WebResourceResponse?,
+        ) {
+            super.onReceivedHttpError(view, request, errorResponse)
+            val url = request?.url?.toString() ?: return
+            val response = errorResponse ?: return
+            DebugNetworkLogger.response(
+                TAG,
+                "WebView",
+                url,
+                response.statusCode,
+                response.responseHeaders.orEmpty(),
+            )
         }
 
         private fun getResourceType(request: WebResourceRequest): Int {

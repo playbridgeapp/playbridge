@@ -54,6 +54,9 @@ const sharedOpts = {
   target: ["firefox102", "chrome110"],
   sourcemap: watch ? "inline" : false,
   minify: !watch,
+  define: {
+    __PB_DEBUG__: watch ? "true" : "false",
+  },
   // Preserve the src/ layout so src/ui/popup.ts → <outDir>/ui/popup.js
   // and src/geckoview/background.ts → <outDir>/geckoview/background.js.
   // GeckoView manifest expects background.js at package root — flattened below.

@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.shared.logging.redactUrlForLog
 import android.view.KeyEvent
 import android.view.WindowManager
@@ -610,6 +611,7 @@ class ExoPlayerActivity : PlayerActivity() {
         FileLogger.i(TAG, "Request headers: ${intentHeaders?.size ?: 0} field(s)")
         FileLogger.i(TAG, "Content Type: $contentType")
         FileLogger.i(TAG, "===========================================")
+        DebugNetworkLogger.urlAndHeaders(TAG, "Play command", url, intentHeaders)
 
         // Do NOT releasePlayer() here: engine.load() swaps the media source on the
         // live player (see ExoPlayerEngine.reloadOnLivePlayer), which kills the

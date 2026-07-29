@@ -3,16 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/extension_request_debug_log.dart';
 
 void main() {
-  test('full request logging requires debug mode and explicit opt-in', () {
-    const explicitlyEnabled = bool.fromEnvironment(
-      'PLAYBRIDGE_DEBUG_EXTENSION_REQUESTS',
-      defaultValue: false,
-    );
-
-    expect(
-      extensionRequestDebugLoggingEnabled,
-      kDebugMode && explicitlyEnabled,
-    );
+  test('full request logging follows debug mode', () {
+    expect(extensionRequestDebugLoggingEnabled, kDebugMode);
   });
 
   group('formatExtensionCastRequestForDebug', () {

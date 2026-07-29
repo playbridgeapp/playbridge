@@ -128,7 +128,6 @@ struct PlayerView: View {
 
             let currentRequest = playlistStore.currentItem ?? payload
             if let currentURL = currentRequest.validURL {
-                let _ = print("PlayerView: Rendering with URL: \(currentURL)")
                 if effectiveEngine(for: currentRequest) == "vlc" {
                     VLCPlayerView(
                         url: currentURL,

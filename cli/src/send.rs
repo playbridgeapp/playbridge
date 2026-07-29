@@ -1559,6 +1559,11 @@ async fn send_playlist(
     media_url: &str,
     device_name: &str,
 ) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        eprintln!("[debug][sender] playlist URL: {media_url}");
+        eprintln!("[debug][sender] playlist headers (0)");
+    }
     let cmd = SenderFrame::Command {
         action: "playlist".into(),
         payload: Some(serde_json::json!({

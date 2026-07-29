@@ -9,6 +9,7 @@ import 'player_controller.dart';
 import 'player_engine.dart';
 import 'protocol.dart';
 import 'system_volume.dart';
+import 'extension_request_debug_log.dart';
 
 const int kDefaultPort = PairingStore.defaultReceiverPort;
 
@@ -349,25 +350,32 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
-  QueueItem _toQueueItem(PlayPayload payload) => QueueItem(
-        url: payload.url,
-        title: payload.titleOrNull ?? payload.url,
-        headers: payload.headersOrNull,
-        subtitles: payload.subtitlesOrNull,
-        startPositionMs: payload.startPositionMsOrNull,
-        bingeGroup: payload.bingeGroupOrNull,
-        season: payload.seasonOrNull,
-        episode: payload.episodeOrNull,
-        imdbId: payload.imdbIdOrNull,
-        backdropUrl: payload.backdropUrlOrNull,
-        posterUrl: payload.posterUrlOrNull,
-        logoUrl: payload.logoUrlOrNull,
-        overview: payload.overviewOrNull,
-        year: payload.yearOrNull,
-        rating: payload.ratingOrNull,
-        runtime: payload.runtimeOrNull,
-        episodeTitle: payload.episodeTitleOrNull,
-      );
+  QueueItem _toQueueItem(PlayPayload payload) {
+    debugLogNetworkRequest(
+      source: 'receiver',
+      url: payload.url,
+      headers: payload.headersOrNull,
+    );
+    return QueueItem(
+      url: payload.url,
+      title: payload.titleOrNull ?? payload.url,
+      headers: payload.headersOrNull,
+      subtitles: payload.subtitlesOrNull,
+      startPositionMs: payload.startPositionMsOrNull,
+      bingeGroup: payload.bingeGroupOrNull,
+      season: payload.seasonOrNull,
+      episode: payload.episodeOrNull,
+      imdbId: payload.imdbIdOrNull,
+      backdropUrl: payload.backdropUrlOrNull,
+      posterUrl: payload.posterUrlOrNull,
+      logoUrl: payload.logoUrlOrNull,
+      overview: payload.overviewOrNull,
+      year: payload.yearOrNull,
+      rating: payload.ratingOrNull,
+      runtime: payload.runtimeOrNull,
+      episodeTitle: payload.episodeTitleOrNull,
+    );
+  }
 
   void _broadcastStatus() {
     _runtime?.broadcast({

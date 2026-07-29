@@ -2,6 +2,7 @@ package com.playbridge.sender.connection
 import androidx.core.content.edit
 
 import android.app.Application
+import com.playbridge.sender.BuildConfig
 import android.content.Context
 import android.os.Build
 import androidx.core.net.toUri
@@ -440,6 +441,12 @@ class ConnectionViewModel(
         title: String? = null,
         mime: String? = null,
     ): Boolean {
+        com.playbridge.sender.logging.DebugNetworkLogger.urlAndHeaders(
+            TAG,
+            "Cast input",
+            url,
+            headers,
+        )
         val media = MediaItem(url = url, headers = headers, mimeType = mime, title = title)
         if (castSessionManager.load(media)) return true
         if (route.value is CastSessionManager.Route.NativeTv &&
@@ -468,6 +475,12 @@ class ConnectionViewModel(
                             headers = packaged.headers ?: emptyMap(),
                             content_type = packaged.contentType ?: mime,
                         ),
+                    )
+                    com.playbridge.sender.logging.DebugNetworkLogger.urlAndHeaders(
+                        TAG,
+                        "Cast packaged output",
+                        packaged.url,
+                        packaged.headers,
                     )
                     sendCommandAndRecord(cmd, "play", packaged.url, title)
                     castSessionManager.notifyNativePlaybackStarted()
@@ -526,7 +539,7 @@ class ConnectionViewModel(
                 )
             )
         }
-        Log.d(TAG, "Sending command payload: $commandJson")
+        if (BuildConfig.DEBUG) Log.d(TAG, "Sending command payload: $commandJson")
         webSocketClient.send(commandJson)
     }
     /**

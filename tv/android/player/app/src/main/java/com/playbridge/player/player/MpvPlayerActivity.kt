@@ -22,6 +22,7 @@ import com.playbridge.player.util.getStringMapExtra
 import `is`.xyz.mpv.MPVLib
 import `is`.xyz.mpv.MPVNode
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.shared.logging.redactUrlForLog
 import androidx.annotation.OptIn
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -1129,6 +1130,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
         FileLogger.i(TAG, "Request headers: ${headers?.size ?: 0} field(s)")
         FileLogger.i(TAG, "Start Paused: $startPaused")
         FileLogger.i(TAG, "===========================================")
+        DebugNetworkLogger.urlAndHeaders(TAG, "Play command", url, headers)
 
 
         // seekTo() will intercept this call while durationMs == 0 (file not yet loaded)

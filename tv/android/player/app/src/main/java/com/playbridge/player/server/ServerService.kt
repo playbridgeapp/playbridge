@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.playbridge.player.logging.FileLogger
+import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.player.player.MpvProcess
 import com.playbridge.player.player.RendererProcessSupervisor
 import androidx.core.app.NotificationCompat
@@ -471,6 +472,7 @@ class ServerService : Service() {
                     .getString(KEY_ACTIVE_UA_VALUE, "") ?: ""
 
                 FileLogger.i(TAG, "Browser command: ${redactUrlForLog(url)} (mode: $browserMode)")
+                DebugNetworkLogger.urlAndHeaders(TAG, "Browser command", url, null)
 
                 val useGecko = browserMode == "gecko"
 
@@ -622,6 +624,14 @@ class ServerService : Service() {
             is IncomingMessage.Playlist -> {
                 val payload = msg.payload
                 FileLogger.i(TAG, "=== PLAYLIST COMMAND === (${payload.items.size} items, startIndex: ${payload.start_index})")
+                payload.items.forEachIndexed { index, item ->
+                    DebugNetworkLogger.urlAndHeaders(
+                        TAG,
+                        "Playlist item $index",
+                        item.url,
+                        item.headers,
+                    )
+                }
 
                 val prefs = getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
                 val tvPref = prefs.getString("player_mode", "phone") ?: "phone"
@@ -658,6 +668,7 @@ class ServerService : Service() {
                 val item = msg.payload.item
                 FileLogger.i(TAG, "=== QUEUE_ADD === title: ${item?.title}")
                 if (item != null) {
+                    DebugNetworkLogger.urlAndHeaders(TAG, "Queue item", item.url, item.headers)
                     // Buffer the item so the player can drain it even if its receiver isn't registered yet.
                     // The broadcast acts only as a wake signal — the player always reads from pendingQueueItems.
                     pendingQueueItems.add(item)

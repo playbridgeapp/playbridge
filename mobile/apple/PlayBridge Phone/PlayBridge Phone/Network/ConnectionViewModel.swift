@@ -274,6 +274,7 @@ final class ConnectionViewModel: ObservableObject {
     func cast(urlString: String, title: String? = nil) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        SenderDebugNetwork.request("Cast output", url: trimmed)
         ws.send(WireProtocol.singleVideoCommand(url: trimmed, title: title))
     }
 
@@ -282,6 +283,7 @@ final class ConnectionViewModel: ObservableObject {
     func castMedia(url: String, title: String? = nil, headers: [String: String] = [:], contentType: String? = nil) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        SenderDebugNetwork.request("Cast output", url: trimmed, headers: headers)
         ws.send(WireProtocol.singleVideoCommand(
             url: trimmed,
             title: title,
@@ -296,12 +298,14 @@ final class ConnectionViewModel: ObservableObject {
     /// attached subtitles. Mirrors the Android `CastSheet` → `createSingleVideoCommandJson` path.
     func castStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
         let url = quality?.url ?? video.url
+        let headers = VideoDetector.mediaHeaders(for: video)
+        SenderDebugNetwork.request("Browser cast output", url: url, headers: headers)
         ws.send(WireProtocol.singleVideoCommand(
             url: url,
             title: video.displayTitle,
             contentType: video.contentType,
             subtitles: subtitles,
-            headers: VideoDetector.mediaHeaders(for: video),
+            headers: headers,
             detectedBy: video.detectedBy,
             playerMode: playerMode
         ))
@@ -310,12 +314,14 @@ final class ConnectionViewModel: ObservableObject {
     /// Queue a browser-detected stream.
     func queueStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
         let url = quality?.url ?? video.url
+        let headers = VideoDetector.mediaHeaders(for: video)
+        SenderDebugNetwork.request("Browser queue output", url: url, headers: headers)
         ws.send(WireProtocol.queueVideoCommand(
             url: url,
             title: video.displayTitle,
             contentType: video.contentType,
             subtitles: subtitles,
-            headers: VideoDetector.mediaHeaders(for: video),
+            headers: headers,
             detectedBy: video.detectedBy,
             playerMode: playerMode
         ))
@@ -325,6 +331,7 @@ final class ConnectionViewModel: ObservableObject {
     func browseTo(url: String, browserMode: String? = nil, desktopMode: Bool = false) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        SenderDebugNetwork.request("Browser command output", url: trimmed)
         ws.send(WireProtocol.browserCommand(
             url: trimmed,
             browserMode: browserMode,
