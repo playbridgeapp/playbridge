@@ -2,11 +2,14 @@ package com.playbridge.sender.cast
 
 import android.content.Context
 import android.util.Log
+import com.playbridge.sender.cast.browser.BrowserCastTarget
 import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.sender.cast.dlna.RenderingControlClient
 import com.playbridge.sender.cast.googlecast.GoogleCastTarget
+import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
+import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.cast.roku.RokuCastTarget
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.ReceiverDiscoveryRepository
@@ -152,6 +155,37 @@ class CastSessionManager(
     /** True after a successful hand-off begins, including while paused. */
     private val _externalMediaLoaded = MutableStateFlow(false)
 
+    /**
+     * User-selected stream route for the next cast packaging (cast sheet chips).
+     * Browser packaging maps Direct → Via phone and always uses Via phone for local files.
+     */
+    private val _preferredStreamRoute = MutableStateFlow(
+        StreamProxySettingsStore.load(context).initialRouteMode(),
+    )
+    val preferredStreamRoute: StateFlow<StreamRouteMode> = _preferredStreamRoute.asStateFlow()
+
+    fun setPreferredStreamRoute(mode: StreamRouteMode) {
+        _preferredStreamRoute.value = mode
+    }
+
+    /** Effective packaging route used on the last external load (for NOW subtitle). */
+    private val _lastEffectiveStreamRoute = MutableStateFlow<StreamRouteMode?>(null)
+    val lastEffectiveStreamRoute: StateFlow<StreamRouteMode?> = _lastEffectiveStreamRoute.asStateFlow()
+
+    /**
+     * One-shot user-visible notices from external packaging (e.g. proxy fallback).
+     * UI should collect and clear via [consumeCastNotice].
+     */
+    private val _castNotices = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val castNotices: SharedFlow<String> = _castNotices.asSharedFlow()
+
+    fun noteEffectiveStreamRoute(mode: StreamRouteMode, proxyFallback: Boolean = false) {
+        _lastEffectiveStreamRoute.value = mode
+        if (proxyFallback) {
+            _castNotices.tryEmit("Remote proxy unavailable — using Via phone")
+        }
+    }
+
     /** Library identity of what's loaded on an external target (null = untracked content). */
     private val _externalNowPlayingMeta = MutableStateFlow<playbridge.VisualMetadata?>(null)
     val externalNowPlayingMeta: StateFlow<playbridge.VisualMetadata?> =
@@ -210,6 +244,31 @@ class CastSessionManager(
 
     fun selectGoogleCastTarget(device: TvDevice) {
         selectExternalTarget(device, GoogleCastTarget(device, scope, context))
+    }
+
+    /** Select an approved phone-hosted browser session as the active cast target. */
+    fun selectBrowserTarget(device: TvDevice) {
+        if (device.resolvedProtocol != CastProtocol.WEB_BROWSER) {
+            Log.w(TAG, "selectBrowserTarget ignored for non-browser ${device.resolvedProtocol}")
+            return
+        }
+        val sessionId = device.uuid.ifEmpty {
+            Log.w(TAG, "selectBrowserTarget requires session uuid")
+            return
+        }
+        selectExternalTarget(
+            device,
+            BrowserCastTarget(
+                context = context,
+                scope = scope,
+                sessionId = sessionId,
+                name = device.name,
+                routeMode = { _preferredStreamRoute.value },
+                onRouteResolved = { effective, proxyFallback ->
+                    noteEffectiveStreamRoute(effective, proxyFallback)
+                },
+            ),
+        )
     }
 
     private val externalSessionState: StateFlow<CastSessionState> = combine(
@@ -822,6 +881,7 @@ class CastSessionManager(
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _externalNowPlayingMeta.value = null
+        _lastEffectiveStreamRoute.value = null
         webSocketClient.disconnect()
         stopReconnectSupervisor()
         // External routes cannot be restored without reconnecting, so their restart/clear
@@ -859,6 +919,7 @@ class CastSessionManager(
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
         _externalNowPlayingMeta.value = null
+        _lastEffectiveStreamRoute.value = null
         if (_route.value is Route.External) {
             _route.value = when (routePrefs.getString(ROUTE_KEY, "this")) {
                 "native" -> Route.NativeTv
@@ -875,6 +936,17 @@ class CastSessionManager(
                     } catch (error: Exception) {
                         Log.w(TAG, "${detached.kind} stop before release failed: ${error.message}")
                     } finally {
+                        // Leave browser host up; only drop this session's WS link.
+                        if (detached is BrowserCastTarget) {
+                            try {
+                                com.playbridge.sender.cast.proxy.PhoneSenderServices.get()
+                                    ?.disconnectBrowser(detached.sessionId)
+                            } catch (error: CancellationException) {
+                                throw error
+                            } catch (error: Exception) {
+                                Log.w(TAG, "browser disconnect failed: ${error.message}")
+                            }
+                        }
                         detached.release()
                     }
                 }
@@ -910,12 +982,20 @@ class CastSessionManager(
         externalLoadJob?.cancel()
         externalLoadJob = scope.launch {
             runCatching { target.load(media) }
+                .onSuccess {
+                    if (_externalTarget.value === target && target is BrowserCastTarget) {
+                        target.lastEffectiveRoute?.let { noteEffectiveStreamRoute(it, target.lastProxyFallback) }
+                    }
+                }
                 .onFailure {
                     if (it is CancellationException) return@onFailure
                     if (_externalTarget.value === target) {
                         _externalStatus.value = PlaybackStatus(PlaybackState.ERROR)
                         _externalMediaLoaded.value = false
                         Log.w(TAG, "${target.kind} load failed: ${it.message}")
+                        if (target is BrowserCastTarget) {
+                            _castNotices.tryEmit("TV browser couldn’t play this stream")
+                        }
                     }
                 }
         }
@@ -936,6 +1016,10 @@ class CastSessionManager(
             is DlnaCastTarget -> scope.launch {
                 runCatching { target.adjustVolume(if (up) 5 else -5) }
                     .onFailure { Log.w(TAG, "DLNA volume adjustment failed: ${it.message}") }
+            }
+            is BrowserCastTarget -> scope.launch {
+                runCatching { target.adjustVolume(if (up) 0.05 else -0.05) }
+                    .onFailure { Log.w(TAG, "Browser volume adjustment failed: ${it.message}") }
             }
             else -> Unit
         }

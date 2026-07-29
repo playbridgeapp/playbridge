@@ -116,6 +116,19 @@ class ConnectionViewModel(
     val externalStatus: StateFlow<PlaybackStatus?> = castSessionManager.externalStatus
     val externalMediaTitle: StateFlow<String?> = castSessionManager.externalMediaTitle
     val castSessionState = castSessionManager.sessionState
+    val lastEffectiveStreamRoute = castSessionManager.lastEffectiveStreamRoute
+    val castNotices = castSessionManager.castNotices
+
+    fun setPreferredStreamRoute(mode: com.playbridge.sender.cast.proxy.StreamRouteMode) {
+        castSessionManager.setPreferredStreamRoute(mode)
+    }
+
+    fun noteEffectiveStreamRoute(
+        mode: com.playbridge.sender.cast.proxy.StreamRouteMode,
+        proxyFallback: Boolean = false,
+    ) {
+        castSessionManager.noteEffectiveStreamRoute(mode, proxyFallback)
+    }
 
     // Foreground discovery session (ref-counted so Connection screen + cast sheet can share).
     // Each window is time-boxed (SCAN_WINDOW_MS); while any UI holds the session we quietly
@@ -351,6 +364,14 @@ class ConnectionViewModel(
         viewModelScope.launch {
             connectionStore.addToHistory(device)
         }
+    }
+
+    /**
+     * Select a phone-hosted browser session as the cast destination.
+     * Browser sessions are not written to device history (host-lifetime only).
+     */
+    fun selectBrowserTarget(device: TvDevice) {
+        castSessionManager.selectBrowserTarget(device)
     }
 
     fun disconnectExternalTarget() = castSessionManager.stopAndClearExternalTarget()

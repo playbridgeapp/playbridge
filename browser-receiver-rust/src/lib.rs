@@ -13,7 +13,7 @@ use axum::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderValue, header},
+    http::{HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
@@ -524,9 +524,15 @@ fn router(service: BrowserReceiverService) -> Router {
     Router::new()
         .route("/", get(index_handler))
         .route("/health", get(|| async { "OK" }))
+        .route("/favicon.ico", get(favicon_handler))
         .route("/assets/receiver.js", get(script_handler))
         .route("/v1/browser/ws", get(websocket_handler))
         .with_state(service)
+}
+
+/// Browsers always request /favicon.ico; avoid noisy 404s in the console.
+async fn favicon_handler() -> Response {
+    StatusCode::NO_CONTENT.into_response()
 }
 
 async fn index_handler() -> Response {
@@ -556,8 +562,19 @@ fn with_security_headers(mut response: Response, content_type: &'static str) -> 
     );
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
+        // Video.js VHS creates blob: Web Workers for MPEG-TS transmux; without
+        // worker-src/script-src blob: those workers are blocked and playback stalls.
+        // font-src is intentionally broad: Video.js (and some browser extensions)
+        // may request icon fonts that are neither 'self' nor data: URLs.
         HeaderValue::from_static(
-            "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; media-src 'self' http: https: blob:; connect-src 'self' ws: wss: http: https:; img-src 'self' data: http: https:",
+            "default-src 'self'; \
+             script-src 'self' blob:; \
+             worker-src 'self' blob:; \
+             style-src 'self' 'unsafe-inline'; \
+             font-src * data: blob:; \
+             media-src 'self' http: https: blob:; \
+             connect-src 'self' ws: wss: http: https:; \
+             img-src 'self' data: http: https:",
         ),
     );
     headers.insert(
@@ -903,6 +920,7 @@ mod tests {
         );
         let html = client.get(base).send().await.unwrap().text().await.unwrap();
         assert!(html.contains("PlayBridge Browser Receiver"));
+        assert!(html.contains("Playback information"));
         let receiver_js = client
             .get(format!(
                 "http://127.0.0.1:{}/assets/receiver.js",
@@ -915,9 +933,7 @@ mod tests {
             .await
             .unwrap();
         assert!(receiver_js.contains("application/dash+xml"));
-        assert!(
-            receiver_js.contains("DASH playback requires Media Source support in this browser")
-        );
+        assert!(receiver_js.contains("Connection lost"));
         host.shutdown().await.unwrap();
     }
 

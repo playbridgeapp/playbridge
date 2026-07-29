@@ -13,6 +13,8 @@ enum class CastProtocol(
     DLNA("DLNA", 2, null),
     ROKU("Roku", 4, 8060),
     GOOGLE_CAST("Google Cast", 16, 8009),
+    /** Phone-hosted web receiver session (not mDNS-discovered). */
+    WEB_BROWSER("Browser", 0, 8770),
 }
 
 /**

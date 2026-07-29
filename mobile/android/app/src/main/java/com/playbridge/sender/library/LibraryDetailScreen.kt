@@ -688,8 +688,12 @@ fun LibraryDetailScreen(
                 val packaged = streamRouteService.packageForCast(
                     media = com.playbridge.sender.cast.proxy.CastableMedia(
                         url = streamUrl,
-                        headers = null,
-                        contentType = null,
+                        // Prefer stream-provided headers (Referer/Cookie/UA) so Via phone
+                        // OkHttp matches what ExoPlayer would send for the same link.
+                        headers = best?.stream?.headers?.takeIf { it.isNotEmpty() },
+                        contentType = streamUrl.substringBefore('?')
+                            .takeIf { it.endsWith(".m3u8", ignoreCase = true) }
+                            ?.let { "application/vnd.apple.mpegurl" },
                         title = resTitle,
                     ),
                     mode = routeMode,

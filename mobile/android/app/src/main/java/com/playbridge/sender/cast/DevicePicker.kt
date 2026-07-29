@@ -44,6 +44,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.playbridge.sender.cast.browser.BrowserReceiverRepository
+import com.playbridge.sender.cast.browser.BrowserReceiverSheet
 import com.playbridge.sender.connection.ConnectionMerge
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
@@ -227,6 +229,12 @@ fun DeviceConnectionSheet(
     val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
     val route by viewModel.route.collectAsState()
     val networkStatus by viewModel.networkStatus.collectAsState()
+    val browserRepo: BrowserReceiverRepository = koinInject()
+    val browserHost by browserRepo.state.collectAsState()
+    val externalMediaTitle by viewModel.externalMediaTitle.collectAsState()
+    val castSessionState by viewModel.castSessionState.collectAsState()
+    val lastEffectiveStreamRoute by viewModel.lastEffectiveStreamRoute.collectAsState()
+    var showBrowserSheet by remember { mutableStateOf(false) }
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
     val nativeSelected = route is CastSessionManager.Route.NativeTv
@@ -296,6 +304,7 @@ fun DeviceConnectionSheet(
             CastProtocol.DLNA -> viewModel.selectDlnaTarget(target)
             CastProtocol.ROKU -> true.also { viewModel.selectRokuTarget(target) }
             CastProtocol.GOOGLE_CAST -> true.also { viewModel.selectGoogleCastTarget(target) }
+            CastProtocol.WEB_BROWSER -> true.also { viewModel.selectBrowserTarget(target) }
             CastProtocol.PLAYBRIDGE -> {
                 viewModel.selectNativeRoute()
                 val alreadyLinked = isConnected && tvDevice?.let {
@@ -353,6 +362,11 @@ fun DeviceConnectionSheet(
                     onDismiss()
                 },
                 isConnecting = isConnecting,
+                externalMediaTitle = externalMediaTitle,
+                externalCasting = castSessionState.phase == SessionPhase.PLAYING ||
+                    castSessionState.phase == SessionPhase.CONNECTED ||
+                    castSessionState.phase == SessionPhase.CONNECTING,
+                streamRouteLabel = lastEffectiveStreamRoute?.label,
             )
 
             // Player-engine picker for a linked PlayBridge session (native route only).
@@ -449,10 +463,106 @@ fun DeviceConnectionSheet(
                 }
             }
 
+            // Ready browser sessions (host running) + setup entry.
+            if (browserHost.running && browserHost.ready.isNotEmpty()) {
+                SectionLabel("Browser")
+                browserHost.ready.forEach { session ->
+                    val device = session.toTvDevice(browserRepo.lanHostIp(), browserHost.port)
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { pick(device) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.Cast,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    session.name,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    "Browser · Ready",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showBrowserSheet = true },
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Cast,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (browserHost.running && browserHost.pending.isNotEmpty()) {
+                                "Cast to browser…"
+                            } else {
+                                "Cast to browser…"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = when {
+                                browserHost.pending.isNotEmpty() -> "Code waiting"
+                                browserHost.running -> "Host running · manage pairing"
+                                else -> "TV, console, or PC browser"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+
             FindMoreDevicesRow(onClick = {
                 onDismiss()
                 onOpenAllDevices()
             })
         }
+    }
+
+    if (showBrowserSheet) {
+        BrowserReceiverSheet(
+            viewModel = viewModel,
+            onDismiss = { showBrowserSheet = false },
+            onCastHere = {
+                // Destination already selected inside the sheet; dismiss cast sheet too.
+                onDismiss()
+            },
+        )
     }
 }

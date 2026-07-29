@@ -7,18 +7,259 @@
   <title>PlayBridge Browser Receiver</title>
   <style>
     * { box-sizing: border-box; }
-    html, body { width: 100%; height: 100%; margin: 0; background: #05070a; color: #f4f7fb; font: 18px/1.4 system-ui, sans-serif; }
+    html, body { width: 100%; height: 100%; margin: 0; background: #05070a; color: #f4f7fb; font: 16px/1.4 system-ui, sans-serif; }
     body { display: grid; place-items: center; overflow: hidden; }
     main { width: min(92vw, 1100px); text-align: center; }
     h1 { margin: 0 0 12px; font-size: clamp(30px, 5vw, 60px); }
     p { color: #aeb8c7; }
     #code { margin: 24px auto; font: 700 clamp(54px, 12vw, 120px)/1 monospace; letter-spacing: .12em; color: #55e6b1; }
-    #player-wrap { display: none; position: fixed; inset: 0; background: #000; }
-    video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-    #play-overlay { display: none; position: absolute; inset: 0; place-items: center; background: #000a; border: 0; color: white; font-size: clamp(24px, 5vw, 52px); }
-    #status { position: fixed; left: 18px; top: 16px; z-index: 4; padding: 7px 12px; border-radius: 8px; background: #101720cc; color: #d5deea; font-size: 14px; opacity: 1; transition: opacity 220ms ease; }
+
+    #player-wrap {
+      display: none;
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      background: #000;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      cursor: none;
+    }
+    #player-wrap.is-playing { display: flex; }
+    #player-wrap.show-chrome { cursor: default; }
+
+    #player-wrap video,
+    #player-wrap .video-js {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      max-width: 100vw !important;
+      max-height: 100vh !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #000;
+      border: 0;
+    }
+    #player-wrap .video-js .vjs-tech,
+    #player-wrap video.vjs-tech {
+      position: absolute !important;
+      inset: 0 !important;
+      width: 100% !important;
+      height: 100% !important;
+      object-fit: contain;
+      background: #000;
+    }
+    #player-wrap .vjs-control-bar,
+    #player-wrap .vjs-big-play-button,
+    #player-wrap .vjs-loading-spinner,
+    #player-wrap .vjs-modal-dialog,
+    #player-wrap .vjs-hidden { display: none !important; }
+
+    /* Captions (Video.js text track display) — keep visible above chrome. */
+    #player-wrap .vjs-text-track-display {
+      display: block !important;
+      pointer-events: none;
+      position: absolute !important;
+      left: 0 !important;
+      right: 0 !important;
+      top: 0 !important;
+      bottom: 72px !important;
+      z-index: 5;
+    }
+    #player-wrap .vjs-text-track-display:empty { display: none !important; }
+    #player-wrap .vjs-text-track-cue {
+      background: #000a;
+      border-radius: 4px;
+      font-size: clamp(16px, 2.6vw, 28px) !important;
+      line-height: 1.35;
+    }
+
+    #play-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 6;
+      place-items: center;
+      background: #000a;
+      border: 0;
+      color: white;
+      font-size: clamp(24px, 5vw, 52px);
+      cursor: pointer;
+    }
+
+    #chrome {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 7;
+      padding: 12px 14px 16px;
+      background: linear-gradient(transparent, #000c 45%, #000e);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+    }
+    #player-wrap.show-chrome #chrome {
+      opacity: 1;
+      transform: none;
+      pointer-events: auto;
+    }
+
+    #stats {
+      color: #c5d0de;
+      font: 600 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+      letter-spacing: .02em;
+      margin: 0 0 10px 2px;
+      text-shadow: 0 1px 2px #000a;
+      min-height: 1.2em;
+    }
+
+    #chrome-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .pb-btn {
+      appearance: none;
+      border: 0;
+      border-radius: 10px;
+      background: #1a2330cc;
+      color: #eef3fa;
+      font: 600 14px/1 system-ui, sans-serif;
+      padding: 10px 12px;
+      min-width: 44px;
+      min-height: 44px;
+      cursor: pointer;
+    }
+    .pb-btn:hover, .pb-btn:focus-visible { background: #2a3648; outline: 0; }
+    .pb-btn.active { background: #2f6fed; color: #fff; }
+    .pb-btn.live-on { color: #ff6b6b; }
+
+    #seek-wrap {
+      flex: 1 1 160px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 140px;
+    }
+    #seek {
+      flex: 1;
+      accent-color: #55e6b1;
+      height: 6px;
+      cursor: pointer;
+    }
+    #seek:disabled { opacity: .35; cursor: default; }
+    #time-label {
+      font: 600 12px/1 ui-monospace, monospace;
+      color: #aeb8c7;
+      min-width: 7.5em;
+      text-align: right;
+    }
+    #live-badge {
+      display: none;
+      font: 700 12px/1 system-ui, sans-serif;
+      color: #ff6b6b;
+      border: 1px solid #ff6b6b88;
+      border-radius: 6px;
+      padding: 6px 8px;
+      letter-spacing: .06em;
+    }
+    #live-badge.show { display: inline-block; }
+
+    .menu-wrap { position: relative; }
+    .pb-menu {
+      display: none;
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 8px);
+      min-width: 160px;
+      max-height: 50vh;
+      overflow: auto;
+      background: #121a24f2;
+      border: 1px solid #2a3648;
+      border-radius: 12px;
+      padding: 6px;
+      box-shadow: 0 12px 40px #000a;
+      z-index: 8;
+    }
+    .pb-menu.open { display: block; }
+    .pb-menu button {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: transparent;
+      color: #e8eef7;
+      font: 600 13px/1.3 system-ui, sans-serif;
+      padding: 10px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .pb-menu button:hover, .pb-menu button:focus-visible { background: #243041; outline: 0; }
+    .pb-menu button.selected { color: #55e6b1; }
+
+    #status {
+      position: fixed;
+      left: 18px;
+      top: 16px;
+      z-index: 9;
+      padding: 7px 12px;
+      border-radius: 8px;
+      background: #101720cc;
+      color: #d5deea;
+      font-size: 14px;
+      opacity: 1;
+      transition: opacity 220ms ease;
+    }
     #status.hidden { opacity: 0; pointer-events: none; }
     .error { color: #ff8c8c; }
+
+    #info-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #000b;
+      cursor: default;
+    }
+    #info-overlay[hidden] { display: none; }
+    #info-panel {
+      width: min(900px, 94vw);
+      max-height: 84vh;
+      overflow: auto;
+      text-align: left;
+      border: 1px solid #314056;
+      border-radius: 16px;
+      background: #0d141ef5;
+      box-shadow: 0 20px 80px #000d;
+      padding: 18px 20px 20px;
+    }
+    #info-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    #info-header h2 { margin: 0; font-size: 20px; }
+    #info-close { font-size: 22px; padding: 7px 11px; }
+    #info-content {
+      margin: 0;
+      color: #dbe5f2;
+      font: 500 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    #info-hint { margin: 12px 0 0; color: #8190a4; font-size: 12px; }
   </style>
 </head>
 <body>
@@ -28,10 +269,50 @@
     <div id="code" aria-live="polite"></div>
     <p id="device-name"></p>
   </main>
+
   <div id="player-wrap">
-    <video id="player" controls playsinline></video>
+    <video id="player" playsinline webkit-playsinline></video>
     <button id="play-overlay" type="button">Press to play</button>
+
+    <div id="chrome" aria-label="Playback controls">
+      <div id="stats" aria-live="polite"></div>
+      <div id="chrome-row">
+        <button type="button" class="pb-btn" id="btn-play" title="Play / Pause" aria-label="Play or pause">▶</button>
+        <div id="seek-wrap">
+          <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" disabled>
+          <span id="time-label">0:00</span>
+          <span id="live-badge" title="Live stream">LIVE</span>
+        </div>
+        <button type="button" class="pb-btn" id="btn-mute" title="Mute" aria-label="Mute">🔊</button>
+        <div class="menu-wrap">
+          <button type="button" class="pb-btn" id="btn-quality" title="Quality" aria-haspopup="listbox" aria-expanded="false">Auto</button>
+          <div id="menu-quality" class="pb-menu" role="listbox" aria-label="Quality"></div>
+        </div>
+        <div class="menu-wrap">
+          <button type="button" class="pb-btn" id="btn-captions" title="Captions" aria-haspopup="listbox" aria-expanded="false">CC</button>
+          <div id="menu-captions" class="pb-menu" role="listbox" aria-label="Captions"></div>
+        </div>
+        <div class="menu-wrap">
+          <button type="button" class="pb-btn" id="btn-speed" title="Speed" aria-haspopup="listbox" aria-expanded="false">1×</button>
+          <div id="menu-speed" class="pb-menu" role="listbox" aria-label="Playback speed"></div>
+        </div>
+        <button type="button" class="pb-btn" id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+        <button type="button" class="pb-btn" id="btn-info" title="Playback info (I)" aria-label="Playback info">ⓘ</button>
+      </div>
+    </div>
   </div>
+
+  <div id="info-overlay" hidden aria-hidden="true">
+    <section id="info-panel" role="dialog" aria-modal="true" aria-labelledby="info-title">
+      <div id="info-header">
+        <h2 id="info-title">Playback information</h2>
+        <button type="button" class="pb-btn" id="info-close" aria-label="Close playback information">×</button>
+      </div>
+      <pre id="info-content"></pre>
+      <p id="info-hint">Press I to toggle · Secret query values are redacted</p>
+    </section>
+  </div>
+
   <div id="status" role="status" aria-live="polite">Starting…</div>
   <script src="/assets/receiver.js"></script>
 </body>

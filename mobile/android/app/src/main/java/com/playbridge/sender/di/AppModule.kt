@@ -117,6 +117,14 @@ val appModule = module {
     }
     single { com.playbridge.sender.connection.NetworkStatusRepository(androidContext()) }
 
+    // Browser receiver host (cast-to-browser) — process-wide host + pairing state.
+    single {
+        com.playbridge.sender.cast.browser.BrowserReceiverRepository(
+            context = androidContext(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+    }
+
     // 5. ConnectionCoordinator Singleton
     single {
         ConnectionCoordinator(
