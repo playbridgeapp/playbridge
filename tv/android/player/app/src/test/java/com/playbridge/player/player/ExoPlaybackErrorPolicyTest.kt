@@ -21,7 +21,7 @@ class ExoPlaybackErrorPolicyTest {
     }
 
     @Test
-    fun `behind live window exhausted is terminal not failover`() {
+    fun `behind live window exhausted may failover mid playback`() {
         val disposition = classify(
             errorCode = ExoPlaybackErrorPolicy.Codes.BEHIND_LIVE_WINDOW,
             isLive = true,
@@ -30,10 +30,13 @@ class ExoPlaybackErrorPolicyTest {
                 liveEdge = ExoPlaybackErrorPolicy.MAX_LIVE_EDGE_RECOVERIES,
             ),
         )
-        assertEscalate(disposition, ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL)
-        assertFalse(
+        assertEscalate(
+            disposition,
+            ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+        )
+        assertTrue(
             ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
-                ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL,
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
                 hasFirstFrame = true,
             ),
         )
@@ -80,6 +83,28 @@ class ExoPlaybackErrorPolicyTest {
     }
 
     @Test
+    fun `network error on live may failover after recovery budget`() {
+        val disposition = classify(
+            errorCode = ExoPlaybackErrorPolicy.Codes.IO_NETWORK_CONNECTION_TIMEOUT,
+            isLive = true,
+            hasFirstFrame = true,
+            budget = ExoPlaybackErrorPolicy.AttemptBudget(
+                liveEdge = ExoPlaybackErrorPolicy.MAX_LIVE_EDGE_RECOVERIES,
+            ),
+        )
+        assertEscalate(
+            disposition,
+            ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+        )
+        assertTrue(
+            ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+                hasFirstFrame = true,
+            ),
+        )
+    }
+
+    @Test
     fun `http 403 is terminal and never engine failover`() {
         val disposition = classify(
             errorCode = ExoPlaybackErrorPolicy.Codes.IO_BAD_HTTP_STATUS,
@@ -114,17 +139,20 @@ class ExoPlaybackErrorPolicyTest {
     }
 
     @Test
-    fun `decoder failure after first frame is terminal not failover`() {
+    fun `decoder failure after first frame may failover after recovery`() {
         val disposition = classify(
             errorCode = ExoPlaybackErrorPolicy.Codes.DECODING_FAILED,
             isLive = true,
             hasFirstFrame = true,
             budget = ExoPlaybackErrorPolicy.AttemptBudget(decode = 1),
         )
-        assertEscalate(disposition, ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL)
-        assertFalse(
+        assertEscalate(
+            disposition,
+            ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+        )
+        assertTrue(
             ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
-                ExoPlaybackErrorPolicy.EscalationSeverity.TERMINAL,
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
                 hasFirstFrame = true,
             ),
         )
@@ -148,10 +176,13 @@ class ExoPlaybackErrorPolicyTest {
             hasFirstFrame = false,
             budget = ExoPlaybackErrorPolicy.AttemptBudget(decode = 1),
         )
-        assertEscalate(second, ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER)
+        assertEscalate(
+            second,
+            ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+        )
         assertTrue(
             ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
-                ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER,
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
                 hasFirstFrame = false,
             ),
         )
@@ -171,7 +202,61 @@ class ExoPlaybackErrorPolicyTest {
     }
 
     @Test
-    fun `mayAutoSwitchEngine requires startup failover and no first frame`() {
+    fun `audio track init failure before first frame may failover after recovery budget`() {
+        val first = classify(
+            errorCode = ExoPlaybackErrorPolicy.Codes.AUDIO_TRACK_INIT_FAILED,
+            isLive = false,
+            hasFirstFrame = false,
+        )
+        assertEquals(
+            ExoPlaybackErrorPolicy.Disposition.Recover(ExoPlaybackErrorPolicy.RecoveryStrategy.REPREPARE),
+            first,
+        )
+
+        val exhausted = classify(
+            errorCode = ExoPlaybackErrorPolicy.Codes.AUDIO_TRACK_INIT_FAILED,
+            isLive = false,
+            hasFirstFrame = false,
+            budget = ExoPlaybackErrorPolicy.AttemptBudget(
+                reprepare = ExoPlaybackErrorPolicy.MAX_REPREPARE_RECOVERIES,
+            ),
+        )
+        assertEscalate(
+            exhausted,
+            ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+        )
+        assertTrue(
+            ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+                hasFirstFrame = false,
+            ),
+        )
+    }
+
+    @Test
+    fun `audio track init failure after first frame may failover after recovery`() {
+        val exhausted = classify(
+            errorCode = ExoPlaybackErrorPolicy.Codes.AUDIO_TRACK_INIT_FAILED,
+            isLive = false,
+            hasFirstFrame = true,
+            budget = ExoPlaybackErrorPolicy.AttemptBudget(
+                reprepare = ExoPlaybackErrorPolicy.MAX_REPREPARE_RECOVERIES,
+            ),
+        )
+        assertEscalate(
+            exhausted,
+            ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+        )
+        assertTrue(
+            ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+                hasFirstFrame = true,
+            ),
+        )
+    }
+
+    @Test
+    fun `mayAutoSwitchEngine allows startup or exhausted recovery failover`() {
         assertTrue(
             ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
                 ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER,
@@ -181,6 +266,12 @@ class ExoPlaybackErrorPolicyTest {
         assertFalse(
             ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
                 ExoPlaybackErrorPolicy.EscalationSeverity.STARTUP_ENGINE_FAILOVER,
+                hasFirstFrame = true,
+            ),
+        )
+        assertTrue(
+            ExoPlaybackErrorPolicy.mayAutoSwitchEngine(
+                ExoPlaybackErrorPolicy.EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
                 hasFirstFrame = true,
             ),
         )
