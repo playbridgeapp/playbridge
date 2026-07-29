@@ -301,7 +301,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
             proxy.start()
             self.proxyServer = proxy
-            print("VLC Proxy: \(url.absoluteString) -> \(proxy.localURL.absoluteString)")
+            debugLogNetworkRequest("VLC proxy upstream", url: url, headers: proxyHeaders)
+            print("VLC Proxy: forwarding through local relay")
             startMedia(playURL: proxy.localURL, useNativeHeaders: false, viaProxy: true)
         }
 
@@ -313,7 +314,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             resolvedUseNativeHeaders = useNativeHeaders
             isPlayingViaProxy = viaProxy
             guard let media = VLCMedia(url: playURL) else {   // VLCKit 4.0: VLCMedia(url:) is failable
-                print("VLC: failed to create media for \(playURL)")
+                debugLogNetworkRequest("VLC media creation failure", url: playURL)
+                print("VLC: failed to create media")
                 return
             }
             // network-caching kept modest: a 15s pre-roll caused a long black/buffering stall before
@@ -447,7 +449,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             // preference); the media's own embedded tracks remain available in the menu.
             guard let first = subtitles?.first, let url = URL(string: first) else { return }
             let rc = mediaPlayer.addPlaybackSlave(url, type: .subtitle, enforce: false)
-            print("VLC: addPlaybackSlave subtitle=\(url.absoluteString) rc=\(rc)")
+            debugLogNetworkRequest("VLC subtitle", url: url)
+            print("VLC: addPlaybackSlave rc=\(rc)")
             // The slave arrives after the initial parse — refresh the track list so the new
             // entry appears in the Subtitles menu.
             updateSubtitleTracks()

@@ -54,14 +54,23 @@ const sharedOpts = {
   target: ["firefox102", "chrome110"],
   sourcemap: watch ? "inline" : false,
   minify: !watch,
-  define: {
-    __PB_DEBUG__: watch ? "true" : "false",
-  },
   // Preserve the src/ layout so src/ui/popup.ts → <outDir>/ui/popup.js
   // and src/geckoview/background.ts → <outDir>/geckoview/background.js.
   // GeckoView manifest expects background.js at package root — flattened below.
   outbase: "src",
 };
+
+function optionsForTarget(target) {
+  return {
+    ...sharedOpts,
+    // GeckoView is copied into variant-agnostic Android source assets. Keep its
+    // raw browser logging compiled out even during watch builds so those assets
+    // cannot contaminate a subsequent Android release. Kotlin owns Android logs.
+    define: {
+      __PB_DEBUG__: watch && !target.copyAndroid ? "true" : "false",
+    },
+  };
+}
 
 function copyStatics(outDir, manifest, includeConsentPage) {
   fs.mkdirSync(`${outDir}/ui/fonts`, { recursive: true });
@@ -140,7 +149,7 @@ for (const target of TARGETS) {
 if (watch) {
   for (const t of TARGETS) {
     const ctx = await esbuild.context({
-      ...sharedOpts,
+      ...optionsForTarget(t),
       entryPoints: t.entryPoints,
       outdir: t.outDir,
       plugins: [
@@ -160,7 +169,7 @@ if (watch) {
 } else {
   for (const t of TARGETS) {
     await esbuild.build({
-      ...sharedOpts,
+      ...optionsForTarget(t),
       entryPoints: t.entryPoints,
       outdir: t.outDir,
     });

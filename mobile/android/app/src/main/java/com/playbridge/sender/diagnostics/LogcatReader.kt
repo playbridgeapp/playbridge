@@ -1,6 +1,7 @@
 package com.playbridge.sender.diagnostics
 
 import android.os.Process
+import com.playbridge.sender.logging.DebugNetworkLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -117,7 +118,14 @@ object LogcatReader {
         } finally {
             process?.destroy()
         }
-        val filtered = if (includeNoise) out else out.filterNot { isNoise(it) }
+        // Full URLs and header values remain available to developers in debug logcat, but must
+        // never flow into the in-app viewer or its persisted share attachment.
+        val diagnosticsSafe = out.filter(::isSafeForDiagnostics)
+        val filtered = if (includeNoise) {
+            diagnosticsSafe
+        } else {
+            diagnosticsSafe.filterNot { isNoise(it) }
+        }
         val userFiltered = if (excludeFilters.isEmpty()) filtered else filtered.filterNot { line ->
             excludeFilters.any { filter ->
                 line.tag.contains(filter, ignoreCase = true) || line.message.contains(filter, ignoreCase = true)
@@ -126,6 +134,9 @@ object LogcatReader {
         if (userFiltered.size > maxLines) userFiltered.subList(userFiltered.size - maxLines, userFiltered.size).toList()
         else userFiltered
     }
+
+    internal fun isSafeForDiagnostics(line: LogLine): Boolean =
+        line.tag != DebugNetworkLogger.LOGCAT_TAG
 
     /** Clears the log buffer. Returns true on success. */
     suspend fun clear(): Boolean = withContext(Dispatchers.IO) {

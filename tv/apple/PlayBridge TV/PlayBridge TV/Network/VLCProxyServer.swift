@@ -512,7 +512,9 @@ class VLCProxyServer {
             let lines = req.components(separatedBy: "\r\n")
             guard let requestLine = lines.first else { connection.cancel(); return }
 
+#if DEBUG
             print("[Proxy] VLC request: \(requestLine)")
+#endif
 
             let parts = requestLine.split(separator: " ")
             let method = parts.count > 0 ? String(parts[0]) : "GET"
@@ -532,16 +534,18 @@ class VLCProxyServer {
             if decodedRequestPath == Self.extPath {
                 // HLS sub-resource on an arbitrary host — full URL is encoded in the query
                 guard let q = requestQuery, let decoded = Self.decodeExtURL(fromQuery: q) else {
+#if DEBUG
                     print("[Proxy] Failed to decode ext URL: \(requestURI)")
+#endif
                     connection.cancel()
                     return
                 }
                 upstreamURL = decoded
-                print("[Proxy] Resolved as ext-encoded sub-request -> \(upstreamURL.absoluteString)")
+                debugLogNetworkRequest("VLC proxy ext sub-request", url: upstreamURL, headers: self.headers)
             } else if decodedRequestPath == targetPath || requestPath == "/" {
                 // Initial request — use the original target URL exactly
                 upstreamURL = self.targetURL
-                print("[Proxy] Resolved as initial request -> \(upstreamURL.absoluteString)")
+                debugLogNetworkRequest("VLC proxy initial request", url: upstreamURL, headers: self.headers)
             } else {
                 // Same-host sub-request (path-relative resolution)
                 var c = URLComponents()
@@ -551,7 +555,7 @@ class VLCProxyServer {
                 c.path = decodedRequestPath
                 c.percentEncodedQuery = requestQuery
                 upstreamURL = c.url ?? self.targetURL
-                print("[Proxy] Resolved as same-host sub-request -> \(upstreamURL.absoluteString)")
+                debugLogNetworkRequest("VLC proxy same-host sub-request", url: upstreamURL, headers: self.headers)
             }
 
             var urlRequest = URLRequest(url: upstreamURL)

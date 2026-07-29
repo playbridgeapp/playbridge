@@ -15,6 +15,13 @@ import kotlinx.serialization.json.jsonPrimitive
  * command URLs and their replay headers are emitted.
  */
 object DebugNetworkLogger {
+    /**
+     * Raw network diagnostics must remain available only through developer logcat access.
+     * [com.playbridge.sender.diagnostics.LogcatReader] excludes this tag from the in-app
+     * diagnostics viewer and its persisted share attachments.
+     */
+    const val LOGCAT_TAG = "PBDebugNetworkRaw"
+
     fun urlAndHeaders(
         tag: String,
         label: String,
@@ -22,10 +29,12 @@ object DebugNetworkLogger {
         headers: Map<String, String>?,
     ) {
         if (!BuildConfig.DEBUG) return
-        Log.d(tag, "$label URL: $url")
+        Log.d(LOGCAT_TAG, "[$tag] $label URL: $url")
         val fields = headers.orEmpty()
-        Log.d(tag, "$label headers (${fields.size}):")
-        fields.forEach { (name, value) -> Log.d(tag, "$label $name: $value") }
+        Log.d(LOGCAT_TAG, "[$tag] $label headers (${fields.size}):")
+        fields.forEach { (name, value) ->
+            Log.d(LOGCAT_TAG, "[$tag] $label $name: $value")
+        }
     }
 
     fun command(tag: String, message: String) {
@@ -49,7 +58,10 @@ object DebugNetworkLogger {
                 }
             }
         }.onFailure {
-            Log.d(tag, "Unable to decode outbound media command for debug logging: ${it.message}")
+            Log.d(
+                LOGCAT_TAG,
+                "[$tag] Unable to decode outbound media command for debug logging: ${it.message}",
+            )
         }
     }
 
