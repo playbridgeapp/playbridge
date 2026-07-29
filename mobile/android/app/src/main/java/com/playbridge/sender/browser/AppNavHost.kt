@@ -155,6 +155,14 @@ fun AppNavHost(
     // 1. Inject ViewModels & Singletons
     val connectionViewModel: ConnectionViewModel = koinViewModel()
     val libraryViewModel: LibraryViewModel = koinViewModel()
+    val appContext = LocalContext.current
+    // Process-wide cast notices (proxy fallback, browser playback failure) as Toasts so
+    // they surface even when the Devices snackbar host is not visible.
+    LaunchedEffect(Unit) {
+        connectionViewModel.castNotices.collect { message ->
+            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+        }
+    }
     val iptvViewModel: com.playbridge.sender.iptv.IptvViewModel = koinViewModel()
     val collectionsViewModel: com.playbridge.sender.collection.CollectionsViewModel = koinViewModel()
     // Centralized "Add to Collection": any screen sets this draft → one shared sheet shows.

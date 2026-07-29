@@ -60,11 +60,13 @@ import kotlinx.coroutines.launch
 import com.playbridge.sender.data.library.TmdbRepository
 import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.CastableMedia
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
 import com.playbridge.sender.cast.proxy.StreamRouteException
 import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.cast.proxy.StreamRouteService
+import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
 /**
@@ -104,6 +106,9 @@ fun CastSheet(
     val streamRouteService = remember { StreamRouteService(context.applicationContext) }
     var routeMode by remember { mutableStateOf(streamProxySettings.initialRouteMode()) }
     var packaging by remember { mutableStateOf(false) }
+    val isBrowserDestination =
+        selectedTvDevice?.resolvedProtocol == CastProtocol.WEB_BROWSER
+    val castSessionManager: CastSessionManager = org.koin.compose.koinInject()
     // Promote synthetic handoff into a dedicated first row; rank the rest below.
     val playableVideos = remember(videos) { buildCastSheetVideos(videos) }
 
@@ -160,6 +165,38 @@ fun CastSheet(
     }
     var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
     var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    val selectedIsLocal = remember(
+        selectedVideo?.url,
+        selectedVideo?.playlistBody,
+        selectedVideo?.hasSyntheticHandoff,
+    ) {
+        val url = selectedVideo?.url.orEmpty()
+        BrowserStreamRoute.isLocalMediaUrl(url) ||
+            !selectedVideo?.playlistBody.isNullOrBlank() ||
+            selectedVideo?.hasSyntheticHandoff == true
+    }
+    val browserEffectiveRoute = remember(routeMode, selectedIsLocal, isBrowserDestination) {
+        if (!isBrowserDestination) routeMode
+        else BrowserStreamRoute.effectiveMode(routeMode, isLocalMedia = selectedIsLocal)
+    }
+    val browserRouteHint = remember(routeMode, browserEffectiveRoute, selectedIsLocal, isBrowserDestination) {
+        if (!isBrowserDestination) null
+        else BrowserStreamRoute.overrideReason(
+            requested = routeMode,
+            effective = browserEffectiveRoute,
+            isLocalMedia = selectedIsLocal,
+        )
+    }
+
+    // Keep CastSessionManager packaging preference in sync with the sheet chips so
+    // browser loads that skip the sheet (e.g. local file) use the same route.
+    LaunchedEffect(routeMode, browserEffectiveRoute, isBrowserDestination) {
+        castSessionManager.setPreferredStreamRoute(routeMode)
+        if (isBrowserDestination) {
+            castSessionManager.noteEffectiveStreamRoute(browserEffectiveRoute, proxyFallback = false)
+        }
+    }
 
     // Synthetic / exclusive handoff must use the phone proxy (body is served locally).
     LaunchedEffect(selectedVideo?.url, selectedVideo?.playlistBody, selectedVideo?.audioUrl) {
@@ -292,7 +329,16 @@ fun CastSheet(
                     packaging = true
                     scope.launch {
                         try {
-                            val packaged = streamRouteService.packageForCast(
+                            val isLocal = BrowserStreamRoute.isLocalMediaUrl(base.url) ||
+                                !base.playlistBody.isNullOrBlank() ||
+                                base.hasSyntheticHandoff
+                            val requested = if (isBrowserDestination) {
+                                BrowserStreamRoute.effectiveMode(routeMode, isLocalMedia = isLocal)
+                            } else {
+                                routeMode
+                            }
+                            val packaged = packageWithBrowserFallback(
+                                streamRouteService = streamRouteService,
                                 media = CastableMedia(
                                     url = base.url,
                                     headers = VideoDetector.mediaHeaders(base),
@@ -301,8 +347,13 @@ fun CastSheet(
                                     playlistBody = base.playlistBody,
                                     audioUrl = base.audioUrl,
                                 ),
-                                mode = routeMode,
+                                mode = requested,
                                 settings = streamProxySettings,
+                                browserDestination = isBrowserDestination,
+                                context = context,
+                                onResolved = { mode, fallback ->
+                                    castSessionManager.noteEffectiveStreamRoute(mode, fallback)
+                                },
                             )
                             val resolved = base.copy(
                                 url = packaged.url,
@@ -406,14 +457,28 @@ fun CastSheet(
                 ) {
                     if (castAction != "browse") {
                         ChipDropdown(
-                            selectedLabel = routeMode.label,
+                            selectedLabel = if (isBrowserDestination) {
+                                browserEffectiveRoute.label
+                            } else {
+                                routeMode.label
+                            },
                             options = StreamRouteMode.entries
                                 .filter {
+                                    // Via proxy only when configured; Direct still listed for
+                                    // non-browser destinations. Browser maps Direct→Via phone.
                                     it != StreamRouteMode.VIA_PROXY ||
                                         streamProxySettings.isRemoteConfigured
                                 }
+                                .filter {
+                                    // Local browser media: only Via phone is valid.
+                                    !(isBrowserDestination && selectedIsLocal && it != StreamRouteMode.VIA_PHONE)
+                                }
                                 .map { it.prefsValue to it.label },
-                            selectedValue = routeMode.prefsValue,
+                            selectedValue = if (isBrowserDestination) {
+                                browserEffectiveRoute.prefsValue
+                            } else {
+                                routeMode.prefsValue
+                            },
                             onSelect = { value ->
                                 routeMode = StreamRouteMode.fromPrefs(value)
                             },
@@ -448,6 +513,26 @@ fun CastSheet(
                         )
                     }
                 }
+            }
+
+            if (castAction != "browse" && browserRouteHint != null) {
+                Text(
+                    text = browserRouteHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                )
+            } else if (castAction != "browse" && isBrowserDestination) {
+                Text(
+                    text = "Casting to browser · media routes Via phone or Via proxy",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                )
             }
 
             // Browse mode still offers the browser-engine picker from TV capabilities.
@@ -924,7 +1009,16 @@ fun CastSheet(
                     packaging = true
                     scope.launch {
                         try {
-                            val packaged = streamRouteService.packageForCast(
+                            val isLocal = BrowserStreamRoute.isLocalMediaUrl(pv.url) ||
+                                !pv.playlistBody.isNullOrBlank() ||
+                                pv.hasSyntheticHandoff
+                            val requested = if (isBrowserDestination) {
+                                BrowserStreamRoute.effectiveMode(routeMode, isLocalMedia = isLocal)
+                            } else {
+                                routeMode
+                            }
+                            val packaged = packageWithBrowserFallback(
+                                streamRouteService = streamRouteService,
                                 media = CastableMedia(
                                     url = pv.url,
                                     headers = VideoDetector.mediaHeaders(pv),
@@ -933,8 +1027,13 @@ fun CastSheet(
                                     playlistBody = pv.playlistBody,
                                     audioUrl = pv.audioUrl,
                                 ),
-                                mode = routeMode,
+                                mode = requested,
                                 settings = streamProxySettings,
+                                browserDestination = isBrowserDestination,
+                                context = context,
+                                onResolved = { mode, fallback ->
+                                    castSessionManager.noteEffectiveStreamRoute(mode, fallback)
+                                },
                             )
                             onVideoClick(
                                 pv.copy(
@@ -957,5 +1056,36 @@ fun CastSheet(
                 }
             )
         }
+    }
+}
+
+/**
+ * Packages media for cast. On browser destinations, falls back Via proxy → Via phone
+ * once with a user-visible toast (plan P5).
+ */
+private suspend fun packageWithBrowserFallback(
+    streamRouteService: StreamRouteService,
+    media: CastableMedia,
+    mode: StreamRouteMode,
+    settings: com.playbridge.sender.cast.proxy.StreamProxySettings,
+    browserDestination: Boolean,
+    context: Context,
+    onResolved: (StreamRouteMode, Boolean) -> Unit = { _, _ -> },
+): com.playbridge.sender.cast.proxy.PackagedMedia {
+    return try {
+        val packaged = streamRouteService.packageForCast(media, mode, settings)
+        onResolved(mode, false)
+        packaged
+    } catch (e: Exception) {
+        if (!browserDestination || mode == StreamRouteMode.VIA_PHONE) throw e
+        Toast.makeText(
+            context,
+            "Remote proxy unavailable — using Via phone",
+            Toast.LENGTH_LONG,
+        ).show()
+        val packaged = streamRouteService.packageForCast(media, StreamRouteMode.VIA_PHONE, settings)
+        // Toast already shown; do not also fire castNotices via proxyFallback=true.
+        onResolved(StreamRouteMode.VIA_PHONE, false)
+        packaged
     }
 }

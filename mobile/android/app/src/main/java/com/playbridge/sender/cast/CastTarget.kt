@@ -54,7 +54,7 @@ interface CastTarget {
     fun release()
 }
 
-enum class TargetKind { NATIVE, DLNA, ROKU, GOOGLE_CAST }
+enum class TargetKind { NATIVE, DLNA, ROKU, GOOGLE_CAST, WEB_BROWSER }
 
 enum class Capability {
     /** Set a new media URI. */

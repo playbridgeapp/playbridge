@@ -2,10 +2,15 @@ package com.playbridge.sender.cast.proxy
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -21,10 +26,14 @@ data class RegisteredMedia(
     val encryptedUrl: String? = null,
 )
 
+data class BrowserHostInfo(
+    val urls: List<String>,
+    val port: Int,
+)
+
 /**
- * Process-wide façade over Rust [SenderServices]: one embedded stream proxy for
- * [StreamRouteMode.VIA_PHONE]. Browser-host commands exist on the native side
- * but are not exposed here yet.
+ * Process-wide façade over Rust [SenderServices]: embedded stream proxy (Via phone)
+ * plus browser-receiver host commands used for cast-to-browser.
  */
 class PhoneSenderServices private constructor(
     private val handle: Long,
@@ -38,6 +47,13 @@ class PhoneSenderServices private constructor(
         private set
 
     val isAvailable: Boolean get() = handle != 0L && closed.get() == 0L
+
+    private val _events = MutableSharedFlow<JSONObject>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+    /** Raw native events (browser pairing/status, worker lifecycle). */
+    val events: SharedFlow<JSONObject> = _events.asSharedFlow()
 
     suspend fun registerUrl(
         host: String,
@@ -89,6 +105,95 @@ class PhoneSenderServices private constructor(
         data.optBoolean("revoked", false)
     }
 
+    suspend fun startBrowser(preferredPort: Int? = null): BrowserHostInfo =
+        withContext(Dispatchers.IO) {
+            val fields = mutableMapOf<String, Any?>()
+            if (preferredPort != null) fields["preferred_port"] = preferredPort
+            val data = submit(command = "browser_start", fields = fields)
+            val urls = data.optJSONArray("urls")?.toStringList().orEmpty()
+            BrowserHostInfo(
+                urls = urls,
+                port = data.optInt("port", 0),
+            )
+        }
+
+    suspend fun stopBrowser() = withContext(Dispatchers.IO) {
+        submit(command = "browser_stop", fields = emptyMap())
+        Unit
+    }
+
+    suspend fun approveBrowser(sessionId: String, code: String) = withContext(Dispatchers.IO) {
+        submit(
+            command = "browser_approve",
+            fields = mapOf(
+                "session_id" to sessionId,
+                "code" to code,
+            ),
+        )
+        Unit
+    }
+
+    suspend fun loadBrowser(
+        sessionId: String,
+        url: String,
+        title: String? = null,
+        contentType: String? = null,
+        posterUrl: String? = null,
+        subtitleUrl: String? = null,
+        startPositionMs: Long? = null,
+    ): String = withContext(Dispatchers.IO) {
+        val media = JSONObject().apply {
+            put("url", url)
+            if (title != null) put("title", title)
+            if (contentType != null) put("contentType", contentType)
+            if (posterUrl != null) put("posterUrl", posterUrl)
+            if (subtitleUrl != null) put("subtitleUrl", subtitleUrl)
+            if (startPositionMs != null) put("startPositionMs", startPositionMs)
+        }
+        val data = submit(
+            command = "browser_load",
+            fields = mapOf(
+                "session_id" to sessionId,
+                "media" to media,
+            ),
+        )
+        data.getString("browserRequestId")
+    }
+
+    /**
+     * @param action snake_case browser command: play, pause, stop, seek, set_volume
+     * @param value seek position ms, or volume 0.0–1.0 for set_volume
+     */
+    suspend fun controlBrowser(
+        sessionId: String,
+        action: String,
+        value: Double? = null,
+    ): String = withContext(Dispatchers.IO) {
+        val fields = mutableMapOf<String, Any?>(
+            "session_id" to sessionId,
+            "action" to action,
+        )
+        if (value != null) fields["value"] = value
+        val data = submit(command = "browser_control", fields = fields)
+        data.getString("browserRequestId")
+    }
+
+    suspend fun disconnectBrowser(sessionId: String): Boolean = withContext(Dispatchers.IO) {
+        val data = submit(
+            command = "browser_disconnect",
+            fields = mapOf("session_id" to sessionId),
+        )
+        data.optBoolean("disconnected", false)
+    }
+
+    suspend fun forgetBrowserReceiver(receiverId: String): Int = withContext(Dispatchers.IO) {
+        val data = submit(
+            command = "browser_forget",
+            fields = mapOf("receiver_id" to receiverId),
+        )
+        data.optInt("forgotten", 0)
+    }
+
     fun shutdown() {
         if (!closed.compareAndSet(0, 1)) return
         pending.forEach { (_, cont) ->
@@ -133,6 +238,7 @@ class PhoneSenderServices private constructor(
 
     private fun handleEvent(json: String) {
         val event = runCatching { JSONObject(json) }.getOrNull() ?: return
+        _events.tryEmit(event)
         when (event.optString("event")) {
             "started" -> {
                 proxyPort = event.optInt("proxyPort", 0)
@@ -212,6 +318,15 @@ class PhoneSenderServices private constructor(
         fun shutdownIfRunning() {
             instance?.shutdown()
             instance = null
+        }
+
+        private fun JSONArray.toStringList(): List<String> {
+            val out = ArrayList<String>(length())
+            for (i in 0 until length()) {
+                val value = optString(i, "")
+                if (value.isNotEmpty()) out.add(value)
+            }
+            return out
         }
     }
 }

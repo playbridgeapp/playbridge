@@ -94,6 +94,12 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|connectedDevice" />
 
+        <!-- Phone-hosted browser receiver page (LAN HTTP/WS while casting to a TV browser). -->
+        <service
+            android:name=".cast.browser.BrowserReceiverHostService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Phase-1 download engine: give WorkManager's foreground service the dataSync
              type so DownloadWorker.setForeground() is allowed on Android 14+ (targetSdk 36). -->
         <service

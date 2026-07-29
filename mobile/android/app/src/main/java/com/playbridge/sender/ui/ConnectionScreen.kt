@@ -80,6 +80,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.cast.CastSessionManager
+import com.playbridge.sender.cast.browser.BrowserOnTvSection
+import com.playbridge.sender.cast.browser.BrowserPairingCodeSheet
+import com.playbridge.sender.cast.browser.BrowserPairingRequest
+import com.playbridge.sender.cast.browser.BrowserReceiverRepository
+import com.playbridge.sender.cast.browser.BrowserReceiverSheet
 import com.playbridge.sender.connection.ConnectionMerge
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.NetworkStatusRepository
@@ -87,6 +92,7 @@ import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 
 private val OnlineGreen = Color(0xFF4CAF50)
 private val WarningAmber = Color(0xFFFFA000)
@@ -117,6 +123,11 @@ fun ConnectionScreen(
     val route by viewModel.route.collectAsState()
     val isScanning by viewModel.isScanning.collectAsState()
     val networkStatus by viewModel.networkStatus.collectAsState()
+    val browserRepo: BrowserReceiverRepository = koinInject()
+    val browserHost by browserRepo.state.collectAsState()
+    val externalMediaTitle by viewModel.externalMediaTitle.collectAsState()
+    val castSessionState by viewModel.castSessionState.collectAsState()
+    val lastEffectiveStreamRoute by viewModel.lastEffectiveStreamRoute.collectAsState()
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
     val nativeSelected = route is CastSessionManager.Route.NativeTv
@@ -125,6 +136,9 @@ fun ConnectionScreen(
             connectionState is WebSocketClient.ConnectionState.WaitingForApproval ||
             connectionState is WebSocketClient.ConnectionState.Retrying
         )
+
+    var showBrowserSheet by remember { mutableStateOf(false) }
+    var browserPairRequest by remember { mutableStateOf<BrowserPairingRequest?>(null) }
 
     DisposableEffect(Unit) {
         viewModel.retainDiscovery()
@@ -223,6 +237,12 @@ fun ConnectionScreen(
         }
     }
 
+    LaunchedEffect(Unit) {
+        viewModel.castNotices.collect { message ->
+            snackbarHostState.showSnackbar(message)
+        }
+    }
+
     fun onDeviceSelected(ip: String, port: Int, name: String, uuid: String = "") =
         connectKnownOrPair(viewModel, history, ip, port, name, uuid)
 
@@ -234,6 +254,7 @@ fun ConnectionScreen(
             CastProtocol.DLNA -> viewModel.selectDlnaTarget(target)
             CastProtocol.ROKU -> true.also { viewModel.selectRokuTarget(target) }
             CastProtocol.GOOGLE_CAST -> true.also { viewModel.selectGoogleCastTarget(target) }
+            CastProtocol.WEB_BROWSER -> true.also { viewModel.selectBrowserTarget(target) }
             CastProtocol.PLAYBRIDGE -> true.also {
                 val alreadyLinked = isConnected && tvDevice?.let {
                     ConnectionMerge.isSameDevice(it, target)
@@ -345,6 +366,11 @@ fun ConnectionScreen(
                     },
                     onDisconnectExternal = { viewModel.disconnectExternalTarget() },
                     isConnecting = isConnecting,
+                    externalMediaTitle = externalMediaTitle,
+                    externalCasting = castSessionState.phase == com.playbridge.sender.cast.SessionPhase.PLAYING ||
+                        castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTED ||
+                        castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTING,
+                    streamRouteLabel = lastEffectiveStreamRoute?.label,
                 )
             }
 
@@ -404,6 +430,21 @@ fun ConnectionScreen(
                         onRemove = null,
                     )
                 }
+            }
+
+            // ── Browser on TV (phone-hosted receiver) ─────────────────────────
+            item(key = "browser-section") {
+                BrowserOnTvSection(
+                    hostState = browserHost,
+                    networkStatus = networkStatus,
+                    onOpenSetup = { showBrowserSheet = true },
+                    onSelectReady = { session ->
+                        selectEndpoint(
+                            session.toTvDevice(browserRepo.lanHostIp(), browserHost.port),
+                        )
+                    },
+                    onEnterCode = { request -> browserPairRequest = request },
+                )
             }
 
             // ── Recent other (saved external shortcuts) ──────────────────────
@@ -504,6 +545,28 @@ fun ConnectionScreen(
             onConnect = { ip, port ->
                 showManualDialog = false
                 onDeviceSelected(ip, port, "Manual TV")
+            },
+        )
+    }
+
+    if (showBrowserSheet) {
+        BrowserReceiverSheet(
+            viewModel = viewModel,
+            onDismiss = { showBrowserSheet = false },
+        )
+    }
+
+    browserPairRequest?.let { request ->
+        BrowserPairingCodeSheet(
+            request = request,
+            onDismiss = { browserPairRequest = null },
+            onApprove = { code ->
+                val result = browserRepo.approve(request.sessionId, code)
+                if (result.isFailure) {
+                    throw result.exceptionOrNull()
+                        ?: IllegalStateException("Incorrect code")
+                }
+                browserPairRequest = null
             },
         )
     }
@@ -698,17 +761,34 @@ fun NowDestinationCard(
     onDisconnectNative: () -> Unit,
     onDisconnectExternal: () -> Unit,
     isConnecting: Boolean = false,
+    externalMediaTitle: String? = null,
+    externalCasting: Boolean = false,
+    streamRouteLabel: String? = null,
 ) {
     val external = activeExternalDevice
     when {
         external != null -> {
+            val isBrowser = external.resolvedProtocol == CastProtocol.WEB_BROWSER
+            val subtitle = buildString {
+                if (externalCasting && !externalMediaTitle.isNullOrBlank()) {
+                    append(externalMediaTitle)
+                } else if (isBrowser) {
+                    append("Cast a video to play here")
+                } else {
+                    append("${external.ip} · cast a video to play here")
+                }
+                if (!streamRouteLabel.isNullOrBlank() && externalCasting) {
+                    append(" · ")
+                    append(streamRouteLabel)
+                }
+            }
             ActiveDestinationCard(
                 name = external.name,
-                subtitle = "${external.ip} · cast a video to play here",
-                icon = Icons.Default.Cast,
+                subtitle = subtitle,
+                icon = if (isBrowser) Icons.Default.Cast else Icons.Default.Cast,
                 badge = external.resolvedProtocol.displayName,
-                statusPill = "Casting",
-                statusFilled = true,
+                statusPill = if (externalCasting) "Casting" else "Ready",
+                statusFilled = externalCasting,
                 onDisconnect = onDisconnectExternal,
             )
         }
@@ -1087,7 +1167,8 @@ fun TvDeviceRow(
             ) {
                 Icon(
                     imageVector = when (device.connectDevice.resolvedProtocol) {
-                        CastProtocol.DLNA, CastProtocol.GOOGLE_CAST -> Icons.Default.Cast
+                        CastProtocol.DLNA, CastProtocol.GOOGLE_CAST, CastProtocol.WEB_BROWSER ->
+                            Icons.Default.Cast
                         else -> Icons.Default.Tv
                     },
                     contentDescription = null,
