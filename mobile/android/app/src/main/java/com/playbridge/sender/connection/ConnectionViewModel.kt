@@ -2,7 +2,6 @@ package com.playbridge.sender.connection
 import androidx.core.content.edit
 
 import android.app.Application
-import com.playbridge.sender.BuildConfig
 import android.content.Context
 import android.os.Build
 import androidx.core.net.toUri
@@ -539,7 +538,6 @@ class ConnectionViewModel(
                 )
             )
         }
-        if (BuildConfig.DEBUG) Log.d(TAG, "Sending command payload: $commandJson")
         webSocketClient.send(commandJson)
     }
     /**

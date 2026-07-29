@@ -426,12 +426,14 @@ class WebSocketServer: ObservableObject {
     // Use SwiftProtobuf JSON for all typed sub-messages.
 
     private func handleMessage(_ jsonString: String, data: Data, from connection: NWConnection) {
-        print("WebSocket Received: \(jsonString)")
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let msgType = json["type"] as? String else {
             print("WebSocket Error: Failed to parse message")
             return
         }
+#if DEBUG
+        print("WebSocket Received: \(msgType)")
+#endif
 
         switch msgType {
         case "ping":
