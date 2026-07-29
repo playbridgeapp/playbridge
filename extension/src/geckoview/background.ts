@@ -7,6 +7,7 @@
  */
 
 import browser from "./browser";
+import { enrichReplayHeaders } from "./header-enrichment";
 import { HlsParser } from "../core/hls-parser";
 import {
   classifyHlsUrl,
@@ -413,8 +414,12 @@ function reportVideo(
 
   if (seenUrls.has(key) && existing) {
     existing.lastSeen = Date.now();
-    if (hasHeaders && !headersCaptured.has(key)) {
-      existing.headers = headers!;
+    const headersEnriched = enrichReplayHeaders(
+      existing,
+      headers,
+      headersCaptured.has(key),
+    );
+    if (headersEnriched) {
       headersCaptured.add(key);
     }
     if (annotated.hlsRole) {
@@ -427,6 +432,9 @@ function reportVideo(
       existing.hlsRole === "media"
     ) {
       maybeSynthesizeFromObservations(tabId, existing.hlsGroupKey);
+    }
+    if (headersEnriched) {
+      emitNativeVideo(existing);
     }
     return;
   }
