@@ -259,8 +259,11 @@ fun DeviceConnectionSheet(
     }
 
     val playBridgeList = ConnectionMerge.playBridgeHistory(history).map { saved ->
+        // Prefer the live discovered endpoint (DHCP/control URL can change) while
+        // keeping the history entry for credentials and last-connected metadata.
+        val live = ConnectionMerge.withDiscoveredEndpoint(saved, discoveredDevices)
         UnifiedDevice(
-            connectDevice = saved,
+            connectDevice = live,
             historyEntry = saved,
             isOnline = pings[saved.endpointKey.toString()] == true ||
                 discoveredDevices.any { ConnectionMerge.isSameDevice(it, saved) },
@@ -273,8 +276,9 @@ fun DeviceConnectionSheet(
         )
 
     val recentExternal = ConnectionMerge.recentExternalHistory(history).map { saved ->
+        val live = ConnectionMerge.withDiscoveredEndpoint(saved, discoveredDevices)
         UnifiedDevice(
-            connectDevice = saved,
+            connectDevice = live,
             historyEntry = saved,
             isOnline = pings[saved.endpointKey.toString()] == true ||
                 discoveredDevices.any { ConnectionMerge.isSameDevice(it, saved) },
@@ -285,30 +289,33 @@ fun DeviceConnectionSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     fun pick(device: TvDevice) {
-        val ready = when (device.resolvedProtocol) {
-            CastProtocol.DLNA -> viewModel.selectDlnaTarget(device)
-            CastProtocol.ROKU -> true.also { viewModel.selectRokuTarget(device) }
-            CastProtocol.GOOGLE_CAST -> true.also { viewModel.selectGoogleCastTarget(device) }
+        // Heal stale saved IPs / DLNA control URLs against the current discovery set
+        // before selecting — shortcuts stay "online" by UUID but may still hold old endpoints.
+        val target = ConnectionMerge.withDiscoveredEndpoint(device, discoveredDevices)
+        val ready = when (target.resolvedProtocol) {
+            CastProtocol.DLNA -> viewModel.selectDlnaTarget(target)
+            CastProtocol.ROKU -> true.also { viewModel.selectRokuTarget(target) }
+            CastProtocol.GOOGLE_CAST -> true.also { viewModel.selectGoogleCastTarget(target) }
             CastProtocol.PLAYBRIDGE -> {
                 viewModel.selectNativeRoute()
                 val alreadyLinked = isConnected && tvDevice?.let {
-                    ConnectionMerge.isSameDevice(it, device)
+                    ConnectionMerge.isSameDevice(it, target)
                 } == true
                 if (!alreadyLinked) {
                     connectKnownOrPair(
                         viewModel,
                         history,
-                        device.ip,
-                        device.port,
-                        device.name,
-                        device.uuid,
+                        target.ip,
+                        target.port,
+                        target.name,
+                        target.uuid,
                     )
                 }
                 true
             }
         }
         if (ready) {
-            onPickedDevice?.invoke(device)
+            onPickedDevice?.invoke(target)
             onDismiss()
         }
     }
