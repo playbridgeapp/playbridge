@@ -60,6 +60,17 @@ internal fun maxVideoBitrateBps(capMbps: Double?): Int? = capMbps
     ?.let { (it * 1_000_000).toInt() }
 
 /**
+ * TextRenderer advances its internal cue cursor monotonically. Moving the effective subtitle
+ * position backwards therefore requires a player position reset; forward movement can be applied
+ * on the next render tick. Paused/buffering playback also needs a reset to refresh cues promptly.
+ */
+internal fun shouldRefreshSubtitleRenderer(
+    previousDelayMs: Long,
+    newDelayMs: Long,
+    isPlaying: Boolean,
+): Boolean = previousDelayMs != newDelayMs && (!isPlaying || newDelayMs < previousDelayMs)
+
+/**
  * Android implementation of [PlaybackEngine] using Media3 ExoPlayer.
  *
  * This implementation includes the complex logic for:
@@ -664,18 +675,17 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     /**
      * Apply a subtitle timing offset. Positive advances subtitles (look-ahead in the cue
-     * timeline); negative delays them. Takes effect on the next text render tick; when paused
-     * a no-op seek forces an immediate refresh.
+     * timeline); negative delays them. Moving the effective cue position backwards requires a
+     * no-op seek so TextRenderer rewinds its internal cue cursor.
      */
     fun setSubtitleDelay(delayMs: Long) {
         val clamped = delayMs.coerceIn(-120_000L, 120_000L)
-        if (subtitleDelayMs == clamped) return
+        val previousDelayMs = subtitleDelayMs
+        if (previousDelayMs == clamped) return
         logger.i(TAG, "setSubtitleDelay($clamped)")
         subtitleDelayMs = clamped
         val exoPlayer = player ?: return
-        // When paused, render() may not run until the next interaction — nudge position so
-        // OffsetTextRenderer re-evaluates active cues with the new offset immediately.
-        if (!exoPlayer.isPlaying) {
+        if (shouldRefreshSubtitleRenderer(previousDelayMs, clamped, exoPlayer.isPlaying)) {
             val pos = exoPlayer.currentPosition.coerceAtLeast(0L)
             exoPlayer.seekTo(pos)
         }

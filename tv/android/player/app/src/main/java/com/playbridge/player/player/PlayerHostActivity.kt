@@ -1962,9 +1962,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     /**
      * Handle a renderer failure.
      *
-     * Auto engine switch is restricted to **startup** hard failures (no first frame yet),
-     * matching Nuvio's model: mid-playback glitches must not flip Exo↔MPV. Watchdog
-     * timeouts while still PREPARING remain eligible for one-shot failover.
+     * Hard startup failures and exhausted in-engine recovery may switch engines once. The
+     * attempted-renderer guard prevents Exo↔MPV loops; terminal source/authentication failures
+     * still end the item without switching.
      */
     private fun handleRendererFailure(
         message: String,

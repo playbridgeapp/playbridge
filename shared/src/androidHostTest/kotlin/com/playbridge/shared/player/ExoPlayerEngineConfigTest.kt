@@ -32,4 +32,47 @@ class ExoPlayerEngineConfigTest {
         assertTrue(shouldUseLegacyHttpDataSource("dom_source"))
         assertTrue(shouldUseLegacyHttpDataSource("iptv_m3u"))
     }
+
+    @Test
+    fun subtitleDelayRefreshesWhenEffectiveCuePositionMovesBackwards() {
+        assertTrue(
+            shouldRefreshSubtitleRenderer(
+                previousDelayMs = 1_000L,
+                newDelayMs = 0L,
+                isPlaying = true,
+            ),
+        )
+        assertTrue(
+            shouldRefreshSubtitleRenderer(
+                previousDelayMs = 0L,
+                newDelayMs = -100L,
+                isPlaying = true,
+            ),
+        )
+    }
+
+    @Test
+    fun subtitleDelayAvoidsUnnecessarySeekWhilePlayingForward() {
+        assertFalse(
+            shouldRefreshSubtitleRenderer(
+                previousDelayMs = 0L,
+                newDelayMs = 100L,
+                isPlaying = true,
+            ),
+        )
+        assertFalse(
+            shouldRefreshSubtitleRenderer(
+                previousDelayMs = 100L,
+                newDelayMs = 100L,
+                isPlaying = false,
+            ),
+        )
+        assertTrue(
+            shouldRefreshSubtitleRenderer(
+                previousDelayMs = 0L,
+                newDelayMs = 100L,
+                isPlaying = false,
+            ),
+        )
+    }
 }

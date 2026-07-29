@@ -5,8 +5,8 @@ package com.playbridge.player.player
  *
  * Policy (Nuvio-inspired):
  * 1. Recover in-engine whenever possible (live edge, re-prepare, seek retry).
- * 2. Escalate engine failover only for hard capability/format failures **before** first frame.
- * 3. After first frame, never recommend engine switch for rebuffer / network / live glitches.
+ * 2. Fall back to the other engine after the applicable in-engine recovery budget is exhausted.
+ * 3. Keep non-recoverable source/authentication failures terminal.
  */
 internal object ExoPlaybackErrorPolicy {
 
@@ -69,10 +69,12 @@ internal object ExoPlaybackErrorPolicy {
      * How the host should treat an error that the renderer could not (or should not) recover.
      *
      * - [STARTUP_ENGINE_FAILOVER]: hard capability/format failure before first frame → switch engines once.
-     * - [TERMINAL]: give up on this engine for this item; do **not** switch after playback has started.
+     * - [RECOVERY_EXHAUSTED_FAILOVER]: recovery budget exhausted → switch engines once, including mid-play.
+     * - [TERMINAL]: give up on this item without switching engines.
      */
     enum class EscalationSeverity {
         STARTUP_ENGINE_FAILOVER,
+        RECOVERY_EXHAUSTED_FAILOVER,
         TERMINAL,
     }
 
@@ -97,12 +99,15 @@ internal object ExoPlaybackErrorPolicy {
     )
 
     fun classify(facts: ErrorFacts): Disposition {
-        // Live edge fell outside the available window — rejoin live; never switch engines.
+        // Live edge fell outside the available window — rejoin live, then fall back if exhausted.
         if (facts.errorCode == Codes.BEHIND_LIVE_WINDOW) {
             return if (facts.budget.liveEdge < MAX_LIVE_EDGE_RECOVERIES) {
                 Disposition.Recover(RecoveryStrategy.LIVE_EDGE)
             } else {
-                Disposition.Escalate(EscalationSeverity.TERMINAL, "behind_live_window_exhausted")
+                Disposition.Escalate(
+                    EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+                    "behind_live_window_exhausted",
+                )
             }
         }
 
@@ -111,7 +116,7 @@ internal object ExoPlaybackErrorPolicy {
             return Disposition.TreatAsEnded("timeout_near_end")
         }
 
-        // Live / mid-stream stall timeout → rejoin live edge or re-prepare; never engine-hop mid-play.
+        // Live / mid-stream stall timeout → rejoin live edge or re-prepare before engine fallback.
         if (facts.errorCode == Codes.TIMEOUT) {
             return if (facts.isLive) {
                 recoverOrEscalate(
@@ -157,11 +162,12 @@ internal object ExoPlaybackErrorPolicy {
         }
 
         if (facts.errorCode == Codes.AUDIO_TRACK_INIT_FAILED) {
-            return recoverOrEscalate(
-                attempts = facts.budget.reprepare,
-                max = MAX_REPREPARE_RECOVERIES,
-                strategy = RecoveryStrategy.REPREPARE,
-                exhaustedReason = "audio_track_init_exhausted",
+            if (facts.budget.reprepare < MAX_REPREPARE_RECOVERIES) {
+                return Disposition.Recover(RecoveryStrategy.REPREPARE)
+            }
+            return Disposition.Escalate(
+                severity = EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+                reason = "audio_track_init_exhausted",
             )
         }
 
@@ -180,11 +186,7 @@ internal object ExoPlaybackErrorPolicy {
                 return Disposition.Recover(RecoveryStrategy.REPREPARE)
             }
             return Disposition.Escalate(
-                severity = if (facts.hasFirstFrame) {
-                    EscalationSeverity.TERMINAL
-                } else {
-                    EscalationSeverity.STARTUP_ENGINE_FAILOVER
-                },
+                severity = EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
                 reason = "decoder_failure",
             )
         }
@@ -231,37 +233,40 @@ internal object ExoPlaybackErrorPolicy {
             }
         }
 
-        // Unknown / unspecified: try one re-prepare, then terminal (or startup failover only if
-        // we never painted a frame — last chance for exotic codec paths).
+        // Unknown / unspecified: try one re-prepare, then fall back to the other engine.
         if (facts.budget.reprepare < 1) {
             return Disposition.Recover(RecoveryStrategy.REPREPARE)
         }
         return Disposition.Escalate(
-            severity = if (facts.hasFirstFrame) {
-                EscalationSeverity.TERMINAL
-            } else {
-                EscalationSeverity.STARTUP_ENGINE_FAILOVER
-            },
+            severity = EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
             reason = "unhandled_${facts.errorCodeName}",
         )
     }
 
     /**
      * Whether the host may auto-switch engines for this escalated failure.
-     * Engine switches are restricted to startup (no first frame) + [STARTUP_ENGINE_FAILOVER].
+     * Startup failures require no first frame; exhausted recovery can switch at any point.
      */
     fun mayAutoSwitchEngine(
         severity: EscalationSeverity,
         hasFirstFrame: Boolean,
-    ): Boolean = !hasFirstFrame && severity == EscalationSeverity.STARTUP_ENGINE_FAILOVER
+    ): Boolean = when (severity) {
+        EscalationSeverity.STARTUP_ENGINE_FAILOVER -> !hasFirstFrame
+        EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER -> true
+        EscalationSeverity.TERMINAL -> false
+    }
 
     fun severityWireValue(severity: EscalationSeverity): String = when (severity) {
         EscalationSeverity.STARTUP_ENGINE_FAILOVER -> RendererProtocol.ERROR_SEVERITY_STARTUP_FAILOVER
+        EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER ->
+            RendererProtocol.ERROR_SEVERITY_RECOVERY_EXHAUSTED_FAILOVER
         EscalationSeverity.TERMINAL -> RendererProtocol.ERROR_SEVERITY_TERMINAL
     }
 
     fun parseSeverity(raw: String?): EscalationSeverity? = when (raw) {
         RendererProtocol.ERROR_SEVERITY_STARTUP_FAILOVER -> EscalationSeverity.STARTUP_ENGINE_FAILOVER
+        RendererProtocol.ERROR_SEVERITY_RECOVERY_EXHAUSTED_FAILOVER ->
+            EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER
         RendererProtocol.ERROR_SEVERITY_TERMINAL -> EscalationSeverity.TERMINAL
         else -> null
     }
@@ -273,9 +278,10 @@ internal object ExoPlaybackErrorPolicy {
         exhaustedReason: String,
     ): Disposition {
         if (attempts < max) return Disposition.Recover(strategy)
-        // Exhausted recoveries are terminal: switching engines does not fix a dead CDN/live edge.
-        // Only decoder/format paths escalate as STARTUP_ENGINE_FAILOVER (handled separately).
-        return Disposition.Escalate(EscalationSeverity.TERMINAL, exhaustedReason)
+        return Disposition.Escalate(
+            EscalationSeverity.RECOVERY_EXHAUSTED_FAILOVER,
+            exhaustedReason,
+        )
     }
 
     private fun isNearVodEnd(facts: ErrorFacts): Boolean {
