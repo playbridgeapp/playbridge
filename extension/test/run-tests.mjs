@@ -11,6 +11,7 @@ const outfiles = [
   join(directory, "geckoview-header-enrichment.test.mjs"),
   join(directory, "hls-parser.test.mjs"),
   join(directory, "media-candidate.test.mjs"),
+  join(directory, "response-body-media.test.mjs"),
   join(directory, "settings.test.mjs"),
   join(directory, "synthetic-hls.test.mjs"),
 ];
@@ -22,6 +23,7 @@ try {
       "test/geckoview-header-enrichment.test.ts",
       "test/hls-parser.test.ts",
       "test/media-candidate.test.ts",
+      "test/response-body-media.test.ts",
       "test/settings.test.ts",
       "test/synthetic-hls.test.ts",
     ],
