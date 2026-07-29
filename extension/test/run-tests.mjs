@@ -8,6 +8,7 @@ import { build } from "esbuild";
 const directory = await mkdtemp(join(tmpdir(), "playbridge-extension-tests-"));
 const outfiles = [
   join(directory, "data-consent.test.mjs"),
+  join(directory, "geckoview-header-enrichment.test.mjs"),
   join(directory, "hls-parser.test.mjs"),
   join(directory, "media-candidate.test.mjs"),
   join(directory, "settings.test.mjs"),
@@ -18,6 +19,7 @@ try {
   await build({
     entryPoints: [
       "test/data-consent.test.ts",
+      "test/geckoview-header-enrichment.test.ts",
       "test/hls-parser.test.ts",
       "test/media-candidate.test.ts",
       "test/settings.test.ts",
