@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import '../extension_request_debug_log.dart';
 
 /// Resolves an HLS **master** playlist down to a single **variant**
 /// media-playlist URL before it reaches mpv.
@@ -77,9 +78,26 @@ Future<String?> _fetch(
 ) async {
   final req = await client.getUrl(uri);
   headers?.forEach((k, v) => req.headers.set(k, v));
+  debugLogNetworkRequest(
+    source: 'hls',
+    url: uri.toString(),
+    headers: _headerMap(req.headers),
+  );
   final resp = await req.close().timeout(timeout);
+  debugLogNetworkResponse(
+    source: 'hls',
+    url: uri.toString(),
+    statusCode: resp.statusCode,
+    headers: _headerMap(resp.headers),
+  );
   if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
   return resp.transform(utf8.decoder).join().timeout(timeout);
+}
+
+Map<String, String> _headerMap(HttpHeaders headers) {
+  final fields = <String, String>{};
+  headers.forEach((name, values) => fields[name] = values.join(', '));
+  return fields;
 }
 
 class _Variant {

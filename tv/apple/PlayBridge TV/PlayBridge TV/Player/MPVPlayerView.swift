@@ -296,6 +296,7 @@ class MPVViewController: UIViewController {
     /// state is reset; the handle, render context, and demuxer caches survive.
     func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
                      initialTime: Double, title: String?) {
+        debugLogNetworkRequest("MPV playback", url: url, headers: headers)
         self.url = url
         self.headers = headers
         self.subtitles = subtitles

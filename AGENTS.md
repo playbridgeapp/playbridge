@@ -88,7 +88,12 @@ The root `shared/` directory has no standalone Gradle wrapper. Validate shared c
 - Use explicit imports, remove unused imports, prefer non-nullable types, and expose Compose state through `StateFlow`.
 - Use Conventional Commits.
 - Preserve unrelated user changes in a dirty worktree; stage only files belonging to the requested task.
-- Never log Debrid tokens, signing credentials, authenticated stream URLs, or other secrets.
+- Debug-only, non-persisted logs may include full URLs and all request/response header
+  names and values for troubleshooting. This exception applies only to debug builds
+  and output that is not retained or exposed through diagnostics endpoints.
+- Release logs and persisted logs require extra caution: never record Debrid tokens,
+  signing or pairing credentials, authenticated stream URLs, sensitive header values,
+  or other secrets. Redact URLs and header values before persistence.
 
 ## Critical cross-project constraints
 

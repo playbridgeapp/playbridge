@@ -440,6 +440,12 @@ class ConnectionViewModel(
         title: String? = null,
         mime: String? = null,
     ): Boolean {
+        com.playbridge.sender.logging.DebugNetworkLogger.urlAndHeaders(
+            TAG,
+            "Cast input",
+            url,
+            headers,
+        )
         val media = MediaItem(url = url, headers = headers, mimeType = mime, title = title)
         if (castSessionManager.load(media)) return true
         if (route.value is CastSessionManager.Route.NativeTv &&
@@ -468,6 +474,12 @@ class ConnectionViewModel(
                             headers = packaged.headers ?: emptyMap(),
                             content_type = packaged.contentType ?: mime,
                         ),
+                    )
+                    com.playbridge.sender.logging.DebugNetworkLogger.urlAndHeaders(
+                        TAG,
+                        "Cast packaged output",
+                        packaged.url,
+                        packaged.headers,
                     )
                     sendCommandAndRecord(cmd, "play", packaged.url, title)
                     castSessionManager.notifyNativePlaybackStarted()
@@ -526,7 +538,6 @@ class ConnectionViewModel(
                 )
             )
         }
-        Log.d(TAG, "Sending command payload: $commandJson")
         webSocketClient.send(commandJson)
     }
     /**

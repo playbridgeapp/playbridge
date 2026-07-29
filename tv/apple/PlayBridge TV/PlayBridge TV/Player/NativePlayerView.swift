@@ -26,6 +26,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let onBroadcast: ([String: Any]) -> Void
 
     func makeUIViewController(context: Context) -> AVPlayerViewController {
+        debugLogNetworkRequest("AVPlayer playback", url: url, headers: headers)
         let controller = ActivityAVPlayerViewController()
         controller.delegate = context.coordinator
 

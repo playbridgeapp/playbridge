@@ -1,6 +1,7 @@
 package com.playbridge.player.player
 
 import android.util.Log
+import com.playbridge.player.logging.DebugNetworkLogger
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -39,9 +40,11 @@ object SubtitleFetcher {
             .url(url)
             .header("User-Agent", "Mozilla/5.0")
             .build()
+        DebugNetworkLogger.request(TAG, "Subtitle lookup", request)
 
         try {
             client.newCall(request).execute().use { response ->
+                DebugNetworkLogger.response(TAG, "Subtitle lookup", response)
                 if (!response.isSuccessful) {
                     Log.w(TAG, "Failed to fetch subtitles: HTTP ${response.code}")
                     return@withContext emptyList()

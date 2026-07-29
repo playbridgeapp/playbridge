@@ -14,6 +14,7 @@ import com.playbridge.sender.cast.roku.RokuCastTarget
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.ReceiverDiscoveryRepository
 import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.logging.DebugNetworkLogger
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.model.CastProtocol
@@ -974,6 +975,12 @@ class CastSessionManager(
 
     fun load(media: MediaItem, userInitiated: Boolean = true): Boolean {
         val target = _externalTarget.value ?: return false
+        DebugNetworkLogger.urlAndHeaders(
+            TAG,
+            "External ${target.kind} cast input",
+            media.url,
+            media.headers,
+        )
         if (userInitiated) _externalInterrupts.tryEmit(Unit)
         _externalMediaTitle.value = media.title ?: "Casting media"
         _externalMediaLoaded.value = true

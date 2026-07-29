@@ -11,6 +11,9 @@ plugins {
 
 android {
     namespace = "com.playbridge.sender"
+    buildFeatures {
+        buildConfig = true
+    }
     compileSdk {
         version = release(37)
     }

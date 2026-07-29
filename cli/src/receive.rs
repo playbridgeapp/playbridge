@@ -186,6 +186,17 @@ impl Mpv {
             .flatten()
             .filter_map(|(key, value)| value.as_str().map(|value| format!("{key}: {value}")))
             .collect::<Vec<_>>();
+        #[cfg(debug_assertions)]
+        {
+            eprintln!("[debug][receiver] playback URL: {url}");
+            eprintln!(
+                "[debug][receiver] playback headers ({}):",
+                header_values.len()
+            );
+            for header in &header_values {
+                eprintln!("[debug][receiver]   {header}");
+            }
+        }
         let header_fields = header_values.join(",");
         let escaped = header_fields.replace('\\', "\\\\").replace('"', "\\\"");
         // This property is global in mpv. Always write it, including an empty

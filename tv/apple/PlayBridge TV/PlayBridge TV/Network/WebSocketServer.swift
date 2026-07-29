@@ -426,12 +426,14 @@ class WebSocketServer: ObservableObject {
     // Use SwiftProtobuf JSON for all typed sub-messages.
 
     private func handleMessage(_ jsonString: String, data: Data, from connection: NWConnection) {
-        print("WebSocket Received: \(jsonString)")
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let msgType = json["type"] as? String else {
             print("WebSocket Error: Failed to parse message")
             return
         }
+#if DEBUG
+        print("WebSocket Received: \(msgType)")
+#endif
 
         switch msgType {
         case "ping":
@@ -949,7 +951,8 @@ class WebSocketServer: ObservableObject {
 
     private func handlePlay(_ payload: Playbridge_PlayPayload) {
         let url = payload.validURL!  // pre-validated by caller
-        print("WebSocket Play: \(payload.titleOrNil ?? "No Title") - \(url)")
+        print("WebSocket Play: \(payload.titleOrNil ?? "No Title")")
+        debugLogNetworkRequest("WebSocket play", url: url, headers: payload.headersOrNil)
         historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
@@ -962,6 +965,15 @@ class WebSocketServer: ObservableObject {
     private func handlePlaylist(_ payload: Playbridge_PlaylistPayload) {
         let valid = payload.items.filter { $0.validURL != nil }
         print("WebSocket Playlist: \(valid.count)/\(payload.items.count) items, startIndex: \(payload.startIndex)")
+        for (index, item) in valid.enumerated() {
+            if let url = item.validURL {
+                debugLogNetworkRequest(
+                    "WebSocket playlist item \(index)",
+                    url: url,
+                    headers: item.headersOrNil
+                )
+            }
+        }
         guard !valid.isEmpty else { return }
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks

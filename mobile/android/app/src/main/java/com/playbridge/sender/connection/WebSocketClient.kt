@@ -1,6 +1,7 @@
 package com.playbridge.sender.connection
 
 import android.util.Log
+import com.playbridge.sender.logging.DebugNetworkLogger
 import com.playbridge.shared.protocol.createAuthJson
 import com.playbridge.shared.protocol.createContextQueryJson
 import com.playbridge.shared.protocol.createPairingCommitJson
@@ -584,6 +585,7 @@ class WebSocketClient {
             Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
             return false
         }
+        DebugNetworkLogger.command(TAG, message)
         return ws.send(message)
     }
 

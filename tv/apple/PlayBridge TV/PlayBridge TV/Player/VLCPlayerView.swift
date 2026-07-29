@@ -260,6 +260,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             print("[VLC] setupPlayer: drawable=videoView bounds=\(videoView.bounds) view.bounds=\(view.bounds)")
 
             guard let url = url else { return }
+            debugLogNetworkRequest("VLC playback", url: url, headers: headers)
             originalURL = url
             let scheme = url.scheme?.lowercased()
             guard scheme == "http" || scheme == "https" else {
@@ -300,7 +301,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
             proxy.start()
             self.proxyServer = proxy
-            print("VLC Proxy: \(url.absoluteString) -> \(proxy.localURL.absoluteString)")
+            debugLogNetworkRequest("VLC proxy upstream", url: url, headers: proxyHeaders)
+            print("VLC Proxy: forwarding through local relay")
             startMedia(playURL: proxy.localURL, useNativeHeaders: false, viaProxy: true)
         }
 
@@ -312,7 +314,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             resolvedUseNativeHeaders = useNativeHeaders
             isPlayingViaProxy = viaProxy
             guard let media = VLCMedia(url: playURL) else {   // VLCKit 4.0: VLCMedia(url:) is failable
-                print("VLC: failed to create media for \(playURL)")
+                debugLogNetworkRequest("VLC media creation failure", url: playURL)
+                print("VLC: failed to create media")
                 return
             }
             // network-caching kept modest: a 15s pre-roll caused a long black/buffering stall before
@@ -349,6 +352,12 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             if let headers = headers {
                 for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
             }
+            debugLogNetworkRequest(
+                "VLC redirect resolver",
+                url: url,
+                method: req.httpMethod ?? "GET",
+                headers: req.allHTTPHeaderFields
+            )
             redirectResolver = RedirectResolver(request: req) { [weak self] finalURL in
                 self?.redirectResolver = nil
                 completion(finalURL)   // nil on failure → caller relays through the proxy
@@ -440,7 +449,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             // preference); the media's own embedded tracks remain available in the menu.
             guard let first = subtitles?.first, let url = URL(string: first) else { return }
             let rc = mediaPlayer.addPlaybackSlave(url, type: .subtitle, enforce: false)
-            print("VLC: addPlaybackSlave subtitle=\(url.absoluteString) rc=\(rc)")
+            debugLogNetworkRequest("VLC subtitle", url: url)
+            print("VLC: addPlaybackSlave rc=\(rc)")
             // The slave arrives after the initial parse — refresh the track list so the new
             // entry appears in the Subtitles menu.
             updateSubtitleTracks()
@@ -981,6 +991,14 @@ private final class RedirectResolver: NSObject, URLSessionDataDelegate {
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        if let http = response as? HTTPURLResponse {
+            debugLogNetworkResponse(
+                "VLC redirect resolver",
+                url: http.url,
+                statusCode: http.statusCode,
+                headers: http.allHeaderFields
+            )
+        }
         finish(response.url)               // response.url is the final URL after any redirects
         completionHandler(.cancel)
     }

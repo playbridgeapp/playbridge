@@ -12,6 +12,7 @@ import 'stream_proxy_server.dart';
 import 'tv_connection_store.dart';
 import 'tv_discovery.dart';
 import 'tv_transport.dart';
+import 'extension_request_debug_log.dart';
 
 /// Orchestrates the desktop's **sender** role: LAN discovery, the paired-TV
 /// store, and multi-protocol receiver transport clients (`wss://`, DLNA, Roku).
@@ -358,6 +359,8 @@ class TvSenderController extends ChangeNotifier {
     String? playlistBody,
     String? audioUrl,
   }) async {
+    debugLogNetworkRequest(
+        source: 'tv-sender input', url: url, headers: headers);
     var targetUrl = url;
     var targetHeaders = headers;
     var targetContentType = contentType;
@@ -421,6 +424,11 @@ class TvSenderController extends ChangeNotifier {
     if (targetHeaders != null && targetHeaders.isNotEmpty) {
       payload.headers.addAll(targetHeaders);
     }
+    debugLogNetworkRequest(
+      source: 'tv-sender output',
+      url: targetUrl,
+      headers: targetHeaders,
+    );
     if (title != null && title.isNotEmpty) {
       payload.title = title;
     }
