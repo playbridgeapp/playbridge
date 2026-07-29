@@ -1,9 +1,18 @@
 package com.playbridge.sender.connection
 
+import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 
 /** Pure connection-bookkeeping helpers, extracted for testability. */
 object ConnectionMerge {
+    /** Paired / saved PlayBridge receivers shown as first-class "Your TVs". */
+    const val MAX_PLAYBRIDGE_HISTORY = 10
+
+    /**
+     * Recent non-PlayBridge cast targets kept as optional shortcuts (DLNA / Roku / Cast).
+     * These have no pairing token — persistence is convenience only.
+     */
+    const val MAX_EXTERNAL_HISTORY = 3
     /**
      * Returns [device] with its complete endpoint taken from the live [discovered] list
      * when a match is found (by uuid, then ip/port). Receiver ports and DHCP addresses
@@ -33,21 +42,47 @@ object ConnectionMerge {
             ((a.uuid.isNotEmpty() && a.uuid == b.uuid) || (a.ip == b.ip && a.port == b.port))
 
     /**
-     * Put [device] at the front of connection history while replacing every older
-     * endpoint for the same receiver. UUID is the stable identity; ip/port remains
-     * the fallback for manual and legacy entries that do not have one.
+     * Put [device] at the front of its protocol class while replacing older endpoints
+     * for the same receiver. PlayBridge entries are first-class (pairing credentials);
+     * external protocols are capped to [MAX_EXTERNAL_HISTORY] recent shortcuts.
      */
-    fun upsertHistory(current: List<TvDevice>, device: TvDevice, limit: Int = 10): List<TvDevice> =
-        (listOf(device) + current.filterNot { isSameDevice(it, device) }).take(limit)
+    fun upsertHistory(
+        current: List<TvDevice>,
+        device: TvDevice,
+        playBridgeLimit: Int = MAX_PLAYBRIDGE_HISTORY,
+        externalLimit: Int = MAX_EXTERNAL_HISTORY,
+    ): List<TvDevice> {
+        val without = current.filterNot { isSameDevice(it, device) }
+        val playBridge = without.filter { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
+        val external = without.filter { it.resolvedProtocol != CastProtocol.PLAYBRIDGE }
+        return if (device.resolvedProtocol == CastProtocol.PLAYBRIDGE) {
+            (listOf(device) + playBridge).take(playBridgeLimit) + external.take(externalLimit)
+        } else {
+            playBridge.take(playBridgeLimit) + (listOf(device) + external).take(externalLimit)
+        }
+    }
 
     /**
      * Collapse duplicates already written by older builds. History is newest-first,
      * so the first entry retains the current endpoint and pairing credentials.
+     * Also re-applies PlayBridge / external caps for legacy oversized lists.
      */
-    fun normalizeHistory(history: List<TvDevice>): List<TvDevice> =
-        history.fold(emptyList()) { unique, device ->
-            if (unique.any { isSameDevice(it, device) }) unique else unique + device
+    fun normalizeHistory(history: List<TvDevice>): List<TvDevice> {
+        val unique = history.fold(emptyList<TvDevice>()) { acc, device ->
+            if (acc.any { isSameDevice(it, device) }) acc else acc + device
         }
+        val playBridge = unique.filter { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
+            .take(MAX_PLAYBRIDGE_HISTORY)
+        val external = unique.filter { it.resolvedProtocol != CastProtocol.PLAYBRIDGE }
+            .take(MAX_EXTERNAL_HISTORY)
+        return playBridge + external
+    }
+
+    fun playBridgeHistory(history: List<TvDevice>): List<TvDevice> =
+        history.filter { it.resolvedProtocol == CastProtocol.PLAYBRIDGE }
+
+    fun recentExternalHistory(history: List<TvDevice>): List<TvDevice> =
+        history.filter { it.resolvedProtocol != CastProtocol.PLAYBRIDGE }
 
     /** Remove every stale endpoint that belongs to [device]. */
     fun removeHistoryDevice(history: List<TvDevice>, device: TvDevice): List<TvDevice> =

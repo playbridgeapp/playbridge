@@ -115,6 +115,7 @@ val appModule = module {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO.limitedParallelism(1)),
         )
     }
+    single { com.playbridge.sender.connection.NetworkStatusRepository(androidContext()) }
 
     // 5. ConnectionCoordinator Singleton
     single {
@@ -215,6 +216,7 @@ val appModule = module {
             commandHistoryDb = get(),
             castSessionManager = get(),
             discoveryRepository = get(),
+            networkStatusRepository = get(),
         )
     }
 

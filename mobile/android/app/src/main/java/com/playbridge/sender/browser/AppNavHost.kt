@@ -315,12 +315,22 @@ fun AppNavHost(
     // Device picker opened from the idle cast bar (rendered once at the host level so
     // it survives screen transitions in the AnimatedContent below).
     var showDevicePicker by remember { mutableStateOf(false) }
+    // "Find more devices" from host-level pickers must expand Other devices even when
+    // the parent left connectionInitialTab at 0 (BrowserActivity only sets tab=1 on some paths).
+    var expandOtherDevices by remember { mutableStateOf(false) }
+    LaunchedEffect(currentScreen) {
+        if (currentScreen != Screen.Connection) expandOtherDevices = false
+    }
+    fun openAllDevicesExpanded() {
+        expandOtherDevices = true
+        onScreenChange(Screen.Connection)
+    }
     if (showDevicePicker) {
         DeviceConnectionSheet(
             onDismiss = { showDevicePicker = false },
             onOpenAllDevices = {
                 showDevicePicker = false
-                onScreenChange(Screen.Connection)
+                openAllDevicesExpanded()
             },
             showThisDevice = true,
         )
@@ -734,7 +744,7 @@ fun AppNavHost(
                                 onScreenChange(Screen.Remote)
                             }
                         } else null,
-                        initialTab = connectionInitialTab
+                        initialTab = if (expandOtherDevices) 1 else connectionInitialTab,
                     )
                 }
                 Screen.Downloads -> {
@@ -1461,7 +1471,7 @@ fun AppNavHost(
                         viewModel = connectionViewModel,
                         uiState = phoneFilesUiState,
                         onBack = { onScreenChange(Screen.Dashboard) },
-                        onOpenAllDevices = { onScreenChange(Screen.Connection) },
+                        onOpenAllDevices = { openAllDevicesExpanded() },
                         onAddToCollection = { media ->
                             onAddToCollection(
                                 com.playbridge.sender.data.collection.CollectionItemDraft(

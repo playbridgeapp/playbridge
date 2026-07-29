@@ -38,6 +38,7 @@ class ConnectionViewModel(
     private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
     val castSessionManager: CastSessionManager,
     private val discoveryRepository: ReceiverDiscoveryRepository,
+    private val networkStatusRepository: NetworkStatusRepository = NetworkStatusRepository(application),
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"
@@ -47,20 +48,12 @@ class ConnectionViewModel(
     val connectionState: StateFlow<WebSocketClient.ConnectionState> = webSocketClient.connectionState
     val tvDevice: Flow<TvDevice?> = connectionStore.tvDevice
 
-    private val _selectedDiscoveryProtocols = MutableStateFlow(CastProtocol.entries.toSet())
-    val selectedDiscoveryProtocols: StateFlow<Set<CastProtocol>> =
-        _selectedDiscoveryProtocols.asStateFlow()
+    /** Live discovery results (sticky across rescans; all protocols). */
+    val discoveredDevices: StateFlow<List<TvDevice>> = discoveryRepository.devices
+    val discoveredEndpoints = discoveryRepository.endpoints
 
-    val discoveredDevices: StateFlow<List<TvDevice>> = combine(
-        discoveryRepository.devices,
-        _selectedDiscoveryProtocols,
-    ) { devices, protocols -> devices.filter { it.resolvedProtocol in protocols } }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-    val discoveredEndpoints = combine(
-        discoveryRepository.endpoints,
-        _selectedDiscoveryProtocols,
-    ) { endpoints, protocols -> endpoints.filter { it.protocol in protocols } }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    /** Wi‑Fi/Ethernet availability and VPN posture for cast banners. */
+    val networkStatus: StateFlow<NetworkStatusRepository.Status> = networkStatusRepository.status
 
     val deviceHistory: Flow<List<TvDevice>> = connectionStore.deviceHistory
 
@@ -124,12 +117,14 @@ class ConnectionViewModel(
     val externalMediaTitle: StateFlow<String?> = castSessionManager.externalMediaTitle
     val castSessionState = castSessionManager.sessionState
 
-    // Foreground scan session. Discovery is time-boxed (SCAN_WINDOW_MS) so the SSDP
-    // M-SEARCH loop and mDNS listener don't run forever; the UI binds [isScanning] for
-    // the spinner and shows a Rescan affordance once a window elapses. rescan() re-arms it.
+    // Foreground discovery session (ref-counted so Connection screen + cast sheet can share).
+    // Each window is time-boxed (SCAN_WINDOW_MS); while any UI holds the session we quietly
+    // rescan every BACKGROUND_RESCAN_MS so the sticky list stays fresh without flashing empty.
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
     private var scanTimeoutJob: Job? = null
+    private var backgroundRescanJob: Job? = null
+    private var discoveryRetainCount = 0
 
     // Stable identity sent to receivers during pairing so the TV can display a friendly name.
     private val phoneDeviceName: String = Build.MODEL
@@ -514,16 +509,58 @@ class ConnectionViewModel(
         webSocketClient.send(commandJson)
     }
     /**
-     * Start a time-boxed scan: run mDNS + DLNA SSDP discovery for [SCAN_WINDOW_MS], then
-     * stop automatically. Idempotent for the engines (their start() is a no-op when already
-     * running); calling again re-arms the timeout, so this doubles as rescan().
+     * Hold a discovery session open while a UI surface is visible (Connection screen or
+     * cast sheet). First retain starts a scan + background refresh loop; last release stops.
      */
-    fun startDiscovery(protocols: Set<CastProtocol> = _selectedDiscoveryProtocols.value) {
-        _selectedDiscoveryProtocols.value = protocols.ifEmpty { CastProtocol.entries.toSet() }
+    fun retainDiscovery() {
+        discoveryRetainCount++
+        if (discoveryRetainCount == 1) {
+            runScanWindow()
+            backgroundRescanJob?.cancel()
+            backgroundRescanJob = viewModelScope.launch {
+                while (true) {
+                    delay(BACKGROUND_RESCAN_MS)
+                    if (discoveryRetainCount > 0) runScanWindow()
+                }
+            }
+        } else if (!_isScanning.value) {
+            runScanWindow()
+        }
+    }
+
+    /** Drop one discovery session hold. */
+    fun releaseDiscovery() {
+        discoveryRetainCount = (discoveryRetainCount - 1).coerceAtLeast(0)
+        if (discoveryRetainCount == 0) {
+            backgroundRescanJob?.cancel()
+            backgroundRescanJob = null
+            endScanWindow()
+        }
+    }
+
+    /**
+     * Start a time-boxed scan: run mDNS + DLNA SSDP discovery for [SCAN_WINDOW_MS], then
+     * mark scanning finished. Sticky results remain published. Prefer [retainDiscovery] from UI.
+     */
+    fun startDiscovery() = runScanWindow()
+
+    /** User-triggered re-scan; restarts the scan window without dropping sticky results. */
+    fun rescan() = runScanWindow()
+
+    fun stopDiscovery() {
+        if (discoveryRetainCount > 0) {
+            // Session still held by UI — only end the current window; background loop continues.
+            endScanWindow()
+        } else {
+            endScanWindow()
+        }
+    }
+
+    private fun runScanWindow() {
         scanTimeoutJob?.cancel()
         discoveryRepository.start(
             owner = ReceiverDiscoveryRepository.OWNER_UI,
-            protocols = _selectedDiscoveryProtocols.value,
+            protocols = CastProtocol.entries.toSet(),
             timeoutMs = SCAN_WINDOW_MS,
         ) { summary ->
             Log.i(
@@ -534,16 +571,15 @@ class ConnectionViewModel(
         _isScanning.value = true
         scanTimeoutJob = viewModelScope.launch {
             delay(SCAN_WINDOW_MS)
-            stopDiscovery()
+            // Keep sticky results; only clear the scanning flag and release the native scanner
+            // if no other owner needs it. UI retain still schedules the next window.
+            discoveryRepository.stop(ReceiverDiscoveryRepository.OWNER_UI)
+            _isScanning.value = false
+            scanTimeoutJob = null
         }
     }
 
-    /** User-triggered re-scan (e.g. the Rescan button); restarts the scan window. */
-    fun rescan() = startDiscovery()
-
-    fun setDiscoveryProtocols(protocols: Set<CastProtocol>) = startDiscovery(protocols)
-
-    fun stopDiscovery() {
+    private fun endScanWindow() {
         scanTimeoutJob?.cancel()
         scanTimeoutJob = null
         discoveryRepository.stop(ReceiverDiscoveryRepository.OWNER_UI)
@@ -552,7 +588,10 @@ class ConnectionViewModel(
 
     override fun onCleared() {
         super.onCleared()
-        discoveryRepository.stop(ReceiverDiscoveryRepository.OWNER_UI)
+        discoveryRetainCount = 0
+        backgroundRescanJob?.cancel()
+        backgroundRescanJob = null
+        endScanWindow()
         // While a cast session is active, CastSessionManager + CastSessionService own the
         // socket's lifetime — episode queueing must survive this ViewModel (screen-off /
         // activity death). Otherwise close the socket as before. Never destroy(): the
@@ -565,5 +604,7 @@ class ConnectionViewModel(
     companion object {
         // Two-plus DLNA SSDP refresh cycles (6s each) plus headroom for mDNS resolves.
         private const val SCAN_WINDOW_MS = 15_000L
+        /** Quiet rescan interval while Connection UI / cast sheet holds discovery. */
+        private const val BACKGROUND_RESCAN_MS = 45_000L
     }
 }
