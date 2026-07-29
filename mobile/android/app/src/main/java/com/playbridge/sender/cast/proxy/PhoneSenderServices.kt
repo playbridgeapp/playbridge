@@ -43,16 +43,19 @@ class PhoneSenderServices private constructor(
         host: String,
         url: String,
         headers: Map<String, String> = emptyMap(),
+        contentType: String? = null,
     ): RegisteredMedia = withContext(Dispatchers.IO) {
         val headersJson = JSONObject()
         headers.forEach { (k, v) -> headersJson.put(k, v) }
+        val fields = mutableMapOf<String, Any?>(
+            "host" to host,
+            "url" to url,
+            "headers" to headersJson,
+        )
+        if (!contentType.isNullOrBlank()) fields["content_type"] = contentType
         val data = submit(
             command = "proxy_register_url",
-            fields = mapOf(
-                "host" to host,
-                "url" to url,
-                "headers" to headersJson,
-            ),
+            fields = fields,
         )
         RegisteredMedia(
             id = data.getString("id"),

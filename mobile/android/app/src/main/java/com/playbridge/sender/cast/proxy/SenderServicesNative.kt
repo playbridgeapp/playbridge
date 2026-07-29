@@ -9,8 +9,19 @@ import android.util.Log
 internal object SenderServicesNative {
     private const val TAG = "SenderServicesNative"
 
+    /** Must match stream-proxy-rust `UPSTREAM_JNI_ABI_VERSION`. */
+    const val EXPECTED_UPSTREAM_ABI: Int = 1
+
     @Volatile
     var libraryLoaded: Boolean = false
+        private set
+
+    /**
+     * True when the packaged native lib exposes the expected upstream ABI and
+     * HttpURLConnection callbacks were installed successfully.
+     */
+    @Volatile
+    var jniUpstreamReady: Boolean = false
         private set
 
     init {
@@ -19,13 +30,44 @@ internal object SenderServicesNative {
             libraryLoaded = true
             // Wire Media3-equivalent HttpURLConnection origin fetch into the
             // embedded stream-proxy (upstream-jni). Safe to call before start().
-            val installed = runCatching { installUpstreamHttpClient() }.getOrDefault(false)
-            if (!installed) {
-                Log.w(TAG, "Upstream HttpURLConnection callbacks not installed")
+            try {
+                val abi = runCatching { upstreamAbiVersion() }.getOrDefault(0)
+                if (abi != EXPECTED_UPSTREAM_ABI) {
+                    Log.e(
+                        TAG,
+                        "Rust proxy JNI upstream ABI mismatch: got $abi, " +
+                            "expected $EXPECTED_UPSTREAM_ABI — Via phone remotes " +
+                            "will use LocalProxy fallback (rebuild libplaybridge_cast_core_ffi.so)",
+                    )
+                    jniUpstreamReady = false
+                } else {
+                    val installed = installUpstreamHttpClient()
+                    val registered = runCatching { upstreamCallbacksRegistered() }.getOrDefault(false)
+                    jniUpstreamReady = installed && registered
+                    if (!jniUpstreamReady) {
+                        Log.e(
+                            TAG,
+                            "Rust proxy JNI upstream not ready " +
+                                "(install=$installed registered=$registered) — " +
+                                "Via phone remotes will use LocalProxy fallback",
+                        )
+                    } else {
+                        Log.i(TAG, "Rust proxy JNI upstream ready (ABI $abi)")
+                    }
+                }
+            } catch (e: UnsatisfiedLinkError) {
+                jniUpstreamReady = false
+                Log.e(
+                    TAG,
+                    "Rust proxy JNI upstream symbols missing from packaged .so " +
+                        "(${e.message}) — Via phone remotes will use LocalProxy fallback. " +
+                        "Rebuild with cast/build-android.sh (sender-services-android).",
+                )
             }
         } catch (e: Throwable) {
             Log.w(TAG, "Native library unavailable: ${e.message}")
             libraryLoaded = false
+            jniUpstreamReady = false
         }
     }
 

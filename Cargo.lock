@@ -2821,6 +2821,8 @@ dependencies = [
  "clap",
  "dashmap",
  "futures",
+ "http-body-util",
+ "httpdate",
  "libloading",
  "mime_guess",
  "rand 0.8.7",

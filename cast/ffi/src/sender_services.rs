@@ -32,6 +32,7 @@ enum ServicesCommand {
         url: String,
         #[serde(default)]
         headers: HashMap<String, String>,
+        content_type: Option<String>,
     },
     ProxyRegisterFile {
         request_id: Value,
@@ -268,9 +269,13 @@ async fn process_command(
     let request_id = command.request_id().clone();
     let result: Result<Value, String> = match command {
         ServicesCommand::ProxyRegisterUrl {
-            host, url, headers, ..
+            host,
+            url,
+            headers,
+            content_type,
+            ..
         } => proxy
-            .register_remote(&host, url, headers)
+            .register_remote_with_content_type(&host, url, headers, content_type.as_deref())
             .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
         ServicesCommand::ProxyRegisterFile {
             host,
@@ -492,10 +497,17 @@ mod tests {
     #[test]
     fn browser_and_proxy_commands_use_the_documented_wire_names() {
         let proxy: ServicesCommand = serde_json::from_str(
-            r#"{"command":"proxy_register_file","request_id":"1","host":"192.0.2.1","path":"/tmp/video.mp4"}"#,
+            r#"{"command":"proxy_register_url","request_id":"1","host":"192.0.2.1","url":"https://cdn.example/live","content_type":"application/vnd.apple.mpegurl"}"#,
         )
         .unwrap();
-        assert_eq!(proxy.operation(), "proxy_register_file");
+        assert_eq!(proxy.operation(), "proxy_register_url");
+        assert!(matches!(
+            proxy,
+            ServicesCommand::ProxyRegisterUrl {
+                content_type: Some(ref value),
+                ..
+            } if value == "application/vnd.apple.mpegurl"
+        ));
 
         let browser: ServicesCommand = serde_json::from_str(
             r#"{"command":"browser_control","request_id":"2","session_id":"session","action":"set_volume","value":0.5}"#,

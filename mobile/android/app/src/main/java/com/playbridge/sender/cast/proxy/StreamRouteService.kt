@@ -149,7 +149,7 @@ class StreamRouteService(
             )
         }
 
-        val jniReady = SenderServicesNative.libraryLoaded &&
+        val jniReady = SenderServicesNative.jniUpstreamReady &&
             runCatching { SenderServicesNative.upstreamCallbacksRegistered() }.getOrDefault(false)
 
         if (jniReady) {
@@ -162,7 +162,11 @@ class StreamRouteService(
                 )
             }
         } else {
-            Log.w(TAG, "JNI upstream not ready; Via phone remote uses LocalProxy")
+            Log.e(
+                TAG,
+                "Rust proxy JNI upstream not ready (libraryLoaded=" +
+                    "${SenderServicesNative.libraryLoaded}); Via phone remote uses LocalProxy fallback",
+            )
         }
         return packageViaPhoneRemoteLocalProxy(media)
     }
@@ -177,6 +181,7 @@ class StreamRouteService(
             host = host,
             url = media.url,
             headers = headers,
+            contentType = media.contentType,
         )
         if (!PhoneProxyUrls.isRustEmbeddedProxyUrl(registered.url)) {
             throw StreamRouteException("Via phone produced unexpected proxy URL shape")
@@ -269,6 +274,7 @@ class StreamRouteService(
         val registerUrl = "$base/register?token=$token"
         val bodyJson = JSONObject().apply {
             put("url", media.url)
+            media.contentType?.takeIf { it.isNotBlank() }?.let { put("content_type", it) }
             put("headers", JSONObject().also { h ->
                 media.headers.orEmpty().forEach { (k, v) -> h.put(k, v) }
             })

@@ -12,12 +12,17 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tracing::debug;
 
 #[cfg(feature = "upstream-reqwest")]
 mod reqwest_fetcher;
 
 #[cfg(feature = "upstream-jni")]
 pub mod jni_fetcher;
+
+pub mod segment_cache;
+
+pub use segment_cache::{hls_media_segment_urls, PrefetchTarget, SegmentCache};
 
 pub struct UpstreamResponse {
     pub status: StatusCode,
@@ -44,9 +49,13 @@ pub trait UpstreamFetcher: Send + Sync {
 pub const DEFAULT_UPSTREAM_UA: &str = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 \
 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
 
+/// How many upcoming media-playlist segments to prefetch after a rewrite.
+const HLS_PREFETCH_SEGMENTS: usize = 3;
+
 /// Façade used by Axum handlers; owns the selected [`UpstreamFetcher`].
 pub struct ConnectionEngine {
     fetcher: Arc<dyn UpstreamFetcher>,
+    cache: Arc<SegmentCache>,
 }
 
 impl ConnectionEngine {
@@ -54,16 +63,32 @@ impl ConnectionEngine {
     pub fn new(ffmpeg_path: Option<String>) -> Self {
         Self {
             fetcher: default_upstream_fetcher(ffmpeg_path),
+            cache: Arc::new(SegmentCache::default()),
         }
     }
 
     /// Inject a custom fetcher (tests, future embedders).
     pub fn with_fetcher(fetcher: Arc<dyn UpstreamFetcher>) -> Self {
-        Self { fetcher }
+        Self {
+            fetcher,
+            cache: Arc::new(SegmentCache::default()),
+        }
+    }
+
+    /// Custom fetcher + cache (tests).
+    pub fn with_fetcher_and_cache(
+        fetcher: Arc<dyn UpstreamFetcher>,
+        cache: Arc<SegmentCache>,
+    ) -> Self {
+        Self { fetcher, cache }
     }
 
     pub fn fetcher(&self) -> &Arc<dyn UpstreamFetcher> {
         &self.fetcher
+    }
+
+    pub fn cache(&self) -> &Arc<SegmentCache> {
+        &self.cache
     }
 
     pub async fn connect_upstream(
@@ -72,7 +97,17 @@ impl ConnectionEngine {
         headers: &HashMap<String, String>,
     ) -> Result<UpstreamResponse, String> {
         let headers = with_default_upstream_headers(headers);
-        self.fetcher.connect(url, &headers).await
+        let fetcher = Arc::clone(&self.fetcher);
+        let url_owned = url.to_owned();
+        let headers_for_fetch = headers.clone();
+        self.cache
+            .get_or_fetch(url, &headers, move || {
+                let fetcher = fetcher;
+                let url_owned = url_owned;
+                let headers_for_fetch = headers_for_fetch;
+                async move { fetcher.connect(&url_owned, &headers_for_fetch).await }
+            })
+            .await
     }
 
     pub async fn fetch_url_bytes(
@@ -86,6 +121,49 @@ impl ConnectionEngine {
             .map_err(|e| format!("Failed reading bytes: {}", e))?;
         Ok(bytes)
     }
+
+    /// Best-effort background prefetch of media segment targets into the cache.
+    /// Never logs URLs (may be authenticated). Caps work so playback stays first.
+    pub fn prefetch_segment_urls(
+        &self,
+        targets: Vec<PrefetchTarget>,
+        headers: &HashMap<String, String>,
+    ) {
+        if targets.is_empty() {
+            return;
+        }
+        let fetcher = Arc::clone(&self.fetcher);
+        let cache = Arc::clone(&self.cache);
+        let base_headers = with_default_upstream_headers(headers);
+        tokio::spawn(async move {
+            // Prefetch a few segments sequentially to avoid stampeding the phone radio.
+            for target in targets.into_iter().take(HLS_PREFETCH_SEGMENTS) {
+                if !SegmentCache::is_cacheable_url(&target.url) {
+                    continue;
+                }
+                let mut headers = base_headers.clone();
+                if let Some(range) = target.range.as_ref() {
+                    headers.insert("Range".to_string(), range.clone());
+                }
+                let fetcher = Arc::clone(&fetcher);
+                let headers_for_key = headers.clone();
+                let headers_for_fetch = headers.clone();
+                let url_for_fetch = target.url.clone();
+                // Drain the tee fully so the producer can store the segment.
+                let result = cache
+                    .fetch_and_store(&target.url, &headers_for_key, move || {
+                        let fetcher = fetcher;
+                        let url_for_fetch = url_for_fetch;
+                        let headers_for_fetch = headers_for_fetch;
+                        async move { fetcher.connect(&url_for_fetch, &headers_for_fetch).await }
+                    })
+                    .await;
+                if result.is_ok() {
+                    debug!("[stream-proxy] prefetched segment into cache (url omitted)");
+                }
+            }
+        });
+    }
 }
 
 /// Pick the build-default origin fetcher.
@@ -96,12 +174,12 @@ pub fn default_upstream_fetcher(ffmpeg_path: Option<String>) -> Arc<dyn Upstream
     #[cfg(all(feature = "upstream-jni", not(feature = "upstream-reqwest")))]
     {
         let _ = ffmpeg_path;
-        return Arc::new(jni_fetcher::JniUpstreamFetcher::new());
+        Arc::new(jni_fetcher::JniUpstreamFetcher::new())
     }
 
     #[cfg(feature = "upstream-reqwest")]
     {
-        return Arc::new(reqwest_fetcher::ReqwestUpstreamFetcher::new(ffmpeg_path));
+        Arc::new(reqwest_fetcher::ReqwestUpstreamFetcher::new(ffmpeg_path))
     }
 
     #[cfg(not(any(feature = "upstream-reqwest", feature = "upstream-jni")))]

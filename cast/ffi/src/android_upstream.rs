@@ -2,14 +2,18 @@
 //!
 //! Registers [stream_proxy_rust::PbUpstreamCallbacks] that call
 //! `com.playbridge.sender.cast.proxy.JniUpstreamHttpClient` open/read/close.
+//!
+//! The host bridge is stored as `Arc` and **cloned out** of the registration
+//! mutex before any JNI call so concurrent segment open/read/close do not
+//! serialize on a global lock.
 
 use jni::objects::{Global, JByteArray, JClass, JObject, JString, JValue};
 use jni::sys::jboolean;
-use jni::{jni_sig, jni_str, Env, EnvUnowned, JavaVM};
+use jni::{Env, EnvUnowned, JavaVM, jni_sig, jni_str};
 use std::ffi::{CStr, CString, c_char};
 use std::os::raw::c_int;
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use stream_proxy_rust::{PbUpstreamCallbacks, set_upstream_callbacks};
 
 struct HostBridge {
@@ -21,15 +25,15 @@ struct HostBridge {
 unsafe impl Send for HostBridge {}
 unsafe impl Sync for HostBridge {}
 
-static HOST: Mutex<Option<HostBridge>> = Mutex::new(None);
+static HOST: Mutex<Option<Arc<HostBridge>>> = Mutex::new(None);
 
 /// Install C upstream callbacks that dispatch to [JniUpstreamHttpClient].
 pub fn install_from_env(env: &mut Env) -> Result<(), String> {
-    let jvm = env
-        .get_java_vm()
-        .map_err(|e| format!("get_java_vm: {e}"))?;
+    let jvm = env.get_java_vm().map_err(|e| format!("get_java_vm: {e}"))?;
     let class = env
-        .find_class(jni_str!("com/playbridge/sender/cast/proxy/JniUpstreamHttpClient"))
+        .find_class(jni_str!(
+            "com/playbridge/sender/cast/proxy/JniUpstreamHttpClient"
+        ))
         .map_err(|e| format!("find_class JniUpstreamHttpClient: {e}"))?;
     let global = env
         .new_global_ref(&class)
@@ -37,10 +41,7 @@ pub fn install_from_env(env: &mut Env) -> Result<(), String> {
 
     {
         let mut guard = HOST.lock().map_err(|_| "host mutex poisoned".to_string())?;
-        *guard = Some(HostBridge {
-            jvm,
-            class: global,
-        });
+        *guard = Some(Arc::new(HostBridge { jvm, class: global }));
     }
 
     set_upstream_callbacks(PbUpstreamCallbacks {
@@ -52,12 +53,13 @@ pub fn install_from_env(env: &mut Env) -> Result<(), String> {
     Ok(())
 }
 
-fn with_host<T>(f: impl FnOnce(&HostBridge) -> Result<T, String>) -> Result<T, String> {
+/// Clone the host Arc and release the registration mutex before JNI work.
+fn host_bridge() -> Result<Arc<HostBridge>, String> {
     let guard = HOST.lock().map_err(|_| "host mutex poisoned".to_string())?;
-    let host = guard
+    guard
         .as_ref()
-        .ok_or_else(|| "Android upstream host is not installed".to_string())?;
-    f(host)
+        .cloned()
+        .ok_or_else(|| "Android upstream host is not installed".to_string())
 }
 
 unsafe extern "C" fn trampoline_free_string(ptr: *mut c_char) {
@@ -93,27 +95,27 @@ unsafe extern "C" fn trampoline_open(
                 .to_owned()
         };
 
-        let json = with_host(|host| {
-            host.jvm
-                .attach_current_thread(|env| -> Result<String, jni::errors::Error> {
-                    let j_url = env.new_string(&url)?;
-                    let j_headers = env.new_string(&headers)?;
-                    // Pass Global class directly (Desc impl); avoid as_ref ambiguity.
-                    let ret = env.call_static_method(
-                        &host.class,
-                        jni_str!("open"),
-                        jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
-                        &[JValue::Object(&j_url), JValue::Object(&j_headers)],
-                    )?;
-                    let jobj: JObject = ret.l()?;
-                    if jobj.is_null() {
-                        return Err(jni::errors::Error::NullPtr("open returned null"));
-                    }
-                    let jstr = unsafe { JString::from_raw(env, jobj.as_raw()) };
-                    Ok(jstr.mutf8_chars(env)?.to_string())
-                })
-                .map_err(|e| format!("jni open: {e}"))
-        })?;
+        let host = host_bridge()?;
+        let json = host
+            .jvm
+            .attach_current_thread(|env| -> Result<String, jni::errors::Error> {
+                let j_url = env.new_string(&url)?;
+                let j_headers = env.new_string(&headers)?;
+                // Pass Global class directly (Desc impl); avoid as_ref ambiguity.
+                let ret = env.call_static_method(
+                    &host.class,
+                    jni_str!("open"),
+                    jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
+                    &[JValue::Object(&j_url), JValue::Object(&j_headers)],
+                )?;
+                let jobj: JObject = ret.l()?;
+                if jobj.is_null() {
+                    return Err(jni::errors::Error::NullPtr("open returned null"));
+                }
+                let jstr = unsafe { JString::from_raw(env, jobj.as_raw()) };
+                Ok(jstr.mutf8_chars(env)?.to_string())
+            })
+            .map_err(|e| format!("jni open: {e}"))?;
         parse_open_json(&json)
     })();
 
@@ -150,8 +152,7 @@ unsafe extern "C" fn trampoline_open(
 }
 
 fn parse_open_json(json: &str) -> Result<(i64, i32, String), String> {
-    let v: serde_json::Value =
-        serde_json::from_str(json).map_err(|e| format!("open json: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(json).map_err(|e| format!("open json: {e}"))?;
     if v.get("ok").and_then(|x| x.as_bool()) != Some(true) {
         let err = v
             .get("error")
@@ -187,7 +188,8 @@ unsafe extern "C" fn trampoline_read(
         return 0;
     }
 
-    let result = with_host(|host| {
+    let result = (|| -> Result<Option<Vec<u8>>, String> {
+        let host = host_bridge()?;
         host.jvm
             .attach_current_thread(|env| -> Result<Option<Vec<u8>>, jni::errors::Error> {
                 let ret = env.call_static_method(
@@ -206,7 +208,7 @@ unsafe extern "C" fn trampoline_read(
                 Ok(Some(bytes))
             })
             .map_err(|e| format!("jni read: {e}"))
-    });
+    })();
 
     match result {
         Ok(Some(bytes)) if bytes.is_empty() => 0,
@@ -237,7 +239,8 @@ unsafe extern "C" fn trampoline_read(
 }
 
 unsafe extern "C" fn trampoline_close(handle: i64) {
-    let _ = with_host(|host| {
+    let _ = (|| -> Result<(), String> {
+        let host = host_bridge()?;
         host.jvm
             .attach_current_thread(|env| -> Result<(), jni::errors::Error> {
                 env.call_static_method(
@@ -249,7 +252,7 @@ unsafe extern "C" fn trampoline_close(handle: i64) {
                 Ok(())
             })
             .map_err(|e| format!("jni close: {e}"))
-    });
+    })();
 }
 
 /// JNI entry: `SenderServicesNative.installUpstreamHttpClient()`.

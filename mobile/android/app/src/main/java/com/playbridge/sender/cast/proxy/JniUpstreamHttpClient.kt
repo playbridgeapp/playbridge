@@ -167,6 +167,12 @@ internal object JniUpstreamHttpClient {
         if (cl >= 0) respHeaders.put("content-length", cl.toString())
         conn.getHeaderField("Content-Range")?.let { respHeaders.put("content-range", it) }
         conn.getHeaderField("Accept-Ranges")?.let { respHeaders.put("accept-ranges", it) }
+        // Cache policy for stream-proxy segment cache (no-store / max-age / Vary).
+        conn.getHeaderField("Cache-Control")?.let { respHeaders.put("cache-control", it) }
+        conn.getHeaderField("Vary")?.let { respHeaders.put("vary", it) }
+        conn.getHeaderField("Expires")?.let { respHeaders.put("expires", it) }
+        conn.getHeaderField("Age")?.let { respHeaders.put("age", it) }
+        conn.getHeaderField("Date")?.let { respHeaders.put("date", it) }
 
         val out = JSONObject()
             .put("ok", true)

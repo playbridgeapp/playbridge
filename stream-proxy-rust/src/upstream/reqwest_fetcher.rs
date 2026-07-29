@@ -38,10 +38,19 @@ impl ReqwestUpstreamFetcher {
 
         for (k, v) in resp.headers() {
             let lower = k.as_str().to_lowercase();
-            if lower == "content-range"
-                || lower == "accept-ranges"
-                || lower == "content-type"
-            {
+            // Include cache policy headers so the segment cache can honor
+            // no-store / no-cache / private / Vary / max-age.
+            if matches!(
+                lower.as_str(),
+                "content-range"
+                    | "accept-ranges"
+                    | "content-type"
+                    | "cache-control"
+                    | "vary"
+                    | "expires"
+                    | "age"
+                    | "date"
+            ) {
                 out_headers.insert(k.clone(), v.clone());
             }
         }

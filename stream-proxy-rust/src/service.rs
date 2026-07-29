@@ -144,6 +144,21 @@ impl ProxyServer {
             .register_remote(&self.base_url(host), url.into(), headers)
     }
 
+    pub fn register_remote_with_content_type(
+        &self,
+        host: &str,
+        url: impl Into<String>,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+    ) -> Result<RegisteredMedia, String> {
+        self.service.register_remote_with_content_type(
+            &self.base_url(host),
+            url.into(),
+            headers,
+            content_type,
+        )
+    }
+
     pub fn register_file(
         &self,
         host: &str,
