@@ -93,4 +93,32 @@ http://cdn.example.com/segment2.ts
             "http://127.0.0.1:8888/proxy?url=http%3A%2F%2Fcdn.example.com%2Fsegment2.ts"
         ));
     }
+
+    #[test]
+    fn rewrites_low_latency_hls_parts_hints_and_rendition_reports() {
+        let manifest = r#"#EXTM3U
+#EXT-X-PART:DURATION=0.333,URI="seg_12_part_1.m4s?session=test"
+#EXT-X-PRELOAD-HINT:TYPE=PART,URI="seg_12_part_2.m4s?session=test"
+#EXT-X-RENDITION-REPORT:URI="../audio/live?session=test",LAST-MSN=12,LAST-PART=1
+"#;
+        let base_url = Url::parse("https://cdn.example/video/live?session=test").unwrap();
+        let rewritten = HlsPlaylistRewriter::rewrite(manifest, &base_url, |target| {
+            format!(
+                "http://phone.test/s/session/item?uri={}",
+                urlencoding::encode(target)
+            )
+        });
+
+        assert!(!rewritten.contains("URI=\"seg_"));
+        assert!(!rewritten.contains("URI=\"../audio"));
+        assert_eq!(
+            rewritten
+                .matches("http://phone.test/s/session/item?uri=")
+                .count(),
+            3
+        );
+        assert!(rewritten.contains("seg_12_part_1.m4s"));
+        assert!(rewritten.contains("seg_12_part_2.m4s"));
+        assert!(rewritten.contains("%2Faudio%2Flive"));
+    }
 }

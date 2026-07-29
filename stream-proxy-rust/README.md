@@ -5,7 +5,17 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
 ## Features
 
 - ⚡ **Ultra-Fast & Lightweight**: ~6.1 MB stripped release binary size, sub-5ms cold startup.
-- 🛡️ **Dual Transport Fallback**: Primary `reqwest` HTTP transport with automatic FFmpeg `libavformat` AVIO fallback for 403 / 471 CDN blocks.
+- 🛡️ **Pluggable origin fetch** (Cargo features):
+  - `upstream-reqwest` (default): `reqwest` HTTP client
+  - `upstream-avio` (default): FFmpeg `libavformat` AVIO fallback after reqwest failure
+  - `upstream-jni`: host C callbacks (`pb_proxy_upstream_set_callbacks`) for Android
+    `HttpURLConnection` (≈ Media3) — open/read/close/free_string; streaming body via
+    `spawn_blocking` (no full-segment buffering)
+- 🔌 **Embed features (cast/ffi)**:
+  - `sender-services` → reqwest + AVIO (Desktop)
+  - `sender-services-android` → upstream-jni only (phone `build-android.sh`)
+    - Phone installs callbacks via `SenderServicesNative.installUpstreamHttpClient()`
+      → Kotlin `JniUpstreamHttpClient` (`HttpURLConnection`, Media3-like TLS)
 - 🔐 **MediaFlow Security Standard**:
   - Stateful session registration via `POST /register`.
   - MediaFlow AES-256-CBC token encryption for stateless proxying (`/proxy/hls/...`).

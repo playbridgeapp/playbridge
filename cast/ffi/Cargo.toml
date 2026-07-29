@@ -8,9 +8,18 @@ description = "UniFFI and stable C bindings for PlayBridge Cast Core"
 
 [features]
 default = []
+# Desktop / Docker-style embed: reqwest (+ AVIO) origin fetch.
 sender-services = [
     "dep:playbridge-browser-receiver",
     "dep:stream-proxy-rust",
+    "stream-proxy-rust/upstream-reqwest",
+    "stream-proxy-rust/upstream-avio",
+]
+# Android phone embed: host HttpURLConnection via JNI callbacks (no reqwest).
+sender-services-android = [
+    "dep:playbridge-browser-receiver",
+    "dep:stream-proxy-rust",
+    "stream-proxy-rust/upstream-jni",
 ]
 
 [lib]
@@ -20,7 +29,8 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 playbridge-cast-core = { path = "../core" }
 playbridge-cast-receiver = { path = "../receiver" }
 playbridge-browser-receiver = { path = "../../browser-receiver-rust", optional = true }
-stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true }
+# Features selected by sender-services / sender-services-android (no default features).
+stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true, default-features = false }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

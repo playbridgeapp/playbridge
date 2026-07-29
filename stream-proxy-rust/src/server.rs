@@ -5,7 +5,7 @@ use crate::epg::EpgCache;
 use crate::hls::HlsPlaylistRewriter;
 use crate::local_file::FileGrantManager;
 use crate::session::SessionManager;
-use crate::upstream::{filter_upstream_headers, ConnectionEngine};
+use crate::upstream::{filter_upstream_headers, ConnectionEngine, UpstreamResponse};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
@@ -26,6 +26,8 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use url::Url;
 
+const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub password: String,
@@ -41,6 +43,8 @@ pub struct RegisterRequest {
     pub url: String,
     #[serde(default)]
     pub headers: HashMap<String, String>,
+    #[serde(default, alias = "contentType")]
+    pub content_type: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -69,6 +73,10 @@ pub struct ProxyService {
 
 impl ProxyService {
     pub fn new(password: String, ffmpeg_path: Option<String>) -> Self {
+        Self::with_engine(password, Arc::new(ConnectionEngine::new(ffmpeg_path)))
+    }
+
+    pub fn with_engine(password: String, engine: Arc<ConnectionEngine>) -> Self {
         let encryption_handler = EncryptionHandler::new(password.as_bytes());
         Self {
             state: AppState {
@@ -76,7 +84,7 @@ impl ProxyService {
                 session_manager: SessionManager::new(),
                 file_grants: FileGrantManager::new(),
                 epg_cache: EpgCache::new(Duration::from_secs(14400)),
-                engine: Arc::new(ConnectionEngine::new(ffmpeg_path)),
+                engine,
                 encryption_handler,
             },
         }
@@ -120,6 +128,16 @@ impl ProxyService {
         original_url: String,
         headers: HashMap<String, String>,
     ) -> Result<RegisteredMedia, String> {
+        self.register_remote_with_content_type(base_url, original_url, headers, None)
+    }
+
+    pub fn register_remote_with_content_type(
+        &self,
+        base_url: &str,
+        original_url: String,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+    ) -> Result<RegisteredMedia, String> {
         let parsed = Url::parse(&original_url).map_err(|error| error.to_string())?;
         if !matches!(parsed.scheme(), "http" | "https") {
             return Err("only HTTP(S) media URLs can be proxied".into());
@@ -128,7 +146,7 @@ impl ProxyService {
             .state
             .session_manager
             .register(original_url.clone(), headers.clone());
-        let filename = registered_media_filename(&parsed);
+        let filename = registered_media_filename(&parsed, content_type);
         let proxy_url = format!(
             "{}/s/{}/{}",
             base_url.trim_end_matches('/'),
@@ -142,9 +160,11 @@ impl ProxyService {
             ip: None,
         };
         let encrypted_token = self.state.encryption_handler.encrypt(&proxy_data)?;
+        let route_kind = registered_media_route_kind(&filename);
         let encrypted_url = format!(
-            "{}/proxy/stream/{}?token={}",
+            "{}/proxy/{}/{}?token={}",
             base_url.trim_end_matches('/'),
+            route_kind,
             urlencoding::encode(&filename),
             encrypted_token
         );
@@ -185,7 +205,14 @@ impl ProxyService {
     }
 }
 
-fn registered_media_filename(url: &Url) -> String {
+fn registered_media_filename(url: &Url, content_type: Option<&str>) -> String {
+    let content_type = content_type.unwrap_or_default().to_ascii_lowercase();
+    if content_type.contains("mpegurl") || content_type.contains("m3u8") {
+        return "playlist.m3u8".to_string();
+    }
+    if content_type.contains("dash") || content_type.contains("mpd") {
+        return "manifest.mpd".to_string();
+    }
     let lower = url.as_str().to_ascii_lowercase();
     if lower.contains(".mpd") || lower.contains("manifest/dash") {
         return "manifest.mpd".to_string();
@@ -198,6 +225,14 @@ fn registered_media_filename(url: &Url) -> String {
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| "media".to_string())
+}
+
+fn registered_media_route_kind(filename: &str) -> &'static str {
+    if filename.ends_with(".m3u8") {
+        "hls"
+    } else {
+        "stream"
+    }
 }
 
 pub fn create_router(config: Config) -> Result<(Router, String, u16), String> {
@@ -266,7 +301,7 @@ async fn register_handler(
         .unwrap_or("127.0.0.1:8888");
 
     let filename = Url::parse(&payload.url)
-        .map(|url| registered_media_filename(&url))
+        .map(|url| registered_media_filename(&url, payload.content_type.as_deref()))
         .unwrap_or_else(|_| "media".to_string());
     let proxy_url = format!(
         "http://{host_str}/s/{}/{}",
@@ -291,11 +326,7 @@ async fn register_handler(
         .encrypt(&proxy_data)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    let route_kind = if filename.ends_with(".m3u8") {
-        "hls"
-    } else {
-        "stream"
-    };
+    let route_kind = registered_media_route_kind(&filename);
     let encrypted_url = format!(
         "http://{}/proxy/{}/{}?token={}",
         host_str,
@@ -420,11 +451,32 @@ async fn stateful_proxy_handler(
         )
         .await
     } else if is_hls {
-        handle_stateful_hls_playlist(&state, session_id, &target_url, &forward_headers).await
+        handle_stateful_hls_playlist(
+            &state,
+            session_id,
+            &target_url,
+            &forward_headers,
+            &public_base_url,
+        )
+        .await
     } else if is_dash {
-        handle_stateful_dash_manifest(&state, session_id, &target_url, &forward_headers).await
+        handle_stateful_dash_manifest(
+            &state,
+            session_id,
+            &target_url,
+            &forward_headers,
+            &public_base_url,
+        )
+        .await
     } else {
-        handle_segment(&state, &target_url, &forward_headers).await
+        handle_stateful_unknown_or_segment(
+            &state,
+            session_id,
+            &target_url,
+            &forward_headers,
+            &public_base_url,
+        )
+        .await
     }
 }
 
@@ -489,53 +541,123 @@ async fn handle_stateful_hls_playlist(
     session_id: &str,
     target_url: &str,
     headers: &HashMap<String, String>,
+    public_base_url: &str,
 ) -> Result<Response, (StatusCode, String)> {
     match state.engine.fetch_url_bytes(target_url, headers).await {
-        Ok(bytes) => {
-            let content = String::from_utf8_lossy(&bytes);
-            let base_uri = match Url::parse(target_url) {
-                Ok(u) => u,
-                Err(e) => {
-                    return Err((
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Parse URL error: {}", e),
-                    ))
-                }
-            };
-
-            let rewritten = HlsPlaylistRewriter::rewrite(&content, &base_uri, |resolved_target| {
-                let resolved_uri = match Url::parse(resolved_target) {
-                    Ok(u) => u,
-                    Err(_) => return resolved_target.to_string(),
-                };
-
-                let filename = resolved_uri
-                    .path_segments()
-                    .and_then(|mut s| s.next_back())
-                    .unwrap_or("item");
-
-                format!(
-                    "/s/{}/{}?uri={}",
-                    session_id,
-                    filename,
-                    urlencoding::encode(resolved_target)
-                )
-            });
-
-            Ok((
-                [
-                    (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
-                    (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-                ],
-                rewritten,
-            )
-                .into_response())
-        }
+        Ok(bytes) => rewrite_stateful_hls(
+            state,
+            session_id,
+            target_url,
+            headers,
+            public_base_url,
+            &bytes,
+        ),
         Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
+            // 502 = origin fetch failed (common on Via phone without FFmpeg AVIO).
+            StatusCode::BAD_GATEWAY,
             format!("Failed to fetch/rewrite HLS playlist: {}", e),
         )),
     }
+}
+
+fn rewrite_stateful_hls(
+    state: &AppState,
+    session_id: &str,
+    target_url: &str,
+    headers: &HashMap<String, String>,
+    public_base_url: &str,
+    bytes: &[u8],
+) -> Result<Response, (StatusCode, String)> {
+    let content = String::from_utf8_lossy(bytes);
+    // Guard against serving HTML/error pages as playlists (Brave demuxer parse errors).
+    if !content.trim_start().starts_with("#EXTM3U") {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "Upstream did not return an HLS playlist (#EXTM3U)".to_string(),
+        ));
+    }
+    let base_uri = Url::parse(target_url).map_err(|error| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Parse URL error: {error}"),
+        )
+    })?;
+
+    // Absolute proxy URLs so VHS on the browser-receiver page (different port)
+    // never resolves child playlists or LL-HLS parts against the CDN directly.
+    let base = public_base_url.trim_end_matches('/');
+    let rewritten = HlsPlaylistRewriter::rewrite(&content, &base_uri, |resolved_target| {
+        format!("{}{}", base, stateful_item_url(session_id, resolved_target))
+    });
+
+    let prefetch_urls = crate::upstream::hls_media_segment_urls(&content, &base_uri, 3);
+    if !prefetch_urls.is_empty() {
+        state.engine.prefetch_segment_urls(prefetch_urls, headers);
+    }
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
+            (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
+        ],
+        rewritten,
+    )
+        .into_response())
+}
+
+/// Extensionless HLS entry points are common on live CDNs. Inspect the upstream
+/// response before treating an unknown URL as a media segment; otherwise the
+/// unmodified master playlist sends the browser directly to authenticated CDN
+/// child URLs and those requests fail with 403/CORS errors.
+async fn handle_stateful_unknown_or_segment(
+    state: &AppState,
+    session_id: &str,
+    target_url: &str,
+    headers: &HashMap<String, String>,
+    public_base_url: &str,
+) -> Result<Response, (StatusCode, String)> {
+    let upstream = state
+        .engine
+        .connect_upstream(target_url, headers)
+        .await
+        .map_err(|error| {
+            (
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to fetch upstream media: {error}"),
+            )
+        })?;
+
+    if response_is_hls(&upstream.headers) {
+        let bytes = axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
+            .await
+            .map_err(|error| {
+                (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed reading HLS playlist: {error}"),
+                )
+            })?;
+        return rewrite_stateful_hls(
+            state,
+            session_id,
+            target_url,
+            headers,
+            public_base_url,
+            &bytes,
+        );
+    }
+
+    Ok(upstream_into_response(target_url, upstream))
+}
+
+fn response_is_hls(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            let lower = value.to_ascii_lowercase();
+            lower.contains("mpegurl") || lower.contains("m3u8")
+        })
+        .unwrap_or(false)
 }
 
 async fn handle_stateful_dash_manifest(
@@ -543,6 +665,7 @@ async fn handle_stateful_dash_manifest(
     session_id: &str,
     target_url: &str,
     headers: &HashMap<String, String>,
+    public_base_url: &str,
 ) -> Result<Response, (StatusCode, String)> {
     let bytes = state
         .engine
@@ -561,8 +684,9 @@ async fn handle_stateful_dash_manifest(
         )
     })?;
     let content = String::from_utf8_lossy(&bytes);
+    let base = public_base_url.trim_end_matches('/');
     let rewritten = DashManifestRewriter::rewrite(&content, &base_uri, |resolved_target| {
-        stateful_item_url(session_id, resolved_target)
+        format!("{}{}", base, stateful_item_url(session_id, resolved_target))
     });
 
     Ok((
@@ -747,6 +871,11 @@ async fn handle_encrypted_hls_playlist(
                 format!("/proxy/hls/{}?token={}", filename, item_token)
             });
 
+            let prefetch_urls = crate::upstream::hls_media_segment_urls(&content, &base_uri, 3);
+            if !prefetch_urls.is_empty() {
+                state.engine.prefetch_segment_urls(prefetch_urls, headers);
+            }
+
             Ok((
                 [
                     (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
@@ -817,30 +946,32 @@ async fn handle_segment(
     headers: &HashMap<String, String>,
 ) -> Result<Response, (StatusCode, String)> {
     match state.engine.connect_upstream(target_url, headers).await {
-        Ok(upstream) => {
-            let mime = mime_for(target_url);
-            let mut response_builder = Response::builder().status(upstream.status);
-
-            if let Some(headers_map) = response_builder.headers_mut() {
-                headers_map.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-                headers_map.insert(
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_static("public, max-age=3600"),
-                );
-                for (k, v) in &upstream.headers {
-                    headers_map.insert(k.clone(), v.clone());
-                }
-            }
-
-            Ok(response_builder.body(upstream.body).unwrap_or_else(|_| {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Build response error").into_response()
-            }))
-        }
+        Ok(upstream) => Ok(upstream_into_response(target_url, upstream)),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("Failed to fetch segment: {}", e),
         )),
     }
+}
+
+fn upstream_into_response(target_url: &str, upstream: UpstreamResponse) -> Response {
+    let mime = mime_for(target_url);
+    let mut response_builder = Response::builder().status(upstream.status);
+
+    if let Some(headers_map) = response_builder.headers_mut() {
+        headers_map.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+        headers_map.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=3600"),
+        );
+        for (k, v) in &upstream.headers {
+            headers_map.insert(k.clone(), v.clone());
+        }
+    }
+
+    response_builder.body(upstream.body).unwrap_or_else(|_| {
+        (StatusCode::INTERNAL_SERVER_ERROR, "Build response error").into_response()
+    })
 }
 
 fn is_dash_manifest(target_url: &str, request_path: &str) -> bool {

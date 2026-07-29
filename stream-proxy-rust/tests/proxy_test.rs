@@ -1,11 +1,13 @@
 use axum::body::Body;
-use axum::http::{header, HeaderMap, Request, StatusCode};
-use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::Router;
+use axum::http::{header, Request, StatusCode};
+#[cfg(feature = "upstream-reqwest")]
+use axum::{http::HeaderMap, response::IntoResponse, routing::get, Router};
 use serde_json::{json, Value};
-use std::{collections::HashMap, fs, time::Duration};
+#[cfg(feature = "upstream-reqwest")]
+use std::collections::HashMap;
+use std::{fs, time::Duration};
 use stream_proxy_rust::{create_router, Config, ProxyServer, ProxyServerConfig};
+#[cfg(feature = "upstream-reqwest")]
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 
@@ -57,7 +59,8 @@ async fn test_register_stateful_and_encrypted_mediaflow_urls() {
     let (app, _, _) = create_router(test_config()).unwrap();
 
     let req_body = json!({
-        "url": "http://stream.example.com/playlist.m3u8",
+        "url": "http://stream.example.com/live",
+        "content_type": "application/vnd.apple.mpegurl",
         "headers": {
             "User-Agent": "PlayBridge"
         }
@@ -85,6 +88,7 @@ async fn test_register_stateful_and_encrypted_mediaflow_urls() {
     let encrypted_url = json_resp["encrypted_url"].as_str().unwrap();
 
     assert!(proxy_url.contains("/s/"));
+    assert!(proxy_url.ends_with("/playlist.m3u8"));
     assert!(encrypted_url.contains("/proxy/hls/"));
     assert!(!encrypted_url.contains("PlayBridge")); // Headers must be encrypted in URL!
 }
@@ -159,6 +163,164 @@ async fn embedded_server_uses_an_ephemeral_port() {
     server.shutdown().await.unwrap();
 }
 
+#[cfg(feature = "upstream-reqwest")]
+#[tokio::test]
+async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
+    const ORIGIN_HEADER: &str = "x-playbridge-origin-test";
+
+    async fn master(headers: HeaderMap) -> impl IntoResponse {
+        if headers
+            .get(ORIGIN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            != Some("allowed")
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        (
+            [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000\nchild?session=test\n",
+        )
+            .into_response()
+    }
+
+    async fn child(headers: HeaderMap) -> impl IntoResponse {
+        if headers
+            .get(ORIGIN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            != Some("allowed")
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        (
+            [(header::CONTENT_TYPE, "application/x-mpegURL")],
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg.m4s?session=test\n",
+        )
+            .into_response()
+    }
+
+    async fn segment(headers: HeaderMap) -> impl IntoResponse {
+        if headers
+            .get(ORIGIN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            != Some("allowed")
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        (
+            [(header::CONTENT_TYPE, "video/iso.segment")],
+            "segment-bytes",
+        )
+            .into_response()
+    }
+
+    let origin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_addr = origin_listener.local_addr().unwrap();
+    let origin_task = tokio::spawn(async move {
+        axum::serve(
+            origin_listener,
+            Router::new()
+                .route("/live", get(master))
+                .route("/child", get(child))
+                .route("/seg.m4s", get(segment)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    let hinted = proxy
+        .register_remote_with_content_type(
+            "127.0.0.1",
+            format!("http://{origin_addr}/live"),
+            HashMap::from([(ORIGIN_HEADER.to_string(), "allowed".to_string())]),
+            Some("application/vnd.apple.mpegurl"),
+        )
+        .unwrap();
+    assert!(hinted.url.ends_with("/playlist.m3u8"));
+    assert!(hinted
+        .encrypted_url
+        .as_deref()
+        .is_some_and(|url| url.contains("/proxy/hls/")));
+
+    let registered = proxy
+        .register_remote(
+            "127.0.0.1",
+            format!("http://{origin_addr}/live"),
+            HashMap::from([(ORIGIN_HEADER.to_string(), "allowed".to_string())]),
+        )
+        .unwrap();
+    assert!(
+        !registered.url.ends_with(".m3u8"),
+        "test must exercise content-type detection, not filename detection"
+    );
+
+    let client = reqwest::Client::new();
+    let master_body = client
+        .get(&registered.url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let child_url = master_body
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .unwrap();
+    assert!(child_url.starts_with(&proxy.base_url("127.0.0.1")));
+    assert!(!child_url.starts_with(&format!("http://{origin_addr}")));
+
+    let child_body = client
+        .get(child_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let segment_url = child_body
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .unwrap();
+    assert!(segment_url.starts_with(&proxy.base_url("127.0.0.1")));
+    assert_eq!(
+        client
+            .get(segment_url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap()
+            .as_ref(),
+        b"segment-bytes"
+    );
+
+    let hinted = proxy
+        .register_remote_with_content_type(
+            "127.0.0.1",
+            format!("http://{origin_addr}/live"),
+            HashMap::new(),
+            Some("application/vnd.apple.mpegurl"),
+        )
+        .unwrap();
+    assert!(hinted.url.ends_with("/playlist.m3u8"));
+
+    proxy.shutdown().await.unwrap();
+    origin_task.abort();
+}
+
+/// Needs a real origin HTTP client (reqwest). Skipped when the library is built
+/// with only `upstream-jni` (Android host-fetch feature set).
+#[cfg(feature = "upstream-reqwest")]
 #[tokio::test]
 async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
     async fn manifest(headers: HeaderMap) -> impl IntoResponse {
@@ -237,7 +399,12 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
         .nth(1)
         .and_then(|value| value.split("</BaseURL>").next())
         .unwrap();
-    assert!(rewritten_base.starts_with("/s/"));
+    // Stateful DASH rewrites use absolute proxy URLs (Host-based) so browser
+    // players on a different port never resolve children against the wrong origin.
+    assert!(
+        rewritten_base.contains("/s/"),
+        "expected proxied BaseURL, got {rewritten_base}"
+    );
     assert!(!rewritten_base.contains("blockorigin"));
     assert!(!rewritten_base.contains("_root_"));
 
@@ -256,8 +423,14 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
     assert!(edl.contains(&format!("{}/s/", proxy.base_url("127.0.0.1"))));
     assert!(!edl.contains("blockorigin"));
 
+    let segment_url =
+        if rewritten_base.starts_with("http://") || rewritten_base.starts_with("https://") {
+            rewritten_base.to_string()
+        } else {
+            format!("{}{}", proxy.base_url("127.0.0.1"), rewritten_base)
+        };
     let segment_response = client
-        .get(format!("{}{}", proxy.base_url("127.0.0.1"), rewritten_base))
+        .get(segment_url)
         .header(header::RANGE, "bytes=0-3")
         .send()
         .await

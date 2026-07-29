@@ -24,8 +24,12 @@ use serde_json::Value;
 uniffi::setup_scaffolding!();
 
 mod receiver_runtime;
-#[cfg(feature = "sender-services")]
+#[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
 mod sender_services;
+
+/// Android-only: JNI trampolines for stream-proxy-rust upstream-jni.
+#[cfg(all(target_os = "android", feature = "sender-services-android"))]
+mod android_upstream;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, uniffi::Enum)]
 pub enum Protocol {
@@ -1004,9 +1008,9 @@ mod android_jni {
 
     use super::{DiscoveryScanner, pb_discovery_cancel, pb_discovery_free, pb_discovery_start};
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     use super::pb_string_free;
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     use super::sender_services::{
         SenderServices, pb_sender_services_abi_version, pb_sender_services_cancel,
         pb_sender_services_free, pb_sender_services_next_json, pb_sender_services_start,
@@ -1088,7 +1092,7 @@ mod android_jni {
         });
     }
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_abiVersion(
         _env: EnvUnowned,
@@ -1097,7 +1101,7 @@ mod android_jni {
         std::panic::catch_unwind(|| pb_sender_services_abi_version()).unwrap_or(0) as jint
     }
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_start(
         _env: EnvUnowned,
@@ -1106,7 +1110,7 @@ mod android_jni {
         std::panic::catch_unwind(|| pb_sender_services_start() as jlong).unwrap_or(0)
     }
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_submitJson<
         'local,
@@ -1141,7 +1145,7 @@ mod android_jni {
         accepted
     }
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_nextEvent<
         'local,
@@ -1177,7 +1181,7 @@ mod android_jni {
             .resolve::<ThrowRuntimeExAndDefault>()
     }
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_cancel(
         _env: EnvUnowned,
@@ -1191,7 +1195,7 @@ mod android_jni {
         });
     }
 
-    #[cfg(feature = "sender-services")]
+    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_free(
         _env: EnvUnowned,
@@ -1203,6 +1207,42 @@ mod android_jni {
                 unsafe { pb_sender_services_free(handle as *const SenderServices) };
             }
         });
+    }
+
+    /// Upstream JNI callback ABI (only meaningful with `sender-services-android`).
+    #[cfg(feature = "sender-services-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_upstreamAbiVersion(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jint {
+        std::panic::catch_unwind(|| stream_proxy_rust::pb_proxy_upstream_abi_version() as jint)
+            .unwrap_or(0)
+    }
+
+    #[cfg(feature = "sender-services-android")]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_upstreamCallbacksRegistered(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jboolean {
+        let ready = std::panic::catch_unwind(|| {
+            stream_proxy_rust::pb_proxy_upstream_callbacks_registered() != 0
+        })
+        .unwrap_or(false);
+        ready as jboolean
+    }
+
+    /// Register Kotlin HttpURLConnection open/read/close as proxy upstream.
+    #[cfg(all(target_os = "android", feature = "sender-services-android"))]
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_installUpstreamHttpClient<
+        'local,
+    >(
+        env: EnvUnowned<'local>,
+        class: JClass<'local>,
+    ) -> jboolean {
+        super::android_upstream::java_install_upstream(env, class)
     }
 }
 
