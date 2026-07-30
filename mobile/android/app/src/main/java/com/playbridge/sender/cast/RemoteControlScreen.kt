@@ -147,6 +147,7 @@ fun RemoteControlScreen(
     externalProtocolLabel: String? = null,
     externalCapabilities: Set<Capability>? = null,
     isLive: Boolean = false,
+    isSeekable: Boolean = true,
     positionMs: Long = 0L,
     durationMs: Long = 0L,
     mediaTitle: String? = null,
@@ -180,7 +181,7 @@ fun RemoteControlScreen(
     val capabilities = externalCapabilities.orEmpty()
     val supportsRemote = !externalMode || Capability.REMOTE in capabilities
     val supportsVolume = !externalMode || Capability.VOLUME in capabilities
-    val supportsSeek = !externalMode || Capability.SEEK in capabilities
+    val supportsSeek = if (externalMode) Capability.SEEK in capabilities else isSeekable
     val availableModes = buildList {
         add(RemoteMode.CONTEXT)
         if (supportsRemote) add(RemoteMode.DPAD)
@@ -284,6 +285,7 @@ fun RemoteControlScreen(
                                     positionMs = positionMs,
                                     durationMs = durationMs,
                                     isLive = isLive,
+                                    isSeekable = supportsSeek,
                                     isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
                                     enableVolume = supportsVolume,
                                     onSeekTo = onSeekTo,
@@ -303,6 +305,7 @@ fun RemoteControlScreen(
                                 positionMs = positionMs,
                                 durationMs = durationMs,
                                 isLive = isLive,
+                                isSeekable = supportsSeek,
                                 dlnaMode = externalMode,
                                 mediaTitle = mediaTitle,
                                 onBrowserControl = onBrowserControl,
@@ -321,7 +324,7 @@ fun RemoteControlScreen(
                                 DpadArea(onRemoteKey = onRemoteKey)
                             }
                             ModeBottomBar(
-                                ctx = ctx, dlnaMode = externalMode, isLive = isLive,
+                                ctx = ctx, dlnaMode = externalMode, isLive = isLive, isSeekable = supportsSeek,
                                 playbackState = playbackState, onRemoteKey = onRemoteKey,
                                 onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
                             )
@@ -338,7 +341,7 @@ fun RemoteControlScreen(
                                 )
                             }
                             ModeBottomBar(
-                                ctx = ctx, dlnaMode = externalMode, isLive = isLive,
+                                ctx = ctx, dlnaMode = externalMode, isLive = isLive, isSeekable = supportsSeek,
                                 playbackState = playbackState, onRemoteKey = onRemoteKey,
                                 onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
                             )
@@ -540,6 +543,7 @@ private fun ColumnScope.BrowserContextView(
     positionMs: Long,
     durationMs: Long,
     isLive: Boolean,
+    isSeekable: Boolean,
     dlnaMode: Boolean,
     mediaTitle: String?,
     onBrowserControl: (String) -> Unit,
@@ -557,6 +561,7 @@ private fun ColumnScope.BrowserContextView(
             positionMs = positionMs,
             durationMs = durationMs,
             isLive = isLive,
+            isSeekable = isSeekable,
             isPlaying = playbackState == "playing" || playbackState == "buffering",
             enableVolume = !dlnaMode,
             onSeekTo = { ms -> onBrowserControl("seek_to:$ms") },
@@ -576,6 +581,7 @@ private fun ColumnScope.ModeBottomBar(
     ctx: RemoteContext,
     dlnaMode: Boolean,
     isLive: Boolean,
+    isSeekable: Boolean,
     playbackState: String?,
     onRemoteKey: (String) -> Unit,
     onBrowserControl: (String) -> Unit,
@@ -586,7 +592,11 @@ private fun ColumnScope.ModeBottomBar(
             VolumeRow(onVolumeUp = { onRemoteKey("volume_up") }, onVolumeDown = { onRemoteKey("volume_down") })
             BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
         }
-        RemoteContext.PLAYER -> MediaControlRow(onPlayerControl = onPlayerControl, showLoop = !dlnaMode, showSeek = !isLive)
+        RemoteContext.PLAYER -> MediaControlRow(
+            onPlayerControl = onPlayerControl,
+            showLoop = !dlnaMode,
+            showSeek = !isLive && isSeekable,
+        )
         RemoteContext.IDLE -> { /* nothing to control */ }
     }
 }
@@ -691,6 +701,7 @@ private fun SeekVolumeBar(
     positionMs: Long,
     durationMs: Long,
     isLive: Boolean,
+    isSeekable: Boolean,
     isPlaying: Boolean,
     enableVolume: Boolean,
     onSeekTo: (Long) -> Unit,
@@ -698,7 +709,7 @@ private fun SeekVolumeBar(
     onVolumeDown: () -> Unit,
     onPlayPauseToggle: () -> Unit,
 ) {
-    val hasDuration = durationMs > 0L && !isLive
+    val hasDuration = durationMs > 0L && !isLive && isSeekable
     val currentPosition by rememberUpdatedState(positionMs)
 
     var widthPx by remember { mutableFloatStateOf(0f) }

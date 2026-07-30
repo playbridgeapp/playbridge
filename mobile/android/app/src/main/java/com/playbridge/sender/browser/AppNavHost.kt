@@ -793,6 +793,11 @@ fun AppNavHost(
                         onScreenChange(remoteReturnScreen)
                     }
                     val external = activeExternalDevice
+                    val remoteTimeline = resolveRemoteTimeline(
+                        activeContext = tvActiveContext,
+                        playback = tvPlayback,
+                        playerSettings = tvPlayerSettings,
+                    )
                     if (external != null) {
                         RemoteControlScreen(
                             activeContext = "player",
@@ -839,7 +844,8 @@ fun AppNavHost(
                     } else RemoteControlScreen(
                         activeContext = tvActiveContext,
                         playbackState = tvPlayback?.state,
-                        isLive = tvPlayerSettings.isLive,
+                        isLive = remoteTimeline.isLive,
+                        isSeekable = remoteTimeline.isSeekable,
                         positionMs = tvPlayback?.positionMs ?: 0L,
                         durationMs = tvPlayback?.durationMs ?: 0L,
                         mediaTitle = tvPlayback?.title,
