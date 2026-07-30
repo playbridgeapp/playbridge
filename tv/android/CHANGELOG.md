@@ -3,6 +3,22 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.11.0] — 2026-07-30 (versionCode 226)
+
+### Added
+- **Live/Network Exo Recovery**: Classifies Media3 errors in `ExoRendererService` and recovers in-engine (live edge / re-prepare) before escalating; host engine auto-switch is limited to startup hard failures, with failover allowed only after in-engine recovery is exhausted.
+- **Embedded Subtitle Offset**: Wires ExoPlayer embedded subtitle delay through `OffsetTextRenderer` so phone/TV offset controls apply to in-band tracks (fixes #171).
+- **Debug Network Diagnostics**: Optional debug-only network logging for stream fetches, ContentSniffer, skip/subtitle downloads, and browser traffic (not retained in release diagnostics).
+
+### Fixed
+- **Subtitle Sync Reset**: Forces absolute zero offset on Sync Reset instead of applying a captured delta that could leave engine/UI state uncleared.
+- **Update Dialog Snooze**: Persists "Later" per version so Activity recreation does not re-show the update prompt until a newer release; manual Check for updates still prompts.
+
+### Security
+- **WebView Mixed Content**: Switched `mixedContentMode` from `ALWAYS_ALLOW` to `COMPATIBILITY_MODE` to reduce MITM/XSS exposure from active HTTP content on HTTPS pages.
+- **WebView Content Access**: Disabled `allowContentAccess` to block local content-provider access from the TV browser WebView.
+- **Auth Response Disclosure**: Stopped echoing authentication tokens in `auth_response` payloads (shared protocol hardening, SEC-005).
+
 ## Player [0.10.1] — 2026-07-22 (versionCode 225)
 
 ### Fixed
