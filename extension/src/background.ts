@@ -37,6 +37,12 @@ import {
   preferredSyntheticCastUrl,
   type SyntheticMasterResult,
 } from "./core/synthetic-hls";
+import {
+  attachBoundedResponseBodyScanner,
+  scanResponseBodyForMedia,
+  shouldInspectResponseBody,
+  type ResponseBodyStreamFilter,
+} from "./core/response-body-media";
 
 declare const __PB_DEBUG__: boolean;
 
@@ -923,10 +929,17 @@ function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Rec
   notifyContentScript(annotated, tabId, headers);
 
   if (isHlsUrl(annotated.url, annotated.contentType)) {
-    // Never re-fetch exclusive bootstrap masters — the edge session is already
-    // held by the page (`session_duplicated` / claims_denied). Prefer Firefox
-    // body sniff on the original response, or observed session media playlists.
-    if (isExclusiveBootstrapMaster(annotated.url, annotated.hlsRole)) {
+    // Body-derived candidates must not trigger speculative requests: they may
+    // be one-shot URLs, and embedded candidates do not yet have replay headers.
+    // The actual media request can enrich the stored detection later.
+    // Exclusive bootstrap masters are also already held by the page; re-fetching
+    // them can produce session_duplicated / claims_denied.
+    if (
+      annotated.detectedBy === "body_content_m3u8" ||
+      annotated.detectedBy === "response_body_url"
+    ) {
+      plog("  skip re-fetch of body-derived HLS URL:", short(annotated.url));
+    } else if (isExclusiveBootstrapMaster(annotated.url, annotated.hlsRole)) {
       plog("  skip re-fetch of exclusive bootstrap master:", short(annotated.url));
     } else {
       HlsParser.parsePlaylist(annotated.url, headers ?? undefined)
@@ -1489,139 +1502,101 @@ browser.webRequest.onHeadersReceived.addListener(
         stored?.headers ?? null,
       );
 
-      // Firefox: capture exclusive bootstrap master body on the first response.
-      // A follow-up fetch gets session_duplicated; child session= URLs are what
-      // we cast. Seeding variants from this body helps before children poll.
-      if (
-        FILTER_AVAILABLE &&
-        details.statusCode === 200 &&
-        isExclusiveBootstrapMaster(details.url, hlsRole)
-      ) {
-        try {
-          const filter = (browser.webRequest as any).filterResponseData(
-            details.requestId,
+    }
+
+    const inspectBody =
+      FILTER_AVAILABLE &&
+      details.statusCode === 200 &&
+      (isM3u8Url ||
+        isMpdUrl ||
+        shouldInspectResponseBody(contentType, details.type));
+    if (inspectBody) {
+      try {
+        const filter = (
+          browser.webRequest as unknown as {
+            filterResponseData: (requestId: string) => ResponseBodyStreamFilter;
+          }
+        ).filterResponseData(details.requestId);
+        attachBoundedResponseBodyScanner(filter, (body) => {
+          const scan = scanResponseBodyForMedia(
+            body,
+            details.url,
+            contentType,
           );
-          const decoder = new TextDecoder("utf-8");
-          let acc = "";
-          filter.ondata = (ev: any) => {
-            filter.write(ev.data);
-            if (acc.length < 96_000) {
-              acc += decoder.decode(ev.data, { stream: true });
+
+          if (scan.responseKind) {
+            let hlsRole: HlsRole = "not_hls";
+            let playlist:
+              | ReturnType<typeof HlsParser.parsePlaylistContent>
+              | undefined;
+            if (scan.responseKind === "hls") {
+              playlist = HlsParser.parsePlaylistContent(body, details.url);
+              hlsRole =
+                playlist.role === "not_hls" ? "media" : playlist.role;
             }
-          };
-          filter.onstop = () => {
-            try {
-              const text = acc.trim();
-              if (text.startsWith("#EXTM3U") && /#EXT-X-STREAM-INF:/i.test(text)) {
-                const playlist = HlsParser.parsePlaylistContent(
-                  text,
-                  details.url,
-                );
-                const storedVideo = findVideoByIdentity(
-                  getTabVideos(tabId),
-                  details.url,
-                );
-                if (storedVideo) {
-                  applyHlsPlaylistEnrichment(
-                    storedVideo,
-                    playlist,
-                    tabId,
-                    text,
-                  );
-                }
-              }
-            } catch (e) {
-              plog("  exclusive master body parse failed:", (e as Error)?.message);
-            }
-            try { filter.disconnect(); } catch (_) {}
-          };
-          filter.onerror = () => {};
-        } catch (e) {
-          plog("  filterResponseData (exclusive master) threw:", (e as Error)?.message);
-        }
-      }
-    } else {
-      const skipTypes = ["image", "font", "stylesheet", "script"];
-      const sniffable = details.statusCode === 200 && !skipTypes.includes(details.type) && FILTER_AVAILABLE;
-      if (details.url.toLowerCase().includes("m3u8")) {
-        plog("  not matched by ct/url; body-sniff", sniffable ? "ENABLED" : "SKIPPED",
-          "(status:", details.statusCode, "type:", details.type, "filter:", FILTER_AVAILABLE + ")");
-      }
-      if (sniffable) {
-        try {
-          const filter = (browser.webRequest as any).filterResponseData(details.requestId);
-          const decoder = new TextDecoder("utf-8");
-          let decided = false;
-          let finished = false;
-          let acc = "";
-          const maybeHandleMasterBody = (body: string) => {
-            const text = body.trim();
-            if (!text.startsWith("#EXTM3U")) return;
-            plog("  ✓ DETECTED via body sniff (#EXTM3U):", short(details.url));
-            const role = classifyHlsUrl(details.url);
             processAndNotifyVideo(
               {
                 url: details.url,
                 tabId,
-                contentType,
-                detectedBy: "body_content_m3u8",
+                contentType:
+                  scan.responseKind === "hls"
+                    ? "application/vnd.apple.mpegurl"
+                    : "application/dash+xml",
+                detectedBy:
+                  scan.responseKind === "hls"
+                    ? "body_content_m3u8"
+                    : "body_content_mpd",
                 originUrl: details.originUrl ?? "",
                 timestamp: Date.now(),
                 frameId,
-                hlsRole: role,
+                hlsRole,
               },
               tabId,
               stored?.headers ?? null,
             );
-            // Capture exclusive bootstrap master body on the first response —
-            // a second fetch will fail with session_duplicated.
+
             if (
-              isExclusiveBootstrapMaster(details.url, role) ||
-              /#EXT-X-STREAM-INF:/i.test(text)
+              playlist &&
+              (playlist.role === "master" ||
+                playlist.videoQualities.length > 0 ||
+                isExclusiveBootstrapMaster(details.url, hlsRole))
             ) {
-              try {
-                const playlist = HlsParser.parsePlaylistContent(text, details.url);
-                const storedVideo = findVideoByIdentity(
-                  getTabVideos(tabId),
-                  details.url,
+              const storedVideo = findVideoByIdentity(
+                getTabVideos(tabId),
+                details.url,
+              );
+              if (storedVideo) {
+                applyHlsPlaylistEnrichment(
+                  storedVideo,
+                  playlist,
+                  tabId,
+                  body,
                 );
-                if (storedVideo) {
-                  applyHlsPlaylistEnrichment(
-                    storedVideo,
-                    playlist,
-                    tabId,
-                    text,
-                  );
-                }
-              } catch (e) {
-                plog("  master body parse failed:", (e as Error)?.message);
               }
             }
-          };
-          filter.ondata = (ev: any) => {
-            filter.write(ev.data);
-            acc += decoder.decode(ev.data, { stream: true });
-            // Exclusive masters need enough of the body for STREAM-INF lines;
-            // keep buffering up to a small cap then parse.
-            if (!decided && acc.trim().startsWith("#EXTM3U") && acc.length >= 256) {
-              decided = true;
-            }
-            if (decided && acc.length > 64_000 && !finished) {
-              finished = true;
-              maybeHandleMasterBody(acc);
-              try { filter.disconnect(); } catch (_) {}
-            }
-          };
-          filter.onstop = () => {
-            if (!finished && acc.trim().startsWith("#EXTM3U")) {
-              maybeHandleMasterBody(acc);
-            } else if (!finished && acc.trim().startsWith("#EXTM3U") === false && acc.length >= 7) {
-              // non-playlist
-            }
-            try { filter.disconnect(); } catch (_) {}
-          };
-          filter.onerror = () => {};
-        } catch (e) { plog("  filterResponseData threw:", (e as Error)?.message); }
+          }
+
+          for (const candidate of scan.embeddedCandidates) {
+            processAndNotifyVideo(
+              {
+                url: candidate.url,
+                tabId,
+                contentType: candidate.contentType,
+                detectedBy: "response_body_url",
+                originUrl: details.originUrl ?? "",
+                timestamp: Date.now(),
+                frameId,
+                hlsRole: isHlsUrl(candidate.url, candidate.contentType)
+                  ? classifyHlsUrl(candidate.url)
+                  : "not_hls",
+              },
+              tabId,
+              null,
+            );
+          }
+        });
+      } catch (e) {
+        plog("  bounded response-body scan failed:", (e as Error)?.message);
       }
     }
 

@@ -28,6 +28,12 @@ import {
   preferredSyntheticCastUrl,
   type SyntheticMasterResult,
 } from "../core/synthetic-hls";
+import {
+  attachBoundedResponseBodyScanner,
+  scanResponseBodyForMedia,
+  shouldInspectResponseBody,
+  type ResponseBodyStreamFilter,
+} from "../core/response-body-media";
 
 const NATIVE_APP_ID = "browser";
 const DEBUG = false;
@@ -750,124 +756,93 @@ browser.webRequest.onHeadersReceived.addListener(
         stored?.headers ?? null,
       );
 
-      // Capture exclusive master body (GeckoView has filterResponseData).
-      if (
-        details.statusCode === 200 &&
-        isExclusiveBootstrapMaster(details.url, hlsRole)
-      ) {
-        try {
-          const filter = (
-            browser.webRequest as {
-              filterResponseData: (id: string) => {
-                ondata: ((ev: { data: ArrayBuffer }) => void) | null;
-                onstop: (() => void) | null;
-                onerror: (() => void) | null;
-                write: (data: ArrayBuffer) => void;
-                disconnect: () => void;
-              };
+    }
+
+    if (
+      details.statusCode === 200 &&
+      (isM3u8Url ||
+        isMpdUrl ||
+        shouldInspectResponseBody(contentType, details.type))
+    ) {
+      try {
+        const filter = (
+          browser.webRequest as unknown as {
+            filterResponseData: (id: string) => ResponseBodyStreamFilter;
+          }
+        ).filterResponseData(details.requestId);
+        attachBoundedResponseBodyScanner(filter, (body) => {
+          const scan = scanResponseBodyForMedia(
+            body,
+            details.url,
+            contentType,
+          );
+
+          if (scan.responseKind) {
+            let hlsRole: HlsRole = "not_hls";
+            let playlist:
+              | ReturnType<typeof HlsParser.parsePlaylistContent>
+              | undefined;
+            if (scan.responseKind === "hls") {
+              playlist = HlsParser.parsePlaylistContent(body, details.url);
+              hlsRole =
+                playlist.role === "not_hls" ? "media" : playlist.role;
             }
-          ).filterResponseData(details.requestId);
-          const decoder = new TextDecoder("utf-8");
-          let acc = "";
-          filter.ondata = (ev) => {
-            filter.write(ev.data);
-            if (acc.length < 96_000) {
-              acc += decoder.decode(ev.data, { stream: true });
-            }
-          };
-          filter.onstop = () => {
-            try {
-              const text = acc.trim();
-              if (
-                text.startsWith("#EXTM3U") &&
-                /#EXT-X-STREAM-INF:/i.test(text)
-              ) {
-                const storedVideo = findVideoByIdentity(
-                  getTabVideos(tabId),
-                  details.url,
-                );
-                if (storedVideo) applyMasterBody(storedVideo, tabId, text);
-              }
-            } catch (e) {
-              plog("exclusive master parse failed:", (e as Error)?.message);
-            }
-            try {
-              filter.disconnect();
-            } catch {
-              /* */
-            }
-          };
-          filter.onerror = () => {};
-        } catch (e) {
-          plog("filterResponseData failed:", (e as Error)?.message);
-        }
-      }
-    } else if (details.statusCode === 200) {
-      const skipTypes = ["image", "font", "stylesheet", "script"];
-      if (!skipTypes.includes(details.type)) {
-        try {
-          const filter = (
-            browser.webRequest as {
-              filterResponseData: (id: string) => {
-                ondata: ((ev: { data: ArrayBuffer }) => void) | null;
-                onstop: (() => void) | null;
-                onerror: (() => void) | null;
-                write: (data: ArrayBuffer) => void;
-                disconnect: () => void;
-              };
-            }
-          ).filterResponseData(details.requestId);
-          const decoder = new TextDecoder("utf-8");
-          let acc = "";
-          let decided = false;
-          filter.ondata = (ev) => {
-            filter.write(ev.data);
-            acc += decoder.decode(ev.data, { stream: true });
-            if (!decided && acc.trim().startsWith("#EXTM3U") && acc.length >= 7) {
-              decided = true;
-              const role = classifyHlsUrl(details.url);
-              reportVideo(
-                {
-                  url: details.url,
-                  tabId,
-                  contentType: contentType || "application/vnd.apple.mpegurl",
-                  detectedBy: "body_content_m3u8",
-                  originUrl: details.originUrl ?? "",
-                  timestamp: Date.now(),
-                  frameId,
-                  hlsRole: role,
-                },
+            reportVideo(
+              {
+                url: details.url,
                 tabId,
-                stored?.headers ?? null,
+                contentType:
+                  scan.responseKind === "hls"
+                    ? "application/vnd.apple.mpegurl"
+                    : "application/dash+xml",
+                detectedBy:
+                  scan.responseKind === "hls"
+                    ? "body_content_m3u8"
+                    : "body_content_mpd",
+                originUrl: details.originUrl ?? "",
+                timestamp: Date.now(),
+                frameId,
+                hlsRole,
+              },
+              tabId,
+              stored?.headers ?? null,
+            );
+
+            if (
+              playlist &&
+              (playlist.role === "master" ||
+                playlist.videoQualities.length > 0 ||
+                isExclusiveBootstrapMaster(details.url, hlsRole))
+            ) {
+              const storedVideo = findVideoByIdentity(
+                getTabVideos(tabId),
+                details.url,
               );
-              if (
-                isExclusiveBootstrapMaster(details.url, role) ||
-                /#EXT-X-STREAM-INF:/i.test(acc)
-              ) {
-                const storedVideo = findVideoByIdentity(
-                  getTabVideos(tabId),
-                  details.url,
-                );
-                if (storedVideo) applyMasterBody(storedVideo, tabId, acc);
-              }
-              try {
-                filter.disconnect();
-              } catch {
-                /* */
-              }
+              if (storedVideo) applyMasterBody(storedVideo, tabId, body);
             }
-          };
-          filter.onstop = () => {
-            try {
-              filter.disconnect();
-            } catch {
-              /* */
-            }
-          };
-          filter.onerror = () => {};
-        } catch {
-          /* filter unavailable */
-        }
+          }
+
+          for (const candidate of scan.embeddedCandidates) {
+            reportVideo(
+              {
+                url: candidate.url,
+                tabId,
+                contentType: candidate.contentType,
+                detectedBy: "response_body_url",
+                originUrl: details.originUrl ?? "",
+                timestamp: Date.now(),
+                frameId,
+                hlsRole: isHlsUrl(candidate.url, candidate.contentType)
+                  ? classifyHlsUrl(candidate.url)
+                  : "not_hls",
+              },
+              tabId,
+              null,
+            );
+          }
+        });
+      } catch (e) {
+        plog("bounded response-body scan failed:", (e as Error)?.message);
       }
     }
 
