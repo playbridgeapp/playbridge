@@ -308,7 +308,13 @@ class ServerService : Service() {
             val tlsDir = java.io.File(filesDir, "tls").also { it.mkdirs() }
             webSocketServer = WebSocketServer(
                 port = port,
-                isTokenAuthorized = { token -> pairingStore.isTokenAuthorized(token) },
+                isTokenAuthorized = { token ->
+                    val authorized = pairingStore.isTokenAuthorized(token)
+                    if (authorized) {
+                        pairingStore.updateLastConnected(token)
+                    }
+                    authorized
+                },
                 onPairingApproved = { deviceName, deviceUUID ->
                     val newToken = java.util.UUID.randomUUID().toString()
                     pairingStore.addAuthorizedToken(newToken)

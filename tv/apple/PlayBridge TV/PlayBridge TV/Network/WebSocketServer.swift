@@ -101,6 +101,14 @@ class WebSocketServer: ObservableObject {
     /// driven by the player UI (next/jump), which never pass through the server.
     private var playlistCancellable: AnyCancellable?
 
+    private func tokenDigest(_ token: String) -> String {
+        if token.hasPrefix("sha256:") { return token }
+        let data = Data(token.utf8)
+        let digest = SHA256.hash(data: data)
+        let hex = digest.compactMap { String(format: "%02x", $0) }.joined()
+        return "sha256:" + hex
+    }
+
     init(historyStore: HistoryStore? = nil, playlistStore: PlaylistStore? = nil) {
         self.historyStore = historyStore
         self.playlistStore = playlistStore
@@ -644,14 +652,15 @@ class WebSocketServer: ObservableObject {
         autoTimeoutWork = nil
 
         let token = UUID().uuidString
+        let digest = tokenDigest(token)
         var tokens = authorizedTokens
-        tokens.insert(token)
+        tokens.insert(digest)
         authorizedTokens = tokens
 
         let device = PairedDevice(
             deviceUUID: handshake.deviceUUID,
             deviceName: handshake.deviceName,
-            token: token,
+            token: digest,
             lastConnected: Date()
         )
         savePairedDevice(device)
@@ -785,7 +794,8 @@ class WebSocketServer: ObservableObject {
             send(json: ["type": "auth_response", "success": false], to: connection)
             return
         }
-        if authorizedTokens.contains(msg.token) {
+        let digest = tokenDigest(msg.token)
+        if authorizedTokens.contains(msg.token) || authorizedTokens.contains(digest) {
             updateLastConnected(token: msg.token)
             completeAuth(from: connection, token: msg.token)
         } else {
@@ -838,6 +848,7 @@ class WebSocketServer: ObservableObject {
         storedPairedDevices = devices
         var tokens = authorizedTokens
         tokens.remove(device.token)
+        tokens.remove(tokenDigest(device.token))
         authorizedTokens = tokens
     }
 
@@ -848,14 +859,21 @@ class WebSocketServer: ObservableObject {
     }
 
     private func updateLastConnected(token: String) {
+        let digest = tokenDigest(token)
         var devices = storedPairedDevices
-        if let idx = devices.firstIndex(where: { $0.token == token }) {
+        if let idx = devices.firstIndex(where: { $0.token == token || $0.token == digest }) {
             let d = devices[idx]
             devices[idx] = PairedDevice(
                 deviceUUID: d.deviceUUID, deviceName: d.deviceName,
-                token: token, lastConnected: Date()
+                token: digest, lastConnected: Date()
             )
             storedPairedDevices = devices
+        }
+        var tokens = authorizedTokens
+        if tokens.contains(token) {
+            tokens.remove(token)
+            tokens.insert(digest)
+            authorizedTokens = tokens
         }
     }
 

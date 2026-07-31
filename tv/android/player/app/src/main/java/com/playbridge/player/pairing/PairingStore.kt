@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.UUID
+import java.security.MessageDigest
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "pairing_store")
 
@@ -28,6 +29,12 @@ class PairingStore(private val context: Context) {
         private val AUTHORIZED_TOKENS = stringPreferencesKey("authorized_tokens")
 
         const val DEFAULT_PORT = com.playbridge.shared.protocol.Config.DEFAULT_PORT
+
+        private fun tokenDigest(token: String): String {
+            if (token.startsWith("sha256:")) return token
+            val bytes = MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8))
+            return "sha256:" + bytes.joinToString("") { java.lang.String.format("%02x", it) }
+        }
     }
     
     /**
@@ -151,7 +158,9 @@ class PairingStore(private val context: Context) {
             current.removeAll {
                 (device.deviceUUID.isNotEmpty() && it.deviceUUID == device.deviceUUID) || it.id == device.id
             }
-            current.add(device)
+
+            val protectedDevice = device.copy(token = tokenDigest(device.token))
+            current.add(protectedDevice)
             
             prefs[PAIRED_DEVICES] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(PairedDevice.serializer()),
@@ -200,6 +209,43 @@ class PairingStore(private val context: Context) {
         }
     }
 
+    suspend fun updateLastConnected(token: String) {
+        val digest = tokenDigest(token)
+        context.dataStore.edit { prefs ->
+            val current = prefs[PAIRED_DEVICES]?.let {
+                try {
+                    protocolJson.decodeFromString<List<PairedDevice>>(it).toMutableList()
+                } catch (e: Exception) {
+                    mutableListOf()
+                }
+            } ?: mutableListOf()
+
+            val index = current.indexOfFirst { it.token == token || it.token == digest }
+            if (index != -1) {
+                val device = current[index]
+                current[index] = device.copy(token = digest, lastConnected = System.currentTimeMillis())
+                prefs[PAIRED_DEVICES] = protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(PairedDevice.serializer()),
+                    current
+                )
+            }
+
+            // Migrate the token in the authorized tokens set as well
+            val authSet = prefs[AUTHORIZED_TOKENS]?.let {
+                try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
+                catch (e: Exception) { mutableSetOf() }
+            } ?: mutableSetOf()
+            if (authSet.contains(token)) {
+                authSet.remove(token)
+                authSet.add(digest)
+                prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+                    authSet.toList()
+                )
+            }
+        }
+    }
+
     // ── Per-device token authorization ────────────────────────────────────────
 
     private suspend fun getAuthorizedTokenSet(): MutableSet<String> {
@@ -211,16 +257,20 @@ class PairingStore(private val context: Context) {
         }
     }
 
-    suspend fun isTokenAuthorized(token: String): Boolean =
-        getAuthorizedTokenSet().contains(token)
+    suspend fun isTokenAuthorized(token: String): Boolean {
+        val set = getAuthorizedTokenSet()
+        val digest = tokenDigest(token)
+        return set.contains(token) || set.contains(digest)
+    }
 
     suspend fun addAuthorizedToken(token: String) {
+        val digest = tokenDigest(token)
         context.dataStore.edit { prefs ->
             val set = prefs[AUTHORIZED_TOKENS]?.let {
                 try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
                 catch (e: Exception) { mutableSetOf() }
             } ?: mutableSetOf()
-            set.add(token)
+            set.add(digest)
             prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
                 set.toList()
@@ -229,12 +279,14 @@ class PairingStore(private val context: Context) {
     }
 
     suspend fun removeAuthorizedToken(token: String) {
+        val digest = tokenDigest(token)
         context.dataStore.edit { prefs ->
             val set = prefs[AUTHORIZED_TOKENS]?.let {
                 try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
                 catch (e: Exception) { mutableSetOf() }
             } ?: mutableSetOf()
             set.remove(token)
+            set.remove(digest)
             prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
                 set.toList()
