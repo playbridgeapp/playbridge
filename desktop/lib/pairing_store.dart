@@ -237,7 +237,7 @@ class PairingStore {
     return pairedDevices.any((d) {
       final dTokenBytes = utf8.encode(d.token);
       return _constantTimeEquals(dTokenBytes, tokenBytes) ||
-             _constantTimeEquals(dTokenBytes, digestBytes);
+          _constantTimeEquals(dTokenBytes, digestBytes);
     });
   }
 
