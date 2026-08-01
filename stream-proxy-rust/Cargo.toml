@@ -44,6 +44,7 @@ mime_guess = "2"
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 cipher = { version = "0.4", features = ["block-padding"] }
+subtle = "2.6.1"
 
 [dev-dependencies]
 tokio-test = "0.4"

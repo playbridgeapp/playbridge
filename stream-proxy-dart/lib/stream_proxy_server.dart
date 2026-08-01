@@ -108,7 +108,7 @@ class StreamProxyServer {
         final token = request.url.queryParameters['token'] ??
             request.headers['Authorization']?.replaceAll('Bearer ', '').trim();
 
-        if (token != password) {
+        if (token == null || !_constantTimeEquals(utf8.encode(token), utf8.encode(password))) {
           return Response.forbidden(
               'Unauthorized: Invalid or missing API password');
         }
@@ -730,4 +730,15 @@ String _rewriteDashManifest(String content, String? token) {
   });
 
   return content;
+}
+
+bool _constantTimeEquals(List<int> a, List<int> b) {
+  if (a.length != b.length) {
+    return false;
+  }
+  int result = 0;
+  for (int i = 0; i < a.length; i++) {
+    result |= a[i] ^ b[i];
+  }
+  return result == 0;
 }

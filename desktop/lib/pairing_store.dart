@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:crypto/crypto.dart';
+import 'dart:typed_data';
+import 'dart:typed_data';
 
 import 'player_engine.dart';
 
@@ -231,7 +233,24 @@ class PairingStore {
 
   bool isTokenAuthorized(String token) {
     final digest = _tokenDigest(token);
-    return pairedDevices.any((d) => d.token == token || d.token == digest);
+    final tokenBytes = utf8.encode(token);
+    final digestBytes = utf8.encode(digest);
+    return pairedDevices.any((d) {
+      final dTokenBytes = utf8.encode(d.token);
+      return _constantTimeEquals(dTokenBytes, tokenBytes) ||
+             _constantTimeEquals(dTokenBytes, digestBytes);
+    });
+  }
+
+  bool _constantTimeEquals(List<int> a, List<int> b) {
+    if (a.length != b.length) {
+      return false;
+    }
+    int result = 0;
+    for (int i = 0; i < a.length; i++) {
+      result |= a[i] ^ b[i];
+    }
+    return result == 0;
   }
 
   Future<void> addPairedDevice(PairedDeviceRecord device) async {

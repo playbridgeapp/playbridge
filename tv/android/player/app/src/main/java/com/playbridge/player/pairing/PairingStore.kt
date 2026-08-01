@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import java.util.UUID
+import java.security.MessageDigest
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "pairing_store")
 
@@ -211,8 +212,12 @@ class PairingStore(private val context: Context) {
         }
     }
 
-    suspend fun isTokenAuthorized(token: String): Boolean =
-        getAuthorizedTokenSet().contains(token)
+    suspend fun isTokenAuthorized(token: String): Boolean {
+        val tokenBytes = token.toByteArray(Charsets.UTF_8)
+        return getAuthorizedTokenSet().any { storedToken ->
+            MessageDigest.isEqual(storedToken.toByteArray(Charsets.UTF_8), tokenBytes)
+        }
+    }
 
     suspend fun addAuthorizedToken(token: String) {
         context.dataStore.edit { prefs ->
