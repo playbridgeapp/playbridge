@@ -42,8 +42,15 @@ pub enum CastError {
     },
     #[error("mDNS operation failed: {0}")]
     Mdns(String),
-    #[error("invalid PlayBridge frame: {0}")]
+    #[error("protocol operation failed: {0}")]
     Protocol(String),
+    #[error("receiver transport failed: {0}")]
+    Transport(String),
+    #[error("Google Cast receiver application is no longer active")]
+    ReceiverSessionEnded,
+
+    #[error("Google Cast receiver application stopped responding")]
+    ReceiverSessionUnresponsive,
     #[error("pairing cryptography failed")]
     Crypto,
 }

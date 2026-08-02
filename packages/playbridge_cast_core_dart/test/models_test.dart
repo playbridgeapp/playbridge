@@ -46,12 +46,15 @@ void main() {
       protocol: ReceiverProtocol.googleCast,
       addresses: ['2001:db8::1', '192.0.2.8'],
       port: 8009,
+      applicationId: 'ABCD1234',
     );
 
     expect(endpoint.toJson(), {
       'protocol': 'google_cast',
       'addresses': ['2001:db8::1', '192.0.2.8'],
       'port': 8009,
+      'application_id': 'ABCD1234',
+      'launch_policy': 'reuse_or_launch',
     });
     expect(
       () => ReceiverEndpoint(
@@ -60,6 +63,30 @@ void main() {
       ).toJson(),
       throwsStateError,
     );
+  });
+
+  test('serializes Google Cast media metadata and resume position', () {
+    const media = MediaRequest(
+      url: 'https://example.test/movie.m3u8',
+      title: 'Movie',
+      contentType: 'application/x-mpegURL',
+      artUrl: 'https://example.test/poster.jpg',
+      start: Duration(milliseconds: 12500),
+      streamType: 'LIVE',
+      hlsSegmentFormat: 'ts_aac',
+      hlsVideoSegmentFormat: 'mpeg2_ts',
+    );
+
+    expect(media.toJson(), {
+      'url': 'https://example.test/movie.m3u8',
+      'title': 'Movie',
+      'content_type': 'application/x-mpegURL',
+      'art_url': 'https://example.test/poster.jpg',
+      'start_seconds': 12.5,
+      'stream_type': 'LIVE',
+      'hls_segment_format': 'ts_aac',
+      'hls_video_segment_format': 'mpeg2_ts',
+    });
   });
 
   test('allows a DLNA endpoint identified only by its description URL', () {
@@ -88,7 +115,8 @@ void main() {
           "status":true,
           "receiver_app_available":false
         },
-        "name":"Living Room Roku"
+        "name":"Living Room Roku",
+        "receiver_application_id":null
       }
     ''');
 
@@ -98,6 +126,7 @@ void main() {
     expect(connected.capabilities.load, isTrue);
     expect(connected.capabilities.seek, isFalse);
     expect(connected.capabilities.receiverAppAvailable, isFalse);
+    expect(connected.receiverApplicationId, isNull);
   });
 
   test('decodes status with fractional seconds', () {
@@ -127,11 +156,46 @@ void main() {
     final connection = CastSessionEvent.fromJsonString(
       '{"event":"error","operation":"connect","message":"offline"}',
     ) as CastSessionError;
+    final receiverEnded = CastSessionEvent.fromJsonString(
+      '{"event":"error","request_id":"8","operation":"load",'
+      '"message":"receiver exited","reason":"receiver_ended"}',
+    ) as CastSessionError;
 
     expect(correlated.requestId, '7');
     expect(correlated.operation, 'load');
     expect(connection.requestId, isNull);
     expect(connection.toString(), contains('offline'));
+    expect(receiverEnded.receiverEnded, isTrue);
+
+    final unresponsive = CastSessionEvent.fromJsonString(
+      '{"event":"error","request_id":"load-2","operation":"load",'
+      '"message":"Google Cast receiver application stopped responding",'
+      '"reason":"session_unresponsive"}',
+    ) as CastSessionError;
+    expect(unresponsive.sessionUnresponsive, isTrue);
+
+    final connectionLost = CastSessionEvent.fromJsonString(
+      '{"event":"error","request_id":"load-3","operation":"load",'
+      '"message":"socket closed","reason":"connection_lost"}',
+    ) as CastSessionError;
+    expect(connectionLost.connectionLost, isTrue);
+    expect(connectionLost.endsSession, isTrue);
+
+    final maintenance = CastSessionEvent.fromJsonString(
+      '{"event":"error","operation":"maintenance",'
+      '"message":"heartbeat timed out"}',
+    ) as CastSessionError;
+    expect(maintenance.endsSession, isFalse);
+
+    final connectionFailed = CastSessionEvent.fromJsonString(
+      '{"event":"finished","reason":"connection_failed",'
+      '"message":"receiver media channel did not become ready"}',
+    ) as CastSessionFinished;
+    expect(connectionFailed.reason, 'connection_failed');
+    expect(
+      connectionFailed.message,
+      'receiver media channel did not become ready',
+    );
   });
 
   test('rejects malformed session events', () {

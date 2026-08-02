@@ -11,6 +11,10 @@ It currently proves:
 - `rupnp` can load a renderer description and execute AVTransport actions;
 - Roku ECP discovery, media launch, status, and remote-key controls;
 - a unified `ReceiverSession` API for PlayBridge, DLNA, Roku, and Google Cast;
+- Google Cast receiver launch/join is separate from media loading: a session
+  becomes ready only after the configured application reports its transport
+  and its media channel answers `GET_STATUS`; the same session supports
+  repeated `LOAD` operations and stop-to-idle behavior;
 - `m3u8-rs` can classify HLS playlists while PlayBridge retains its own proxy
   URL-rewriting and duration policy.
 - `mdns-sd` can resolve `_playbridge._tcp.local.` receivers and preserve UUID,

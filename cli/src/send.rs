@@ -9,6 +9,7 @@ use crossterm::{
 };
 use std::{
     collections::HashMap,
+    env,
     io::{self, Write},
     path::PathBuf,
     time::Duration,
@@ -1377,16 +1378,36 @@ async fn cast_to_target(
         "google_cast" | "googlecast" | "chromecast" => {
             let target_port = port.unwrap_or(8009);
             println!(
-                "Connecting TLS CastV2 channel to Google Cast device at {}:{}...",
+                "Launching Google Cast receiver at {}:{}...",
                 address, target_port
             );
-            let details = castv2::cast_media_session_with_details(
+            let application_id = env::var("PLAYBRIDGE_GOOGLE_CAST_APP_ID")
+                .unwrap_or_else(|_| castv2::DEFAULT_MEDIA_RECEIVER_APP_ID.to_owned());
+            let mut details = castv2::launch_app_session_with_strategy(
                 address,
                 target_port,
-                media_url,
-                Some(device_name),
+                &application_id,
+                castv2::SessionLaunchStrategy::ForceRelaunch,
             )
             .await?;
+            println!(
+                "Receiver application {} is ready; loading media...",
+                details.app_id
+            );
+            let (content_type, stream_type) = castv2::media_format(media_url);
+            let media_session_id = castv2::load_media(
+                &mut details,
+                media_url,
+                Some(content_type),
+                stream_type,
+                Some(device_name),
+                None,
+                0.0,
+                None,
+                None,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             println!(
                 "Successfully sent media cast request to \"{}\"!",
                 device_name
@@ -1395,7 +1416,7 @@ async fn cast_to_target(
                 channel: details.channel,
                 destination_id: details.transport_id,
                 session_id: details.session_id,
-                media_session_id: details.media_session_id,
+                media_session_id,
             }))
         }
         "dlna" => {

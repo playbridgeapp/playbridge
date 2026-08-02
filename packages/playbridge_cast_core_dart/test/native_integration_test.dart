@@ -18,7 +18,7 @@ void main() {
         markTestSkipped('The packaged native library is stale: $error');
         return;
       }
-      expect(core.abiVersion, 1);
+      expect(core.abiVersion, 2);
       final scanner = core.discover(
         protocols: {ReceiverProtocol.playBridge},
         timeout: const Duration(milliseconds: 500),

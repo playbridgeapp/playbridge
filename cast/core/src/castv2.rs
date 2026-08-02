@@ -10,6 +10,11 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+#[cfg(target_os = "android")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "android")]
+use tokio::net::TcpSocket;
+
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const MAX_CAST_MESSAGE_SIZE: usize = 1024 * 1024;
 static CONTROL_REQUEST_ID: AtomicU32 = AtomicU32::new(10_000);
@@ -230,6 +235,8 @@ pub fn build_load_payload(
         start_seconds,
         request_id,
         session_id,
+        None,
+        None,
     )
 }
 
@@ -243,6 +250,8 @@ pub fn build_load_payload_with_stream_type(
     start_seconds: f64,
     request_id: u32,
     session_id: Option<&str>,
+    hls_segment_format: Option<&str>,
+    hls_video_segment_format: Option<&str>,
 ) -> String {
     let mut media = json!({
         "contentId": content_url,
@@ -252,6 +261,12 @@ pub fn build_load_payload_with_stream_type(
 
     if let Some(ct) = content_type {
         media["contentType"] = json!(ct);
+    }
+    if let Some(format) = hls_segment_format {
+        media["hlsSegmentFormat"] = json!(format);
+    }
+    if let Some(format) = hls_video_segment_format {
+        media["hlsVideoSegmentFormat"] = json!(format);
     }
 
     let mut metadata = json!({ "metadataType": 1 });
@@ -323,6 +338,17 @@ pub struct CastChannel {
 
 impl CastChannel {
     pub async fn connect(address: &str, port: u16) -> Result<Self, String> {
+        Self::connect_with_network_handle(address, port, None).await
+    }
+
+    /// Connects to a CastV2 endpoint, optionally binding the TCP socket to an
+    /// Android `Network#getNetworkHandle()` before connect. This keeps local
+    /// Cast traffic on Wi-Fi when the app's default route is a VPN.
+    pub async fn connect_with_network_handle(
+        address: &str,
+        port: u16,
+        network_handle: Option<u64>,
+    ) -> Result<Self, String> {
         let builder = native_tls::TlsConnector::builder()
             .danger_accept_invalid_certs(true)
             .danger_accept_invalid_hostnames(true)
@@ -331,10 +357,7 @@ impl CastChannel {
 
         let connector = tokio_native_tls::TlsConnector::from(builder);
         let addr = crate::net::socket_endpoint(address, port);
-        let tcp = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(&addr))
-            .await
-            .map_err(|_| format!("Timed out connecting to Chromecast at {addr}"))?
-            .map_err(|e| format!("Failed to connect TCP to {addr}: {e}"))?;
+        let tcp = connect_tcp(&addr, network_handle).await?;
 
         let tls = tokio::time::timeout(CONNECT_TIMEOUT, connector.connect(address, tcp))
             .await
@@ -398,6 +421,113 @@ impl CastChannel {
             self.send_message(&pong).await?;
         }
         Ok(true)
+    }
+}
+
+async fn connect_tcp(addr: &str, network_handle: Option<u64>) -> Result<TcpStream, String> {
+    #[cfg(target_os = "android")]
+    if let Some(network_handle) = network_handle.filter(|handle| *handle != 0) {
+        match connect_tcp_on_android_network(addr, network_handle).await {
+            Ok(stream) => return Ok(stream),
+            Err(AndroidNetworkConnectError::Connect(error)) => return Err(error),
+            Err(AndroidNetworkConnectError::Bind(bind_error)) => {
+                return connect_tcp_on_android_default_network(addr).await.map_err(
+                    |default_error| android_network_fallback_error(&bind_error, &default_error),
+                );
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "android"))]
+    let _ = network_handle;
+
+    tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .map_err(|_| format!("Timed out connecting to Chromecast at {addr}"))?
+        .map_err(|error| format!("Failed to connect TCP to {addr}: {error}"))
+}
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AndroidNetworkConnectError {
+    Bind(String),
+    Connect(String),
+}
+
+#[cfg(any(target_os = "android", test))]
+fn android_network_fallback_error(bind_error: &str, default_error: &str) -> String {
+    format!("{bind_error}; retrying with Android's default network also failed: {default_error}")
+}
+
+#[cfg(target_os = "android")]
+async fn connect_tcp_on_android_default_network(addr: &str) -> Result<TcpStream, String> {
+    tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(addr))
+        .await
+        .map_err(|_| format!("Timed out connecting to Chromecast at {addr}"))?
+        .map_err(|error| format!("Failed to connect TCP to {addr}: {error}"))
+}
+
+#[cfg(target_os = "android")]
+async fn connect_tcp_on_android_network(
+    addr: &str,
+    network_handle: u64,
+) -> Result<TcpStream, AndroidNetworkConnectError> {
+    let endpoints = tokio::net::lookup_host(addr)
+        .await
+        .map_err(|error| {
+            AndroidNetworkConnectError::Connect(format!(
+                "Failed to resolve Chromecast endpoint {addr}: {error}"
+            ))
+        })?
+        .collect::<Vec<_>>();
+    if endpoints.is_empty() {
+        return Err(AndroidNetworkConnectError::Connect(format!(
+            "Chromecast endpoint {addr} resolved to no addresses"
+        )));
+    }
+
+    let mut last_error = format!("Failed to connect TCP to {addr}");
+    for endpoint in endpoints {
+        let socket = if endpoint.is_ipv4() {
+            TcpSocket::new_v4()
+        } else {
+            TcpSocket::new_v6()
+        }
+        .map_err(|error| {
+            AndroidNetworkConnectError::Connect(format!(
+                "Failed to create Chromecast socket for {endpoint}: {error}"
+            ))
+        })?;
+        bind_socket_to_android_network(&socket, network_handle).map_err(|error| {
+            AndroidNetworkConnectError::Bind(format!(
+                "Failed to bind Chromecast socket to the Android local network: {error}. A VPN may be preventing local-network access"
+            ))
+        })?;
+        match tokio::time::timeout(CONNECT_TIMEOUT, socket.connect(endpoint)).await {
+            Ok(Ok(stream)) => return Ok(stream),
+            Ok(Err(error)) => {
+                last_error = format!("Failed to connect TCP to {endpoint}: {error}");
+            }
+            Err(_) => {
+                last_error = format!("Timed out connecting to Chromecast at {endpoint}");
+            }
+        }
+    }
+    Err(AndroidNetworkConnectError::Connect(last_error))
+}
+
+#[cfg(target_os = "android")]
+fn bind_socket_to_android_network(socket: &TcpSocket, network_handle: u64) -> std::io::Result<()> {
+    #[link(name = "android")]
+    unsafe extern "C" {
+        fn android_setsocknetwork(network: u64, fd: std::os::raw::c_int) -> std::os::raw::c_int;
+    }
+
+    let result = unsafe { android_setsocknetwork(network_handle, socket.as_raw_fd()) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
@@ -530,10 +660,35 @@ pub async fn send_heartbeat_ping(channel: &mut CastChannel) -> Result<(), String
 
 pub struct CastSessionDetails {
     pub channel: CastChannel,
+    pub app_id: String,
     pub transport_id: String,
     pub session_id: String,
-    pub media_session_id: i64,
+    pub media_session_id: Option<i64>,
 }
+
+/// Failure returned while sending or confirming a media LOAD request.
+///
+/// Keep transport failures distinct so persistent session consumers can tear
+/// down a broken CastV2 socket and establish a genuinely fresh connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoadMediaError {
+    Transport(String),
+    Rejected(String),
+    ReceiverUnresponsive,
+}
+
+impl std::fmt::Display for LoadMediaError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transport(message) | Self::Rejected(message) => formatter.write_str(message),
+            Self::ReceiverUnresponsive => {
+                formatter.write_str("Chromecast did not confirm the LOAD request")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LoadMediaError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionLaunchStrategy {
@@ -595,14 +750,109 @@ pub async fn cast_media_session_with_strategy(
     title: Option<&str>,
     strategy: SessionLaunchStrategy,
 ) -> Result<CastSessionDetails, String> {
-    let mut channel = CastChannel::connect(address, port).await?;
+    let mut details =
+        launch_app_session_with_strategy(address, port, DEFAULT_MEDIA_RECEIVER_APP_ID, strategy)
+            .await?;
+    let (content_type, stream_type) = media_format(media_url);
+    load_media(
+        &mut details,
+        media_url,
+        Some(content_type),
+        stream_type,
+        title,
+        None,
+        0.0,
+        None,
+        None,
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    Ok(details)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReceiverApplication {
+    pub(crate) transport_id: String,
+    pub(crate) session_id: String,
+}
+
+pub(crate) fn matching_receiver_application(
+    payload: &serde_json::Value,
+    app_id: &str,
+) -> Option<ReceiverApplication> {
+    if payload["type"] != "RECEIVER_STATUS" {
+        return None;
+    }
+    payload["status"]["applications"]
+        .as_array()?
+        .iter()
+        .find_map(|application| {
+            if application["appId"].as_str()? != app_id {
+                return None;
+            }
+            let transport_id = application["transportId"].as_str()?.to_owned();
+            if transport_id.is_empty() {
+                return None;
+            }
+            Some(ReceiverApplication {
+                transport_id,
+                session_id: application["sessionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            })
+        })
+}
+
+pub(crate) fn is_connection_close(message: &CastMessage) -> bool {
+    if message.namespace != NS_CONNECTION {
+        return false;
+    }
+    serde_json::from_str::<serde_json::Value>(&message.payload_utf8)
+        .is_ok_and(|payload| payload["type"] == "CLOSE")
+}
+
+/// Launches or joins a receiver application and confirms that its media
+/// namespace is answering. No media is loaded by this operation.
+pub async fn launch_app_session(
+    address: &str,
+    port: u16,
+    app_id: &str,
+) -> Result<CastSessionDetails, String> {
+    launch_app_session_with_strategy(address, port, app_id, SessionLaunchStrategy::ReuseOrLaunch)
+        .await
+}
+
+#[allow(clippy::collapsible_if)]
+pub async fn launch_app_session_with_strategy(
+    address: &str,
+    port: u16,
+    app_id: &str,
+    strategy: SessionLaunchStrategy,
+) -> Result<CastSessionDetails, String> {
+    launch_app_session_with_strategy_on_network(address, port, app_id, strategy, None).await
+}
+
+/// Launches or joins a receiver application over an optional Android network.
+/// Non-Android callers should pass `None` and retain the platform default route.
+#[allow(clippy::collapsible_if)]
+pub async fn launch_app_session_with_strategy_on_network(
+    address: &str,
+    port: u16,
+    app_id: &str,
+    strategy: SessionLaunchStrategy,
+    network_handle: Option<u64>,
+) -> Result<CastSessionDetails, String> {
+    if app_id.trim().is_empty() {
+        return Err("Google Cast application ID must not be empty".into());
+    }
+    let mut channel =
+        CastChannel::connect_with_network_handle(address, port, network_handle).await?;
     let req_gen = RequestIdGenerator::new();
 
-    // 1. Send CONNECT to receiver-0
     let conn_msg = CastMessage::new(RECEIVER_ID, NS_CONNECTION, build_connect_payload());
     channel.send_message(&conn_msg).await?;
 
-    // 2. Query RECEIVER_STATUS to check for active vs stale sessions
     let status_req_id = req_gen.next();
     let get_status_msg = CastMessage::new(
         RECEIVER_ID,
@@ -615,10 +865,7 @@ pub async fn cast_media_session_with_strategy(
     );
     let _ = channel.send_message(&get_status_msg).await;
 
-    let mut destination_id = String::new();
-    let mut session_id = String::new();
-    let mut is_active_app = false;
-
+    let mut application = None;
     let status_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < status_deadline {
         if let Ok(Ok(msg)) = tokio::time::timeout(
@@ -633,65 +880,41 @@ pub async fn cast_media_session_with_strategy(
             }
             if msg.namespace == NS_RECEIVER {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
-                    if v["type"] == "RECEIVER_STATUS" {
-                        if let Some(apps) = v["status"]["applications"].as_array() {
-                            for app in apps {
-                                if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
-                                    if let Some(sid) = app["sessionId"].as_str() {
-                                        session_id = sid.to_string();
-                                    }
-                                    if let Some(tid) = app["transportId"].as_str() {
-                                        destination_id = tid.to_string();
-                                    }
-                                    let is_idle = app["isIdleScreen"].as_bool().unwrap_or(false);
-                                    if !destination_id.is_empty() && !is_idle {
-                                        is_active_app = true;
-                                    }
-                                }
-                            }
-                        }
+                    application = matching_receiver_application(&v, app_id);
+                    if application.is_some() {
+                        break;
                     }
-                }
-                if !session_id.is_empty() || is_active_app {
-                    break;
                 }
             }
         }
     }
 
-    if strategy == SessionLaunchStrategy::ReuseOrLaunch && is_active_app {
-        println!(
-            "Reusing active Default Media Receiver app (transportId: {}, sessionId: {}).",
-            destination_id, session_id
-        );
-    } else {
-        // Stop lingering stale session if any
-        if !session_id.is_empty() {
-            let stop_msg = CastMessage::new(
-                RECEIVER_ID,
-                NS_RECEIVER,
-                json!({
-                    "type": "STOP",
-                    "sessionId": session_id,
-                    "requestId": req_gen.next(),
-                })
-                .to_string(),
-            );
-            let _ = channel.send_message(&stop_msg).await;
-            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    if strategy == SessionLaunchStrategy::ForceRelaunch || application.is_none() {
+        if let Some(existing) = application.take() {
+            if strategy == SessionLaunchStrategy::ForceRelaunch && !existing.session_id.is_empty() {
+                let stop_msg = CastMessage::new(
+                    RECEIVER_ID,
+                    NS_RECEIVER,
+                    json!({
+                        "type": "STOP",
+                            "sessionId": existing.session_id,
+                        "requestId": req_gen.next(),
+                    })
+                    .to_string(),
+                );
+                let _ = channel.send_message(&stop_msg).await;
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
         }
 
-        // Send LAUNCH for Default Media Receiver (CC1AD845)
         let launch_req_id = req_gen.next();
         let launch_msg = CastMessage::new(
             RECEIVER_ID,
             NS_RECEIVER,
-            build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, launch_req_id),
+            build_launch_payload(app_id, launch_req_id),
         );
         channel.send_message(&launch_msg).await?;
 
-        destination_id.clear();
-        session_id.clear();
         let launch_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         while tokio::time::Instant::now() < launch_deadline {
             if let Ok(Ok(msg)) =
@@ -704,107 +927,188 @@ pub async fn cast_media_session_with_strategy(
                 }
                 if msg.namespace == NS_RECEIVER {
                     if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
-                        if v["type"] == "RECEIVER_STATUS" {
-                            if let Some(apps) = v["status"]["applications"].as_array() {
-                                for app in apps {
-                                    if app["appId"] == DEFAULT_MEDIA_RECEIVER_APP_ID {
-                                        if let Some(tid) = app["transportId"].as_str() {
-                                            destination_id = tid.to_string();
-                                        }
-                                        if let Some(sid) = app["sessionId"].as_str() {
-                                            session_id = sid.to_string();
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
+                        if v["requestId"].as_u64() == Some(u64::from(launch_req_id))
+                            && matches!(
+                                v["type"].as_str(),
+                                Some("LAUNCH_ERROR" | "INVALID_REQUEST")
+                            )
+                        {
+                            return Err(format!(
+                                "Chromecast rejected receiver application launch: {}",
+                                v["reason"].as_str().unwrap_or("unknown reason")
+                            ));
                         }
-                    }
-                    if !destination_id.is_empty() {
-                        break;
-                    }
-                }
-            }
-        }
-
-        if destination_id.is_empty() {
-            return Err("Failed to launch Default Media Receiver app on Chromecast (no transportId returned)".into());
-        }
-
-        println!(
-            "Launched Default Media Receiver app (transportId: {}, sessionId: {}).",
-            destination_id, session_id
-        );
-    }
-
-    // 4. Connect to target transportId
-    let app_conn_msg = CastMessage::new(&destination_id, NS_CONNECTION, build_connect_payload());
-    channel.send_message(&app_conn_msg).await?;
-
-    // Wait 400ms for receiver app HTML5 runtime
-    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-
-    // 5. Send LOAD payload to target transportId
-    let load_req_id = req_gen.next();
-    let (content_type, stream_type) = media_format(media_url);
-    let load_payload = build_load_payload_with_stream_type(
-        media_url,
-        Some(content_type),
-        stream_type,
-        title,
-        None,
-        0.0,
-        load_req_id,
-        if session_id.is_empty() {
-            None
-        } else {
-            Some(&session_id)
-        },
-    );
-    let load_msg = CastMessage::new(&destination_id, NS_MEDIA, load_payload);
-    channel.send_message(&load_msg).await?;
-
-    println!("Sent LOAD request. Waiting for receiver response...");
-
-    let mut media_session_id = None;
-    let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
-    while tokio::time::Instant::now() < read_deadline {
-        if let Ok(Ok(msg)) = tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            channel.read_message(),
-        )
-        .await
-        {
-            if msg.namespace == NS_MEDIA {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
-                    if matches!(v["type"].as_str(), Some("LOAD_FAILED" | "INVALID_REQUEST")) {
-                        return Err(format!(
-                            "Chromecast rejected LOAD request: {}",
-                            v["reason"].as_str().unwrap_or("unknown reason")
-                        ));
-                    }
-                    if let Some(status) = v["status"].as_array().and_then(|a| a.first()) {
-                        if let Some(msid) = status["mediaSessionId"].as_i64() {
-                            media_session_id = Some(msid);
+                        application = matching_receiver_application(&v, app_id);
+                        if application.is_some() {
                             break;
                         }
                     }
                 }
-            } else if msg.namespace == NS_HEARTBEAT {
-                channel.handle_heartbeat(&msg).await?;
             }
         }
     }
 
-    let media_session_id = media_session_id
-        .ok_or_else(|| "Chromecast did not confirm the LOAD request".to_string())?;
+    let application = application.ok_or_else(|| {
+        format!(
+            "Failed to launch Google Cast receiver application {app_id} (no transportId returned)"
+        )
+    })?;
+
+    let app_conn_msg = CastMessage::new(
+        &application.transport_id,
+        NS_CONNECTION,
+        build_connect_payload(),
+    );
+    channel.send_message(&app_conn_msg).await?;
+
+    confirm_media_channel_ready(&mut channel, &application.transport_id, &req_gen).await?;
 
     Ok(CastSessionDetails {
         channel,
-        transport_id: destination_id,
-        session_id,
-        media_session_id,
+        app_id: app_id.to_owned(),
+        transport_id: application.transport_id,
+        session_id: application.session_id,
+        media_session_id: None,
     })
+}
+
+async fn confirm_media_channel_ready(
+    channel: &mut CastChannel,
+    transport_id: &str,
+    request_ids: &RequestIdGenerator,
+) -> Result<(), String> {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        let request_id = request_ids.next();
+        channel
+            .send_message(&CastMessage::new(
+                transport_id,
+                NS_MEDIA,
+                json!({ "type": "GET_STATUS", "requestId": request_id }).to_string(),
+            ))
+            .await?;
+
+        let attempt_deadline =
+            (tokio::time::Instant::now() + std::time::Duration::from_millis(750)).min(deadline);
+        while tokio::time::Instant::now() < attempt_deadline {
+            let remaining = attempt_deadline.saturating_duration_since(tokio::time::Instant::now());
+            let Ok(result) = tokio::time::timeout(remaining, channel.read_message()).await else {
+                break;
+            };
+            let message = result?;
+            if message.namespace == NS_HEARTBEAT {
+                channel.handle_heartbeat(&message).await?;
+                continue;
+            }
+            if message.namespace != NS_MEDIA {
+                continue;
+            }
+            let payload: serde_json::Value = serde_json::from_str(&message.payload_utf8)
+                .map_err(|error| format!("Invalid Google Cast media status: {error}"))?;
+            if payload["requestId"]
+                .as_u64()
+                .is_some_and(|id| id != u64::from(request_id))
+            {
+                continue;
+            }
+            if payload["type"] == "MEDIA_STATUS" {
+                return Ok(());
+            }
+        }
+    }
+    Err(
+        "Google Cast receiver application launched but its media channel did not become ready"
+            .into(),
+    )
+}
+
+/// Loads media into an already-ready receiver application.
+#[allow(clippy::too_many_arguments)]
+pub async fn load_media(
+    details: &mut CastSessionDetails,
+    media_url: &str,
+    content_type: Option<&str>,
+    stream_type: &str,
+    title: Option<&str>,
+    art_url: Option<&str>,
+    start_seconds: f64,
+    hls_segment_format: Option<&str>,
+    hls_video_segment_format: Option<&str>,
+) -> Result<i64, LoadMediaError> {
+    let load_req_id = next_control_request_id();
+    let load_payload = build_load_payload_with_stream_type(
+        media_url,
+        content_type,
+        stream_type,
+        title,
+        art_url,
+        start_seconds.max(0.0),
+        load_req_id,
+        if details.session_id.is_empty() {
+            None
+        } else {
+            Some(&details.session_id)
+        },
+        hls_segment_format,
+        hls_video_segment_format,
+    );
+    let load_msg = CastMessage::new(&details.transport_id, NS_MEDIA, load_payload);
+    details
+        .channel
+        .send_message(&load_msg)
+        .await
+        .map_err(LoadMediaError::Transport)?;
+
+    let mut media_session_id = None;
+    let read_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    while tokio::time::Instant::now() < read_deadline {
+        let msg = match tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            details.channel.read_message(),
+        )
+        .await
+        {
+            Err(_) => continue,
+            Ok(Err(error)) => return Err(LoadMediaError::Transport(error)),
+            Ok(Ok(message)) => message,
+        };
+        if msg.namespace == NS_MEDIA {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&msg.payload_utf8) {
+                // A persistent receiver can emit unsolicited status updates for the
+                // previously loaded item. Only the response correlated to this LOAD
+                // may confirm or reject the new media request.
+                if !load_response_matches_request(&v, load_req_id) {
+                    continue;
+                }
+                if matches!(v["type"].as_str(), Some("LOAD_FAILED" | "INVALID_REQUEST")) {
+                    return Err(LoadMediaError::Rejected(format!(
+                        "Chromecast rejected LOAD request: {}",
+                        v["reason"].as_str().unwrap_or("unknown reason")
+                    )));
+                }
+                if let Some(status) = v["status"].as_array().and_then(|a| a.first())
+                    && let Some(msid) = status["mediaSessionId"].as_i64()
+                {
+                    media_session_id = Some(msid);
+                    break;
+                }
+            }
+        } else if msg.namespace == NS_HEARTBEAT {
+            details
+                .channel
+                .handle_heartbeat(&msg)
+                .await
+                .map_err(LoadMediaError::Transport)?;
+        }
+    }
+
+    let media_session_id = media_session_id.ok_or(LoadMediaError::ReceiverUnresponsive)?;
+    details.media_session_id = Some(media_session_id);
+    Ok(media_session_id)
+}
+
+fn load_response_matches_request(payload: &serde_json::Value, request_id: u32) -> bool {
+    payload["requestId"].as_u64() == Some(u64::from(request_id))
 }
 
 pub fn media_format(media_url: &str) -> (&'static str, &'static str) {
@@ -833,6 +1137,26 @@ pub fn media_format(media_url: &str) -> (&'static str, &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn android_network_fallback_error_preserves_both_failures() {
+        let error = android_network_fallback_error(
+            "explicit Android network bind was rejected",
+            "default route timed out",
+        );
+
+        assert!(error.contains("explicit Android network bind was rejected"));
+        assert!(error.contains("default route timed out"));
+    }
+
+    #[test]
+    fn android_network_connect_errors_distinguish_bind_from_connect_failures() {
+        let bind = AndroidNetworkConnectError::Bind("bind rejected".into());
+        let connect = AndroidNetworkConnectError::Connect("connect timed out".into());
+
+        assert!(matches!(bind, AndroidNetworkConnectError::Bind(_)));
+        assert!(matches!(connect, AndroidNetworkConnectError::Connect(_)));
+    }
 
     #[test]
     fn test_cast_message_encode_decode() {
@@ -867,6 +1191,98 @@ mod tests {
         let payload = build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, 42);
         assert!(payload.contains("CC1AD845"));
         assert!(payload.contains("42"));
+    }
+
+    #[test]
+    fn matches_only_the_configured_receiver_application() {
+        let payload = json!({
+            "type": "RECEIVER_STATUS",
+            "status": {
+                "applications": [
+                    {
+                        "appId": "OTHER",
+                        "sessionId": "other-session",
+                        "transportId": "other-transport"
+                    },
+                    {
+                        "appId": "PLAY1234",
+                        "sessionId": "play-session",
+                        "transportId": "play-transport",
+                        "isIdleScreen": true
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(
+            matching_receiver_application(&payload, "PLAY1234"),
+            Some(ReceiverApplication {
+                session_id: "play-session".into(),
+                transport_id: "play-transport".into(),
+            })
+        );
+        assert_eq!(matching_receiver_application(&payload, "MISSING"), None);
+    }
+
+    #[test]
+    fn recognizes_receiver_application_connection_close() {
+        assert!(is_connection_close(&CastMessage::new(
+            "sender-0",
+            NS_CONNECTION,
+            json!({ "type": "CLOSE" }).to_string(),
+        )));
+        assert!(!is_connection_close(&CastMessage::new(
+            "sender-0",
+            NS_HEARTBEAT,
+            json!({ "type": "CLOSE" }).to_string(),
+        )));
+    }
+
+    #[test]
+    fn load_payload_carries_receiver_branding_metadata() {
+        let payload = build_load_payload_with_stream_type(
+            "https://example.test/live.m3u8",
+            Some("application/x-mpegURL"),
+            "LIVE",
+            Some("Live channel"),
+            Some("https://example.test/art.jpg"),
+            12.5,
+            7,
+            Some("receiver-session"),
+            Some("ts_aac"),
+            Some("mpeg2_ts"),
+        );
+        let payload: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(payload["media"]["metadata"]["title"], "Live channel");
+        assert_eq!(
+            payload["media"]["metadata"]["images"][0]["url"],
+            "https://example.test/art.jpg"
+        );
+        assert_eq!(payload["media"]["streamType"], "LIVE");
+        assert_eq!(payload["media"]["hlsSegmentFormat"], "ts_aac");
+        assert_eq!(payload["media"]["hlsVideoSegmentFormat"], "mpeg2_ts");
+        assert_eq!(payload["currentTime"], 12.5);
+        assert_eq!(payload["sessionId"], "receiver-session");
+    }
+
+    #[test]
+    fn load_confirmation_requires_the_exact_request_id() {
+        assert!(load_response_matches_request(
+            &json!({ "type": "MEDIA_STATUS", "requestId": 42, "status": [] }),
+            42,
+        ));
+        assert!(!load_response_matches_request(
+            &json!({ "type": "MEDIA_STATUS", "requestId": 41, "status": [] }),
+            42,
+        ));
+        assert!(!load_response_matches_request(
+            &json!({ "type": "MEDIA_STATUS", "status": [] }),
+            42,
+        ));
+        assert!(!load_response_matches_request(
+            &json!({ "type": "LOAD_FAILED", "requestId": 41 }),
+            42,
+        ));
     }
 
     #[test]

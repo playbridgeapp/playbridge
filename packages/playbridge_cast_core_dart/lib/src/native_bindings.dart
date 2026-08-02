@@ -17,7 +17,7 @@ typedef SessionStartDart = Pointer<Void> Function(Pointer<Utf8>, int);
 typedef SessionSubmitNative = Bool Function(Pointer<Void>, Pointer<Utf8>);
 typedef SessionSubmitDart = bool Function(Pointer<Void>, Pointer<Utf8>);
 
-const castCoreAbiVersion = 1;
+const castCoreAbiVersion = 2;
 
 final class NativeBindings {
   NativeBindings(DynamicLibrary library)

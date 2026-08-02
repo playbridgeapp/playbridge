@@ -13,7 +13,8 @@ use playbridge_cast_core::discovery::{
     DiscoveryConfig, DiscoveryEvent, DiscoveryStream, Receiver, ReceiverProtocol,
 };
 use playbridge_cast_core::{
-    castv2::CastChannel,
+    CastError,
+    castv2::{DEFAULT_MEDIA_RECEIVER_APP_ID, SessionLaunchStrategy},
     roku::{DEFAULT_ECP_PORT, RokuClient},
     session::{MediaRequest, PlaybackState, ReceiverSession},
     upnp::Renderer,
@@ -74,7 +75,7 @@ pub struct DiscoveryScanner {
     cancelled: Arc<AtomicBool>,
 }
 
-const CAST_CORE_ABI_VERSION: u32 = 1;
+const CAST_CORE_ABI_VERSION: u32 = 2;
 const SESSION_COMMAND_CAPACITY: usize = 32;
 const SESSION_EVENT_CAPACITY: usize = 64;
 
@@ -86,6 +87,23 @@ enum SessionProtocol {
     GoogleCast,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionLaunchPolicy {
+    ForceRelaunch,
+    #[default]
+    ReuseOrLaunch,
+}
+
+impl From<SessionLaunchPolicy> for SessionLaunchStrategy {
+    fn from(value: SessionLaunchPolicy) -> Self {
+        match value {
+            SessionLaunchPolicy::ForceRelaunch => Self::ForceRelaunch,
+            SessionLaunchPolicy::ReuseOrLaunch => Self::ReuseOrLaunch,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct SessionTarget {
     protocol: SessionProtocol,
@@ -93,6 +111,10 @@ struct SessionTarget {
     addresses: Vec<String>,
     port: Option<u16>,
     location: Option<String>,
+    application_id: Option<String>,
+    network_handle: Option<u64>,
+    #[serde(default)]
+    launch_policy: SessionLaunchPolicy,
 }
 
 impl SessionTarget {
@@ -124,6 +146,13 @@ enum SessionCommand {
         url: String,
         title: Option<String>,
         metadata: Option<String>,
+        content_type: Option<String>,
+        art_url: Option<String>,
+        #[serde(default)]
+        start_seconds: f64,
+        stream_type: Option<String>,
+        hls_segment_format: Option<String>,
+        hls_video_segment_format: Option<String>,
     },
     Play {
         request_id: Value,
@@ -142,10 +171,17 @@ enum SessionCommand {
         request_id: Value,
         forward: bool,
     },
+    SetVolume {
+        request_id: Value,
+        level: f32,
+    },
     Status {
         request_id: Value,
     },
     Disconnect {
+        request_id: Value,
+    },
+    EndReceiver {
         request_id: Value,
     },
 }
@@ -159,8 +195,10 @@ impl SessionCommand {
             | Self::Stop { request_id }
             | Self::Seek { request_id, .. }
             | Self::RelativeSeek { request_id, .. }
+            | Self::SetVolume { request_id, .. }
             | Self::Status { request_id }
-            | Self::Disconnect { request_id } => request_id,
+            | Self::Disconnect { request_id }
+            | Self::EndReceiver { request_id } => request_id,
         }
     }
 
@@ -172,8 +210,10 @@ impl SessionCommand {
             Self::Stop { .. } => "stop",
             Self::Seek { .. } => "seek",
             Self::RelativeSeek { .. } => "relative_seek",
+            Self::SetVolume { .. } => "set_volume",
             Self::Status { .. } => "status",
             Self::Disconnect { .. } => "disconnect",
+            Self::EndReceiver { .. } => "end_receiver",
         }
     }
 
@@ -201,6 +241,8 @@ enum SessionEvent {
         protocol: SessionProtocol,
         capabilities: SessionCapabilities,
         name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receiver_application_id: Option<String>,
     },
     Operation {
         request_id: Value,
@@ -216,9 +258,13 @@ enum SessionEvent {
         request_id: Option<Value>,
         operation: &'static str,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<&'static str>,
     },
     Finished {
         reason: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
 }
 
@@ -386,6 +432,14 @@ fn validate_target(target: &SessionTarget) -> Result<(), String> {
         }
         SessionProtocol::Roku | SessionProtocol::GoogleCast => {
             target.address()?;
+            if target.protocol == SessionProtocol::GoogleCast
+                && target
+                    .application_id
+                    .as_deref()
+                    .is_some_and(|application_id| application_id.trim().is_empty())
+            {
+                return Err("Google Cast application ID must not be empty".into());
+            }
         }
     }
     Ok(())
@@ -404,12 +458,14 @@ fn session_worker(
     {
         Ok(runtime) => runtime,
         Err(error) => {
+            let message = error.to_string();
             let _ = send_session_event(
                 &events,
                 SessionEvent::Error {
                     request_id: None,
                     operation: "connect",
-                    message: error.to_string(),
+                    message: message.clone(),
+                    reason: None,
                 },
                 &cancelled,
             );
@@ -417,6 +473,7 @@ fn session_worker(
                 &events,
                 SessionEvent::Finished {
                     reason: "connection_failed",
+                    message: Some(message),
                 },
                 &cancelled,
             );
@@ -428,19 +485,22 @@ fn session_worker(
     let (mut receiver, roku_receiver_app, name, connected_address) = match connected {
         Ok(connected) => connected,
         Err(message) => {
+            let reason = connect_failure_reason(&message);
             let _ = send_session_event(
                 &events,
                 SessionEvent::Error {
                     request_id: None,
                     operation: "connect",
-                    message,
+                    message: message.clone(),
+                    reason,
                 },
                 &cancelled,
             );
             let _ = send_session_event(
                 &events,
                 SessionEvent::Finished {
-                    reason: "connection_failed",
+                    reason: reason.unwrap_or("connection_failed"),
+                    message: Some(message),
                 },
                 &cancelled,
             );
@@ -463,19 +523,60 @@ fn session_worker(
             protocol: target.protocol,
             capabilities,
             name,
+            receiver_application_id: (target.protocol == SessionProtocol::GoogleCast).then(|| {
+                target
+                    .application_id
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_MEDIA_RECEIVER_APP_ID.to_owned())
+            }),
         },
         &cancelled,
     ) {
         return;
     }
 
+    let mut last_maintenance = std::time::Instant::now();
     let finish_reason = loop {
         if cancelled.load(Ordering::Acquire) {
             break "cancelled";
         }
         let command = match commands.recv_timeout(Duration::from_millis(50)) {
             Ok(command) => command,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if target.protocol == SessionProtocol::GoogleCast
+                    && last_maintenance.elapsed() >= Duration::from_secs(5)
+                {
+                    let maintenance: Result<(), CastError> = runtime.block_on(async {
+                        tokio::time::timeout(
+                            operation_timeout,
+                            receiver_mut(&mut receiver)?.status(),
+                        )
+                        .await
+                        .map_err(|_| {
+                            CastError::Protocol("Google Cast heartbeat timed out".to_owned())
+                        })?
+                        .map(|_| ())
+                    });
+                    last_maintenance = std::time::Instant::now();
+                    if let Err(error) = maintenance {
+                        let reason = session_finish_reason(&error);
+                        let _ = send_session_event(
+                            &events,
+                            SessionEvent::Error {
+                                request_id: None,
+                                operation: maintenance_event_operation(reason),
+                                message: error.to_string(),
+                                reason,
+                            },
+                            &cancelled,
+                        );
+                        if let Some(reason) = reason {
+                            break reason;
+                        }
+                    }
+                }
+                continue;
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break "command_channel_closed",
         };
         let disconnect = matches!(command, SessionCommand::Disconnect { .. });
@@ -489,6 +590,12 @@ fn session_worker(
             &command,
             operation_timeout,
         ));
+        let finish_reason = result.as_ref().err().and_then(command_finish_reason);
+        // Every command has just exercised the receiver connection, even when the
+        // receiver returned a request-scoped error. Starting maintenance immediately
+        // after a timeout would block the next queued command behind a second full
+        // status timeout and can create a self-sustaining timeout cascade.
+        last_maintenance = std::time::Instant::now();
         let event = match result {
             Ok(Some(status)) => SessionEvent::Status { request_id, status },
             Ok(None) => SessionEvent::Operation {
@@ -496,10 +603,11 @@ fn session_worker(
                 operation,
                 ok: true,
             },
-            Err(message) => SessionEvent::Error {
+            Err(error) => SessionEvent::Error {
                 request_id: Some(request_id),
                 operation,
-                message,
+                message: error.to_string(),
+                reason: finish_reason,
             },
         };
         if !send_session_event(&events, event, &cancelled) {
@@ -508,15 +616,51 @@ fn session_worker(
         if disconnect {
             break "disconnected";
         }
+        // End the worker only when the error proves that the receiver application or
+        // transport is gone. A playback STATUS timeout is request-scoped: receivers
+        // can be slow to answer while an HLS pipeline is starting, and closing the
+        // CastV2 socket here strands otherwise healthy playback on the loading screen.
+        if let Some(reason) = finish_reason {
+            break reason;
+        }
     };
 
     let _ = send_session_event(
         &events,
         SessionEvent::Finished {
             reason: finish_reason,
+            message: None,
         },
         &cancelled,
     );
+}
+
+fn session_finish_reason(error: &CastError) -> Option<&'static str> {
+    match error {
+        CastError::ReceiverSessionEnded => Some("receiver_ended"),
+        CastError::ReceiverSessionUnresponsive => Some("session_unresponsive"),
+        CastError::Transport(_) => Some("connection_lost"),
+        _ => None,
+    }
+}
+
+fn maintenance_event_operation(finish_reason: Option<&'static str>) -> &'static str {
+    if finish_reason.is_some() {
+        "connection"
+    } else {
+        "maintenance"
+    }
+}
+
+fn connect_failure_reason(message: &str) -> Option<&'static str> {
+    (message.contains("No route to host")
+        || message.contains("Network is unreachable")
+        || message.contains("Android local network"))
+    .then_some("local_network_unreachable")
+}
+
+fn command_finish_reason(error: &CastError) -> Option<&'static str> {
+    session_finish_reason(error)
 }
 
 async fn connect_target(
@@ -587,14 +731,24 @@ async fn connect_target(
             let attempt_timeout = operation_timeout / addresses.len() as u32;
             let mut last_error = "Google Cast connection failed".to_owned();
             for address in addresses {
-                match tokio::time::timeout(attempt_timeout, CastChannel::connect(address, port))
-                    .await
+                match tokio::time::timeout(
+                    attempt_timeout,
+                    ReceiverSession::connect_google_cast_with_strategy_on_network(
+                        address,
+                        port,
+                        target.application_id.as_deref(),
+                        target.launch_policy.into(),
+                        target.network_handle,
+                    ),
+                )
+                .await
                 {
-                    Ok(Ok(_)) => {
-                        return Ok((None, None, None, Some(address.to_owned())));
+                    Ok(Ok(session)) => {
+                        return Ok((Some(session), None, None, Some(address.to_owned())));
                     }
                     Ok(Err(error)) => {
-                        last_error = format!("Google Cast probe at {address} failed: {error}");
+                        last_error =
+                            format!("Google Cast receiver at {address} was not ready: {error}");
                     }
                     Err(_) => {
                         last_error = format!("Google Cast probe at {address} timed out");
@@ -608,84 +762,92 @@ async fn connect_target(
 
 async fn execute_session_command(
     target: &SessionTarget,
-    connected_address: Option<&str>,
+    _connected_address: Option<&str>,
     receiver: &mut Option<ReceiverSession>,
     roku_receiver_app: Option<bool>,
     command: &SessionCommand,
     operation_timeout: Duration,
-) -> Result<Option<SessionPlaybackStatus>, String> {
+) -> Result<Option<SessionPlaybackStatus>, CastError> {
     let operation = async {
         match command {
             SessionCommand::Load {
                 url,
                 title,
                 metadata,
+                content_type,
+                art_url,
+                start_seconds,
+                stream_type,
+                hls_segment_format,
+                hls_video_segment_format,
                 ..
             } => {
                 if url.trim().is_empty() {
-                    return Err("media URL must not be empty".to_owned());
+                    return Err(CastError::Protocol(
+                        "media URL must not be empty".to_owned(),
+                    ));
                 }
                 let media = MediaRequest {
                     url: url.clone(),
                     title: title.clone(),
                     metadata: metadata.clone(),
+                    content_type: content_type.clone(),
+                    art_url: art_url.clone(),
+                    start_seconds: *start_seconds,
+                    stream_type: stream_type.clone(),
+                    hls_segment_format: hls_segment_format.clone(),
+                    hls_video_segment_format: hls_video_segment_format.clone(),
                 };
                 if target.protocol == SessionProtocol::Roku && roku_receiver_app != Some(true) {
-                    return Err("compatible Play on Roku receiver app 15985 is required".into());
+                    return Err(CastError::Protocol(
+                        "compatible Play on Roku receiver app 15985 is required".into(),
+                    ));
                 }
-                if target.protocol == SessionProtocol::GoogleCast {
-                    let session = ReceiverSession::connect_google_cast(
-                        connected_address
-                            .ok_or_else(|| "Google Cast receiver is not connected".to_owned())?,
-                        target.port.unwrap_or(8009),
-                        &media,
-                    )
-                    .await
-                    .map_err(|error| error.to_string())?;
-                    *receiver = Some(session);
-                } else {
-                    receiver
-                        .as_mut()
-                        .ok_or_else(|| "receiver is not connected".to_owned())?
-                        .load(&media)
-                        .await
-                        .map_err(|error| error.to_string())?;
-                }
+                receiver
+                    .as_mut()
+                    .ok_or_else(|| CastError::Protocol("receiver is not connected".to_owned()))?
+                    .load(&media)
+                    .await?;
                 Ok(None)
             }
             SessionCommand::Play { .. } => {
-                receiver_mut(receiver)?.play().await.map_err(to_message)?;
+                receiver_mut(receiver)?.play().await?;
                 Ok(None)
             }
             SessionCommand::Pause { .. } => {
-                receiver_mut(receiver)?.pause().await.map_err(to_message)?;
+                receiver_mut(receiver)?.pause().await?;
                 Ok(None)
             }
             SessionCommand::Stop { .. } => {
-                receiver_mut(receiver)?.stop().await.map_err(to_message)?;
+                receiver_mut(receiver)?.stop().await?;
                 Ok(None)
             }
             SessionCommand::Seek {
                 position_seconds, ..
             } => {
                 if !position_seconds.is_finite() || *position_seconds < 0.0 {
-                    return Err("seek position must be a finite non-negative number".into());
+                    return Err(CastError::Protocol(
+                        "seek position must be a finite non-negative number".into(),
+                    ));
                 }
-                receiver_mut(receiver)?
-                    .seek(*position_seconds)
-                    .await
-                    .map_err(to_message)?;
+                receiver_mut(receiver)?.seek(*position_seconds).await?;
                 Ok(None)
             }
             SessionCommand::RelativeSeek { forward, .. } => {
-                receiver_mut(receiver)?
-                    .relative_seek(*forward)
-                    .await
-                    .map_err(to_message)?;
+                receiver_mut(receiver)?.relative_seek(*forward).await?;
+                Ok(None)
+            }
+            SessionCommand::SetVolume { level, .. } => {
+                if !level.is_finite() || !(0.0..=1.0).contains(level) {
+                    return Err(CastError::Protocol(
+                        "volume level must be between 0 and 1".into(),
+                    ));
+                }
+                receiver_mut(receiver)?.set_volume(*level).await?;
                 Ok(None)
             }
             SessionCommand::Status { .. } => {
-                let status = receiver_mut(receiver)?.status().await.map_err(to_message)?;
+                let status = receiver_mut(receiver)?.status().await?;
                 Ok(Some(SessionPlaybackStatus {
                     state: playback_state_name(status.state),
                     position_seconds: status.position_seconds,
@@ -693,21 +855,21 @@ async fn execute_session_command(
                 }))
             }
             SessionCommand::Disconnect { .. } => Ok(None),
+            SessionCommand::EndReceiver { .. } => {
+                receiver_mut(receiver)?.end_receiver_application().await?;
+                Ok(None)
+            }
         }
     };
     tokio::time::timeout(operation_timeout, operation)
         .await
-        .map_err(|_| format!("{} timed out", command.operation()))?
+        .map_err(|_| CastError::Protocol(format!("{} timed out", command.operation())))?
 }
 
-fn receiver_mut(receiver: &mut Option<ReceiverSession>) -> Result<&mut ReceiverSession, String> {
+fn receiver_mut(receiver: &mut Option<ReceiverSession>) -> Result<&mut ReceiverSession, CastError> {
     receiver
         .as_mut()
-        .ok_or_else(|| "load media before sending this command".to_owned())
-}
-
-fn to_message(error: playbridge_cast_core::CastError) -> String {
-    error.to_string()
+        .ok_or_else(|| CastError::Protocol("receiver is not connected".to_owned()))
 }
 
 fn playback_state_name(state: PlaybackState) -> &'static str {
@@ -1006,10 +1168,12 @@ mod android_jni {
     };
     use std::ffi::{CStr, CString, c_char};
 
-    use super::{DiscoveryScanner, pb_discovery_cancel, pb_discovery_free, pb_discovery_start};
+    use super::{
+        CastSession, DiscoveryScanner, pb_cast_core_abi_version, pb_discovery_cancel,
+        pb_discovery_free, pb_discovery_start, pb_session_cancel, pb_session_free,
+        pb_session_next_json, pb_session_start, pb_session_submit_json, pb_string_free,
+    };
 
-    #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
-    use super::pb_string_free;
     #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     use super::sender_services::{
         SenderServices, pb_sender_services_abi_version, pb_sender_services_cancel,
@@ -1092,6 +1256,124 @@ mod android_jni {
         });
     }
 
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_abiVersion(
+        _env: EnvUnowned,
+        _class: JClass,
+    ) -> jint {
+        std::panic::catch_unwind(|| pb_cast_core_abi_version()).unwrap_or(0) as jint
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_start<
+        'local,
+    >(
+        mut unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        target_json: JString<'local>,
+        timeout_ms: jlong,
+    ) -> jlong {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let target = unowned_env
+                .with_env(|env| -> Result<String, jni::errors::Error> {
+                    target_json.try_to_string(env)
+                })
+                .resolve::<ThrowRuntimeExAndDefault>();
+            let Ok(target) = CString::new(target) else {
+                return 0;
+            };
+            unsafe { pb_session_start(target.as_ptr(), timeout_ms.max(0) as u64) as jlong }
+        }))
+        .unwrap_or(0)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_submitJson<
+        'local,
+    >(
+        mut unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        command_json: JString<'local>,
+    ) -> jboolean {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if handle == 0 {
+                return false;
+            }
+            let command = unowned_env
+                .with_env(|env| -> Result<String, jni::errors::Error> {
+                    command_json.try_to_string(env)
+                })
+                .resolve::<ThrowRuntimeExAndDefault>();
+            let Ok(command) = CString::new(command) else {
+                return false;
+            };
+            unsafe { pb_session_submit_json(handle as *const CastSession, command.as_ptr()) }
+        }))
+        .unwrap_or(false)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_nextEvent<
+        'local,
+    >(
+        mut unowned_env: EnvUnowned<'local>,
+        _class: JClass<'local>,
+        handle: jlong,
+        wait_ms: jlong,
+    ) -> JString<'local> {
+        let json = std::panic::catch_unwind(|| {
+            if handle == 0 {
+                return None;
+            }
+            let ptr = unsafe {
+                pb_session_next_json(handle as *const CastSession, wait_ms.max(0) as u64)
+            };
+            if ptr.is_null() {
+                return None;
+            }
+            let owned = unsafe { CStr::from_ptr(ptr as *const c_char) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { pb_string_free(ptr) };
+            Some(owned)
+        })
+        .unwrap_or(None);
+
+        unowned_env
+            .with_env(|env| match json {
+                Some(json) => env.new_string(json),
+                None => Ok(JString::default()),
+            })
+            .resolve::<ThrowRuntimeExAndDefault>()
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_cancel(
+        _env: EnvUnowned,
+        _class: JClass,
+        handle: jlong,
+    ) {
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_session_cancel(handle as *const CastSession) };
+            }
+        });
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_playbridge_sender_cast_googlecast_RustCastSessionNative_free(
+        _env: EnvUnowned,
+        _class: JClass,
+        handle: jlong,
+    ) {
+        let _ = std::panic::catch_unwind(|| {
+            if handle != 0 {
+                unsafe { pb_session_free(handle as *const CastSession) };
+            }
+        });
+    }
+
     #[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
     #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_playbridge_sender_cast_proxy_SenderServicesNative_abiVersion(
@@ -1127,8 +1409,7 @@ mod android_jni {
             // Mirror discovery JNI: extract JSON via nextEvent-style env helpers.
             let command = unowned_env
                 .with_env(|env| -> Result<String, jni::errors::Error> {
-                    let java = env.get_string(&command_json)?;
-                    Ok(java.to_str().into_owned())
+                    command_json.try_to_string(env)
                 })
                 .resolve::<ThrowRuntimeExAndDefault>();
             if command.is_empty() {
@@ -1251,8 +1532,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stable_c_abi_version_is_one() {
-        assert_eq!(pb_cast_core_abi_version(), 1);
+    fn stable_c_abi_version_is_two() {
+        assert_eq!(pb_cast_core_abi_version(), 2);
     }
 
     #[test]
@@ -1281,6 +1562,33 @@ mod tests {
             target.ordered_addresses(),
             vec!["192.0.2.10", "receiver.local", "fe80::1%en0"]
         );
+        assert_eq!(target.launch_policy, SessionLaunchPolicy::ReuseOrLaunch);
+    }
+
+    #[test]
+    fn google_cast_target_accepts_receiver_application_configuration() {
+        let target: SessionTarget = serde_json::from_str(
+            r#"{"protocol":"google_cast","addresses":["192.0.2.10"],"application_id":"PLAY1234","network_handle":467262165005,"launch_policy":"force_relaunch"}"#,
+        )
+        .unwrap();
+        assert_eq!(target.application_id.as_deref(), Some("PLAY1234"));
+        assert_eq!(target.network_handle, Some(467_262_165_005));
+        assert_eq!(target.launch_policy, SessionLaunchPolicy::ForceRelaunch);
+    }
+
+    #[test]
+    fn local_network_route_failures_have_an_actionable_reason() {
+        assert_eq!(
+            connect_failure_reason("Failed to connect TCP: No route to host (os error 113)"),
+            Some("local_network_unreachable"),
+        );
+        assert_eq!(
+            connect_failure_reason(
+                "Failed to bind Chromecast socket to the Android local network: Operation not permitted"
+            ),
+            Some("local_network_unreachable"),
+        );
+        assert_eq!(connect_failure_reason("TLS handshake failed"), None);
     }
 
     #[test]
@@ -1296,6 +1604,59 @@ mod tests {
             serde_json::from_str(r#"{"command":"play","request_id":{"nested":"not-supported"}}"#)
                 .unwrap();
         assert!(!invalid.has_valid_request_id());
+    }
+
+    #[test]
+    fn status_timeouts_are_request_scoped_but_transport_failures_end_the_session() {
+        let status_timeout = CastError::Protocol("Google Cast status timed out".into());
+        assert_eq!(command_finish_reason(&status_timeout), None,);
+
+        let transport_error = CastError::Transport("channel closed".into());
+        assert_eq!(
+            command_finish_reason(&transport_error),
+            Some("connection_lost"),
+        );
+        assert_eq!(
+            command_finish_reason(&CastError::ReceiverSessionEnded),
+            Some("receiver_ended"),
+        );
+        assert_eq!(
+            command_finish_reason(&CastError::ReceiverSessionUnresponsive),
+            Some("session_unresponsive"),
+        );
+        assert_eq!(maintenance_event_operation(None), "maintenance");
+        assert_eq!(
+            maintenance_event_operation(Some("connection_lost")),
+            "connection",
+        );
+    }
+
+    #[test]
+    fn receiver_ended_error_event_exposes_machine_readable_reason() {
+        let event = SessionEvent::Error {
+            request_id: Some(Value::from("load-1")),
+            operation: "load",
+            message: CastError::ReceiverSessionEnded.to_string(),
+            reason: Some("receiver_ended"),
+        };
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["event"], "error");
+        assert_eq!(json["reason"], "receiver_ended");
+    }
+
+    #[test]
+    fn connection_failed_finished_event_preserves_the_underlying_message() {
+        let event = SessionEvent::Finished {
+            reason: "connection_failed",
+            message: Some("receiver media channel did not become ready".into()),
+        };
+        let json = serde_json::to_value(event).unwrap();
+        assert_eq!(json["event"], "finished");
+        assert_eq!(json["reason"], "connection_failed");
+        assert_eq!(
+            json["message"],
+            "receiver media channel did not become ready"
+        );
     }
 
     #[test]

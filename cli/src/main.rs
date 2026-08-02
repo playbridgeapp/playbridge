@@ -379,7 +379,8 @@ Usage:
   playbridge browser <filename|URL>      Cast through a sender-hosted browser receiver
   playbridge receiver [options]         Run as a PlayBridge receiver using mpv
   playbridge discover [options]          Discover receivers on your local network
-  playbridge google-cast status [options] Connect to Cast and query status only
+  playbridge google-cast status [options] Query receiver status without launching
+  playbridge google-cast launch [options] Launch/join the receiver and wait until ready
   playbridge preferred [clear]           View or clear the saved preferred device
 
 Discover Options:
@@ -388,10 +389,11 @@ Discover Options:
   -t, --timeout <seconds> Bounded scan duration (1-300, default 5)
       --json              Print one final JSON report
       --json-lines        Stream one JSON event per line
-Google Cast Status Options:
+Google Cast Options:
       --device <name>     Select a discovered Google Cast receiver
       --address <address> Connect directly instead of discovering
       --port <port>       CastV2 port (default 8009)
+      --app-id <id>       Receiver application ID (or PLAYBRIDGE_GOOGLE_CAST_APP_ID)
       --json              Print the receiver status as JSON
 Receiver Options:
       --name <name>       Receiver name advertised on the LAN

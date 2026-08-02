@@ -5,8 +5,8 @@ use serde_json::json;
 use crate::{
     CastError, Result,
     castv2::{
-        self, CastMessage, CastSessionDetails, NS_HEARTBEAT, NS_MEDIA, NS_RECEIVER, RECEIVER_ID,
-        RequestIdGenerator,
+        self, CastMessage, CastSessionDetails, DEFAULT_MEDIA_RECEIVER_APP_ID, NS_HEARTBEAT,
+        NS_MEDIA, NS_RECEIVER, RECEIVER_ID, RequestIdGenerator, SessionLaunchStrategy,
     },
     playbridge::{ReceiverFrame, SenderFrame},
     roku::RokuClient,
@@ -21,6 +21,12 @@ pub struct MediaRequest {
     pub url: String,
     pub title: Option<String>,
     pub metadata: Option<String>,
+    pub content_type: Option<String>,
+    pub art_url: Option<String>,
+    pub start_seconds: f64,
+    pub stream_type: Option<String>,
+    pub hls_segment_format: Option<String>,
+    pub hls_video_segment_format: Option<String>,
 }
 
 impl MediaRequest {
@@ -29,6 +35,12 @@ impl MediaRequest {
             url: url.into(),
             title: None,
             metadata: None,
+            content_type: None,
+            art_url: None,
+            start_seconds: 0.0,
+            stream_type: None,
+            hls_segment_format: None,
+            hls_video_segment_format: None,
         }
     }
 
@@ -81,18 +93,48 @@ impl ReceiverSession {
     pub async fn connect_google_cast(
         address: &str,
         port: u16,
-        media: &MediaRequest,
+        application_id: Option<&str>,
     ) -> Result<Self> {
-        let details = timeout(
-            castv2::cast_media_session_with_details(
-                address,
-                port,
-                &media.url,
-                media.title.as_deref(),
-            ),
-            "Google Cast connection and load",
+        Self::connect_google_cast_with_strategy(
+            address,
+            port,
+            application_id,
+            SessionLaunchStrategy::ReuseOrLaunch,
         )
-        .await?
+        .await
+    }
+
+    pub async fn connect_google_cast_with_strategy(
+        address: &str,
+        port: u16,
+        application_id: Option<&str>,
+        strategy: SessionLaunchStrategy,
+    ) -> Result<Self> {
+        Self::connect_google_cast_with_strategy_on_network(
+            address,
+            port,
+            application_id,
+            strategy,
+            None,
+        )
+        .await
+    }
+
+    pub async fn connect_google_cast_with_strategy_on_network(
+        address: &str,
+        port: u16,
+        application_id: Option<&str>,
+        strategy: SessionLaunchStrategy,
+        network_handle: Option<u64>,
+    ) -> Result<Self> {
+        let details = castv2::launch_app_session_with_strategy_on_network(
+            address,
+            port,
+            application_id.unwrap_or(DEFAULT_MEDIA_RECEIVER_APP_ID),
+            strategy,
+            network_handle,
+        )
+        .await
         .map_err(CastError::Protocol)?;
         Ok(Self::GoogleCast(GoogleCastSession {
             details,
@@ -146,10 +188,7 @@ impl ReceiverSession {
                     .await?;
                 renderer.play().await
             }
-            Self::GoogleCast(_) => Err(CastError::Protocol(
-                "Google Cast media is loaded while connecting; reconnect to load another item"
-                    .into(),
-            )),
+            Self::GoogleCast(session) => session.load(media).await,
         }
     }
 
@@ -199,6 +238,17 @@ impl ReceiverSession {
             Self::Dlna(renderer) => renderer.stop().await,
             Self::Roku(client) => client.keypress("Stop").await,
             Self::PlayBridge(socket) => socket.send(&control("stop")).await,
+        }
+    }
+
+    /// Explicitly ends a Google Cast receiver application. Normal media stop
+    /// intentionally leaves the receiver ready on its idle splash.
+    pub async fn end_receiver_application(&mut self) -> Result<()> {
+        match self {
+            Self::GoogleCast(session) => session.end_receiver_application().await,
+            _ => Err(CastError::Protocol(
+                "ending the receiver application is only supported by Google Cast".into(),
+            )),
         }
     }
 
@@ -367,10 +417,41 @@ impl ReceiverSession {
 }
 
 impl GoogleCastSession {
-    async fn send_media(&mut self, mut payload: serde_json::Value) -> Result<u32> {
+    async fn load(&mut self, media: &MediaRequest) -> Result<()> {
+        self.ensure_receiver_application_active().await?;
+        let inferred = castv2::media_format(&media.url);
+        castv2::load_media(
+            &mut self.details,
+            &media.url,
+            media.content_type.as_deref().or(Some(inferred.0)),
+            media.stream_type.as_deref().unwrap_or(inferred.1),
+            media.title.as_deref(),
+            media.art_url.as_deref(),
+            media.start_seconds,
+            media.hls_segment_format.as_deref(),
+            media.hls_video_segment_format.as_deref(),
+        )
+        .await
+        .map_err(map_google_cast_load_error)?;
+        Ok(())
+    }
+
+    fn media_session_id(&self) -> Result<i64> {
+        self.details.media_session_id.ok_or_else(|| {
+            CastError::Protocol("Google Cast receiver is ready but no media is loaded".into())
+        })
+    }
+
+    async fn send_media(
+        &mut self,
+        mut payload: serde_json::Value,
+        include_media_session: bool,
+    ) -> Result<u32> {
         let request_id = self.request_ids.next();
         payload["requestId"] = json!(request_id);
-        payload["mediaSessionId"] = json!(self.details.media_session_id);
+        if include_media_session {
+            payload["mediaSessionId"] = json!(self.media_session_id()?);
+        }
         self.details
             .channel
             .send_message(&CastMessage::new(
@@ -379,16 +460,19 @@ impl GoogleCastSession {
                 payload.to_string(),
             ))
             .await
-            .map_err(CastError::Protocol)?;
+            .map_err(CastError::Transport)?;
         Ok(request_id)
     }
     async fn media_command(&mut self, command: &str) -> Result<()> {
-        let request_id = self.send_media(json!({ "type": command })).await?;
+        let request_id = self.send_media(json!({ "type": command }), true).await?;
         self.wait_for_media_status(request_id).await.map(|_| ())
     }
     async fn seek(&mut self, seconds: f64) -> Result<()> {
         let request_id = self
-            .send_media(json!({ "type": "SEEK", "currentTime": seconds.max(0.0) }))
+            .send_media(
+                json!({ "type": "SEEK", "currentTime": seconds.max(0.0) }),
+                true,
+            )
             .await?;
         self.wait_for_media_status(request_id).await.map(|_| ())
     }
@@ -402,20 +486,88 @@ impl GoogleCastSession {
                 payload.to_string(),
             ))
             .await
-            .map_err(CastError::Protocol)
+            .map_err(CastError::Transport)
     }
     async fn stop(&mut self) -> Result<()> {
-        self.media_command("STOP").await?;
-        if !self.details.session_id.is_empty() {
-            let session_id = self.details.session_id.clone();
-            self.receiver_command(json!({ "type": "STOP", "sessionId": session_id }))
-                .await?;
+        if self.details.media_session_id.is_some() {
+            self.media_command("STOP").await?;
         }
         Ok(())
     }
+    async fn end_receiver_application(&mut self) -> Result<()> {
+        if self.details.session_id.is_empty() {
+            return Ok(());
+        }
+        let session_id = self.details.session_id.clone();
+        self.receiver_command(json!({ "type": "STOP", "sessionId": session_id }))
+            .await
+    }
     async fn status(&mut self) -> Result<PlaybackStatus> {
-        let request_id = self.send_media(json!({ "type": "GET_STATUS" })).await?;
+        self.ensure_receiver_application_active().await?;
+        let request_id = self
+            .send_media(json!({ "type": "GET_STATUS" }), false)
+            .await?;
         self.wait_for_media_status(request_id).await
+    }
+
+    async fn ensure_receiver_application_active(&mut self) -> Result<()> {
+        let request_id = self.request_ids.next();
+        self.details
+            .channel
+            .send_message(&CastMessage::new(
+                RECEIVER_ID,
+                NS_RECEIVER,
+                json!({ "type": "GET_STATUS", "requestId": request_id }).to_string(),
+            ))
+            .await
+            .map_err(CastError::Transport)?;
+
+        let deadline = tokio::time::Instant::now() + OPERATION_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return Err(CastError::Protocol(
+                    "Google Cast receiver application status timed out".into(),
+                ));
+            }
+            let message = tokio::time::timeout(remaining, self.details.channel.read_message())
+                .await
+                .map_err(|_| {
+                    CastError::Protocol("Google Cast receiver application status timed out".into())
+                })?
+                .map_err(CastError::Transport)?;
+            if castv2::is_connection_close(&message) {
+                return Err(CastError::ReceiverSessionEnded);
+            }
+            if message.namespace == NS_HEARTBEAT {
+                self.details
+                    .channel
+                    .handle_heartbeat(&message)
+                    .await
+                    .map_err(CastError::Transport)?;
+                continue;
+            }
+            if message.namespace != NS_RECEIVER {
+                continue;
+            }
+            let payload: serde_json::Value = serde_json::from_str(&message.payload_utf8)
+                .map_err(|error| CastError::Protocol(error.to_string()))?;
+            if payload["type"] != "RECEIVER_STATUS" {
+                continue;
+            }
+            let Some(application) =
+                castv2::matching_receiver_application(&payload, &self.details.app_id)
+            else {
+                return Err(CastError::ReceiverSessionEnded);
+            };
+            let session_matches = self.details.session_id.is_empty()
+                || application.session_id.is_empty()
+                || application.session_id == self.details.session_id;
+            if application.transport_id != self.details.transport_id || !session_matches {
+                return Err(CastError::ReceiverSessionEnded);
+            }
+            return Ok(());
+        }
     }
 
     async fn wait_for_media_status(&mut self, request_id: u32) -> Result<PlaybackStatus> {
@@ -428,13 +580,33 @@ impl GoogleCastSession {
             let message = tokio::time::timeout(remaining, self.details.channel.read_message())
                 .await
                 .map_err(|_| CastError::Protocol("Google Cast status timed out".into()))?
-                .map_err(CastError::Protocol)?;
+                .map_err(CastError::Transport)?;
+            if castv2::is_connection_close(&message) {
+                return Err(CastError::ReceiverSessionEnded);
+            }
             if message.namespace == NS_HEARTBEAT {
                 self.details
                     .channel
                     .handle_heartbeat(&message)
                     .await
-                    .map_err(CastError::Protocol)?;
+                    .map_err(CastError::Transport)?;
+                continue;
+            }
+            if message.namespace == NS_RECEIVER {
+                let payload: serde_json::Value = serde_json::from_str(&message.payload_utf8)
+                    .map_err(|error| CastError::Protocol(error.to_string()))?;
+                if payload["type"] == "RECEIVER_STATUS" {
+                    let current =
+                        castv2::matching_receiver_application(&payload, &self.details.app_id);
+                    if current.as_ref().is_none_or(|application| {
+                        application.transport_id != self.details.transport_id
+                            || (!self.details.session_id.is_empty()
+                                && !application.session_id.is_empty()
+                                && application.session_id != self.details.session_id)
+                    }) {
+                        return Err(CastError::ReceiverSessionEnded);
+                    }
+                }
                 continue;
             }
             if message.namespace == NS_MEDIA {
@@ -458,14 +630,15 @@ impl GoogleCastSession {
                 if payload["type"] == "MEDIA_STATUS"
                     && payload["status"].as_array().is_some_and(Vec::is_empty)
                 {
+                    self.details.media_session_id = None;
                     return Ok(PlaybackStatus {
-                        state: PlaybackState::Finished,
+                        state: PlaybackState::Stopped,
                         ..PlaybackStatus::default()
                     });
                 }
                 if let Some(status) = payload["status"].as_array().and_then(|items| items.first()) {
                     if let Some(id) = status["mediaSessionId"].as_i64() {
-                        self.details.media_session_id = id;
+                        self.details.media_session_id = Some(id);
                     }
                     return Ok(PlaybackStatus {
                         state: state_from_text(status["playerState"].as_str().unwrap_or("")),
@@ -475,6 +648,14 @@ impl GoogleCastSession {
                 }
             }
         }
+    }
+}
+
+fn map_google_cast_load_error(error: castv2::LoadMediaError) -> CastError {
+    match error {
+        castv2::LoadMediaError::Transport(message) => CastError::Transport(message),
+        castv2::LoadMediaError::Rejected(message) => CastError::Protocol(message),
+        castv2::LoadMediaError::ReceiverUnresponsive => CastError::ReceiverSessionUnresponsive,
     }
 }
 
@@ -541,6 +722,26 @@ async fn timeout<T, E>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_google_cast_load_acknowledgement_invalidates_the_session() {
+        assert!(matches!(
+            map_google_cast_load_error(castv2::LoadMediaError::ReceiverUnresponsive),
+            CastError::ReceiverSessionUnresponsive,
+        ));
+        assert!(matches!(
+            map_google_cast_load_error(castv2::LoadMediaError::Rejected(
+                "Chromecast rejected LOAD request: cancelled".into(),
+            )),
+            CastError::Protocol(_),
+        ));
+        assert!(matches!(
+            map_google_cast_load_error(castv2::LoadMediaError::Transport(
+                "Failed to write CastMessage: socket closed".into(),
+            )),
+            CastError::Transport(_),
+        ));
+    }
     #[test]
     fn maps_common_protocol_states() {
         assert_eq!(state_from_text("PLAYING"), PlaybackState::Playing);

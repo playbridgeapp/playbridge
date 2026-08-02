@@ -38,12 +38,22 @@ enum ReceiverProtocol {
       };
 }
 
+enum GoogleCastLaunchPolicy {
+  forceRelaunch('force_relaunch'),
+  reuseOrLaunch('reuse_or_launch');
+
+  const GoogleCastLaunchPolicy(this.wireName);
+  final String wireName;
+}
+
 final class ReceiverEndpoint {
   ReceiverEndpoint({
     required this.protocol,
     required List<String> addresses,
     this.port,
     this.location,
+    this.applicationId,
+    this.googleCastLaunchPolicy = GoogleCastLaunchPolicy.reuseOrLaunch,
   }) : addresses = List.unmodifiable(addresses);
 
   factory ReceiverEndpoint.fromReceiverInfo(ReceiverInfo receiver) =>
@@ -58,6 +68,8 @@ final class ReceiverEndpoint {
   final List<String> addresses;
   final int? port;
   final String? location;
+  final String? applicationId;
+  final GoogleCastLaunchPolicy googleCastLaunchPolicy;
 
   Map<String, Object?> toJson() {
     if (protocol != ReceiverProtocol.dlna &&
@@ -70,21 +82,49 @@ final class ReceiverEndpoint {
       'addresses': addresses,
       if (port != null) 'port': port,
       if (location != null) 'location': location,
+      if (applicationId != null) 'application_id': applicationId,
+      if (protocol == ReceiverProtocol.googleCast)
+        'launch_policy': googleCastLaunchPolicy.wireName,
     };
   }
 }
 
 final class MediaRequest {
-  const MediaRequest({required this.url, this.title, this.metadata});
+  const MediaRequest({
+    required this.url,
+    this.title,
+    this.metadata,
+    this.contentType,
+    this.artUrl,
+    this.start = Duration.zero,
+    this.streamType,
+    this.hlsSegmentFormat,
+    this.hlsVideoSegmentFormat,
+  });
 
   final String url;
   final String? title;
   final String? metadata;
+  final String? contentType;
+  final String? artUrl;
+  final Duration start;
+  final String? streamType;
+  final String? hlsSegmentFormat;
+  final String? hlsVideoSegmentFormat;
 
   Map<String, Object?> toJson() => {
         'url': url,
         if (title != null) 'title': title,
         if (metadata != null) 'metadata': metadata,
+        if (contentType != null) 'content_type': contentType,
+        if (artUrl != null) 'art_url': artUrl,
+        if (start != Duration.zero)
+          'start_seconds':
+              start.inMicroseconds / Duration.microsecondsPerSecond,
+        if (streamType != null) 'stream_type': streamType,
+        if (hlsSegmentFormat != null) 'hls_segment_format': hlsSegmentFormat,
+        if (hlsVideoSegmentFormat != null)
+          'hls_video_segment_format': hlsVideoSegmentFormat,
       };
 }
 
@@ -181,6 +221,7 @@ sealed class CastSessionEvent {
             json['capabilities']! as Map<String, Object?>,
           ),
           name: json['name'] as String?,
+          receiverApplicationId: json['receiver_application_id'] as String?,
         ),
       'operation' => CastSessionOperation(
           requestId: _requestId(json),
@@ -197,8 +238,12 @@ sealed class CastSessionEvent {
           requestId: json['request_id']?.toString(),
           operation: json['operation'] as String?,
           message: json['message']! as String,
+          reason: json['reason'] as String?,
         ),
-      'finished' => CastSessionFinished(json['reason']! as String),
+      'finished' => CastSessionFinished(
+          json['reason']! as String,
+          message: json['message'] as String?,
+        ),
       _ => throw FormatException('Unknown session event: $event'),
     };
   }
@@ -215,10 +260,12 @@ final class CastSessionConnected extends CastSessionEvent {
     required this.protocol,
     required this.capabilities,
     this.name,
+    this.receiverApplicationId,
   });
   final ReceiverProtocol protocol;
   final SessionCapabilities capabilities;
   final String? name;
+  final String? receiverApplicationId;
 }
 
 final class CastSessionOperation extends CastSessionEvent {
@@ -243,10 +290,22 @@ final class CastSessionError extends CastSessionEvent implements Exception {
     required this.message,
     this.requestId,
     this.operation,
+    this.reason,
   });
   final String? requestId;
   final String? operation;
   final String message;
+  final String? reason;
+
+  bool get receiverEnded => reason == 'receiver_ended';
+  bool get sessionUnresponsive => reason == 'session_unresponsive';
+  bool get connectionLost => reason == 'connection_lost';
+
+  /// A request-less error with one of these reasons is followed by a finished
+  /// event and invalidates the native worker. Request-less maintenance errors
+  /// deliberately carry no reason and leave the session usable.
+  bool get endsSession =>
+      receiverEnded || sessionUnresponsive || connectionLost;
 
   @override
   String toString() => operation == null
@@ -255,8 +314,9 @@ final class CastSessionError extends CastSessionEvent implements Exception {
 }
 
 final class CastSessionFinished extends CastSessionEvent {
-  const CastSessionFinished(this.reason);
+  const CastSessionFinished(this.reason, {this.message});
   final String reason;
+  final String? message;
 }
 
 final class ReceiverInfo {

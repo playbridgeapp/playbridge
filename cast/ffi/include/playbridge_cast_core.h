@@ -25,7 +25,20 @@ void pb_discovery_free(const DiscoveryScanner *scanner);
 /*
  * Starts one resource-bounded receiver session worker. target_json:
  * {"protocol":"dlna|roku|google_cast","addresses":["192.0.2.1"],
- *  "port":8060,"location":"http://192.0.2.1/device.xml"}
+ *  "port":8060,"location":"http://192.0.2.1/device.xml",
+ *  "application_id":"CC1AD845","launch_policy":"reuse_or_launch",
+ *  "network_handle":467262165005}
+ * network_handle is the optional Android Network#getNetworkHandle() used to
+ * bind local Cast sockets around a VPN without changing the process route.
+ *
+ * For Google Cast, the connected event is emitted only after the configured
+ * receiver application has launched (or been joined), its transport channel
+ * is connected, and its media namespace answers GET_STATUS. LOAD is a later
+ * command and may be repeated while the receiver remains ready.
+ *
+ * LOAD additionally accepts optional content_type, art_url, start_seconds,
+ * and stream_type fields. STOP stops media but leaves the receiver application
+ * ready; END_RECEIVER explicitly terminates the receiver application.
  */
 CastSession *pb_session_start(const char *target_json, uint64_t timeout_ms);
 /* Commands are JSON objects with command and request_id fields. */

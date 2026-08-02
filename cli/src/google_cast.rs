@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use playbridge_cast_core::{
     castv2::{
@@ -10,12 +10,13 @@ use serde_json::{Value, json};
 use tokio::time::Instant;
 
 const DEFAULT_PORT: u16 = 8009;
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub async fn run_google_cast(arguments: &[String]) -> Result<(), String> {
-    if arguments.first().map(String::as_str) != Some("status") {
+    let command = arguments.first().map(String::as_str);
+    if !matches!(command, Some("status" | "launch")) {
         return Err(
-            "expected: playbridge google-cast status [--device <name>] [--address <address>]"
+            "expected: playbridge google-cast <status|launch> [--device <name>] [--address <address>]"
                 .into(),
         );
     }
@@ -40,6 +41,39 @@ pub async fn run_google_cast(arguments: &[String]) -> Result<(), String> {
         )
     })?;
     let port = receiver.port.unwrap_or(options.port);
+
+    if command == Some("launch") {
+        let details = tokio::time::timeout(
+            options.timeout,
+            castv2::launch_app_session(address, port, &options.application_id),
+        )
+        .await
+        .map_err(|_| "Google Cast receiver application launch timed out".to_owned())??;
+        if options.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "name": receiver.name,
+                    "protocol": "google_cast",
+                    "address": address,
+                    "port": port,
+                    "application_id": details.app_id,
+                    "session_id": details.session_id,
+                    "transport_id": details.transport_id,
+                    "ready": true,
+                }))
+                .map_err(|error| error.to_string())?
+            );
+        } else {
+            println!(
+                "Google Cast ready: {} ({}:{}, app {})",
+                receiver.name, address, port, details.app_id
+            );
+            println!("The receiver is showing its idle screen and is ready for LOAD.");
+        }
+        return Ok(());
+    }
+
     let mut channel = CastChannel::connect(address, port).await?;
     let ids = RequestIdGenerator::new();
     channel
@@ -117,6 +151,7 @@ struct Options {
     port: u16,
     timeout: Duration,
     json: bool,
+    application_id: String,
 }
 
 fn parse_options(arguments: &[String]) -> Result<Options, String> {
@@ -126,6 +161,8 @@ fn parse_options(arguments: &[String]) -> Result<Options, String> {
         port: DEFAULT_PORT,
         timeout: DEFAULT_TIMEOUT,
         json: false,
+        application_id: env::var("PLAYBRIDGE_GOOGLE_CAST_APP_ID")
+            .unwrap_or_else(|_| castv2::DEFAULT_MEDIA_RECEIVER_APP_ID.to_owned()),
     };
     let mut index = 0;
     while index < arguments.len() {
@@ -169,12 +206,22 @@ fn parse_options(arguments: &[String]) -> Result<Options, String> {
                 options.timeout = Duration::from_secs(seconds);
             }
             "--json" => options.json = true,
-            unknown => return Err(format!("unknown Google Cast status option: {unknown}")),
+            "--app-id" => {
+                index += 1;
+                options.application_id = arguments
+                    .get(index)
+                    .ok_or("--app-id requires a value")?
+                    .clone();
+                if options.application_id.trim().is_empty() {
+                    return Err("--app-id must not be empty".into());
+                }
+            }
+            unknown => return Err(format!("unknown Google Cast option: {unknown}")),
         }
         index += 1;
     }
     if options.device.is_none() && options.address.is_none() {
-        return Err("Google Cast status requires --device or --address".into());
+        return Err("Google Cast command requires --device or --address".into());
     }
     if options.device.is_some() && options.address.is_some() {
         return Err("--device and --address cannot be combined".into());
@@ -239,5 +286,17 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn accepts_an_explicit_receiver_application_id() {
+        let options = parse_options(&[
+            "--address".into(),
+            "192.0.2.1".into(),
+            "--app-id".into(),
+            "PLAY1234".into(),
+        ])
+        .unwrap();
+        assert_eq!(options.application_id, "PLAY1234");
     }
 }

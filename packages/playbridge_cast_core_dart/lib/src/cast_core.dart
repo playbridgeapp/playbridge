@@ -41,7 +41,7 @@ final class CastCoreLibrary {
       ReceiverProtocol.roku,
       ReceiverProtocol.googleCast,
     },
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 20),
     Duration pollInterval = const Duration(milliseconds: 50),
   }) {
     if (protocols.isEmpty) {
@@ -66,7 +66,7 @@ final class CastCoreLibrary {
 
   CastSession startSession(
     ReceiverEndpoint endpoint, {
-    Duration timeout = const Duration(seconds: 15),
+    Duration timeout = const Duration(seconds: 20),
     Duration pollInterval = const Duration(milliseconds: 50),
   }) {
     if (timeout <= Duration.zero) {
@@ -192,12 +192,20 @@ final class CastSession implements Finalizable {
   Future<void> play() => _operation('play');
   Future<void> pause() => _operation('pause');
   Future<void> stop() => _operation('stop');
+  Future<void> endReceiver() => _operation('end_receiver');
   Future<void> seek(Duration position) => _operation('seek', {
         'position_seconds':
             position.inMicroseconds / Duration.microsecondsPerSecond,
       });
   Future<void> relativeSeek({required bool forward}) =>
       _operation('relative_seek', {'forward': forward});
+  Future<void> setVolume(double level) {
+    if (!level.isFinite || level < 0 || level > 1) {
+      throw ArgumentError.value(level, 'level', 'must be between 0 and 1');
+    }
+    return _operation('set_volume', {'level': level});
+  }
+
   Future<PlaybackStatus> status() => _submit<PlaybackStatus>('status');
   Future<void> disconnect() => _operation('disconnect');
 
@@ -313,13 +321,14 @@ final class CastSession implements Finalizable {
           completer.completeError(event);
         } else if (!_connected.isCompleted) {
           _connected.completeError(event);
-        } else if (requestId == null) {
+        } else if (requestId == null && event.endsSession) {
           _failPending(event, StackTrace.current);
         }
       case CastSessionFinished():
         final error = CastSessionError(
           operation: 'session',
-          message: 'Receiver session finished: ${event.reason}',
+          message:
+              event.message ?? 'Receiver session finished: ${event.reason}',
         );
         if (!_connected.isCompleted) _connected.completeError(error);
         _failPending(error, StackTrace.current);
