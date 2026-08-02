@@ -49,6 +49,9 @@ String? spkiPinFromCertDer(Uint8List der) {
 
 enum SenderConnectionState {
   disconnected,
+
+  /// Destination remains selected, but its receiver application is not active.
+  selected,
   connecting,
   waitingForChallenge,
   waitingForCodeInput,

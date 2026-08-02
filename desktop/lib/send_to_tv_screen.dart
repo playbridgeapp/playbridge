@@ -191,7 +191,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
           activeTv: controller.activeTv,
           onDisconnect: controller.disconnect,
         ),
-        if (controller.state == SenderConnectionState.connected) ...[
+        if (controller.isConnected) ...[
           const SizedBox(height: 12),
           Row(
             children: [
@@ -217,7 +217,8 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                         !controller.castRouteThroughProxy);
                   },
                   child: const Text(
-                    'Route remote stream requests through local proxy',
+                    'Route through Desktop proxy '
+                    '(off sends the original URL without browser headers)',
                     style: TextStyle(fontSize: 13, color: Colors.white70),
                   ),
                 ),
@@ -434,7 +435,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       _snack('No supported media files in that drop.');
       return;
     }
-    if (controller.state != SenderConnectionState.connected) {
+    if (!controller.isConnected) {
       _snack('Connect to a TV first, then drop files to cast.');
       return;
     }
@@ -769,7 +770,8 @@ class _StatusBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final (icon, color, text) = _describe();
-    final connected = state == SenderConnectionState.connected;
+    final connected = state == SenderConnectionState.connected ||
+        state == SenderConnectionState.selected;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
@@ -803,6 +805,13 @@ class _StatusBanner extends StatelessWidget {
           Icons.tv_off,
           Colors.white54,
           'Not connected to a TV.',
+        ),
+      SenderConnectionState.selected => (
+          Icons.cast,
+          Colors.amberAccent,
+          name != null
+              ? '$name is selected. Its Cast session ended or stopped responding; the next cast will start fresh.'
+              : 'Cast destination selected. The next cast will start fresh.',
         ),
       SenderConnectionState.connecting => (
           Icons.cast,

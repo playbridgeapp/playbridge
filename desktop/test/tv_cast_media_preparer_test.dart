@@ -48,4 +48,128 @@ https://cdn.example/v.m3u8?session=s
     expect(rewritten, contains('http://127.0.0.1/s/v/p.m3u8'));
     expect(rewritten, isNot(contains('cdn.example')));
   });
+
+  test('classifies finite HLS as buffered and explicit live HLS as live', () {
+    expect(
+      TvCastMediaPreparer.hlsStreamTypeForBody('''
+#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXTINF:6,
+000.jpg
+#EXT-X-ENDLIST
+'''),
+      'buffered',
+    );
+    expect(
+      TvCastMediaPreparer.hlsStreamTypeForBody('''
+#EXTM3U
+#EXT-X-SERVER-CONTROL:CAN-BLOCK-RELOAD=YES
+#EXT-X-PART:DURATION=1,URI="part.m4s"
+'''),
+      'live',
+    );
+    expect(TvCastMediaPreparer.hlsStreamTypeForBody(null), 'buffered');
+  });
+
+  test('infers HLS segment format only from media-playlist evidence', () {
+    expect(
+      TvCastMediaPreparer.hlsSegmentFormatForBody('''
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXTINF:6,
+segment.jpg
+'''),
+      'ts',
+    );
+    expect(
+      TvCastMediaPreparer.hlsSegmentFormatForBody('''
+#EXTM3U
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:6,
+segment.m4s
+'''),
+      'fmp4',
+    );
+    expect(
+      TvCastMediaPreparer.hlsSegmentFormatForBody('''
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000
+media.m3u8
+'''),
+      isNull,
+    );
+    expect(
+      TvCastMediaPreparer.hlsSegmentFormatForBody('''
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXTINF:6,
+audio.aac
+'''),
+      isNull,
+    );
+    expect(
+      TvCastMediaPreparer.hlsSegmentFormatForBody('''
+#EXTM3U
+#EXT-X-TARGETDURATION:6
+#EXTINF:6,
+captions.vtt
+'''),
+      isNull,
+    );
+  });
+
+  test('returns every HLS variant in descending bandwidth order', () {
+    expect(
+      TvCastMediaPreparer.hlsVariantUrlsForBody('''
+#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=1000
+low/playlist.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=5000
+high/playlist.m3u8
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",URI="audio/playlist.m3u8"
+''', 'https://cdn.example/master.m3u8'),
+      [
+        'https://cdn.example/high/playlist.m3u8',
+        'https://cdn.example/low/playlist.m3u8',
+        'https://cdn.example/audio/playlist.m3u8',
+      ],
+    );
+  });
+
+  test('omits a master-wide HLS format for mixed rendition containers', () {
+    expect(
+      TvCastMediaPreparer.commonHlsSegmentFormatForBodies([
+        '#EXTM3U\n#EXTINF:6,\nsegment.ts',
+        '#EXTM3U\n#EXT-X-MAP:URI="init.mp4"\n#EXTINF:6,\nsegment.m4s',
+      ]),
+      isNull,
+    );
+    expect(
+      TvCastMediaPreparer.commonHlsSegmentFormatForBodies([
+        '#EXTM3U\n#EXTINF:6,\nsegment-a.ts',
+        '#EXTM3U\n#EXTINF:6,\nsegment-b.jpg',
+      ]),
+      'ts',
+    );
+    expect(
+      TvCastMediaPreparer.commonHlsSegmentFormatForBodies([
+        '#EXTM3U\n#EXTINF:6,\nvideo.ts',
+        '#EXTM3U\n#EXTINF:6,\naudio.aac',
+      ]),
+      isNull,
+    );
+  });
+
+  test('omits an HLS format query hint when the container is unknown', () {
+    final hinted = TvCastMediaPreparer.withHlsHints(
+      'http://192.0.2.1/s/id/playlist.m3u8?token=x',
+      TvCastMediaPreparer.hlsContentType,
+      format: null,
+      streamType: 'buffered',
+    );
+    final uri = Uri.parse(hinted);
+    expect(uri.queryParameters['token'], 'x');
+    expect(uri.queryParameters['pb_hls_stream'], 'buffered');
+    expect(uri.queryParameters.containsKey('pb_hls_format'), isFalse);
+  });
 }

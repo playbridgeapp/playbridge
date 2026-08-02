@@ -11,6 +11,24 @@ import 'tv_sender_client.dart';
 
 export 'tv_sender_client.dart' show SenderConnectionState, TvCredentials;
 
+const _googleCastApplicationId = String.fromEnvironment(
+  'PLAYBRIDGE_GOOGLE_CAST_APP_ID',
+  defaultValue: 'CC1AD845',
+);
+
+@visibleForTesting
+bool isGoogleCastRestartableSessionError(Object error) =>
+    error is rust.CastSessionError &&
+    (error.receiverEnded || error.sessionUnresponsive || error.connectionLost);
+
+@visibleForTesting
+bool shouldPublishGlobalCastSessionError(rust.CastSessionError error) =>
+    error.endsSession;
+
+@visibleForTesting
+bool googleCastStatusFailuresRequireFreshSession(int consecutiveFailures) =>
+    consecutiveFailures >= 3;
+
 /// Abstract transport contract for interacting with a target TV/receiver
 /// (PlayBridge WebSockets, DLNA UPnP, Roku ECP, etc.).
 abstract class TvTransport {
@@ -173,7 +191,11 @@ class RustCastTransport extends TvTransport {
   StreamSubscription<rust.CastSessionEvent>? _eventSub;
   Timer? _pollTimer;
   bool _polling = false;
+  bool _statusPollingEnabled = false;
+  int _statusPollFailures = 0;
   String? _currentTitle;
+  DiscoveredTv? _selectedTv;
+  bool _receiverEnded = false;
 
   final _state = StreamController<SenderConnectionState>.broadcast();
   final _messages = StreamController<String>.broadcast();
@@ -215,7 +237,26 @@ class RustCastTransport extends TvTransport {
     String? token,
     String? expectedPin,
   }) async {
-    await _closeSession(sendDisconnected: false);
+    _selectedTv = tv;
+    _receiverEnded = false;
+    await _connectSession(
+      tv,
+      launchPolicy: protocol == TvProtocol.googleCast
+          ? rust.GoogleCastLaunchPolicy.forceRelaunch
+          : rust.GoogleCastLaunchPolicy.reuseOrLaunch,
+      failureState: SenderConnectionState.error,
+    );
+  }
+
+  Future<bool> _connectSession(
+    DiscoveredTv tv, {
+    required rust.GoogleCastLaunchPolicy launchPolicy,
+    required SenderConnectionState failureState,
+  }) async {
+    await _closeSession(
+      sendDisconnected: false,
+      clearSelection: false,
+    );
     _setState(SenderConnectionState.connecting);
     try {
       final core = _core ??= rust.CastCoreLibrary.open();
@@ -225,41 +266,63 @@ class RustCastTransport extends TvTransport {
           addresses: tv.allAddresses,
           port: tv.port,
           location: tv.location,
+          applicationId: protocol == TvProtocol.googleCast
+              ? _googleCastApplicationId
+              : null,
+          googleCastLaunchPolicy: launchPolicy,
         ),
       );
       _session = session;
       final connected = await session.connected;
       _capabilities = connected.capabilities;
       _eventSub = session.events.listen(
-        _onSessionEvent,
+        (event) => _onSessionEvent(session, event),
         onError: (Object error, StackTrace stackTrace) {
           _emitError('session', error);
-          _setState(SenderConnectionState.error);
+          _markSessionUnavailable(session, receiverEnded: false);
         },
         onDone: () {
-          if (identical(_session, session)) {
-            _session = null;
-            _capabilities = null;
-            _stopPolling();
-            _setState(SenderConnectionState.disconnected);
-          }
+          _markSessionUnavailable(session, receiverEnded: false);
         },
       );
+      _receiverEnded = false;
       _setState(SenderConnectionState.connected);
+      return true;
     } on Object catch (error) {
       _emitError('connect', error);
-      await _closeSession(sendDisconnected: false);
-      _setState(SenderConnectionState.error);
+      await _closeSession(
+        sendDisconnected: false,
+        clearSelection: false,
+      );
+      _setState(failureState);
+      return false;
     }
   }
 
   @override
-  Future<void> disconnect() => _closeSession(sendDisconnected: true);
+  Future<void> disconnect() => _closeSession(
+        sendDisconnected: true,
+        clearSelection: true,
+      );
 
   @override
-  Future<bool> castVideo(PlayPayload video) async {
-    final session = _session;
-    if (!isConnected || session == null || video.url.isEmpty) return false;
+  Future<bool> castVideo(PlayPayload video) =>
+      _castVideo(video, allowFreshSessionRetry: true);
+
+  Future<bool> _castVideo(
+    PlayPayload video, {
+    required bool allowFreshSessionRetry,
+  }) async {
+    if (video.url.isEmpty) return false;
+    var session = _session;
+    if (!isConnected || session == null) {
+      if (protocol != TvProtocol.googleCast ||
+          !await _connectSelectedGoogleCast()) {
+        return false;
+      }
+      session = _session;
+      if (session == null) return false;
+    }
     if (_capabilities?.load == false) {
       _emitError(
         'load',
@@ -270,15 +333,72 @@ class RustCastTransport extends TvTransport {
     try {
       final title =
           video.hasTitle() && video.title.isNotEmpty ? video.title : 'Media';
-      await session.load(rust.MediaRequest(url: video.url, title: title));
+      final hlsFormat = googleCastHlsFormatForUrl(video.url);
+      final streamType = googleCastStreamTypeForUrl(video.url);
+      final hlsAudioFormat = googleCastHlsAudioFormat(hlsFormat);
+      final hlsVideoFormat = googleCastHlsVideoFormat(hlsFormat);
+      if (hlsFormat != null) {
+        debugPrint(
+          '[tv-cast] Google Cast HLS metadata: '
+          'audio=$hlsAudioFormat video=$hlsVideoFormat '
+          'streamType=$streamType',
+        );
+      }
+      await session.load(rust.MediaRequest(
+        url: video.url,
+        title: title,
+        contentType: video.hasContentType() && video.contentType.isNotEmpty
+            ? video.contentType
+            : browserContentTypeForUrl(video.url),
+        artUrl: video.posterUrlOrNull,
+        start: Duration(
+          milliseconds:
+              video.startPositionMsOrNull?.clamp(0, 1 << 62).toInt() ?? 0,
+        ),
+        streamType: streamType,
+        hlsSegmentFormat: hlsAudioFormat,
+        hlsVideoSegmentFormat: hlsVideoFormat,
+      ));
       _currentTitle = title;
       _startPolling();
-      await _pollStatus();
       return true;
     } on Object catch (error) {
+      if (protocol == TvProtocol.googleCast &&
+          allowFreshSessionRetry &&
+          (isGoogleCastRestartableSessionError(error) || _receiverEnded)) {
+        _receiverEnded = true;
+        session.dispose();
+        _markSessionUnavailable(session, receiverEnded: true);
+        if (await _connectSelectedGoogleCast(forceRelaunch: true)) {
+          return _castVideo(video, allowFreshSessionRetry: false);
+        }
+      }
       _emitError('load', error);
       return false;
     }
+  }
+
+  Future<bool> _connectSelectedGoogleCast({bool? forceRelaunch}) async {
+    final tv = _selectedTv;
+    if (protocol != TvProtocol.googleCast || tv == null) return false;
+    final force = forceRelaunch ?? _receiverEnded;
+    final connected = await _connectSession(
+      tv,
+      launchPolicy: force
+          ? rust.GoogleCastLaunchPolicy.forceRelaunch
+          : rust.GoogleCastLaunchPolicy.reuseOrLaunch,
+      failureState: SenderConnectionState.selected,
+    );
+    if (connected || force) return connected;
+
+    // Reuse is preferred after a transient network loss so current playback can
+    // survive. If that session is stale/unusable, make the next attempt CLI-like.
+    _receiverEnded = true;
+    return _connectSession(
+      tv,
+      launchPolicy: rust.GoogleCastLaunchPolicy.forceRelaunch,
+      failureState: SenderConnectionState.selected,
+    );
   }
 
   @override
@@ -345,7 +465,10 @@ class RustCastTransport extends TvTransport {
   @override
   Future<bool> queueAdd(PlayPayload item) async => false;
 
-  void _onSessionEvent(rust.CastSessionEvent event) {
+  void _onSessionEvent(
+    rust.CastSession session,
+    rust.CastSessionEvent event,
+  ) {
     switch (event) {
       case rust.CastSessionStatus(:final status):
         _emitStatus(status);
@@ -353,39 +476,123 @@ class RustCastTransport extends TvTransport {
             status.state == rust.PlaybackState.finished) {
           _stopPolling();
         }
-      case rust.CastSessionError(:final operation, :final message):
-        _emitError(operation ?? 'session', message);
-      case rust.CastSessionFinished():
-        _session = null;
-        _capabilities = null;
-        _stopPolling();
-        _setState(SenderConnectionState.disconnected);
+      case rust.CastSessionError():
+        final error = event;
+        if (shouldPublishGlobalCastSessionError(error)) {
+          final receiverApplicationInvalid =
+              error.receiverEnded || error.sessionUnresponsive;
+          _receiverEnded = _receiverEnded || receiverApplicationInvalid;
+          session.dispose();
+          _markSessionUnavailable(
+            session,
+            receiverEnded: receiverApplicationInvalid,
+          );
+          _emitError(error.operation ?? 'session', error.message);
+        } else if (error.requestId == null) {
+          debugPrint(
+            '[tv-transport] ${protocol.label} maintenance warning: '
+            '${error.message}',
+          );
+        }
+      case rust.CastSessionFinished(:final reason):
+        _markSessionUnavailable(
+          session,
+          receiverEnded:
+              reason == 'receiver_ended' || reason == 'session_unresponsive',
+        );
       case rust.CastSessionConnected() || rust.CastSessionOperation():
         break;
     }
   }
 
+  void _markSessionUnavailable(
+    rust.CastSession session, {
+    required bool receiverEnded,
+  }) {
+    if (!identical(_session, session)) return;
+    _session = null;
+    _capabilities = null;
+    _stopPolling();
+    _receiverEnded = _receiverEnded || receiverEnded;
+    if (protocol == TvProtocol.googleCast && _selectedTv != null) {
+      _setState(SenderConnectionState.selected);
+    } else {
+      _setState(SenderConnectionState.disconnected);
+    }
+  }
+
   void _startPolling() {
-    if (_pollTimer != null || _capabilities?.status == false) return;
+    if (_statusPollingEnabled || _capabilities?.status == false) return;
+    _statusPollingEnabled = true;
+    if (protocol == TvProtocol.googleCast) {
+      _scheduleGoogleCastStatusPoll(initial: true);
+      return;
+    }
     _pollTimer = Timer.periodic(
       const Duration(seconds: 1),
       (_) => unawaited(_pollStatus()),
     );
   }
 
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
+  void _scheduleGoogleCastStatusPoll({bool initial = false}) {
+    if (!_statusPollingEnabled ||
+        _pollTimer != null ||
+        _capabilities?.status == false) {
+      return;
+    }
+    _pollTimer = Timer(
+      googleCastStatusPollDelay(_statusPollFailures, initial: initial),
+      () {
+        _pollTimer = null;
+        unawaited(_runGoogleCastStatusPoll());
+      },
+    );
   }
 
-  Future<void> _pollStatus() async {
+  Future<void> _runGoogleCastStatusPoll() async {
     final session = _session;
-    if (_polling || session == null || !isConnected) return;
+    final succeeded = await _pollStatus();
+    if (!_statusPollingEnabled ||
+        !identical(_session, session) ||
+        !isConnected) {
+      return;
+    }
+    if (succeeded) {
+      _statusPollFailures = 0;
+    } else {
+      _statusPollFailures = (_statusPollFailures + 1).clamp(0, 3);
+      if (session != null &&
+          googleCastStatusFailuresRequireFreshSession(_statusPollFailures)) {
+        debugPrint(
+          '[tv-transport] ${protocol.label} status remained unavailable; '
+          'discarding the stale session so the next cast starts fresh',
+        );
+        _receiverEnded = true;
+        session.dispose();
+        _markSessionUnavailable(session, receiverEnded: true);
+        return;
+      }
+    }
+    _scheduleGoogleCastStatusPoll();
+  }
+
+  void _stopPolling() {
+    _statusPollingEnabled = false;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _statusPollFailures = 0;
+  }
+
+  Future<bool> _pollStatus() async {
+    final session = _session;
+    if (_polling || session == null || !isConnected) return false;
     _polling = true;
     try {
       await session.status();
+      return true;
     } on Object catch (error) {
       debugPrint('[tv-transport] ${protocol.label} status failed: $error');
+      return false;
     } finally {
       _polling = false;
     }
@@ -418,7 +625,10 @@ class RustCastTransport extends TvTransport {
     if (!_state.isClosed) _state.add(value);
   }
 
-  Future<void> _closeSession({required bool sendDisconnected}) async {
+  Future<void> _closeSession({
+    required bool sendDisconnected,
+    required bool clearSelection,
+  }) async {
     _stopPolling();
     await _eventSub?.cancel();
     _eventSub = null;
@@ -433,12 +643,20 @@ class RustCastTransport extends TvTransport {
       }
       session.dispose();
     }
+    if (clearSelection) {
+      _selectedTv = null;
+      _receiverEnded = false;
+      _currentTitle = null;
+    }
     if (sendDisconnected) _setState(SenderConnectionState.disconnected);
   }
 
   @override
   Future<void> dispose() async {
-    await _closeSession(sendDisconnected: false);
+    await _closeSession(
+      sendDisconnected: false,
+      clearSelection: true,
+    );
     await _state.close();
     await _messages.close();
     await _credentials.close();
@@ -757,4 +975,50 @@ String? browserContentTypeForUrl(String url) {
   if (path.endsWith('.mp3')) return 'audio/mpeg';
   if (path.endsWith('.ogg') || path.endsWith('.ogv')) return 'video/ogg';
   return null;
+}
+
+@visibleForTesting
+String googleCastStreamTypeForUrl(String url) {
+  final uri = Uri.tryParse(url);
+  final hint = uri?.queryParameters['pb_hls_stream']?.toLowerCase();
+  if (hint == 'live') return 'LIVE';
+  if (hint == 'buffered') return 'BUFFERED';
+  // An HLS extension alone does not mean live. Stored VOD is the safer
+  // default; callers that have explicit live playlist evidence add the query
+  // hint above.
+  return 'BUFFERED';
+}
+
+@visibleForTesting
+String? googleCastHlsFormatForUrl(String url) {
+  final format =
+      Uri.tryParse(url)?.queryParameters['pb_hls_format']?.toLowerCase();
+  return switch (format) {
+    'ts' || 'fmp4' => format,
+    _ => null,
+  };
+}
+
+@visibleForTesting
+String? googleCastHlsAudioFormat(String? container) => switch (container) {
+      'ts' => 'ts_aac',
+      'fmp4' => 'fmp4',
+      _ => null,
+    };
+
+@visibleForTesting
+String? googleCastHlsVideoFormat(String? container) => switch (container) {
+      'ts' => 'mpeg2_ts',
+      'fmp4' => 'fmp4',
+      _ => null,
+    };
+
+@visibleForTesting
+Duration googleCastStatusPollDelay(
+  int consecutiveFailures, {
+  bool initial = false,
+}) {
+  if (initial) return const Duration(seconds: 3);
+  const delays = [5, 10, 20, 30];
+  return Duration(seconds: delays[consecutiveFailures.clamp(0, 3)]);
 }

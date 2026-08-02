@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
 import 'package:playbridge_desktop/tv_discovery.dart';
 import 'package:playbridge_desktop/tv_transport.dart';
 
@@ -73,5 +74,112 @@ void main() {
         isNull,
       );
     });
+  });
+
+  test('reads explicit HLS container hints from proxied Cast URLs', () {
+    expect(
+      googleCastHlsFormatForUrl(
+        'http://192.0.2.1:9000/s/id/playlist.m3u8?pb_hls_format=ts',
+      ),
+      'ts',
+    );
+    expect(
+      googleCastHlsFormatForUrl(
+        'http://192.0.2.1:9000/media/id/master.m3u8?pb_hls_format=fmp4',
+      ),
+      'fmp4',
+    );
+    expect(
+      googleCastHlsFormatForUrl('https://example.test/master.m3u8'),
+      isNull,
+    );
+    expect(googleCastHlsAudioFormat('ts'), 'ts_aac');
+    expect(googleCastHlsVideoFormat('ts'), 'mpeg2_ts');
+    expect(googleCastHlsAudioFormat('fmp4'), 'fmp4');
+    expect(googleCastHlsVideoFormat('fmp4'), 'fmp4');
+  });
+
+  test('treats ambiguous HLS as VOD unless an explicit live hint exists', () {
+    expect(
+      googleCastStreamTypeForUrl(
+        'http://192.0.2.1:9000/s/id/playlist.m3u8?pb_hls_stream=buffered',
+      ),
+      'BUFFERED',
+    );
+    expect(
+      googleCastStreamTypeForUrl(
+        'http://192.0.2.1:9000/s/id/playlist.m3u8?pb_hls_stream=live',
+      ),
+      'LIVE',
+    );
+    expect(
+      googleCastStreamTypeForUrl('https://example.test/master.m3u8'),
+      'BUFFERED',
+    );
+  });
+
+  test('recognizes receiver-ended errors as requiring a fresh session', () {
+    const ended = rust.CastSessionError(
+      operation: 'load',
+      message: 'receiver exited',
+      reason: 'receiver_ended',
+    );
+    const network = rust.CastSessionError(
+      operation: 'status',
+      message: 'network timeout',
+    );
+
+    expect(isGoogleCastRestartableSessionError(ended), isTrue);
+    expect(isGoogleCastRestartableSessionError(network), isFalse);
+
+    const unresponsive = rust.CastSessionError(
+      operation: 'load',
+      message: 'Google Cast receiver application stopped responding',
+      reason: 'session_unresponsive',
+    );
+    expect(isGoogleCastRestartableSessionError(unresponsive), isTrue);
+
+    const connectionLost = rust.CastSessionError(
+      operation: 'load',
+      message: 'receiver transport failed: socket closed',
+      reason: 'connection_lost',
+    );
+    expect(isGoogleCastRestartableSessionError(connectionLost), isTrue);
+  });
+
+  test('publishes only terminal session errors as global errors', () {
+    const statusTimeout = rust.CastSessionError(
+      requestId: 'status-1',
+      operation: 'status',
+      message: 'status timed out',
+    );
+    const maintenanceWarning = rust.CastSessionError(
+      operation: 'maintenance',
+      message: 'heartbeat delayed',
+    );
+    const connectionLost = rust.CastSessionError(
+      requestId: 'load-1',
+      operation: 'load',
+      message: 'socket closed',
+      reason: 'connection_lost',
+    );
+
+    expect(shouldPublishGlobalCastSessionError(statusTimeout), isFalse);
+    expect(shouldPublishGlobalCastSessionError(maintenanceWarning), isFalse);
+    expect(shouldPublishGlobalCastSessionError(connectionLost), isTrue);
+  });
+
+  test('delays initial Cast status and backs off after timeouts', () {
+    expect(
+      googleCastStatusPollDelay(0, initial: true),
+      const Duration(seconds: 3),
+    );
+    expect(googleCastStatusPollDelay(0), const Duration(seconds: 5));
+    expect(googleCastStatusPollDelay(1), const Duration(seconds: 10));
+    expect(googleCastStatusPollDelay(2), const Duration(seconds: 20));
+    expect(googleCastStatusPollDelay(3), const Duration(seconds: 30));
+    expect(googleCastStatusPollDelay(99), const Duration(seconds: 30));
+    expect(googleCastStatusFailuresRequireFreshSession(2), isFalse);
+    expect(googleCastStatusFailuresRequireFreshSession(3), isTrue);
   });
 }

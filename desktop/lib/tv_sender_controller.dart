@@ -14,6 +14,36 @@ import 'tv_discovery.dart';
 import 'tv_transport.dart';
 import 'extension_request_debug_log.dart';
 
+typedef TvCastRouteDecision = ({
+  bool useProxy,
+  bool forwardHeadersDirectly,
+});
+
+/// Decide how a sender request reaches the selected receiver.
+///
+/// Request headers deliberately do not override the user's Direct choice.
+/// Only PlayBridge's own protocol can carry them directly; Google Cast, DLNA,
+/// Roku, and browser receivers need the Desktop proxy to replay them.
+@visibleForTesting
+TvCastRouteDecision decideTvCastRoute({
+  required TvProtocol protocol,
+  required bool proxyEnabled,
+  required bool alreadyProxied,
+  required bool hasSyntheticPlaylist,
+  required bool hasCompanionAudio,
+  required bool hasHeaders,
+}) {
+  final useProxy = proxyEnabled ||
+      alreadyProxied ||
+      hasSyntheticPlaylist ||
+      hasCompanionAudio;
+  return (
+    useProxy: useProxy,
+    forwardHeadersDirectly:
+        !useProxy && hasHeaders && protocol == TvProtocol.playBridge,
+  );
+}
+
 /// Orchestrates the desktop's **sender** role: LAN discovery, the paired-TV
 /// store, and multi-protocol receiver transport clients (`wss://`, DLNA, Roku).
 /// Connect to a discovered TV (first-time pairing) or reconnect a known one by token;
@@ -82,7 +112,12 @@ class TvSenderController extends ChangeNotifier {
   bool get isScanning => _isScanning;
   SenderConnectionState get state => _state;
   TvRecord? get activeTv => _activeTv;
-  bool get isConnected => _state == SenderConnectionState.connected;
+
+  /// A live receiver session or a selected Cast destination that can be
+  /// relaunched on the next explicit media request.
+  bool get isConnected =>
+      _state == SenderConnectionState.connected ||
+      _state == SenderConnectionState.selected;
   String? get currentSas => _currentSas;
   BrowserHostInfo? get browserHost => _browserHost;
   bool get browserReceiverRunning => _browserHost != null;
@@ -368,25 +403,25 @@ class TvSenderController extends ChangeNotifier {
     final hasSynthetic =
         playlistBody != null && playlistBody.trim().startsWith('#EXTM3U');
     final hasCompanionAudio = audioUrl != null && audioUrl.trim().isNotEmpty;
-    final requiresHeaderProxy = headers != null &&
-        headers.isNotEmpty &&
-        _transport.protocol != TvProtocol.playBridge;
-    // Synthetic/demuxed: always proxy for every external target (incl. browser
-    // and PlayBridge protocol) so A/V + headers land on a LAN-reachable master.
-    final forceProxyForSynthetic = hasSynthetic || hasCompanionAudio;
+    // Synthetic/demuxed streams remain proxy-only for every external target so
+    // separate A/V resources land on one LAN-reachable master URL.
     final alreadyProxied = StreamProxyServer.instance.ownsUrl(url);
+    final route = decideTvCastRoute(
+      protocol: _transport.protocol,
+      proxyEnabled: castRouteThroughProxy,
+      alreadyProxied: alreadyProxied,
+      hasSyntheticPlaylist: hasSynthetic,
+      hasCompanionAudio: hasCompanionAudio,
+      hasHeaders: headers?.isNotEmpty == true,
+    );
+    var proxied = false;
 
-    if ((castRouteThroughProxy ||
-            requiresHeaderProxy ||
-            alreadyProxied ||
-            forceProxyForSynthetic) &&
-        isConnected &&
-        _activeTv != null) {
+    if (route.useProxy && isConnected && _activeTv != null) {
       final active = _activeTv!;
       final lanIp = await _localLanIp(active.host);
       if (lanIp != null) {
         final proxy = StreamProxyServer.instance;
-        if (alreadyProxied && !forceProxyForSynthetic) {
+        if (alreadyProxied && !hasSynthetic && !hasCompanionAudio) {
           // demo.html and the extension can hand us a URL already backed by
           // this proxy. Re-registering it creates a nested DASH proxy that
           // browser players cannot initialize. Only publish the same session
@@ -417,12 +452,26 @@ class TvSenderController extends ChangeNotifier {
         }
         // The proxy session owns the upstream request headers.
         targetHeaders = null;
+        proxied = true;
       }
+    }
+
+    if (!proxied &&
+        targetHeaders?.isNotEmpty == true &&
+        !route.forwardHeadersDirectly) {
+      debugPrint(
+        '[tv-cast] Direct selected for ${_transport.protocol.label}; '
+        'browser request headers cannot be forwarded by this receiver',
+      );
+      targetHeaders = null;
     }
 
     final payload = PlayPayload()..url = targetUrl;
     if (targetHeaders != null && targetHeaders.isNotEmpty) {
       payload.headers.addAll(targetHeaders);
+    }
+    if (targetContentType != null && targetContentType.isNotEmpty) {
+      payload.contentType = targetContentType;
     }
     debugLogNetworkRequest(
       source: 'tv-sender output',
@@ -652,6 +701,10 @@ class TvSenderController extends ChangeNotifier {
             _store.upsert(_activeTv!);
           }
         }
+        break;
+      case SenderConnectionState.selected:
+        // Google Cast receiver exited on the TV. Keep the destination so the
+        // next explicit cast can launch a clean receiver session.
         break;
       case SenderConnectionState.disconnected:
       case SenderConnectionState.authFailed:

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -97,13 +98,27 @@ class TvCastMediaPreparer {
     }
 
     if (_isHttpUrl(plan.openUrl)) {
+      final contentType = _guessContentType(plan.openUrl, hasSyntheticBody);
+      final evidence = _isHlsContentType(contentType)
+          ? await _probeHlsEvidence(
+              plan.openUrl,
+              hdrs,
+              suppliedBody: hasSyntheticBody ? body : null,
+            )
+          : null;
       final reg = await p.registerRemote(plan.openUrl, hdrs, host: lanHost);
       debugPrint(
-        '[tv-cast] proxied single media → ${reg.url} (${plan.strategy})',
+        '[tv-cast] proxied single media → ${reg.url} '
+        '(source=${plan.strategy})',
       );
       return PreparedTvMedia(
-        url: reg.url,
-        contentType: _guessContentType(plan.openUrl, hasSyntheticBody),
+        url: withHlsHints(
+          reg.url,
+          contentType,
+          format: evidence?.format,
+          streamType: evidence?.streamType ?? hlsStreamTypeForBody(body),
+        ),
+        contentType: contentType,
         strategy: 'proxy_single',
       );
     }
@@ -144,8 +159,18 @@ class TvCastMediaPreparer {
       '(${children.length} children, master=${masterReg.id})',
     );
 
+    final evidence = await _probeHlsEvidence(
+      children.first,
+      headers,
+      suppliedBody: body,
+    );
     return PreparedTvMedia(
-      url: masterReg.url,
+      url: withHlsHints(
+        masterReg.url,
+        hlsContentType,
+        format: evidence?.format,
+        streamType: evidence?.streamType ?? hlsStreamTypeForBody(body),
+      ),
       contentType: hlsContentType,
       strategy: 'proxy_synthetic_multivariant',
     );
@@ -158,6 +183,15 @@ class TvCastMediaPreparer {
     required String audioUrl,
     required Map<String, String> headers,
   }) async {
+    final evidence = await Future.wait([
+      _probeHlsEvidence(videoUrl, headers),
+      _probeHlsEvidence(audioUrl, headers),
+    ]);
+    final videoEvidence = evidence[0];
+    final audioEvidence = evidence[1];
+    final commonFormat = videoEvidence?.format == audioEvidence?.format
+        ? videoEvidence?.format
+        : null;
     final videoReg =
         await proxy.registerRemote(videoUrl, headers, host: lanHost);
     final audioReg =
@@ -180,7 +214,12 @@ class TvCastMediaPreparer {
     );
 
     return PreparedTvMedia(
-      url: masterReg.url,
+      url: withHlsHints(
+        masterReg.url,
+        hlsContentType,
+        format: commonFormat,
+        streamType: videoEvidence?.streamType ?? 'buffered',
+      ),
       contentType: hlsContentType,
       strategy: 'proxy_demuxed_master',
     );
@@ -258,4 +297,271 @@ $videoProxyUrl
     if (lower.contains('.mpd')) return 'application/dash+xml';
     return null;
   }
+
+  static bool _isHlsContentType(String? contentType) {
+    final lower = contentType?.toLowerCase() ?? '';
+    return lower.contains('mpegurl') || lower.contains('m3u8');
+  }
+
+  /// Carries the HLS container hint through [PlayPayload] without exposing
+  /// origin headers to the receiver. The Rust proxy ignores this query value;
+  /// GoogleCastTransport consumes it when building Cast LOAD metadata.
+  @visibleForTesting
+  static String withHlsHints(
+    String url,
+    String? contentType, {
+    required String? format,
+    required String streamType,
+  }) {
+    if (!_isHlsContentType(contentType)) return url;
+    final uri = Uri.tryParse(url);
+    if (uri == null) return url;
+    return uri.replace(
+      queryParameters: {
+        ...uri.queryParameters,
+        if (format != null) 'pb_hls_format': format,
+        'pb_hls_stream': streamType,
+      },
+    ).toString();
+  }
+
+  /// Infers the segment container only from media-playlist URI evidence. A
+  /// missing EXT-X-MAP does not prove MPEG-TS: packed AAC/MP3 and WebVTT media
+  /// playlists are also map-less. Image extensions are treated as TS because
+  /// some supported anime CDNs intentionally disguise transport-stream bytes.
+  @visibleForTesting
+  static String? hlsSegmentFormatForBody(String? body) {
+    final source = body?.replaceAll('\r\n', '\n') ?? '';
+    final upper = source.toUpperCase();
+    if (!upper.trimLeft().startsWith('#EXTM3U')) return null;
+    if (upper.contains('#EXT-X-MAP:')) return 'fmp4';
+    final isMediaPlaylist = upper.contains('#EXTINF:') ||
+        upper.contains('#EXT-X-TARGETDURATION:') ||
+        upper.contains('#EXT-X-MEDIA-SEQUENCE:');
+    if (!isMediaPlaylist) return null;
+
+    final references = <String>[];
+    final uriAttribute = RegExp(r'(?:^|,)URI="([^"]+)"', caseSensitive: false);
+    for (final rawLine in source.split('\n')) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+      if (!line.startsWith('#')) {
+        references.add(line);
+        continue;
+      }
+      final tag = line.toUpperCase();
+      if (tag.startsWith('#EXT-X-PART:') ||
+          (tag.startsWith('#EXT-X-PRELOAD-HINT:') &&
+              tag.contains('TYPE=PART'))) {
+        final reference = uriAttribute.firstMatch(line)?.group(1);
+        if (reference != null) references.add(reference);
+      }
+    }
+    if (references.isEmpty) return null;
+
+    final formats = <String>{};
+    for (final reference in references) {
+      final format = _hlsSegmentFormatForReference(reference);
+      if (format == null) return null;
+      formats.add(format);
+    }
+    return formats.length == 1 ? formats.single : null;
+  }
+
+  static String? _hlsSegmentFormatForReference(String reference) {
+    final path = Uri.tryParse(reference)?.path.toLowerCase() ??
+        reference.split('?').first.toLowerCase();
+    final dot = path.lastIndexOf('.');
+    final extension = dot < 0 ? '' : path.substring(dot + 1);
+    return switch (extension) {
+      'm4s' || 'mp4' || 'cmfv' || 'cmfa' => 'fmp4',
+      'ts' || 'm2ts' || 'mts' => 'ts',
+      // Known CDN deception: the response body is MPEG-TS despite the suffix.
+      'jpg' || 'jpeg' => 'ts',
+      _ => null,
+    };
+  }
+
+  /// Returns every distinct master-playlist variant in descending bandwidth
+  /// order. Format metadata is safe only after every returned rendition has
+  /// been inspected.
+  @visibleForTesting
+  static List<String> hlsVariantUrlsForBody(String? body, String baseUrl) {
+    final source = body?.replaceAll('\r\n', '\n') ?? '';
+    final base = Uri.tryParse(baseUrl);
+    if (base == null) return const [];
+    String? pendingUri;
+    final variants = <MapEntry<int, String>>[];
+    var malformedVariant = false;
+    void addVariant(String value, int bandwidth) {
+      try {
+        variants.add(MapEntry(bandwidth, base.resolve(value).toString()));
+      } on FormatException {
+        malformedVariant = true;
+      }
+    }
+
+    final lines = source.split('\n');
+    for (var index = 0; index < lines.length; index++) {
+      final line = lines[index].trim();
+      if (line.startsWith('#EXT-X-MEDIA:') ||
+          line.startsWith('#EXT-X-I-FRAME-STREAM-INF:')) {
+        final attributeUri = RegExp(
+          r'(?:^|,)URI="([^"]+)"',
+          caseSensitive: false,
+        ).firstMatch(line)?.group(1);
+        if (attributeUri != null) addVariant(attributeUri, 0);
+        continue;
+      }
+      if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
+      final bandwidth = int.tryParse(
+            RegExp(r'(?:^|,)BANDWIDTH=(\d+)', caseSensitive: false)
+                    .firstMatch(line.substring('#EXT-X-STREAM-INF:'.length))
+                    ?.group(1) ??
+                '',
+          ) ??
+          0;
+      pendingUri = null;
+      for (var child = index + 1; child < lines.length; child++) {
+        final candidate = lines[child].trim();
+        if (candidate.isEmpty) continue;
+        if (candidate.startsWith('#')) break;
+        pendingUri = candidate;
+        break;
+      }
+      if (pendingUri != null) {
+        addVariant(pendingUri, bandwidth);
+      }
+    }
+    if (malformedVariant) return const [];
+    variants.sort((left, right) => right.key.compareTo(left.key));
+    final unique = <String>{};
+    for (final variant in variants) {
+      unique.add(variant.value);
+    }
+    return unique.toList(growable: false);
+  }
+
+  /// Returns a container only when all supplied media playlists are readable
+  /// and agree. Mixed TS/fMP4 masters must not receive master-wide metadata.
+  @visibleForTesting
+  static String? commonHlsSegmentFormatForBodies(Iterable<String?> bodies) {
+    final formats = <String>{};
+    var count = 0;
+    for (final body in bodies) {
+      count++;
+      final format = hlsSegmentFormatForBody(body);
+      if (format == null) return null;
+      formats.add(format);
+    }
+    return count > 0 && formats.length == 1 ? formats.single : null;
+  }
+
+  static Future<_HlsEvidence?> _probeHlsEvidence(
+    String url,
+    Map<String, String> headers, {
+    String? suppliedBody,
+  }) async {
+    final currentUrl = url;
+    var body = suppliedBody;
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 4)
+      ..userAgent = null;
+    try {
+      body ??= await _fetchPlaylist(client, currentUrl, headers);
+      if (body == null || !body.trimLeft().startsWith('#EXTM3U')) return null;
+      final variants = hlsVariantUrlsForBody(body, currentUrl);
+      if (variants.isNotEmpty) {
+        // Bound remote work for untrusted manifests. More variants means the
+        // format cannot be proven safely, so omit the hint.
+        if (variants.length > 16) {
+          return const _HlsEvidence(
+            format: null,
+            streamType: 'buffered',
+          );
+        }
+        final variantBodies = await Future.wait(
+          variants.map((variant) => _fetchPlaylist(client, variant, headers)),
+        );
+        final commonFormat = commonHlsSegmentFormatForBodies(variantBodies);
+        final streamTypes = <String>{};
+        var allReadable = true;
+        for (final variantBody in variantBodies) {
+          if (variantBody == null) {
+            allReadable = false;
+            continue;
+          }
+          streamTypes.add(hlsStreamTypeForBody(variantBody));
+        }
+        return _HlsEvidence(
+          format: commonFormat,
+          streamType: allReadable && streamTypes.length == 1
+              ? streamTypes.single
+              : 'buffered',
+        );
+      }
+      final format = hlsSegmentFormatForBody(body);
+      if (format == null) return null;
+      return _HlsEvidence(
+        format: format,
+        streamType: hlsStreamTypeForBody(body),
+      );
+    } catch (error) {
+      debugPrint(
+          '[tv-cast] HLS metadata probe failed; omitting format hint: $error');
+      return null;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  static Future<String?> _fetchPlaylist(
+    HttpClient client,
+    String url,
+    Map<String, String> headers,
+  ) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return null;
+    }
+    final request =
+        await client.getUrl(uri).timeout(const Duration(seconds: 4));
+    headers.forEach(request.headers.set);
+    final response = await request.close().timeout(const Duration(seconds: 4));
+    if (response.statusCode < 200 || response.statusCode >= 300) return null;
+    const maximumCharacters = 1024 * 1024;
+    final contents = StringBuffer();
+    await for (final chunk in response
+        .transform(utf8.decoder)
+        .timeout(const Duration(seconds: 4))) {
+      contents.write(chunk);
+      if (contents.length > maximumCharacters) return null;
+    }
+    return contents.toString();
+  }
+
+  /// Treat ambiguous web-video HLS as stored media. Live is used only when the
+  /// supplied media playlist has explicit live/event markers and no terminal
+  /// ENDLIST; a master playlist alone does not prove that its media is live.
+  @visibleForTesting
+  static String hlsStreamTypeForBody(String? body) {
+    final upper = body?.toUpperCase() ?? '';
+    if (upper.contains('#EXT-X-ENDLIST') ||
+        upper.contains('#EXT-X-PLAYLIST-TYPE:VOD')) {
+      return 'buffered';
+    }
+    if (upper.contains('#EXT-X-PLAYLIST-TYPE:EVENT') ||
+        upper.contains('#EXT-X-SERVER-CONTROL:') ||
+        upper.contains('#EXT-X-PART:')) {
+      return 'live';
+    }
+    return 'buffered';
+  }
+}
+
+final class _HlsEvidence {
+  const _HlsEvidence({required this.format, required this.streamType});
+
+  final String? format;
+  final String streamType;
 }
