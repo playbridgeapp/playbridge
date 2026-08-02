@@ -248,7 +248,7 @@ fun ConnectionScreen(
 
     fun selectEndpoint(device: TvDevice) {
         // Heal stale saved IPs / control URLs against the current discovery set before
-        // selecting (same path as DeviceConnectionSheet).
+        // selecting (same path as DeviceConnectionDialog).
         val target = ConnectionMerge.withDiscoveredEndpoint(device, discoveredDevices)
         val ready = when (target.resolvedProtocol) {
             CastProtocol.DLNA -> viewModel.selectDlnaTarget(target)
@@ -367,9 +367,12 @@ fun ConnectionScreen(
                     onDisconnectExternal = { viewModel.disconnectExternalTarget() },
                     isConnecting = isConnecting,
                     externalMediaTitle = externalMediaTitle,
-                    externalCasting = castSessionState.phase == com.playbridge.sender.cast.SessionPhase.PLAYING ||
-                        castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTED ||
+                    externalCasting =
+                        castSessionState.phase == com.playbridge.sender.cast.SessionPhase.PLAYING,
+                    externalConnecting =
                         castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTING,
+                    externalFailed =
+                        castSessionState.phase == com.playbridge.sender.cast.SessionPhase.FAILED,
                     streamRouteLabel = lastEffectiveStreamRoute?.label,
                 )
             }
@@ -763,7 +766,10 @@ fun NowDestinationCard(
     isConnecting: Boolean = false,
     externalMediaTitle: String? = null,
     externalCasting: Boolean = false,
+    externalConnecting: Boolean = false,
+    externalFailed: Boolean = false,
     streamRouteLabel: String? = null,
+    compact: Boolean = false,
 ) {
     val external = activeExternalDevice
     when {
@@ -787,9 +793,15 @@ fun NowDestinationCard(
                 subtitle = subtitle,
                 icon = if (isBrowser) Icons.Default.Cast else Icons.Default.Cast,
                 badge = external.resolvedProtocol.displayName,
-                statusPill = if (externalCasting) "Casting" else "Ready",
+                statusPill = when {
+                    externalFailed -> "Couldn’t connect"
+                    externalConnecting -> "Connecting…"
+                    externalCasting -> "Casting"
+                    else -> "Ready"
+                },
                 statusFilled = externalCasting,
                 onDisconnect = onDisconnectExternal,
+                compact = compact,
             )
         }
         connectionState is WebSocketClient.ConnectionState.Connected -> {
@@ -846,6 +858,7 @@ fun NowDestinationCard(
                 },
                 onDisconnect = onDisconnectNative,
                 secondaryAction = if (!castingHere) "Cast here" to onCastHere else null,
+                compact = compact,
             )
         }
         isConnecting -> {
@@ -857,6 +870,7 @@ fun NowDestinationCard(
                 statusPill = "Connecting",
                 statusFilled = false,
                 onDisconnect = onDisconnectNative,
+                compact = compact,
             )
         }
         else -> {
@@ -869,14 +883,15 @@ fun NowDestinationCard(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(if (compact) 12.dp else 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
                 ) {
                     Icon(
                         Icons.Default.Smartphone,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(if (compact) 24.dp else 28.dp),
                     )
                     Column {
                         Text(
@@ -908,6 +923,7 @@ fun ActiveDestinationCard(
     footer: (@Composable () -> Unit)? = null,
     secondaryAction: Pair<String, () -> Unit>? = null,
     onDisconnect: () -> Unit,
+    compact: Boolean = false,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -916,23 +932,40 @@ fun ActiveDestinationCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .padding(if (compact) 12.dp else 16.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 12.dp),
             ) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    modifier = Modifier.size(32.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
+                if (compact) {
+                    Surface(
+                        modifier = Modifier.size(38.dp),
+                        shape = RoundedCornerShape(10.dp),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.08f),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                icon,
+                                contentDescription = null,
+                                modifier = Modifier.size(22.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            )
+                        }
+                    }
+                } else {
+                    Icon(
+                        icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 4.dp),
                 ) {
                     // Name alone on the first line so protocol/status chips never truncate it.
                     Text(
@@ -940,14 +973,12 @@ fun ActiveDestinationCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     if (badge != null || statusPill != null) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(if (compact) 6.dp else 8.dp),
                         ) {
                             if (badge != null) ProtocolBadge(badge)
                             if (statusPill != null) {
@@ -960,6 +991,8 @@ fun ActiveDestinationCard(
                             text = subtitle,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
+                            maxLines = if (compact) 2 else Int.MAX_VALUE,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                     trailing?.invoke()
@@ -971,15 +1004,31 @@ fun ActiveDestinationCard(
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
             ) {
                 if (secondaryAction != null) {
-                    TextButton(onClick = secondaryAction.second) {
+                    TextButton(
+                        onClick = secondaryAction.second,
+                        contentPadding = if (compact) {
+                            PaddingValues(horizontal = 10.dp)
+                        } else {
+                            PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        },
+                    ) {
                         Text(secondaryAction.first)
                     }
                 }
-                Button(
-                    onClick = onDisconnect,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                ) {
-                    Text("Disconnect")
+                if (compact) {
+                    TextButton(
+                        onClick = onDisconnect,
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                    ) {
+                        Text("Disconnect", color = MaterialTheme.colorScheme.error)
+                    }
+                } else {
+                    Button(
+                        onClick = onDisconnect,
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    ) {
+                        Text("Disconnect")
+                    }
                 }
             }
         }
@@ -987,7 +1036,11 @@ fun ActiveDestinationCard(
 }
 
 @Composable
-fun ThisDeviceDestinationRow(selected: Boolean, onClick: () -> Unit) {
+fun ThisDeviceDestinationRow(
+    selected: Boolean,
+    onClick: () -> Unit,
+    compact: Boolean = false,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -997,14 +1050,14 @@ fun ThisDeviceDestinationRow(selected: Boolean, onClick: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
+                .padding(horizontal = if (compact) 12.dp else 16.dp, vertical = if (compact) 10.dp else 16.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 16.dp),
         ) {
             Icon(
                 Icons.Default.Smartphone,
                 contentDescription = null,
-                modifier = Modifier.size(28.dp),
+                modifier = Modifier.size(if (compact) 24.dp else 28.dp),
                 tint = MaterialTheme.colorScheme.primary,
             )
             Text(
@@ -1021,7 +1074,7 @@ fun ThisDeviceDestinationRow(selected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-fun FindMoreDevicesRow(onClick: () -> Unit) {
+fun FindMoreDevicesRow(onClick: () -> Unit, compact: Boolean = false) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -1031,7 +1084,7 @@ fun FindMoreDevicesRow(onClick: () -> Unit) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp),
+                .padding(vertical = if (compact) 8.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -1062,6 +1115,9 @@ fun ProtocolBadge(text: String) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
         )
     }
@@ -1144,7 +1200,18 @@ fun TvDeviceRow(
     onClick: () -> Unit,
     onRemove: (() -> Unit)? = null,
     showProtocolBadge: Boolean = true,
+    compact: Boolean = false,
 ) {
+    if (compact) {
+        CompactTvDeviceRow(
+            device = device,
+            onClick = onClick,
+            onRemove = onRemove,
+            showProtocolBadge = showProtocolBadge,
+        )
+        return
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1186,8 +1253,6 @@ fun TvDeviceRow(
                         text = device.connectDevice.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Text(
@@ -1243,6 +1308,127 @@ fun TvDeviceRow(
                         imageVector = Icons.Default.Delete,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactTvDeviceRow(
+    device: UnifiedDevice,
+    onClick: () -> Unit,
+    onRemove: (() -> Unit)?,
+    showProtocolBadge: Boolean,
+) {
+    val protocol = device.connectDevice.resolvedProtocol
+    val endpoint = if (device.connectDevice.port > 0) {
+        "${device.connectDevice.ip}:${device.connectDevice.port}"
+    } else {
+        device.connectDevice.ip
+    }
+    val statusText = when {
+        device.isOnline && !device.isKnown -> "Online · New"
+        device.isOnline -> "Online"
+        device.lastConnected != null -> formatLastSeen(device.lastConnected)
+        else -> "Saved"
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+        ),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = 10.dp,
+                    top = 9.dp,
+                    end = if (onRemove != null) 2.dp else 10.dp,
+                    bottom = 9.dp,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Surface(
+                modifier = Modifier.size(38.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.10f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = when (protocol) {
+                            CastProtocol.DLNA, CastProtocol.GOOGLE_CAST, CastProtocol.WEB_BROWSER ->
+                                Icons.Default.Cast
+                            else -> Icons.Default.Tv
+                        },
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                // Device identity is never truncated; metadata yields and wraps below it.
+                Text(
+                    text = device.connectDevice.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (device.isOnline) OnlineGreen
+                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            ),
+                    )
+                    Text(
+                        text = "$statusText · $endpoint",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (device.isOnline) OnlineGreen
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (showProtocolBadge) {
+                        ProtocolBadge(protocol.displayName)
+                    }
+                }
+            }
+
+            if (onRemove != null) {
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .semantics {
+                            contentDescription = "Remove"
+                            role = androidx.compose.ui.semantics.Role.Button
+                        },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
             }

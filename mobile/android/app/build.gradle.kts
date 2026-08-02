@@ -9,6 +9,16 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val googleCastApplicationId = providers.gradleProperty("PLAYBRIDGE_GOOGLE_CAST_APP_ID")
+    .orElse(providers.environmentVariable("PLAYBRIDGE_GOOGLE_CAST_APP_ID"))
+    .orElse("CC1AD845")
+    .map { applicationId ->
+        require(applicationId.matches(Regex("[A-Za-z0-9_-]+"))) {
+            "PLAYBRIDGE_GOOGLE_CAST_APP_ID contains unsupported characters"
+        }
+        applicationId
+    }
+
 android {
     namespace = "com.playbridge.sender"
     buildFeatures {
@@ -34,6 +44,11 @@ android {
         targetSdk = 36
         versionCode = 221
         versionName = "0.11.2"
+        buildConfigField(
+            "String",
+            "GOOGLE_CAST_APPLICATION_ID",
+            "\"${googleCastApplicationId.get()}\"",
+        )
 
         ndk {
             abiFilters.add("armeabi-v7a")

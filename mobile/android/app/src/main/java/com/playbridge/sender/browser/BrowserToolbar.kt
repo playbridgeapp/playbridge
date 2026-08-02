@@ -41,6 +41,9 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.res.painterResource
 import com.playbridge.sender.R
+import com.playbridge.sender.cast.DetectedMediaKind
+import com.playbridge.sender.cast.mediaCategoryAccent
+import com.playbridge.sender.cast.mediaCategoryContentColor
 import androidx.compose.foundation.Image
 
 /**
@@ -59,7 +62,8 @@ fun BrowserToolbar(
     onTvClick: () -> Unit,
     onRemoteClick: () -> Unit,
     isPlayEnabled: Boolean,
-    videoCount: Int,
+    mediaCount: Int,
+    mediaKind: DetectedMediaKind?,
     onPlayClick: () -> Unit,
     onPlayLongClick: () -> Unit,
     onLogoClick: () -> Unit = {},
@@ -72,6 +76,12 @@ fun BrowserToolbar(
     val keyboardController = LocalSoftwareKeyboardController.current
     val scope = rememberCoroutineScope()
     var isFocused by remember { mutableStateOf(false) }
+    val mediaBadgeColor = if (mediaKind != null) {
+        mediaCategoryAccent(mediaKind)
+    } else {
+        MaterialTheme.colorScheme.primary
+    }
+    val mediaBadgeContentColor = mediaCategoryContentColor(mediaBadgeColor)
 
     val mainColor = MaterialTheme.colorScheme.onSurface
     val dullColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
@@ -359,20 +369,24 @@ fun BrowserToolbar(
                     ) {
                         BadgedBox(
                             badge = {
-                                if (isPlayEnabled && videoCount > 0) {
+                                if (isPlayEnabled && mediaCount > 0) {
                                     Badge(
-                                        containerColor = MaterialTheme.colorScheme.error,
-                                        contentColor = MaterialTheme.colorScheme.onError
+                                        containerColor = mediaBadgeColor,
+                                        contentColor = mediaBadgeContentColor,
                                     ) {
-                                        Text(videoCount.toString())
+                                        Text(mediaCount.toString())
                                     }
                                 }
                             }
                         ) {
                             Icon(
                                 imageVector = Icons.Default.PlayArrow,
-                                contentDescription = "Play/Cast video",
-                                tint = if (isPlayEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+                                contentDescription = "Cast detected media",
+                                tint = if (isPlayEnabled) {
+                                    if (mediaKind != null) mediaBadgeColor else MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                },
                                 modifier = Modifier.size(22.dp)
                             )
                         }

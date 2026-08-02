@@ -48,7 +48,7 @@ import androidx.compose.ui.unit.dp
  * Persistent cast mini-bar shown across the main screens. It has two visual modes:
  *
  *  - **Playing**: a cast session is active with media loaded — shows the title + "on <device>";
- *    tapping opens the Remote. Shows a TV icon button on the right to open the connection sheet,
+ *    tapping opens the Remote. Shows a TV icon button on the right to open the connection dialog,
  *    an animated equalizer on the left (frozen into a pause glyph while [isPaused]), and a thin
  *    [progress] line along the bottom edge.
  *  - **Idle**: no media is playing — shows the current cast destination (a connected TV/renderer,

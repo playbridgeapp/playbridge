@@ -334,7 +334,7 @@ fun AppNavHost(
         onScreenChange(Screen.Connection)
     }
     if (showDevicePicker) {
-        DeviceConnectionSheet(
+        DeviceConnectionDialog(
             onDismiss = { showDevicePicker = false },
             onOpenAllDevices = {
                 showDevicePicker = false

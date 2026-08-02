@@ -169,14 +169,9 @@ fun SessionObserverSetup(
 
             override fun onLoadingStateChange(loading: Boolean) {
                 isLoading.value = loading
-                if (loading) {
-                    // Reset detected videos on every top-level page load start —
-                    // including reloads of the same URL. Does not fire for
-                    // same-document (hash/pushState) navigations, so SPA route
-                    // changes keep their detected videos. (Was ProgressDelegate
-                    // onPageStart.)
-                    selectedTabState.value?.id?.let { VideoDetector.clearTab(it) }
-                }
+                // The detector's committed-navigation generation owns media
+                // clearing. Clearing here can race a fast media response and
+                // erase it after the extension has already reported it.
             }
 
             override fun onTitleChange(title: String) {

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.Icons
@@ -32,8 +33,12 @@ import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Photo
+import androidx.compose.material.icons.filled.Subtitles
 import androidx.compose.foundation.Image
 import coil.compose.AsyncImage
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -77,6 +82,7 @@ import com.playbridge.sender.ui.theme.PlayBridgeTheme
 @Composable
 fun CastSheet(
     videos: List<DetectedVideo>,
+    mediaRevision: Int = 0,
     onDismiss: () -> Unit,
     onVideoClick: (DetectedVideo, List<String>?) -> Unit,
     onQueueVideo: (DetectedVideo, List<String>?) -> Unit = { _, _ -> },
@@ -110,7 +116,22 @@ fun CastSheet(
         selectedTvDevice?.resolvedProtocol == CastProtocol.WEB_BROWSER
     val castSessionManager: CastSessionManager = org.koin.compose.koinInject()
     // Promote synthetic handoff into a dedicated first row; rank the rest below.
-    val playableVideos = remember(videos) { buildCastSheetVideos(videos) }
+    val rankedVideos = remember(videos, mediaRevision) { buildCastSheetVideos(videos) }
+    val playableVideos = remember(rankedVideos, mediaRevision) {
+        rankedVideos.filter {
+            it.effectiveValidationState != MediaValidationState.FAILED
+        }
+    }
+    val unavailableVideos = remember(rankedVideos, mediaRevision) {
+        rankedVideos.filter {
+            it.effectiveValidationState == MediaValidationState.FAILED
+        }
+    }
+    val detectedAudio = remember(videos, mediaRevision) { buildCastSheetAudio(videos) }
+    val detectedImages = remember(videos, mediaRevision) { buildCastSheetImages(videos) }
+    val hasDetectedMedia = playableVideos.isNotEmpty() ||
+        detectedAudio.isNotEmpty() ||
+        detectedImages.isNotEmpty()
 
     // The action chosen in the header dropdown. It drives both the body layout and what the
     // Send button does when tapped — nothing is sent on selection:
@@ -121,9 +142,9 @@ fun CastSheet(
     // (e.g. desktop, Apple TV) get no Browse action at all.
     val canBrowse = onBrowseClick != null && selectedTvDevice?.browsers?.isNotEmpty() == true
 
-    var castAction by remember(playableVideos, contentPayload) {
+    var castAction by remember(playableVideos, detectedAudio, detectedImages, contentPayload) {
         mutableStateOf(
-            if (playableVideos.isEmpty() && contentPayload == null && canBrowse) "browse" else initialMode
+            if (!hasDetectedMedia && contentPayload == null && canBrowse) "browse" else initialMode
         )
     }
 
@@ -135,19 +156,31 @@ fun CastSheet(
 
     // If we have content metadata but no browser-detected videos, default to playing it
     // (the video URL comes from the contentPayload/library resource).
-    LaunchedEffect(contentPayload) {
-        if (contentPayload != null && playableVideos.isEmpty()) {
+    LaunchedEffect(contentPayload, hasDetectedMedia) {
+        if (contentPayload != null && !hasDetectedMedia) {
             castAction = "play"
         }
     }
-    val allSubtitles = remember(videos) { videos.filter { it.isSubtitle } }
+    val allSubtitles = remember(videos, mediaRevision) { videos.filter { it.isSubtitle } }
 
     val isPlaylistMode = remember(playableVideos) {
         playableVideos.firstOrNull()?.playlistPayload != null
     }
 
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = if (isPlaylistMode) listOf("Playlist Bundle") else listOf("Videos", "Subtitles")
+    val tabs: List<Pair<DetectedMediaKind?, String>> = if (isPlaylistMode) {
+        listOf(null to "Playlist Bundle")
+    } else {
+        listOf(
+            DetectedMediaKind.VIDEO to "Videos",
+            DetectedMediaKind.AUDIO to "Audio",
+            DetectedMediaKind.IMAGE to "Images",
+            DetectedMediaKind.SUBTITLE to "Subtitles",
+        )
+    }
+    LaunchedEffect(tabs.size) {
+        if (selectedTab !in tabs.indices) selectedTab = 0
+    }
 
     // State for subtitle search dialog. The gate + shared results live here; the dialog's
     // own query/loading/results are bundled in SubtitleSearchUiState (held here so they
@@ -158,13 +191,49 @@ fun CastSheet(
 
     val tmdbRepository = remember { TmdbRepository(context) }
     val scope = rememberCoroutineScope()
+    val videoListState = rememberLazyListState()
+    var showUnavailableVideos by remember { mutableStateOf(false) }
+    var previousBestVideoUrl by remember { mutableStateOf<String?>(null) }
+    var showNewBestVideoPrompt by remember { mutableStateOf(false) }
 
     // Global selection state — prefer the synthetic row when present.
-    var selectedVideo by remember(playableVideos) {
-        mutableStateOf(playableVideos.firstOrNull())
+    var selectedVideo by remember(playableVideos, detectedAudio, detectedImages) {
+        mutableStateOf(
+            playableVideos.firstOrNull()
+                ?: detectedAudio.firstOrNull()
+                ?: detectedImages.firstOrNull()
+        )
     }
     var selectedQualityUrl by remember { mutableStateOf<String?>(null) }
     var selectedSubtitles by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Validation and thumbnail work can change the ordering after the sheet opens. Keep the
+    // selection bound to the current object and offer a non-disruptive jump when a newly
+    // verified candidate becomes the best result while the user is farther down the list.
+    LaunchedEffect(mediaRevision) {
+        val currentUrl = selectedVideo?.url
+        selectedVideo = playableVideos.firstOrNull { it.url == currentUrl }
+            ?: detectedAudio.firstOrNull { it.url == currentUrl }
+            ?: detectedImages.firstOrNull { it.url == currentUrl }
+            ?: playableVideos.firstOrNull()
+            ?: detectedAudio.firstOrNull()
+            ?: detectedImages.firstOrNull()
+    }
+    LaunchedEffect(playableVideos.firstOrNull()?.url) {
+        val bestUrl = playableVideos.firstOrNull()?.url
+        val previousUrl = previousBestVideoUrl
+        if (previousUrl != null && bestUrl != null && bestUrl != previousUrl) {
+            if (videoListState.firstVisibleItemIndex == 0) {
+                // Stable LazyColumn keys intentionally preserve the visible row across reorders.
+                // At the top, override that preservation so the promoted result is actually shown.
+                videoListState.scrollToItem(0)
+                showNewBestVideoPrompt = false
+            } else {
+                showNewBestVideoPrompt = true
+            }
+        }
+        previousBestVideoUrl = bestUrl
+    }
 
     val selectedIsLocal = remember(
         selectedVideo?.url,
@@ -661,22 +730,72 @@ fun CastSheet(
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
 
-            TabRow(selectedTabIndex = selectedTab) {
-                tabs.forEachIndexed { index, title ->
+            PrimaryScrollableTabRow(
+                selectedTabIndex = selectedTab,
+                edgePadding = 8.dp,
+            ) {
+                tabs.forEachIndexed { index, (kind, title) ->
                     val count = if (isPlaylistMode) {
                         playableVideos.firstOrNull()?.playlistPayload?.size ?: 0
                     } else {
-                        if (index == 0) playableVideos.size else (allSubtitles.size + extraSubtitles.size)
+                        when (index) {
+                            0 -> playableVideos.size
+                            1 -> detectedAudio.size
+                            2 -> detectedImages.size
+                            else -> allSubtitles.size + extraSubtitles.size
+                        }
                     }
+                    val accent = if (kind != null) {
+                        mediaCategoryAccent(kind)
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                    val tabSelected = selectedTab == index
 
                     Tab(
-                        selected = selectedTab == index,
+                        selected = tabSelected,
                         onClick = { selectedTab = index },
+                        selectedContentColor = accent,
+                        unselectedContentColor = accent.copy(alpha = 0.72f),
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp, vertical = 4.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (tabSelected) accent.copy(alpha = 0.12f)
+                                else Color.Transparent,
+                            ),
                         text = {
                             if (isPlaylistMode) {
                                 Text(title)
                             } else {
-                                Text("$title ($count)")
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = when (kind) {
+                                            DetectedMediaKind.VIDEO -> Icons.Default.PlayArrow
+                                            DetectedMediaKind.AUDIO -> Icons.Default.Audiotrack
+                                            DetectedMediaKind.IMAGE -> Icons.Default.Photo
+                                            else -> Icons.Default.Subtitles
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                    Text(title)
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = accent.copy(alpha = if (tabSelected) 0.22f else 0.12f),
+                                        contentColor = accent,
+                                    ) {
+                                        Text(
+                                            text = count.toString(),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
                             }
                         }
                     )
@@ -686,7 +805,11 @@ fun CastSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             if (selectedTab == 0) {
-                if (playableVideos.isEmpty() && contentPayload == null) {
+                if (
+                    playableVideos.isEmpty() &&
+                    unavailableVideos.isEmpty() &&
+                    contentPayload == null
+                ) {
                     // Empty state — explain WHY it's empty when detection is off,
                     // instead of a silently empty sheet.
                     Column(
@@ -735,8 +858,23 @@ fun CastSheet(
                         combinedSubtitles.groupBy { it.tabId }
                     }
 
+                    if (showNewBestVideoPrompt) {
+                        FilledTonalButton(
+                            onClick = {
+                                scope.launch { videoListState.animateScrollToItem(0) }
+                                showNewBestVideoPrompt = false
+                            },
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .padding(horizontal = 16.dp, vertical = 4.dp),
+                        ) {
+                            Text("A better stream was found · Show")
+                        }
+                    }
+
                     LazyColumn(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        state = videoListState,
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         if (contentPayload != null) {
@@ -817,7 +955,10 @@ fun CastSheet(
                             }
                         }
 
-                        items(playableVideos) { video ->
+                        items(
+                            items = playableVideos,
+                            key = { video -> "available:${video.url}" },
+                        ) { video ->
                             VideoItemDetailed(
                                 video = video,
                                 isSelected = selectedVideo?.url == video.url,
@@ -849,9 +990,162 @@ fun CastSheet(
                                 onSaveToCollection = onSaveToCollection?.let { cb -> { cb(video) } }
                             )
                         }
+
+                        if (unavailableVideos.isNotEmpty()) {
+                            item(key = "unavailable-toggle") {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    HorizontalDivider()
+                                    TextButton(
+                                        onClick = {
+                                            showUnavailableVideos = !showUnavailableVideos
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Text(
+                                            if (showUnavailableVideos) {
+                                                "Hide unavailable candidates (${unavailableVideos.size})"
+                                            } else {
+                                                "Show unavailable candidates (${unavailableVideos.size})"
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        if (showUnavailableVideos) {
+                            items(
+                                items = unavailableVideos,
+                                key = { video -> "unavailable:${video.url}" },
+                            ) { video ->
+                                VideoItemDetailed(
+                                    video = video,
+                                    isSelected = selectedVideo?.url == video.url,
+                                    selectedQualityUrl = if (selectedVideo?.url == video.url) {
+                                        selectedQualityUrl
+                                    } else {
+                                        null
+                                    },
+                                    onClick = {
+                                        selectedVideo = video
+                                        selectedQualityUrl = null
+                                    },
+                                    onQualityClick = { specificUrl ->
+                                        selectedVideo = video
+                                        selectedQualityUrl = specificUrl
+                                    },
+                                    onDownloadClick = { onDownload(video) },
+                                    onCopyClick = {
+                                        copyToClipboard(context, video.url)
+                                        Toast.makeText(
+                                            context,
+                                            "URL copied to clipboard",
+                                            Toast.LENGTH_SHORT,
+                                        ).show()
+                                    },
+                                    onOpenWithClick = {
+                                        dispatchExternalPlayerForVideo(video)
+                                    },
+                                    onPreviewClick = { previewVideo = video },
+                                    onPlayPhoneClick = { dispatchPhoneForVideo(video) },
+                                    onSaveToCollection = onSaveToCollection?.let { cb ->
+                                        { cb(video) }
+                                    },
+                                )
+                            }
+                        }
                     }
                 }
             } else if (selectedTab == 1) {
+                if (detectedAudio.isEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            Icons.Default.Audiotrack,
+                            contentDescription = null,
+                            modifier = Modifier.size(56.dp),
+                            tint = MaterialTheme.colorScheme.outline,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "No audio detected yet",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(detectedAudio) { audio ->
+                            DetectedMediaItemDetailed(
+                                media = audio,
+                                kind = DetectedMediaKind.AUDIO,
+                                isSelected = selectedVideo?.url == audio.url,
+                                onClick = {
+                                    selectedVideo = audio
+                                    selectedQualityUrl = null
+                                },
+                                onDownloadClick = { onDownload(audio) },
+                                onCopyClick = {
+                                    copyToClipboard(context, audio.url)
+                                    Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                                },
+                                onOpenWithClick = { dispatchExternalPlayerForVideo(audio) },
+                                onPlayPhoneClick = { dispatchPhoneForVideo(audio) },
+                                onSaveToCollection = onSaveToCollection?.let { cb -> { cb(audio) } },
+                            )
+                        }
+                    }
+                }
+            } else if (selectedTab == 2) {
+                if (detectedImages.isEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            Icons.Default.Photo,
+                            contentDescription = null,
+                            modifier = Modifier.size(56.dp),
+                            tint = MaterialTheme.colorScheme.outline,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            "No images detected yet",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(detectedImages) { image ->
+                            DetectedMediaItemDetailed(
+                                media = image,
+                                kind = DetectedMediaKind.IMAGE,
+                                isSelected = selectedVideo?.url == image.url,
+                                onClick = {
+                                    selectedVideo = image
+                                    selectedQualityUrl = null
+                                },
+                                onDownloadClick = { onDownload(image) },
+                                onCopyClick = {
+                                    copyToClipboard(context, image.url)
+                                    Toast.makeText(context, "URL copied to clipboard", Toast.LENGTH_SHORT).show()
+                                },
+                                onOpenWithClick = { dispatchExternalPlayerForVideo(image) },
+                                onSaveToCollection = onSaveToCollection?.let { cb -> { cb(image) } },
+                            )
+                        }
+                    }
+                }
+            } else if (selectedTab == 3) {
                 // Subtitles Tab
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     Button(

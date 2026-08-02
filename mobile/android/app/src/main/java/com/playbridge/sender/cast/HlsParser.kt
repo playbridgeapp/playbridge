@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast
 
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -28,12 +29,25 @@ data class AudioTrack(
  * Represents the full parsed content of an HLS master playlist
  */
 @Serializable
+enum class HlsPlaylistValidation {
+    VALID_MASTER,
+    VALID_MEDIA,
+    INVALID,
+    FETCH_FAILED,
+}
+
+@Serializable
 data class HlsPlaylist(
     val videoQualities: List<VideoQuality>,
     val audioTracks: List<AudioTrack> = emptyList(),
     val masterPlaylistUrl: String,
-    val segmentPrefixes: Set<String> = emptySet()
-)
+    val segmentPrefixes: Set<String> = emptySet(),
+    val validation: HlsPlaylistValidation = HlsPlaylistValidation.INVALID,
+) {
+    val isPlayable: Boolean
+        get() = validation == HlsPlaylistValidation.VALID_MASTER ||
+            validation == HlsPlaylistValidation.VALID_MEDIA
+}
 
 /**
  * Video quality variant with audio group reference
@@ -55,6 +69,8 @@ data class VideoQuality(
  */
 object HlsParser {
 
+    private const val TAG = "HlsParser"
+
     private val REGEX_GROUP_ID = Regex("GROUP-ID=\"([^\"]+)\"")
     private val REGEX_NAME = Regex("NAME=\"([^\"]+)\"")
     private val REGEX_LANGUAGE = Regex("LANGUAGE=\"([^\"]+)\"")
@@ -73,125 +89,132 @@ object HlsParser {
      * Parses the given M3U8 URL and returns a comprehensive HlsPlaylist object.
      * Pass [headers] (e.g. from the browser extension) so auth/cookie-gated playlists can be fetched.
      */
-    suspend fun parsePlaylist(masterPlaylistUrl: String, headers: Map<String, String>? = null): HlsPlaylist = withContext(Dispatchers.IO) {
+    suspend fun parsePlaylist(
+        masterPlaylistUrl: String,
+        headers: Map<String, String>? = null,
+    ): HlsPlaylist = withContext(Dispatchers.IO) {
         try {
             val content = fetchUrlContent(masterPlaylistUrl, headers)
-            
-            // Basic check for M3U8 format
-            if (!content.startsWith("#EXTM3U")) {
-                return@withContext HlsPlaylist(emptyList(), emptyList(), masterPlaylistUrl)
-            }
+            parsePlaylistContent(masterPlaylistUrl, content)
+        } catch (e: Exception) {
+            Log.w(TAG, "Playlist fetch failed (${e.javaClass.simpleName})")
+            HlsPlaylist(
+                videoQualities = emptyList(),
+                masterPlaylistUrl = masterPlaylistUrl,
+                validation = HlsPlaylistValidation.FETCH_FAILED,
+            )
+        }
+    }
 
-            val videoQualities = mutableListOf<VideoQuality>()
-            val audioTracks = mutableListOf<AudioTrack>()
-            val segmentPrefixes = mutableSetOf<String>()
+    internal fun parsePlaylistContent(
+        masterPlaylistUrl: String,
+        content: String,
+    ): HlsPlaylist {
+        if (!content.trimStart().startsWith("#EXTM3U")) {
+            return HlsPlaylist(
+                videoQualities = emptyList(),
+                masterPlaylistUrl = masterPlaylistUrl,
+                validation = HlsPlaylistValidation.INVALID,
+            )
+        }
 
-            // Process by lineSequence
-            var currentBandwidth: Long? = null
-            var currentAverageBandwidth: Long? = null
-            var currentResolution: String? = null
-            var currentCodecs: String? = null
-            var currentAudioGroup: String? = null
-            var currentFrameRate: String? = null
+        val videoQualities = mutableListOf<VideoQuality>()
+        val audioTracks = mutableListOf<AudioTrack>()
+        val segmentPrefixes = mutableSetOf<String>()
+        var mediaEntryCount = 0
+        var currentBandwidth: Long? = null
+        var currentAverageBandwidth: Long? = null
+        var currentResolution: String? = null
+        var currentCodecs: String? = null
+        var currentAudioGroup: String? = null
+        var currentFrameRate: String? = null
+        var expectsMediaSegment = false
 
-            val iterator = content.lineSequence().iterator()
-            while (iterator.hasNext()) {
-                val line = iterator.next().trim()
-                
-                if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
-                    // Parse Audio Track
-                    val attributes = line.substringAfter(":")
-                    
-                    val groupId = REGEX_GROUP_ID.find(attributes)?.groupValues?.get(1)
-                    val name = REGEX_NAME.find(attributes)?.groupValues?.get(1)
-                    val language = REGEX_LANGUAGE.find(attributes)?.groupValues?.get(1)
-                    val uri = REGEX_URI.find(attributes)?.groupValues?.get(1)
-                    val isDefault = REGEX_DEFAULT_YES.containsMatchIn(attributes)
-                    val autoselect = REGEX_AUTOSELECT_YES.containsMatchIn(attributes)
-                    val channels = REGEX_CHANNELS.find(attributes)?.groupValues?.get(1) // e.g. "2"
+        fun recordMediaUri(rawUri: String) {
+            mediaEntryCount++
+            val segmentUrl = resolveUrl(masterPlaylistUrl, rawUri)
+            val prefix = segmentUrl.substringBeforeLast("/") + "/"
+            if (prefix.startsWith("http")) segmentPrefixes.add(prefix)
+        }
 
-                    if (groupId != null && name != null) {
-                        // Resolve relative URI if present
-                        val resolvedUri = uri?.let { resolveUrl(masterPlaylistUrl, it) }
-                        
-                        audioTracks.add(AudioTrack(
+        for (rawLine in content.lineSequence()) {
+            val line = rawLine.trim()
+            if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
+                val attributes = line.substringAfter(":")
+                val groupId = REGEX_GROUP_ID.find(attributes)?.groupValues?.get(1)
+                val name = REGEX_NAME.find(attributes)?.groupValues?.get(1)
+                if (groupId != null && name != null) {
+                    audioTracks.add(
+                        AudioTrack(
                             groupId = groupId,
                             name = name,
-                            language = language,
-                            uri = resolvedUri,
-                            isDefault = isDefault,
-                            autoselect = autoselect,
-                            channels = channels
-                        ))
-                    }
-                    
-                } else if (line.startsWith("#EXT-X-STREAM-INF:")) {
-                    val attributes = line.substringAfter(":")
-                    
-                    // Parse bandwidths
-                    currentBandwidth = REGEX_BANDWIDTH.find(attributes)?.groupValues?.get(1)?.toLongOrNull()
-                    currentAverageBandwidth = REGEX_AVERAGE_BANDWIDTH.find(attributes)?.groupValues?.get(1)?.toLongOrNull()
-                    
-                    // Parse dimensions
-                    currentResolution = REGEX_RESOLUTION.find(attributes)?.groupValues?.get(1)
-                    
-                    // Parse codecs
-                    currentCodecs = REGEX_CODECS.find(attributes)?.groupValues?.get(1)
-                    
-                    // Parse audio group ID
-                    currentAudioGroup = REGEX_AUDIO_GROUP.find(attributes)?.groupValues?.get(1)
-                    
-                    // Parse frame rate
-                    currentFrameRate = REGEX_FRAME_RATE.find(attributes)?.groupValues?.get(1)
-                    
-                } else if (!line.startsWith("#") && line.isNotEmpty()) {
-                    if (currentBandwidth != null) {
-                        // This is a URI line following a stream info tag (a variant playlist)
-                        val variantUrl = resolveUrl(masterPlaylistUrl, line)
-                        
-                        // Create quality label
-                        val resolutionLabel = currentResolution?.let { res ->
-                            val height = res.substringAfter("x")
-                            "${height}p"
-                        } ?: "Unknown"
-
-                        videoQualities.add(VideoQuality(
-                            resolution = resolutionLabel,
+                            language = REGEX_LANGUAGE.find(attributes)?.groupValues?.get(1),
+                            uri = REGEX_URI.find(attributes)?.groupValues?.get(1)
+                                ?.let { resolveUrl(masterPlaylistUrl, it) },
+                            isDefault = REGEX_DEFAULT_YES.containsMatchIn(attributes),
+                            autoselect = REGEX_AUTOSELECT_YES.containsMatchIn(attributes),
+                            channels = REGEX_CHANNELS.find(attributes)?.groupValues?.get(1),
+                        ),
+                    )
+                }
+            } else if (
+                line.startsWith("#EXT-X-PART:") ||
+                line.startsWith("#EXT-X-MAP:") ||
+                line.startsWith("#EXT-X-PRELOAD-HINT:")
+            ) {
+                REGEX_URI.find(line)?.groupValues?.get(1)?.let(::recordMediaUri)
+            } else if (line.startsWith("#EXTINF:")) {
+                expectsMediaSegment = true
+            } else if (line.startsWith("#EXT-X-STREAM-INF:")) {
+                val attributes = line.substringAfter(":")
+                currentBandwidth = REGEX_BANDWIDTH.find(attributes)?.groupValues?.get(1)?.toLongOrNull()
+                currentAverageBandwidth = REGEX_AVERAGE_BANDWIDTH.find(attributes)?.groupValues?.get(1)?.toLongOrNull()
+                currentResolution = REGEX_RESOLUTION.find(attributes)?.groupValues?.get(1)
+                currentCodecs = REGEX_CODECS.find(attributes)?.groupValues?.get(1)
+                currentAudioGroup = REGEX_AUDIO_GROUP.find(attributes)?.groupValues?.get(1)
+                currentFrameRate = REGEX_FRAME_RATE.find(attributes)?.groupValues?.get(1)
+            } else if (!line.startsWith("#") && line.isNotEmpty()) {
+                if (currentBandwidth != null) {
+                    videoQualities.add(
+                        VideoQuality(
+                            resolution = currentResolution
+                                ?.substringAfter("x")
+                                ?.let { "${it}p" }
+                                ?: "Unknown",
                             bandwidth = currentBandwidth,
                             averageBandwidth = currentAverageBandwidth,
-                            url = variantUrl,
+                            url = resolveUrl(masterPlaylistUrl, line),
                             codecs = currentCodecs,
                             audioGroupId = currentAudioGroup,
-                            frameRate = currentFrameRate
-                        ))
-                        
-                        // Reset for next entry
-                        currentBandwidth = null
-                        currentAverageBandwidth = null
-                        currentResolution = null
-                        currentCodecs = null
-                        currentAudioGroup = null
-                        currentFrameRate = null
-                    } else {
-                        // This is a URI line NOT following stream info, likely a media segment
-                        val segmentUrl = resolveUrl(masterPlaylistUrl, line)
-                        val prefix = segmentUrl.substringBeforeLast("/") + "/"
-                        if (prefix.startsWith("http")) {
-                            segmentPrefixes.add(prefix)
-                        }
-                    }
+                            frameRate = currentFrameRate,
+                        ),
+                    )
+                    currentBandwidth = null
+                    currentAverageBandwidth = null
+                    currentResolution = null
+                    currentCodecs = null
+                    currentAudioGroup = null
+                    currentFrameRate = null
+                } else if (expectsMediaSegment) {
+                    recordMediaUri(line)
+                    expectsMediaSegment = false
                 }
             }
-            
-            // Sort by bandwidth descending (highest quality first)
-            videoQualities.sortByDescending { it.bandwidth }
-            
-            HlsPlaylist(videoQualities, audioTracks, masterPlaylistUrl, segmentPrefixes)
-            
-        } catch (e: Exception) {
-            e.printStackTrace()
-            HlsPlaylist(emptyList(), emptyList(), masterPlaylistUrl, emptySet())
         }
+
+        videoQualities.sortByDescending { it.bandwidth }
+        val validation = when {
+            videoQualities.isNotEmpty() -> HlsPlaylistValidation.VALID_MASTER
+            mediaEntryCount > 0 -> HlsPlaylistValidation.VALID_MEDIA
+            else -> HlsPlaylistValidation.INVALID
+        }
+        return HlsPlaylist(
+            videoQualities = videoQualities,
+            audioTracks = audioTracks,
+            masterPlaylistUrl = masterPlaylistUrl,
+            segmentPrefixes = segmentPrefixes,
+            validation = validation,
+        )
     }
 
     /**

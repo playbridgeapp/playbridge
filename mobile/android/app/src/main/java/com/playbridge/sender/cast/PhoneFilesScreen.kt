@@ -393,7 +393,7 @@ fun PhoneFilesScreen(
 
     // Opened when a file is tapped but the cast target was lost mid-flight.
     if (showDevicePicker) {
-        DeviceConnectionSheet(
+        DeviceConnectionDialog(
             onDismiss = { showDevicePicker = false },
             onOpenAllDevices = {
                 showDevicePicker = false

@@ -33,6 +33,8 @@ import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Audiotrack
+import androidx.compose.material.icons.filled.Photo
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -676,6 +678,194 @@ internal fun VideoItemDetailed(
 }
 
 @Composable
+internal fun DetectedMediaItemDetailed(
+    media: DetectedVideo,
+    kind: DetectedMediaKind,
+    isSelected: Boolean,
+    onClick: () -> Unit,
+    onDownloadClick: () -> Unit,
+    onCopyClick: () -> Unit,
+    onOpenWithClick: () -> Unit,
+    onPlayPhoneClick: (() -> Unit)? = null,
+    onSaveToCollection: (() -> Unit)? = null,
+) {
+    val urlInfo = remember(media.url) { parseUrlInfo(media.url) }
+    val accent = mediaCategoryAccent(kind)
+    val label = remember(media.url, media.contentType, kind) {
+        urlInfo.extension?.uppercase()
+            ?: media.contentType?.substringAfter('/')?.substringBefore(';')?.uppercase()
+            ?: kind.name
+    }
+    val title = media.title ?: urlInfo.filename ?: urlInfo.host
+
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) {
+                accent.copy(alpha = 0.14f)
+            } else {
+                MaterialTheme.colorScheme.surfaceVariant
+            },
+        ),
+        border = if (isSelected) {
+            androidx.compose.foundation.BorderStroke(2.dp, accent)
+        } else {
+            null
+        },
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    color = accent.copy(alpha = 0.16f),
+                    shape = MaterialTheme.shapes.small,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = if (kind == DetectedMediaKind.AUDIO) {
+                                Icons.Default.Audiotrack
+                            } else {
+                                Icons.Default.Photo
+                            },
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp),
+                            tint = accent,
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = accent,
+                        )
+                    }
+                }
+                Text(
+                    text = formatTimestamp(media.timestamp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+            if (kind == DetectedMediaKind.IMAGE) {
+                AsyncImage(
+                    model = media.url,
+                    contentDescription = title,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 120.dp, max = 220.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentScale = ContentScale.Fit,
+                )
+                Spacer(Modifier.height(10.dp))
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(accent.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Audiotrack,
+                            contentDescription = null,
+                            modifier = Modifier.size(28.dp),
+                            tint = accent,
+                        )
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = urlInfo.host,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            if (kind == DetectedMediaKind.IMAGE) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val dimensions = if (media.width != null && media.height != null) {
+                    "${media.width} × ${media.height}"
+                } else {
+                    null
+                }
+                Text(
+                    text = listOfNotNull(dimensions, media.contentType, urlInfo.host).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else if (media.contentType != null) {
+                Text(
+                    text = media.contentType,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                onPlayPhoneClick?.let { play ->
+                    IconButton(onClick = play) {
+                        Icon(Icons.Default.PlayArrow, contentDescription = "Play on phone")
+                    }
+                }
+                IconButton(onClick = onDownloadClick) {
+                    Icon(Icons.Default.Download, contentDescription = "Download")
+                }
+                IconButton(onClick = onOpenWithClick) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = "Open with")
+                }
+                IconButton(onClick = onCopyClick) {
+                    Icon(Icons.Default.Share, contentDescription = "Copy media URL")
+                }
+                onSaveToCollection?.let { save ->
+                    IconButton(onClick = save) {
+                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = "Save to collection")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun InfoChip(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     text: String
@@ -781,7 +971,7 @@ fun formatTimestamp(timestamp: Long): String {
 
 fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("Video URL", text)
+    val clip = ClipData.newPlainText("Media URL", text)
     clipboard.setPrimaryClip(clip)
 }
 

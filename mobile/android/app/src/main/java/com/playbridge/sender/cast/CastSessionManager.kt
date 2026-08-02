@@ -38,6 +38,24 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+internal fun externalSessionPhase(
+    targetKind: TargetKind,
+    status: PlaybackStatus?,
+    mediaTitle: String?,
+): SessionPhase = when (status?.state) {
+    PlaybackState.BUFFERING -> SessionPhase.CONNECTING
+    PlaybackState.PLAYING, PlaybackState.PAUSED -> SessionPhase.PLAYING
+    PlaybackState.ERROR -> SessionPhase.FAILED
+    PlaybackState.STOPPED ->
+        if (targetKind == TargetKind.GOOGLE_CAST || mediaTitle != null) {
+            SessionPhase.CONNECTED
+        } else {
+            SessionPhase.SELECTED
+        }
+    PlaybackState.IDLE, null ->
+        if (mediaTitle == null) SessionPhase.SELECTED else SessionPhase.CONNECTED
+}
+
 /**
  * Process-wide owner of the active cast session — the single seam every screen sends
  * playback through, regardless of transport.
@@ -244,7 +262,10 @@ class CastSessionManager(
     }
 
     fun selectGoogleCastTarget(device: TvDevice) {
-        selectExternalTarget(device, GoogleCastTarget(device, scope, context))
+        val target = GoogleCastTarget(device, scope, context)
+        selectExternalTarget(device, target)
+        _externalStatus.value = PlaybackStatus(PlaybackState.BUFFERING)
+        target.connectReady()
     }
 
     /** Select an approved phone-hosted browser session as the active cast target. */
@@ -281,13 +302,7 @@ class CastSessionManager(
         if (device == null || target == null) {
             CastSessionState()
         } else {
-            val phase = when (status?.state) {
-                PlaybackState.BUFFERING -> SessionPhase.CONNECTING
-                PlaybackState.PLAYING, PlaybackState.PAUSED -> SessionPhase.PLAYING
-                PlaybackState.ERROR -> SessionPhase.FAILED
-                PlaybackState.IDLE, PlaybackState.STOPPED, null ->
-                    if (title == null) SessionPhase.SELECTED else SessionPhase.CONNECTED
-            }
+            val phase = externalSessionPhase(target.kind, status, title)
             CastSessionState(
                 phase = phase,
                 endpointKey = device.endpointKey,

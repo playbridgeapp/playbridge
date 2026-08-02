@@ -15,6 +15,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.longOrNull
 import com.playbridge.shared.protocol.decodeVisualMetadataJson
 import playbridge.PlayPayload
 import playbridge.VisualMetadata
@@ -544,7 +545,13 @@ object Components {
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
                 val type = jsonObject["type"]?.jsonPrimitive?.content
-                if (type == "http_error") {
+                if (type == "detector_hello") {
+                    Log.d(
+                        TAG,
+                        "Video detector native channel ready " +
+                            "epoch=${jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: "legacy"}",
+                    )
+                } else if (type == "http_error") {
                     val statusCode = jsonObject["statusCode"]?.jsonPrimitive?.content ?: "unknown"
                     val url = jsonObject["url"]?.jsonPrimitive?.content ?: "unknown"
                     val tabId = jsonObject["tabId"]?.jsonPrimitive?.content
@@ -588,17 +595,36 @@ object Components {
                         }
                     }
                 } else if (type == "navigation") {
-                    // Top-level navigation (including reloads) committed in a tab:
-                    // the extension has cleared its per-tab detection state and
-                    // will re-report videos as the new page loads — reset ours too
-                    // so the cast sheet count starts from 0.
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
-                    VideoDetector.clearTab(kotlinTabId)
-                    Log.d(TAG, "Navigation committed — cleared detected videos for tab $kotlinTabId")
+                    val version = detectorPageVersion(jsonObject)
+                    if (version == null) {
+                        VideoDetector.clearTab(kotlinTabId)
+                        Log.d(TAG, "Legacy navigation — cleared detected videos for tab $kotlinTabId")
+                    } else {
+                        val order = VideoDetector.onDetectorNavigation(kotlinTabId, version)
+                        Log.d(
+                            TAG,
+                            "Detector navigation tab=$kotlinTabId " +
+                                "generation=${version.navigationGeneration} order=$order",
+                        )
+                    }
                 } else if (type == "video_detected" && !detectVideosEnabled) {
                     Log.d(TAG, "Video detection disabled — ignoring detection message")
                 } else {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
+                    val version = detectorPageVersion(jsonObject)
+                    if (
+                        type == "video_detected" &&
+                        version != null &&
+                        !VideoDetector.acceptDetectorVideo(kotlinTabId, version)
+                    ) {
+                        Log.d(
+                            TAG,
+                            "Ignoring stale detector video tab=$kotlinTabId " +
+                                "generation=${version.navigationGeneration}",
+                        )
+                        return
+                    }
                     VideoDetector.onMessageReceived(jsonObject, kotlinTabId)
                     Log.i(TAG, "Message sent to VideoDetector for tab $kotlinTabId")
                 }
@@ -606,6 +632,13 @@ object Components {
         } catch (e: Exception) {
             Log.e(TAG, "Error processing message", e)
         }
+    }
+
+    private fun detectorPageVersion(message: JsonObject): DetectorPageVersion? {
+        val detectorEpoch = message["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: return null
+        val navigationGeneration =
+            message["navigationGeneration"]?.jsonPrimitive?.longOrNull ?: return null
+        return DetectorPageVersion(detectorEpoch, navigationGeneration)
     }
     
     /**

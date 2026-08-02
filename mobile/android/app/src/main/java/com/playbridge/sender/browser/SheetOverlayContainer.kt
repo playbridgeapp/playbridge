@@ -71,6 +71,7 @@ fun SheetOverlayContainer(
     // Cast Sheet States
     showVideoSheet: Boolean,
     detectedVideos: List<DetectedVideo>,
+    detectedMediaRevision: Int,
     pendingContentPayload: PlayPayload?,
     isTvPlaying: Boolean,
     onDismissVideoSheet: () -> Unit,
@@ -176,6 +177,7 @@ fun SheetOverlayContainer(
             }
             CastSheet(
                 videos = detectedVideos,
+                mediaRevision = detectedMediaRevision,
                 onDismiss = onDismissVideoSheet,
                 onSaveToCollection = { video ->
                     saveToCollectionDraft = com.playbridge.sender.data.collection.CollectionItemDraft(

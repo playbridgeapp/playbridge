@@ -182,11 +182,11 @@ fun RemoteControlScreen(
     val supportsRemote = !externalMode || Capability.REMOTE in capabilities
     val supportsVolume = !externalMode || Capability.VOLUME in capabilities
     val supportsSeek = if (externalMode) Capability.SEEK in capabilities else isSeekable
-    val availableModes = buildList {
-        add(RemoteMode.CONTEXT)
-        if (supportsRemote) add(RemoteMode.DPAD)
-        if (!externalMode) add(RemoteMode.TOUCHPAD)
-    }
+    val availableModes = availableRemoteModes(
+        remoteContext = remoteContext,
+        externalMode = externalMode,
+        supportsRemote = supportsRemote,
+    )
     var modeByContext by remember {
         mutableStateOf(
             mapOf(
@@ -389,14 +389,25 @@ fun RemoteControlScreen(
     }
 }
 
-private enum class RemoteMode(val label: String, val icon: ImageVector) {
+internal enum class RemoteMode(val label: String, val icon: ImageVector) {
     CONTEXT("Context", Icons.Default.Dashboard),
     DPAD("D-Pad", Icons.Default.Gamepad),
     TOUCHPAD("Touchpad", Icons.Default.TouchApp),
     KEYBOARD("Keyboard", Icons.Default.Keyboard)
 }
 
-private enum class RemoteContext { PLAYER, BROWSER, IDLE }
+internal enum class RemoteContext { PLAYER, BROWSER, IDLE }
+
+internal fun availableRemoteModes(
+    remoteContext: RemoteContext,
+    externalMode: Boolean,
+    supportsRemote: Boolean,
+): List<RemoteMode> = buildList {
+    add(RemoteMode.CONTEXT)
+    if (supportsRemote) add(RemoteMode.DPAD)
+    if (!externalMode) add(RemoteMode.TOUCHPAD)
+    if (!externalMode && remoteContext == RemoteContext.BROWSER) add(RemoteMode.KEYBOARD)
+}
 
 private fun remoteContextOf(active: String): RemoteContext = when (active) {
     "player" -> RemoteContext.PLAYER

@@ -5,8 +5,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -16,18 +18,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Tv
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -44,6 +45,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import com.playbridge.sender.cast.browser.BrowserReceiverRepository
 import com.playbridge.sender.cast.browser.BrowserReceiverSheet
 import com.playbridge.sender.connection.ConnectionMerge
@@ -67,10 +69,57 @@ import org.koin.compose.koinInject
 private val ConnectedGreen = Color(0xFF4CAF50)
 private val ConnectingOrange = Color(0xFFFF9800)
 
+internal fun googleCastPickerConnectionComplete(phase: SessionPhase): Boolean =
+    phase == SessionPhase.CONNECTED || phase == SessionPhase.PLAYING
+
+@Composable
+private fun DevicePickerDialogFrame(
+    onDismissRequest: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Dialog(onDismissRequest = onDismissRequest) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 720.dp),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            tonalElevation = 6.dp,
+            shadowElevation = 12.dp,
+        ) {
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Cast to",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    IconButton(onClick = onDismissRequest) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Close",
+                            modifier = Modifier.size(22.dp),
+                        )
+                    }
+                }
+
+                HorizontalDivider()
+                content()
+            }
+        }
+    }
+}
+
 /**
  * The shared device/destination chip used by the Library top bar, the Library detail destination
  * row, and the Cast sheet. Replaces the three hand-rolled `ChipDropdown` selectors: instead of a
- * dropdown it opens [DeviceConnectionSheet] (a minimal connection screen) on tap.
+ * dropdown it opens [DeviceConnectionDialog] (a minimal connection screen) on tap.
  *
  * Presentation-only and self-contained — it reads the active [ConnectionViewModel] for its label
  * and status, so callers don't thread device lists/handlers down. Host-specific side effects go
@@ -97,16 +146,25 @@ fun DeviceChip(
     val tvDevice by viewModel.tvDevice.collectAsState(initial = null)
     val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
     val route by viewModel.route.collectAsState()
+    val castSessionState by viewModel.castSessionState.collectAsState()
 
     val externalSelected = route is CastSessionManager.Route.External && activeExternalDevice != null
     val nativeSelected = route is CastSessionManager.Route.NativeTv
-    val isConnected = externalSelected ||
+    val externalConnected = externalSelected && castSessionState.phase in setOf(
+        SessionPhase.CONNECTED,
+        SessionPhase.PLAYING,
+    )
+    val isConnected = externalConnected ||
         (nativeSelected && connectionState is WebSocketClient.ConnectionState.Connected)
-    val isConnecting = nativeSelected && (
-        connectionState is WebSocketClient.ConnectionState.Connecting ||
-            connectionState is WebSocketClient.ConnectionState.Retrying ||
-            connectionState is WebSocketClient.ConnectionState.WaitingForApproval
-        )
+    val isConnecting = if (externalSelected) {
+        castSessionState.phase == SessionPhase.CONNECTING
+    } else {
+        nativeSelected && (
+            connectionState is WebSocketClient.ConnectionState.Connecting ||
+                connectionState is WebSocketClient.ConnectionState.Retrying ||
+                connectionState is WebSocketClient.ConnectionState.WaitingForApproval
+            )
+    }
 
     val name = if (externalSelected) activeExternalDevice?.name else tvDevice?.name
     val label = when {
@@ -192,7 +250,7 @@ fun DeviceChip(
     }
 
     if (showPicker) {
-        DeviceConnectionSheet(
+        DeviceConnectionDialog(
             onDismiss = { showPicker = false },
             onOpenAllDevices = {
                 showPicker = false
@@ -211,9 +269,8 @@ fun DeviceChip(
  *
  * Self-sources the activity [ConnectionViewModel]; host hooks run after routing changes.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DeviceConnectionSheet(
+fun DeviceConnectionDialog(
     onDismiss: () -> Unit,
     onOpenAllDevices: () -> Unit,
     showThisDevice: Boolean = true,
@@ -235,6 +292,7 @@ fun DeviceConnectionSheet(
     val castSessionState by viewModel.castSessionState.collectAsState()
     val lastEffectiveStreamRoute by viewModel.lastEffectiveStreamRoute.collectAsState()
     var showBrowserSheet by remember { mutableStateOf(false) }
+    var pendingGoogleCast by remember { mutableStateOf<TvDevice?>(null) }
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
     val nativeSelected = route is CastSessionManager.Route.NativeTv
@@ -294,16 +352,45 @@ fun DeviceConnectionSheet(
         )
     }.filterNot { isActive(it.connectDevice) }
 
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    fun dismissDialog() {
+        val pending = pendingGoogleCast
+        val active = activeExternalDevice
+        val pendingConnectionIsActive = pending != null && active != null &&
+            ConnectionMerge.isSameDevice(pending, active)
+        pendingGoogleCast = null
+        if (pendingConnectionIsActive && !googleCastPickerConnectionComplete(castSessionState.phase)) {
+            viewModel.disconnectExternalTarget()
+        }
+        onDismiss()
+    }
+
+    LaunchedEffect(pendingGoogleCast, activeExternalDevice, castSessionState.phase) {
+        val pending = pendingGoogleCast ?: return@LaunchedEffect
+        val active = activeExternalDevice ?: return@LaunchedEffect
+        if (
+            ConnectionMerge.isSameDevice(pending, active) &&
+            googleCastPickerConnectionComplete(castSessionState.phase)
+        ) {
+            pendingGoogleCast = null
+            onPickedDevice?.invoke(pending)
+            onDismiss()
+        }
+    }
 
     fun pick(device: TvDevice) {
         // Heal stale saved IPs / DLNA control URLs against the current discovery set
         // before selecting — shortcuts stay "online" by UUID but may still hold old endpoints.
         val target = ConnectionMerge.withDiscoveredEndpoint(device, discoveredDevices)
+        if (target.resolvedProtocol == CastProtocol.GOOGLE_CAST) {
+            pendingGoogleCast = target
+            viewModel.selectGoogleCastTarget(target)
+            return
+        }
+        pendingGoogleCast = null
         val ready = when (target.resolvedProtocol) {
             CastProtocol.DLNA -> viewModel.selectDlnaTarget(target)
             CastProtocol.ROKU -> true.also { viewModel.selectRokuTarget(target) }
-            CastProtocol.GOOGLE_CAST -> true.also { viewModel.selectGoogleCastTarget(target) }
+            CastProtocol.GOOGLE_CAST -> false // Handled above; connection is asynchronous.
             CastProtocol.WEB_BROWSER -> true.also { viewModel.selectBrowserTarget(target) }
             CastProtocol.PLAYBRIDGE -> {
                 viewModel.selectNativeRoute()
@@ -329,21 +416,16 @@ fun DeviceConnectionSheet(
         }
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    DevicePickerDialogFrame(onDismissRequest = ::dismissDialog) {
         Column(
             modifier = Modifier
+                .weight(1f, fill = false)
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = "Cast to",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-            )
-
             LocalNetworkBanners(status = networkStatus)
 
             NowDestinationCard(
@@ -353,20 +435,23 @@ fun DeviceConnectionSheet(
                 activeExternalDevice = activeExternalDevice,
                 onCastHere = { viewModel.selectNativeRoute() },
                 onDisconnectNative = {
+                    pendingGoogleCast = null
                     viewModel.selectThisDevice()
                     viewModel.disconnect()
                     onDismiss()
                 },
                 onDisconnectExternal = {
+                    pendingGoogleCast = null
                     viewModel.disconnectExternalTarget()
                     onDismiss()
                 },
                 isConnecting = isConnecting,
                 externalMediaTitle = externalMediaTitle,
-                externalCasting = castSessionState.phase == SessionPhase.PLAYING ||
-                    castSessionState.phase == SessionPhase.CONNECTED ||
-                    castSessionState.phase == SessionPhase.CONNECTING,
+                externalCasting = castSessionState.phase == SessionPhase.PLAYING,
+                externalConnecting = castSessionState.phase == SessionPhase.CONNECTING,
+                externalFailed = castSessionState.phase == SessionPhase.FAILED,
                 streamRouteLabel = lastEffectiveStreamRoute?.label,
+                compact = true,
             )
 
             // Player-engine picker for a linked PlayBridge session (native route only).
@@ -401,7 +486,9 @@ fun DeviceConnectionSheet(
             if (showThisDevice) {
                 ThisDeviceDestinationRow(
                     selected = onPhone && !isConnecting,
+                    compact = true,
                     onClick = {
+                        pendingGoogleCast = null
                         viewModel.selectThisDevice()
                         onPickedThisDevice?.invoke()
                         onDismiss()
@@ -441,6 +528,7 @@ fun DeviceConnectionSheet(
                     TvDeviceRow(
                         device = device,
                         showProtocolBadge = false,
+                        compact = true,
                         onClick = { pick(device.connectDevice) },
                         onRemove = device.historyEntry?.let { entry ->
                             { viewModel.removeDeviceFromHistory(entry) }
@@ -455,6 +543,7 @@ fun DeviceConnectionSheet(
                     TvDeviceRow(
                         device = device,
                         showProtocolBadge = true,
+                        compact = true,
                         onClick = { pick(device.connectDevice) },
                         onRemove = device.historyEntry?.let { entry ->
                             { viewModel.removeDeviceFromHistory(entry) }
@@ -478,7 +567,7 @@ fun DeviceConnectionSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                .padding(horizontal = 10.dp, vertical = 9.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
@@ -486,14 +575,13 @@ fun DeviceConnectionSheet(
                                 Icons.Default.Cast,
                                 contentDescription = null,
                                 tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(22.dp),
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     session.name,
-                                    style = MaterialTheme.typography.titleMedium,
+                                    style = MaterialTheme.typography.titleSmall,
                                     fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
                                 )
                                 Text(
                                     "Browser · Ready",
@@ -516,7 +604,7 @@ fun DeviceConnectionSheet(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                        .padding(horizontal = 10.dp, vertical = 9.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
@@ -524,6 +612,7 @@ fun DeviceConnectionSheet(
                         Icons.Default.Cast,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
                     )
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -532,7 +621,7 @@ fun DeviceConnectionSheet(
                             } else {
                                 "Cast to browser…"
                             },
-                            style = MaterialTheme.typography.titleMedium,
+                            style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
@@ -548,8 +637,8 @@ fun DeviceConnectionSheet(
                 }
             }
 
-            FindMoreDevicesRow(onClick = {
-                onDismiss()
+            FindMoreDevicesRow(compact = true, onClick = {
+                dismissDialog()
                 onOpenAllDevices()
             })
         }
@@ -560,7 +649,8 @@ fun DeviceConnectionSheet(
             viewModel = viewModel,
             onDismiss = { showBrowserSheet = false },
             onCastHere = {
-                // Destination already selected inside the sheet; dismiss cast sheet too.
+                // Destination already selected inside the sheet; dismiss the picker too.
+                pendingGoogleCast = null
                 onDismiss()
             },
         )

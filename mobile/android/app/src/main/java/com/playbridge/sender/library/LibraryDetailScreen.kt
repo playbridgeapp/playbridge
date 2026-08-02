@@ -187,7 +187,7 @@ fun LibraryDetailScreen(
     }
 
     // Intentionally NO auto-connect on this screen (entry or Watch/Resume). Connecting
-    // is left to the Connection sheet — see onOpenConnectionScreen. Watch only resolves
+    // is left to the connection dialog — see onOpenConnectionScreen. Watch only resolves
     // streams and casts/plays on the current route.
 
     val episodeListState = rememberLazyListState()
@@ -714,7 +714,7 @@ fun LibraryDetailScreen(
     }
 
     val triggerWatch: (String, String, String, Boolean, Boolean, StremioVideo?) -> Unit = triggerWatch@{ streamId, streamType, resTitle, forPhone, forcePicker, episode ->
-        // Do not reconnect from Watch/Resume — pairing lives on the Connection sheet.
+        // Do not reconnect from Watch/Resume — pairing lives in the connection dialog.
         // If the TV route is selected but offline, cast will fail cleanly; user reconnects there.
 
         // 1. Proxied cast path (Via phone / Via proxy only; Direct uses hub/picker paths)

@@ -77,4 +77,177 @@ class BuildCastSheetVideosTest {
         )
         assertTrue(synth.castScore() > hls.castScore())
     }
+
+    @Test
+    fun mediaKinds_keepAudioAndImagesOutOfVideosTab() {
+        val video = DetectedVideo(url = "https://cdn.example/movie.mp4")
+        val audio = DetectedVideo(
+            url = "https://cdn.example/theme.mp3",
+            contentType = "audio/mpeg",
+        )
+        val image = DetectedVideo(
+            url = "https://cdn.example/poster",
+            contentType = "image/webp",
+        )
+
+        assertEquals(listOf(video), buildCastSheetVideos(listOf(audio, image, video)))
+        assertEquals(listOf(audio), buildCastSheetAudio(listOf(audio, image, video)))
+        assertEquals(listOf(image), buildCastSheetImages(listOf(audio, image, video)))
+    }
+
+    @Test
+    fun demuxedHlsAudio_isClassifiedAsAudio() {
+        val audio = DetectedVideo(
+            url = "https://cdn.example/chunklist_audio.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            hlsRole = "audio_media",
+        )
+
+        assertEquals(DetectedMediaKind.AUDIO, audio.kind)
+        assertTrue(audio.isAudio)
+        assertEquals(0, audio.castScore())
+    }
+
+    @Test
+    fun explicitDetectorKind_supportsExtensionlessImages() {
+        val image = DetectedVideo(
+            url = "https://cdn.example/resource/42",
+            contentType = "application/octet-stream",
+            mediaKind = "image",
+            width = 1920,
+            height = 1080,
+        )
+
+        assertEquals(DetectedMediaKind.IMAGE, image.kind)
+        assertTrue(image.isImage)
+    }
+
+    @Test
+    fun adaptiveStreamUrl_winsOverDeceptiveImageMime() {
+        val stream = DetectedVideo(
+            url = "https://cdn.example/manifest/master.m3u8",
+            contentType = "image/jpeg",
+        )
+
+        assertEquals(DetectedMediaKind.VIDEO, stream.kind)
+        assertTrue(stream.isVideo)
+    }
+
+    @Test
+    fun toolbarBadge_prefersVideoThenAudioThenImages() {
+        val image = DetectedVideo(url = "https://cdn.example/poster.jpg")
+        val audio = DetectedVideo(url = "https://cdn.example/theme.mp3")
+        val video1 = DetectedVideo(url = "https://cdn.example/movie.mp4")
+        val video2 = DetectedVideo(url = "https://cdn.example/trailer.webm")
+
+        assertEquals(
+            DetectedMediaBadge(DetectedMediaKind.VIDEO, 2),
+            buildDetectedMediaBadge(listOf(image, audio, video1, video2)),
+        )
+        assertEquals(
+            DetectedMediaBadge(DetectedMediaKind.AUDIO, 1),
+            buildDetectedMediaBadge(listOf(image, audio)),
+        )
+        assertEquals(
+            DetectedMediaBadge(DetectedMediaKind.IMAGE, 1),
+            buildDetectedMediaBadge(listOf(image)),
+        )
+        assertEquals(
+            null,
+            buildDetectedMediaBadge(listOf(DetectedVideo(url = "https://cdn.example/captions.vtt"))),
+        )
+        assertEquals(null, buildDetectedMediaBadge(emptyList()))
+    }
+
+    @Test
+    fun thumbnailPrefetch_isLimitedToTopRankedVideos() {
+        val progressive = DetectedVideo(
+            url = "https://cdn.example/movie.mp4",
+            timestamp = 3,
+        )
+        val hls = DetectedVideo(
+            url = "https://cdn.example/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            timestamp = 2,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+        val dash = DetectedVideo(
+            url = "https://cdn.example/manifest.mpd",
+            contentType = "application/dash+xml",
+            timestamp = 1,
+            validationState = MediaValidationState.FAILED,
+        )
+        val audio = DetectedVideo(
+            url = "https://cdn.example/theme.mp3",
+            contentType = "audio/mpeg",
+        )
+
+        assertEquals(
+            listOf(hls.url, progressive.url),
+            thumbnailPrefetchCandidates(listOf(progressive, audio, dash, hls)).map { it.url },
+        )
+        assertEquals(emptyList<DetectedVideo>(), thumbnailPrefetchCandidates(listOf(hls), limit = 0))
+    }
+
+    @Test
+    fun verifiedManifestOutranksNewerUrlGuess() {
+        val guessed = DetectedVideo(
+            url = "https://cdn.example/not-really-a-playlist.m3u8",
+            detectedBy = "url_pattern_m3u8",
+            timestamp = 20,
+        )
+        val actual = DetectedVideo(
+            url = "https://cdn.example/session/actual.m3u8",
+            detectedBy = "body_content_m3u8",
+            timestamp = 10,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+        )
+
+        assertEquals(
+            listOf(actual.url, guessed.url),
+            buildCastSheetVideos(listOf(guessed, actual)).map { it.url },
+        )
+    }
+
+    @Test
+    fun failedCandidateRanksBelowPendingCandidate() {
+        val failed = DetectedVideo(
+            url = "https://cdn.example/fake.m3u8",
+            detectedBy = "url_pattern_m3u8",
+            validationState = MediaValidationState.FAILED,
+        )
+        val pending = DetectedVideo(
+            url = "https://cdn.example/movie.mp4",
+            validationState = MediaValidationState.PENDING,
+        )
+
+        assertEquals(
+            listOf(pending.url, failed.url),
+            buildCastSheetVideos(listOf(failed, pending)).map { it.url },
+        )
+    }
+
+    @Test
+    fun recentObservationBreaksEqualEvidenceTie() {
+        val older = DetectedVideo(
+            url = "https://cdn.example/older.m3u8",
+            detectedBy = "body_content_m3u8",
+            timestamp = 100,
+            lastSeen = 100,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+        val active = DetectedVideo(
+            url = "https://cdn.example/active.m3u8",
+            detectedBy = "body_content_m3u8",
+            timestamp = 50,
+            lastSeen = 200,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+
+        assertEquals(
+            listOf(active.url, older.url),
+            buildCastSheetVideos(listOf(older, active)).map { it.url },
+        )
+    }
 }

@@ -3,6 +3,7 @@ package com.playbridge.sender.cast
 import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -11,6 +12,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
+import androidx.media3.common.C
+import androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist as Media3HlsMediaPlaylist
+import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist as Media3HlsMultivariantPlaylist
+import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser as Media3HlsPlaylistParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -21,8 +26,10 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -34,6 +41,20 @@ import java.util.concurrent.TimeUnit
 /**
  * Data class representing a detected video URL
  */
+@Serializable
+enum class MediaValidationState {
+    PENDING,
+    VERIFIED_PLAYABLE,
+    FAILED,
+}
+
+@Serializable
+enum class ThumbnailPreviewState {
+    NOT_REQUESTED,
+    READY,
+    UNAVAILABLE,
+}
+
 @Serializable
 data class DetectedVideo(
     val url: String,
@@ -61,9 +82,17 @@ data class DetectedVideo(
     val audioUrl: String? = null,
     val hlsRole: String? = null,
     val isSyntheticMaster: Boolean = false,
+    /** Detector-provided broad category; older messages are classified locally. */
+    val mediaKind: String? = null,
+    val width: Int? = null,
+    val height: Int? = null,
+    val lastSeen: Long = timestamp,
+    var validationState: MediaValidationState = MediaValidationState.PENDING,
+    var thumbnailState: ThumbnailPreviewState = ThumbnailPreviewState.NOT_REQUESTED,
 ) {
     val isSubtitle: Boolean
-        get() = contentType?.contains("vtt", ignoreCase = true) == true ||
+        get() = mediaKind.equals("subtitle", ignoreCase = true) ||
+                contentType?.contains("vtt", ignoreCase = true) == true ||
                 contentType?.contains("subrip", ignoreCase = true) == true ||
                 url.endsWith(".vtt", ignoreCase = true) ||
                 url.endsWith(".srt", ignoreCase = true)
@@ -76,6 +105,103 @@ data class DetectedVideo(
         get() = isSyntheticMaster ||
             !playlistBody.isNullOrBlank() ||
             !audioUrl.isNullOrBlank()
+
+    val kind: DetectedMediaKind
+        get() = classifyDetectedMediaKind(
+            explicitKind = mediaKind,
+            url = url,
+            contentType = contentType,
+            hlsRole = hlsRole,
+        )
+
+    val isAudio: Boolean get() = kind == DetectedMediaKind.AUDIO
+    val isImage: Boolean get() = kind == DetectedMediaKind.IMAGE
+    val isVideo: Boolean get() = kind == DetectedMediaKind.VIDEO
+
+    val effectiveValidationState: MediaValidationState
+        get() = when (isPlayable) {
+            true -> MediaValidationState.VERIFIED_PLAYABLE
+            false -> MediaValidationState.FAILED
+            null -> validationState
+        }
+}
+
+enum class DetectedMediaKind { VIDEO, AUDIO, IMAGE, SUBTITLE }
+
+internal fun detectionEvidenceScore(detectedBy: String?): Int = when (detectedBy?.lowercase()) {
+    "body_content_m3u8", "body_content_mpd" -> 80
+    "synthetic_hls_master" -> 75
+    "player_config" -> 70
+    "content_type" -> 50
+    "dom_source" -> 30
+    "url_extension" -> 20
+    "url_pattern_m3u8", "url_pattern_mpd" -> 10
+    "response_body_url" -> 5
+    else -> 15
+}
+
+internal fun validationStateForDetection(
+    detectedBy: String?,
+    isSyntheticMaster: Boolean,
+): MediaValidationState = when {
+    isSyntheticMaster -> MediaValidationState.VERIFIED_PLAYABLE
+    detectedBy == "body_content_m3u8" || detectedBy == "body_content_mpd" ->
+        MediaValidationState.VERIFIED_PLAYABLE
+    else -> MediaValidationState.PENDING
+}
+
+data class DetectedMediaBadge(
+    val kind: DetectedMediaKind,
+    val count: Int,
+)
+
+/**
+ * Chooses one concise toolbar badge instead of summing unrelated media types.
+ * Playable video is most actionable, followed by audio and then images.
+ */
+fun buildDetectedMediaBadge(media: List<DetectedVideo>): DetectedMediaBadge? {
+    val preferredKind = when {
+        media.any { it.isVideo } -> DetectedMediaKind.VIDEO
+        media.any { it.isAudio } -> DetectedMediaKind.AUDIO
+        media.any { it.isImage } -> DetectedMediaKind.IMAGE
+        else -> return null
+    }
+    return DetectedMediaBadge(
+        kind = preferredKind,
+        count = media.count { it.kind == preferredKind },
+    )
+}
+
+private val AUDIO_FILE_EXTENSIONS = setOf("mp3", "m4a", "aac", "ogg", "oga", "opus", "wav", "flac", "weba")
+private val IMAGE_FILE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "avif", "gif", "bmp", "heic", "heif")
+
+internal fun classifyDetectedMediaKind(
+    explicitKind: String?,
+    url: String,
+    contentType: String?,
+    hlsRole: String?,
+): DetectedMediaKind {
+    when (explicitKind?.lowercase()) {
+        "audio" -> return DetectedMediaKind.AUDIO
+        "image" -> return DetectedMediaKind.IMAGE
+        "subtitle" -> return DetectedMediaKind.SUBTITLE
+        "video" -> return DetectedMediaKind.VIDEO
+    }
+    val mime = contentType.orEmpty().lowercase()
+    val path = url.substringBefore('?').substringBefore('#').lowercase()
+    val extension = path.substringAfterLast('.', "")
+    return when {
+        mime.contains("vtt") || mime.contains("subrip") || extension == "vtt" || extension == "srt" ->
+            DetectedMediaKind.SUBTITLE
+        hlsRole.equals("audio_media", ignoreCase = true) ->
+            DetectedMediaKind.AUDIO
+        mime.contains("mpegurl") || mime.contains("application/dash") ||
+            path.contains("m3u8") || extension == "mpd" -> DetectedMediaKind.VIDEO
+        mime.startsWith("audio/") || extension in AUDIO_FILE_EXTENSIONS -> DetectedMediaKind.AUDIO
+        mime.startsWith("video/") -> DetectedMediaKind.VIDEO
+        mime.startsWith("image/") || extension in IMAGE_FILE_EXTENSIONS -> DetectedMediaKind.IMAGE
+        else -> DetectedMediaKind.VIDEO
+    }
 }
 
 /** Title used for the dedicated cast-sheet row for synthetic demuxed/exclusive masters. */
@@ -83,18 +209,10 @@ const val SYNTHETIC_CAST_ITEM_TITLE = "Synthetic playlist (Via phone)"
 
 /**
  * Ranking score for ordering and auto-picking detected videos (higher = better).
- * Adaptive streams (HLS **and** DASH) outrank progressive files, and streams whose
- * variant list has already been parsed outrank ones that haven't. DASH is treated at
- * full parity with HLS here — its variants live in [DetectedVideo.qualities] (there is
- * no dash equivalent of [DetectedVideo.hlsPlaylist]), so checking only `hlsPlaylist`
- * used to bury DASH manifests below plain video files.
- *
- * Crucially, a stream that merely *looks* adaptive (by `.mpd`/`.m3u8` URL or
- * content-type) is ranked as adaptive **immediately** — variant parsing and the
- * playability probe both run asynchronously, so if scoring waited on `qualities` /
- * `isPlayable` the stream would sit at the bottom on first open and only jump up once
- * the sheet was dismissed and reopened (by which point the async work had finished).
- * We only demote below progressive video when the probe has *verified* it unplayable.
+ * Verification is the strongest signal, followed by how the detector observed the
+ * candidate, then adaptive-stream metadata, replay headers, and thumbnail success.
+ * This keeps a URL that merely resembles an M3U8 below a manifest observed in a
+ * response body, while still ranking unchecked candidates sensibly during validation.
  *
  * Synthetic handoff masters outrank everything else so the cast sheet prefers them.
  *
@@ -102,27 +220,29 @@ const val SYNTHETIC_CAST_ITEM_TITLE = "Synthetic playlist (Via phone)"
  * never diverge.
  */
 fun DetectedVideo.castScore(): Int {
-    if (hasSyntheticHandoff) return 100
+    if (!isVideo) return 0
+    if (hasSyntheticHandoff) return 1_000
     val isDash = url.contains(".mpd", ignoreCase = true) ||
                  contentType?.contains("dash", ignoreCase = true) == true
     val isHlsUrl = url.contains(".m3u8", ignoreCase = true) ||
                    contentType?.contains("mpegurl", ignoreCase = true) == true
     val looksAdaptive = isDash || isHlsUrl
-    val base = when {
-        // Score 1: verified unplayable (dead link, 403, etc) — lowest, even if it looked adaptive.
-        isPlayable == false -> 1
-        // Score 5: adaptive stream with parsed variants (HLS master playlist or DASH manifest).
-        hlsPlaylist?.videoQualities?.isNotEmpty() == true -> 5
-        isDash && qualities.isNotEmpty() -> 5
-        // Score 4: looks like an adaptive stream (HLS/DASH) by URL or content-type. Ranked high
-        // up front, before the async variant/playability check resolves, so it never starts at
-        // the bottom on the first open.
-        looksAdaptive -> 4
-        // Score 2: normal video — unchecked or confirmed-playable rank equally; timestamp breaks ties.
-        else -> 2
+    val validationScore = when (effectiveValidationState) {
+        MediaValidationState.VERIFIED_PLAYABLE -> 600
+        MediaValidationState.PENDING -> 300
+        MediaValidationState.FAILED -> 0
     }
-    // Master playlists (multi-variant entry points) edge out same-tier single renditions.
-    return if (url.contains("master", ignoreCase = true)) base + 1 else base
+    val evidenceScore = detectionEvidenceScore(detectedBy)
+    val adaptiveScore = when {
+        hlsPlaylist?.validation == HlsPlaylistValidation.VALID_MASTER -> 35
+        hlsPlaylist?.validation == HlsPlaylistValidation.VALID_MEDIA -> 30
+        isDash && qualities.isNotEmpty() -> 35
+        looksAdaptive -> 20
+        else -> 10
+    }
+    val replayScore = if (!headers.isNullOrEmpty()) 15 else 0
+    val previewScore = if (thumbnailState == ThumbnailPreviewState.READY) 25 else 0
+    return validationScore + evidenceScore + adaptiveScore + replayScore + previewScore
 }
 
 /**
@@ -131,7 +251,7 @@ fun DetectedVideo.castScore(): Int {
  * and keeps the remaining non-synthetic streams ranked below it.
  */
 fun buildCastSheetVideos(videos: List<DetectedVideo>): List<DetectedVideo> {
-    val playable = videos.filter { !it.isSubtitle }
+    val playable = videos.filter { it.isVideo }
     val handoffSources = playable.filter { it.hasSyntheticHandoff }
     if (handoffSources.isEmpty()) {
         return playable.sortedWith(castSheetComparator())
@@ -163,9 +283,39 @@ fun buildCastSheetVideos(videos: List<DetectedVideo>): List<DetectedVideo> {
     return listOf(syntheticRow) + rest
 }
 
+fun buildCastSheetAudio(videos: List<DetectedVideo>): List<DetectedVideo> =
+    videos.filter { it.isAudio }.sortedByDescending { it.timestamp }
+
+fun buildCastSheetImages(videos: List<DetectedVideo>): List<DetectedVideo> =
+    videos.filter { it.isImage }.sortedByDescending { it.timestamp }
+
+internal fun thumbnailPrefetchCandidates(
+    media: List<DetectedVideo>,
+    limit: Int = 2,
+): List<DetectedVideo> = if (limit <= 0) {
+    emptyList()
+} else {
+    val candidates = buildCastSheetVideos(media)
+        .filter { it.effectiveValidationState != MediaValidationState.FAILED }
+    val bestVerified = candidates.firstOrNull {
+        it.effectiveValidationState == MediaValidationState.VERIFIED_PLAYABLE
+    }
+    val newestPending = candidates
+        .filter { it.effectiveValidationState == MediaValidationState.PENDING }
+        .maxByOrNull { maxOf(it.timestamp, it.lastSeen) }
+    buildList {
+        bestVerified?.let(::add)
+        newestPending?.takeIf { pending -> none { it.url == pending.url } }?.let(::add)
+        for (candidate in candidates) {
+            if (size >= limit) break
+            if (none { it.url == candidate.url }) add(candidate)
+        }
+    }.take(limit)
+}
+
 private fun castSheetComparator(): Comparator<DetectedVideo> =
     compareByDescending<DetectedVideo> { it.castScore() }
-        .thenByDescending { it.timestamp }
+        .thenByDescending { maxOf(it.timestamp, it.lastSeen) }
 
 /**
  * Data class representing an active subtitle period
@@ -184,6 +334,8 @@ data class Cue(val startTime: Long, val endTime: Long, val text: String) : Compa
 object VideoDetector {
 
     private const val TAG = "VideoDetector"
+    private const val MAX_HLS_THUMBNAIL_BYTES = 12 * 1024 * 1024
+    private const val HLS_THUMBNAIL_SEGMENT_COUNT = 3
 
     private var appContext: Context? = null
 
@@ -236,13 +388,16 @@ object VideoDetector {
     // Per-tab seen URLs to avoid duplicates
     private val tabSeenUrls = mutableMapOf<String, MutableSet<String>>()
 
+    // Last document generation accepted from the GeckoView detector per Kotlin tab.
+    private val detectorPageTracker = DetectorPageTracker()
+
     // Track ignored URLs (e.g., HLS variants) — global since variants can appear across tabs
     private val ignoredUrls = mutableSetOf<String>()
 
     /**
      * Incremented on the main thread whenever a video's playability or quality status changes.
-     * Observed inside derivedStateOf in BrowserActivity so the video list re-derives and the
-     * sheet's sort order updates automatically without the user closing and reopening the sheet.
+     * Observed as an explicit Compose input in BrowserActivity so the sheet's sort order updates
+     * automatically without the user closing and reopening it.
      */
     var processingVersion by mutableIntStateOf(0)
         private set
@@ -250,7 +405,55 @@ object VideoDetector {
     /** Must be called from the main thread after updating any video's sort-relevant fields. */
     private fun notifyVideoUpdated() { processingVersion++ }
 
-    private val thumbnailMutex = Mutex()
+    /**
+     * Duplicate detector messages replace a SnapshotStateList element with an enriched copy.
+     * A probe that started on the previous instance must publish its result to that current copy,
+     * otherwise the cache can contain a thumbnail while the sheet still ranks the row as pending.
+     * Called only from the main thread.
+     */
+    private fun syncProbeStateToTrackedCopies(
+        source: DetectedVideo,
+        fileSize: Boolean = false,
+        manifest: Boolean = false,
+        thumbnail: Boolean = false,
+    ) {
+        tabVideos.values.forEach { videos ->
+            videos.forEach trackedLoop@ { tracked ->
+                if (tracked === source || tracked.url != source.url) return@trackedLoop
+                if (source.tabId != -1 && tracked.tabId != source.tabId) return@trackedLoop
+                if (fileSize) {
+                    tracked.fileSize = source.fileSize
+                    tracked.fileSizeChecked = source.fileSizeChecked
+                }
+                if (manifest) {
+                    tracked.qualities = source.qualities
+                    tracked.qualitiesChecked = source.qualitiesChecked
+                    tracked.hlsPlaylist = source.hlsPlaylist
+                }
+                when (source.effectiveValidationState) {
+                    MediaValidationState.VERIFIED_PLAYABLE -> {
+                        tracked.isPlayable = true
+                        tracked.validationState = MediaValidationState.VERIFIED_PLAYABLE
+                    }
+                    MediaValidationState.FAILED -> {
+                        // Do not let an older probe overwrite stronger body evidence that arrived
+                        // on an enriched replacement while that probe was in flight.
+                        if (tracked.effectiveValidationState !=
+                            MediaValidationState.VERIFIED_PLAYABLE
+                        ) {
+                            tracked.isPlayable = false
+                            tracked.validationState = MediaValidationState.FAILED
+                        }
+                    }
+                    MediaValidationState.PENDING -> Unit
+                }
+                if (thumbnail) tracked.thumbnailState = source.thumbnailState
+            }
+        }
+    }
+
+    private val thumbnailWorkMutex = Mutex()
+    private val thumbnailRequests = ThumbnailRequestCoordinator<String, Bitmap>()
 
     /**
      * Get the observable video list for a specific tab.
@@ -265,6 +468,36 @@ object VideoDetector {
      */
     fun getVideoCountForTab(tabId: String): Int {
         return tabVideos[tabId]?.size ?: 0
+    }
+
+    /**
+     * Apply a committed navigation without allowing a delayed message for the
+     * same generation to erase media that already arrived.
+     */
+    internal fun onDetectorNavigation(
+        tabId: String,
+        incoming: DetectorPageVersion,
+    ): DetectorMessageOrder {
+        val order = detectorPageTracker.observe(tabId, incoming)
+        if (order == DetectorMessageOrder.ADVANCE) {
+            clearTabMedia(tabId)
+        }
+        return order
+    }
+
+    /**
+     * Prepare for a detection. A newer detection may arrive before its navigation
+     * message, so it advances and clears atomically; stale detections are rejected.
+     */
+    internal fun acceptDetectorVideo(tabId: String, incoming: DetectorPageVersion): Boolean {
+        return when (detectorPageTracker.observe(tabId, incoming)) {
+            DetectorMessageOrder.ADVANCE -> {
+                clearTabMedia(tabId)
+                true
+            }
+            DetectorMessageOrder.CURRENT -> true
+            DetectorMessageOrder.STALE -> false
+        }
     }
 
     /**
@@ -288,6 +521,12 @@ object VideoDetector {
 
                 val headersJson = try { message["headers"]?.jsonObject } catch(e: Exception) { null }
                 val headers = headersJson?.mapValues { it.value.jsonPrimitive.content }
+                val incomingDetectedBy =
+                    message["detectedBy"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+                val incomingTimestamp =
+                    message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis()
+                val incomingLastSeen =
+                    message["lastSeen"]?.jsonPrimitive?.longOrNull ?: incomingTimestamp
 
                 // Get or create per-tab structures
                 val videos = tabVideos.getOrPut(kotlinTabId) { mutableStateListOf() }
@@ -300,15 +539,30 @@ object VideoDetector {
                     val existing = videos[existingIndex]
                     val playlistBody = message["playlistBody"]?.jsonPrimitive?.contentOrNull
                     val audioUrl = message["audioUrl"]?.jsonPrimitive?.contentOrNull
+                    val incomingMediaKind = message["mediaKind"]?.jsonPrimitive?.contentOrNull
+                    val incomingWidth = message["width"]?.jsonPrimitive?.intOrNull
+                    val incomingHeight = message["height"]?.jsonPrimitive?.intOrNull
                     val isSynthetic =
                         message["isSyntheticMaster"]?.jsonPrimitive?.booleanOrNull ?: false
+                    val evidenceUpgraded =
+                        detectionEvidenceScore(incomingDetectedBy) >
+                            detectionEvidenceScore(existing.detectedBy)
+                    val incomingValidation = validationStateForDetection(
+                        incomingDetectedBy,
+                        isSynthetic,
+                    )
                     val shouldUpdate =
                         (headers != null && headers.isNotEmpty()) ||
                             !playlistBody.isNullOrBlank() ||
                             !audioUrl.isNullOrBlank() ||
-                            isSynthetic
+                            incomingMediaKind != null ||
+                            incomingWidth != null ||
+                            incomingHeight != null ||
+                            isSynthetic ||
+                            evidenceUpgraded ||
+                            incomingLastSeen > existing.lastSeen
                     if (shouldUpdate) {
-                        Log.i(TAG, "Updating detection for tab $kotlinTabId (headers/synth)")
+                        Log.i(TAG, "Updating detection for tab $kotlinTabId (evidence/media metadata)")
                         videos[existingIndex] = existing.copy(
                             headers = headers ?: existing.headers,
                             originUrl = message["originUrl"]?.jsonPrimitive?.content
@@ -321,25 +575,58 @@ object VideoDetector {
                             hlsRole = message["hlsRole"]?.jsonPrimitive?.contentOrNull
                                 ?: existing.hlsRole,
                             isSyntheticMaster = isSynthetic || existing.isSyntheticMaster,
+                            mediaKind = incomingMediaKind ?: existing.mediaKind,
+                            width = incomingWidth ?: existing.width,
+                            height = incomingHeight ?: existing.height,
+                            detectedBy = if (evidenceUpgraded) {
+                                incomingDetectedBy
+                            } else {
+                                existing.detectedBy
+                            },
+                            lastSeen = maxOf(existing.lastSeen, incomingLastSeen),
+                            validationState = if (
+                                incomingValidation == MediaValidationState.VERIFIED_PLAYABLE
+                            ) {
+                                MediaValidationState.VERIFIED_PLAYABLE
+                            } else {
+                                existing.validationState
+                            },
+                            isPlayable = if (
+                                incomingValidation == MediaValidationState.VERIFIED_PLAYABLE
+                            ) {
+                                true
+                            } else {
+                                existing.isPlayable
+                            },
                         )
+                        notifyVideoUpdated()
                     }
                     return
                 }
 
+                val isSynthetic =
+                    message["isSyntheticMaster"]?.jsonPrimitive?.booleanOrNull ?: false
                 val video = DetectedVideo(
                     url = url,
                     tabId = message["tabId"]?.jsonPrimitive?.content?.toIntOrNull() ?: -1,
                     contentType = message["contentType"]?.jsonPrimitive?.content,
-                    detectedBy = message["detectedBy"]?.jsonPrimitive?.content ?: "unknown",
+                    detectedBy = incomingDetectedBy,
                     originUrl = message["originUrl"]?.jsonPrimitive?.content,
                     headers = headers,
-                    timestamp = message["timestamp"]?.jsonPrimitive?.longOrNull ?: System.currentTimeMillis(),
+                    timestamp = incomingTimestamp,
                     originalMessage = message.toString(),
                     playlistBody = message["playlistBody"]?.jsonPrimitive?.contentOrNull,
                     audioUrl = message["audioUrl"]?.jsonPrimitive?.contentOrNull,
                     hlsRole = message["hlsRole"]?.jsonPrimitive?.contentOrNull,
-                    isSyntheticMaster = message["isSyntheticMaster"]?.jsonPrimitive?.booleanOrNull
-                        ?: false,
+                    isSyntheticMaster = isSynthetic,
+                    mediaKind = message["mediaKind"]?.jsonPrimitive?.contentOrNull,
+                    width = message["width"]?.jsonPrimitive?.intOrNull,
+                    height = message["height"]?.jsonPrimitive?.intOrNull,
+                    lastSeen = incomingLastSeen,
+                    validationState = validationStateForDetection(
+                        incomingDetectedBy,
+                        isSynthetic,
+                    ),
                 )
 
                 Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId")
@@ -394,22 +681,46 @@ object VideoDetector {
                 connection.disconnect()
 
                 if (responseCode in 200..299) {
-                    video.isPlayable = true
                     video.fileSize = if (contentLength > 0) contentLength else null
-                } else {
+                    val isAdaptiveManifest =
+                        video.url.contains(".m3u8", ignoreCase = true) ||
+                            video.url.contains(".mpd", ignoreCase = true) ||
+                            video.contentType?.contains("mpegurl", ignoreCase = true) == true ||
+                            video.contentType?.contains("dash", ignoreCase = true) == true
+                    if (!isAdaptiveManifest) {
+                        // A successful HEAD is useful evidence for a progressive file, but it says
+                        // nothing about whether an adaptive URL actually contains a valid manifest.
+                        video.isPlayable = true
+                        video.validationState = MediaValidationState.VERIFIED_PLAYABLE
+                    }
+                } else if (responseCode == HttpURLConnection.HTTP_NOT_FOUND ||
+                    responseCode == HttpURLConnection.HTTP_GONE
+                ) {
                     video.isPlayable = false
-                    Log.w(TAG, "Video unplayable: HTTP $responseCode for ${video.url}")
+                    video.validationState = MediaValidationState.FAILED
+                    Log.w(TAG, "Video probe confirmed unavailable: HTTP $responseCode")
+                } else {
+                    // HEAD is commonly rejected even when GET playback works. Only a definitive
+                    // missing response should invalidate a candidate; manifest/preview work will
+                    // establish playability for other statuses.
+                    Log.d(TAG, "Video HEAD probe inconclusive: HTTP $responseCode")
                 }
 
                 video.fileSizeChecked = true
                 Log.d(TAG, "File size for ${video.url.take(50)}: ${video.fileSize ?: "unknown"}")
 
-                withContext(Dispatchers.Main) { notifyVideoUpdated() }
+                withContext(Dispatchers.Main) {
+                    syncProbeStateToTrackedCopies(video, fileSize = true)
+                    notifyVideoUpdated()
+                }
                 video.fileSize
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching file size: ${e.message}")
                 video.fileSizeChecked = true
-                withContext(Dispatchers.Main) { notifyVideoUpdated() }
+                withContext(Dispatchers.Main) {
+                    syncProbeStateToTrackedCopies(video, fileSize = true)
+                    notifyVideoUpdated()
+                }
                 null
             }
         }
@@ -609,12 +920,21 @@ object VideoDetector {
                     val qualities = DashParser.parseManifest(video.url, video.headers)
                     video.qualities = qualities
                     video.qualitiesChecked = true
-                    if (qualities.isNotEmpty()) video.isPlayable = true
+                    if (qualities.isNotEmpty()) {
+                        video.isPlayable = true
+                        video.validationState = MediaValidationState.VERIFIED_PLAYABLE
+                    } else {
+                        video.isPlayable = false
+                        video.validationState = MediaValidationState.FAILED
+                    }
                     Log.d(TAG, "Fetched ${qualities.size} DASH qualities for ${video.url}")
                     // Bump the version so the cast sheet re-derives and re-ranks live — the
                     // HLS path below does this, but DASH was returning early without it, so a
                     // parsed DASH stream only moved up after the sheet was reopened.
-                    withContext(Dispatchers.Main) { notifyVideoUpdated() }
+                    withContext(Dispatchers.Main) {
+                        syncProbeStateToTrackedCopies(video, manifest = true)
+                        notifyVideoUpdated()
+                    }
                     return@withContext qualities
                 }
 
@@ -626,6 +946,23 @@ object VideoDetector {
                     video.hlsPlaylist = playlist
                     video.qualities = playlist.videoQualities
                     video.qualitiesChecked = true
+                    when (playlist.validation) {
+                        HlsPlaylistValidation.VALID_MASTER,
+                        HlsPlaylistValidation.VALID_MEDIA -> {
+                            video.validationState = MediaValidationState.VERIFIED_PLAYABLE
+                            video.isPlayable = true
+                        }
+                        HlsPlaylistValidation.INVALID -> {
+                            video.validationState = MediaValidationState.FAILED
+                            video.isPlayable = false
+                        }
+                        HlsPlaylistValidation.FETCH_FAILED -> {
+                            // A replay request can fail after the extension has already observed
+                            // and parsed the real response. Preserve that stronger evidence and
+                            // leave unchecked URLs retryable from a visible row.
+                            video.qualitiesChecked = false
+                        }
+                    }
 
                     if (playlist.segmentPrefixes.isNotEmpty()) {
                         withContext(Dispatchers.Main) {
@@ -646,7 +983,6 @@ object VideoDetector {
                     }
 
                     if (playlist.videoQualities.isNotEmpty()) {
-                        video.isPlayable = true
                         withContext(Dispatchers.Main) {
                             // Add variants to ignore list so future detections are filtered
                             playlist.videoQualities.forEach { quality ->
@@ -660,13 +996,13 @@ object VideoDetector {
                                 }
                             }
                         }
-                    } else if (playlist.segmentPrefixes.isNotEmpty()) {
-                        // It's a media playlist directly (no variants), so it is playable
-                        video.isPlayable = true
                     }
 
                     Log.d(TAG, "Fetched ${playlist.videoQualities.size} qualities for ${video.url}")
-                    withContext(Dispatchers.Main) { notifyVideoUpdated() }
+                    withContext(Dispatchers.Main) {
+                        syncProbeStateToTrackedCopies(video, manifest = true)
+                        notifyVideoUpdated()
+                    }
                     playlist.videoQualities
 
                 } else {
@@ -676,44 +1012,82 @@ object VideoDetector {
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching HLS qualities for ${video.url}: ${e.message}")
                 video.isPlayable = false
+                video.validationState = MediaValidationState.FAILED
                 video.qualitiesChecked = true
-                withContext(Dispatchers.Main) { notifyVideoUpdated() }
+                withContext(Dispatchers.Main) {
+                    syncProbeStateToTrackedCopies(video, manifest = true)
+                    notifyVideoUpdated()
+                }
                 emptyList()
             }
         }
     }
 
-    /**
-     * Fetch a video thumbnail. Routes to HLS-aware extraction for m3u8 streams (downloads a TS
-     * segment and runs MMR locally) or falls back to direct MMR for progressive files.
-     */
-    suspend fun fetchThumbnail(video: DetectedVideo): Bitmap? {
-        if (video.isSubtitle) return null
+    /** Fetches a thumbnail through HLS sample reconstruction or a bounded progressive download. */
+    internal suspend fun fetchThumbnail(
+        video: DetectedVideo,
+        priority: ThumbnailRequestPriority = ThumbnailRequestPriority.VISIBLE,
+    ): Bitmap? {
+        if (!video.isVideo) return null
         if (video.url.startsWith("data:", ignoreCase = true)) return null
-        synchronized(thumbnailCache) { thumbnailCache[video.url]?.let { return it } }
-
-        return thumbnailMutex.withLock {
-            // Check cache again after acquiring lock in case another coroutine fetched it
-            synchronized(thumbnailCache) { thumbnailCache[video.url]?.let { return@withLock it } }
-
-            withContext(Dispatchers.IO) {
-                val isHls = video.url.contains(".m3u8", ignoreCase = true) ||
-                            video.contentType?.contains("mpegurl", ignoreCase = true) == true
-                val bmp: Bitmap? = if (isHls && appContext != null) {
-                    fetchHlsThumbnail(video)
-                } else if (appContext != null) {
-                    fetchProgressiveThumbnail(video)
-                } else {
-                    null
+        val cached = synchronized(thumbnailCache) { thumbnailCache[video.url] }
+        if (cached != null) {
+            withContext(Dispatchers.Main) {
+                val changed = video.thumbnailState != ThumbnailPreviewState.READY ||
+                    video.effectiveValidationState != MediaValidationState.VERIFIED_PLAYABLE
+                video.thumbnailState = ThumbnailPreviewState.READY
+                video.isPlayable = true
+                video.validationState = MediaValidationState.VERIFIED_PLAYABLE
+                if (changed) {
+                    syncProbeStateToTrackedCopies(video, thumbnail = true)
+                    notifyVideoUpdated()
                 }
-                if (bmp != null) {
-                    video.isPlayable = true
-                    synchronized(thumbnailCache) { thumbnailCache[video.url] = bmp }
+            }
+            return cached
+        }
+
+        val bitmap = thumbnailRequests.run(video.url, priority) {
+            thumbnailWorkMutex.withLock {
+                // Another URL can finish while this request waits for the decoder slot.
+                synchronized(thumbnailCache) {
+                    thumbnailCache[video.url]
+                } ?: withContext(Dispatchers.IO) {
+                    val isHls = video.url.contains(".m3u8", ignoreCase = true) ||
+                        video.contentType?.contains("mpegurl", ignoreCase = true) == true
+                    val bmp: Bitmap? = if (isHls && appContext != null) {
+                        fetchHlsThumbnail(video)
+                    } else if (appContext != null) {
+                        fetchProgressiveThumbnail(video)
+                    } else {
+                        null
+                    }
+                    if (bmp != null) {
+                        synchronized(thumbnailCache) { thumbnailCache[video.url] = bmp }
+                    }
+                    bmp
                 }
-                withContext(Dispatchers.Main) { notifyVideoUpdated() }
-                bmp
             }
         }
+        withContext(Dispatchers.Main) {
+            val nextPreviewState = if (bitmap != null) {
+                ThumbnailPreviewState.READY
+            } else {
+                ThumbnailPreviewState.UNAVAILABLE
+            }
+            val changed = video.thumbnailState != nextPreviewState ||
+                (bitmap != null &&
+                    video.effectiveValidationState != MediaValidationState.VERIFIED_PLAYABLE)
+            video.thumbnailState = nextPreviewState
+            if (bitmap != null) {
+                video.isPlayable = true
+                video.validationState = MediaValidationState.VERIFIED_PLAYABLE
+            }
+            if (changed) {
+                syncProbeStateToTrackedCopies(video, thumbnail = true)
+                notifyVideoUpdated()
+            }
+        }
+        return bitmap
     }
 
     /**
@@ -727,10 +1101,10 @@ object VideoDetector {
         return try {
             // Download first 2MB
             if (!downloadSegmentToFile(video.url, video.headers, tempFile, maxBytes = 2 * 1024 * 1024)) {
-                Log.w(TAG, "Progressive thumbnail: download failed for ${video.url.take(60)}")
+                Log.w(TAG, "Progressive thumbnail download failed")
                 return null
             }
-            extractThumbnailFromFile(tempFile, video.url)
+            extractThumbnailFromFile(tempFile)
         } finally {
             tempFile.delete()
         }
@@ -739,7 +1113,7 @@ object VideoDetector {
     /**
      * Runs MediaMetadataRetriever on a local file.
      */
-    private fun extractThumbnailFromFile(file: File, originalUrl: String): Bitmap? {
+    private fun extractThumbnailFromFile(file: File): Bitmap? {
         var result: Bitmap? = null
         var exception: Exception? = null
         val latch = CountDownLatch(1)
@@ -754,7 +1128,10 @@ object VideoDetector {
                     
                     // For short clips, seek to 0.5s. For others, seek to 1s (safe within 2MB chunk).
                     val seekUs = if (durationMs > 2_000L) 1_000_000L else 500_000L
-                    result = retriever.getFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    result = retriever.getFrameAtTime(
+                        seekUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                    ) ?: retriever.getFrameAtTime()
                 } finally {
                     retriever.release()
                 }
@@ -765,24 +1142,29 @@ object VideoDetector {
         }.start()
 
         val completed = latch.await(10L, TimeUnit.SECONDS)
+        val failure = exception
         return when {
             !completed -> {
-                Log.w(TAG, "MMR extraction timed out for ${originalUrl.take(60)}")
+                Log.w(TAG, "MMR thumbnail extraction timed out")
                 null
             }
-            exception != null -> {
-                Log.w(TAG, "MMR extraction failed for ${originalUrl.take(60)}: ${exception!!.message}")
+            failure != null -> {
+                Log.w(TAG, "MMR extraction failed: ${failure.message}")
                 null
             }
             else -> result
         }
     }
 
+    private data class ParsedThumbnailPlaylist(
+        val url: String,
+        val playlist: Media3HlsMediaPlaylist,
+    )
+
     /**
-     * HLS thumbnail extraction:
-     * 1. Fetch the media playlist to get segment URLs.
-     * 2. Download ~3 MB of a segment from around the 25% mark.
-     * 3. Run MMR on the local .ts file — MMR handles MPEG-TS reliably without needing to speak HLS.
+     * HLS thumbnail extraction reconstructs a small, locally decodable sample. Media playlists can
+     * use MPEG-TS, fragmented MP4 initialization sections, byte ranges, or AES-128 encryption, so
+     * treating a URI line as a standalone `.ts` file is not sufficient.
      */
     private fun fetchHlsThumbnail(video: DetectedVideo): Bitmap? {
         val ctx = appContext ?: return null
@@ -798,73 +1180,268 @@ object VideoDetector {
             }
         }
 
-        val segmentUrls = fetchMediaSegmentUrls(mediaPlaylistUrl, video.headers)
-        if (segmentUrls.isNullOrEmpty()) {
-            Log.w(TAG, "HLS thumbnail: no segments found in $mediaPlaylistUrl")
+        val parsed = fetchThumbnailMediaPlaylist(mediaPlaylistUrl, video.headers)
+        val segments = parsed?.playlist?.segments?.filterNot { it.hasGapTag }.orEmpty()
+        if (parsed == null || segments.isEmpty()) {
+            Log.w(TAG, "HLS thumbnail: no usable media segments")
             return null
         }
 
         // ~25% into the segment list for a mid-stream frame (avoids intros)
-        val targetIndex = ((segmentUrls.size - 1) * 0.25).toInt()
-        val segmentUrl = segmentUrls[targetIndex]
-        Log.d(TAG, "HLS thumbnail: segment [${targetIndex + 1}/${segmentUrls.size}]")
+        val targetIndex = ((segments.size - 1) * 0.25).toInt()
+        val target = segments[targetIndex]
+        val isFragmentedMp4 = target.initializationSegment != null
+        Log.d(
+            TAG,
+            "HLS thumbnail: segment [${targetIndex + 1}/${segments.size}] " +
+                "init=$isFragmentedMp4 encrypted=${target.fullSegmentEncryptionKeyUri != null} " +
+                "range=${target.byteRangeLength != C.LENGTH_UNSET.toLong()}",
+        )
 
-        val tempFile = File.createTempFile("playbridge_thumb_", ".ts", ctx.cacheDir)
+        if (target.drmInitData != null && target.fullSegmentEncryptionKeyUri == null) {
+            Log.w(TAG, "HLS thumbnail: sample-encrypted/DRM stream cannot be decoded for preview")
+            return null
+        }
+
+        val suffix = if (isFragmentedMp4) ".mp4" else ".ts"
+        val tempFile = File.createTempFile("playbridge_thumb_", suffix, ctx.cacheDir)
         return try {
-            if (!downloadSegmentToFile(segmentUrl, video.headers, tempFile)) {
-                Log.w(TAG, "HLS thumbnail: segment download failed")
+            if (!writeHlsThumbnailSample(parsed, segments, targetIndex, video.headers, tempFile)) {
+                Log.w(TAG, "HLS thumbnail: could not reconstruct a decodable sample")
                 return null
             }
-            extractThumbnailFromFile(tempFile, video.url)
+            extractThumbnailFromFile(tempFile)
         } finally {
             tempFile.delete()
         }
     }
 
-    /**
-     * Fetches a media (.m3u8) playlist and returns all segment URLs in order.
-     * Automatically recurses into a master playlist's first variant if needed.
-     */
-    private fun fetchMediaSegmentUrls(mediaPlaylistUrl: String, headers: Map<String, String>?): List<String>? {
+    private fun fetchThumbnailMediaPlaylist(
+        playlistUrl: String,
+        headers: Map<String, String>?,
+        depth: Int = 0,
+        multivariant: Media3HlsMultivariantPlaylist? = null,
+    ): ParsedThumbnailPlaylist? {
+        if (depth > 3) return null
+        val connection = try {
+            openThumbnailConnection(playlistUrl, headers)
+        } catch (e: Exception) {
+            Log.w(TAG, "HLS thumbnail playlist connection failed: ${e.message}")
+            return null
+        }
         return try {
-            val conn = URL(mediaPlaylistUrl).openConnection() as HttpURLConnection
-            conn.requestMethod = "GET"
-            conn.connectTimeout = 8_000
-            conn.readTimeout = 8_000
-            conn.instanceFollowRedirects = true
-            headers?.forEach { (k, v) ->
-                if (!k.equals("Range", ignoreCase = true) &&
-                    PLAYER_SKIP_HEADERS.none { it.equals(k, ignoreCase = true) }) {
-                    conn.setRequestProperty(k, v)
+            if (connection.responseCode !in 200..299) return null
+            val resolvedPlaylistUrl = connection.url.toString()
+            val parsed = connection.inputStream.use { input ->
+                val parser = if (multivariant != null) {
+                    Media3HlsPlaylistParser(multivariant, null)
+                } else {
+                    Media3HlsPlaylistParser()
+                }
+                parser.parse(Uri.parse(resolvedPlaylistUrl), input)
+            }
+            when (parsed) {
+                is Media3HlsMediaPlaylist -> ParsedThumbnailPlaylist(resolvedPlaylistUrl, parsed)
+                is Media3HlsMultivariantPlaylist -> {
+                    val videoVariants = parsed.variants.filter { variant ->
+                        variant.format.width > 0 ||
+                            variant.format.height > 0 ||
+                            variant.format.codecs.orEmpty().contains(
+                                Regex("avc|hvc|hev|vp9|vp0?9|av01", RegexOption.IGNORE_CASE),
+                            )
+                    }.ifEmpty { parsed.variants }
+                    val variant = videoVariants.minByOrNull { variant ->
+                        variant.format.averageBitrate.takeIf { it > 0 }
+                            ?: variant.format.peakBitrate.takeIf { it > 0 }
+                            ?: Int.MAX_VALUE
+                    } ?: return null
+                    fetchThumbnailMediaPlaylist(
+                        playlistUrl = variant.url.toString(),
+                        headers = headers,
+                        depth = depth + 1,
+                        multivariant = parsed,
+                    )
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "HLS thumbnail playlist parse failed: ${e.message}")
+            null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun writeHlsThumbnailSample(
+        parsed: ParsedThumbnailPlaylist,
+        segments: List<Media3HlsMediaPlaylist.Segment>,
+        targetIndex: Int,
+        headers: Map<String, String>?,
+        outFile: File,
+    ): Boolean {
+        val target = segments[targetIndex]
+        val keyCache = mutableMapOf<String, ByteArray>()
+        var totalBytes = 0
+        var writtenSegments = 0
+
+        return try {
+            outFile.outputStream().use { output ->
+                target.initializationSegment?.let { init ->
+                    val bytes = fetchHlsResource(
+                        playlistUrl = parsed.url,
+                        resource = init,
+                        headers = headers,
+                        keyCache = keyCache,
+                        maxBytes = MAX_HLS_THUMBNAIL_BYTES,
+                    ) ?: return false
+                    output.write(bytes)
+                    totalBytes += bytes.size
+                }
+
+                for (segment in segments.drop(targetIndex).take(HLS_THUMBNAIL_SEGMENT_COUNT)) {
+                    if (segment.relativeDiscontinuitySequence != target.relativeDiscontinuitySequence) break
+                    if (segment.drmInitData != null && segment.fullSegmentEncryptionKeyUri == null) break
+                    if (!sameHlsInitializationSection(segment, target)) break
+                    val remaining = MAX_HLS_THUMBNAIL_BYTES - totalBytes
+                    if (remaining <= 0) break
+                    val bytes = fetchHlsResource(
+                        playlistUrl = parsed.url,
+                        resource = segment,
+                        headers = headers,
+                        keyCache = keyCache,
+                        maxBytes = remaining,
+                    ) ?: break
+                    output.write(bytes)
+                    totalBytes += bytes.size
+                    writtenSegments++
                 }
             }
-            if (headers?.keys?.none { it.equals("User-Agent", ignoreCase = true) } != false) {
-                conn.setRequestProperty("User-Agent",
-                    "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
-            }
-            val content = conn.inputStream.use { BufferedReader(InputStreamReader(it)).readText() }
-            if (!content.startsWith("#EXTM3U")) return null
-
-            val baseUri = URI(mediaPlaylistUrl)
-            // If this is a master playlist, recurse into its first variant
-            if (content.contains("#EXT-X-STREAM-INF")) {
-                val variantUrl = content.lineSequence()
-                    .dropWhile { !it.startsWith("#EXT-X-STREAM-INF") }
-                    .drop(1)
-                    .firstOrNull { it.isNotEmpty() && !it.startsWith("#") }
-                    ?.let { baseUri.resolve(it).toString() }
-                    ?: return null
-                return fetchMediaSegmentUrls(variantUrl, headers)
-            }
-
-            content.lineSequence()
-                .filter { it.isNotEmpty() && !it.startsWith("#") }
-                .map { baseUri.resolve(it).toString() }
-                .toList()
-                .takeIf { it.isNotEmpty() }
+            Log.d(TAG, "HLS thumbnail: reconstructed $writtenSegments segment(s), $totalBytes bytes")
+            writtenSegments > 0 && outFile.length() > 0L
         } catch (e: Exception) {
-            Log.w(TAG, "fetchMediaSegmentUrls failed for $mediaPlaylistUrl: ${e.message}")
+            Log.w(TAG, "HLS thumbnail sample reconstruction failed: ${e.message}")
+            false
+        }
+    }
+
+    private fun sameHlsInitializationSection(
+        left: Media3HlsMediaPlaylist.Segment,
+        right: Media3HlsMediaPlaylist.Segment,
+    ): Boolean {
+        val leftInit = left.initializationSegment
+        val rightInit = right.initializationSegment
+        if (leftInit == null || rightInit == null) return leftInit == rightInit
+        return leftInit.url == rightInit.url &&
+            leftInit.byteRangeOffset == rightInit.byteRangeOffset &&
+            leftInit.byteRangeLength == rightInit.byteRangeLength &&
+            leftInit.fullSegmentEncryptionKeyUri == rightInit.fullSegmentEncryptionKeyUri &&
+            leftInit.encryptionIV == rightInit.encryptionIV
+    }
+
+    private fun fetchHlsResource(
+        playlistUrl: String,
+        resource: Media3HlsMediaPlaylist.SegmentBase,
+        headers: Map<String, String>?,
+        keyCache: MutableMap<String, ByteArray>,
+        maxBytes: Int,
+    ): ByteArray? {
+        val resourceUrl = URI(playlistUrl).resolve(resource.url).toString()
+        val payload = fetchThumbnailBytes(
+            url = resourceUrl,
+            headers = headers,
+            offset = resource.byteRangeOffset,
+            length = resource.byteRangeLength,
+            maxBytes = maxBytes,
+        ) ?: return null
+
+        val keyReference = resource.fullSegmentEncryptionKeyUri ?: return payload
+        val iv = resource.encryptionIV ?: return null
+        val keyUrl = URI(playlistUrl).resolve(keyReference).toString()
+        val key = keyCache[keyUrl] ?: fetchThumbnailBytes(
+            url = keyUrl,
+            headers = headers,
+            offset = 0L,
+            length = C.LENGTH_UNSET.toLong(),
+            maxBytes = 32,
+        )?.also { keyCache[keyUrl] = it } ?: return null
+        return decryptHlsAes128(payload, key, iv)
+    }
+
+    private fun fetchThumbnailBytes(
+        url: String,
+        headers: Map<String, String>?,
+        offset: Long,
+        length: Long,
+        maxBytes: Int,
+    ): ByteArray? {
+        val connection = try {
+            openThumbnailConnection(url, headers)
+        } catch (e: Exception) {
+            Log.w(TAG, "HLS thumbnail resource connection failed: ${e.message}")
+            return null
+        }
+        val range = hlsRangeHeader(offset, length)
+        if (range != null) connection.setRequestProperty("Range", range)
+        return try {
+            val status = connection.responseCode
+            if (status !in 200..299) return null
+            connection.inputStream.use { input ->
+                if (range != null && status != HttpURLConnection.HTTP_PARTIAL && offset > 0L) {
+                    var remainingSkip = offset
+                    while (remainingSkip > 0L) {
+                        val skipped = input.skip(remainingSkip)
+                        if (skipped <= 0L) {
+                            if (input.read() < 0) return null
+                            remainingSkip--
+                        } else {
+                            remainingSkip -= skipped
+                        }
+                    }
+                }
+
+                val expected = length.takeIf { it > 0L } ?: Long.MAX_VALUE
+                val output = ByteArrayOutputStream(minOf(maxBytes, 256 * 1024))
+                val buffer = ByteArray(16 * 1024)
+                var total = 0L
+                while (total < expected) {
+                    val allowed = minOf(buffer.size.toLong(), expected - total).toInt()
+                    val read = input.read(buffer, 0, allowed)
+                    if (read < 0) break
+                    if (total + read > maxBytes) return null
+                    output.write(buffer, 0, read)
+                    total += read
+                }
+                if (length > 0L && total < length) return null
+                output.toByteArray().takeIf { it.isNotEmpty() }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "HLS thumbnail resource fetch failed: ${e.message}")
             null
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun openThumbnailConnection(
+        url: String,
+        headers: Map<String, String>?,
+    ): HttpURLConnection = (URL(url).openConnection() as HttpURLConnection).apply {
+        requestMethod = "GET"
+        connectTimeout = 8_000
+        readTimeout = 8_000
+        instanceFollowRedirects = true
+        headers?.forEach { (key, value) ->
+            if (!key.equals("Range", ignoreCase = true) &&
+                PLAYER_SKIP_HEADERS.none { it.equals(key, ignoreCase = true) }) {
+                setRequestProperty(key, value)
+            }
+        }
+        if (headers?.keys?.none { it.equals("User-Agent", ignoreCase = true) } != false) {
+            setRequestProperty(
+                "User-Agent",
+                "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 " +
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+            )
         }
     }
 
@@ -907,7 +1484,7 @@ object VideoDetector {
             }
             outFile.length() > 0
         } catch (e: Exception) {
-            Log.w(TAG, "downloadSegmentToFile failed for $segmentUrl: ${e.message}")
+            Log.w(TAG, "Thumbnail media download failed: ${e.message}")
             false
         }
     }
@@ -916,6 +1493,11 @@ object VideoDetector {
      * Clear detected videos for a specific tab.
      */
     fun clearTab(tabId: String) {
+        clearTabMedia(tabId)
+        detectorPageTracker.forget(tabId)
+    }
+
+    private fun clearTabMedia(tabId: String) {
         Log.d(TAG, "Clearing videos for tab $tabId (had ${tabVideos[tabId]?.size ?: 0})")
         tabVideos.remove(tabId)
         tabSeenUrls.remove(tabId)
@@ -928,6 +1510,7 @@ object VideoDetector {
         Log.d(TAG, "Clearing all detected videos across ${tabVideos.size} tabs")
         tabVideos.clear()
         tabSeenUrls.clear()
+        detectorPageTracker.clear()
         ignoredUrls.clear()
     }
 

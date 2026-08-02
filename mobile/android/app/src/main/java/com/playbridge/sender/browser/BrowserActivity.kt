@@ -130,6 +130,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
 
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collectLatest
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.withContext
 import com.playbridge.sender.data.history.TabEntity
@@ -957,7 +958,7 @@ class BrowserActivity : ComponentActivity() {
             var isSecureConnection by remember { mutableStateOf(false) }
             var siteSecurityInfo by remember { mutableStateOf<SiteSecurityInfo?>(null) }
             var showSiteInfoSheet by remember { mutableStateOf(false) }
-            var showBrowserConnectSheet by remember { mutableStateOf(false) }
+            var showBrowserConnectDialog by remember { mutableStateOf(false) }
             var isFullscreen by remember { mutableStateOf(false) }
             var isFullscreenVideoPortrait by remember { mutableStateOf(false) }
 
@@ -1015,20 +1016,16 @@ class BrowserActivity : ComponentActivity() {
             var pendingContentPayload by remember { mutableStateOf<playbridge.PlayPayload?>(null) }
 
             val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsState()
-            val detectedVideos by remember(selectedTabId, forcePlaylistSheet, forcedVideos) {
-                derivedStateOf {
-                    // Read processingVersion so this re-derives whenever any video's
-                    // isPlayable / qualities / hlsPlaylist fields are updated by background fetches.
-                    @Suppress("UNUSED_EXPRESSION")
-                    VideoDetector.processingVersion
-                    if (forcedVideos != null) forcedVideos!!
-                    else if (forcePlaylistSheet != null) listOf(forcePlaylistSheet!!)
-                    else VideoDetector.getVideosForTab(selectedTabId ?: "").toList()
-                }
+            // Keep the revision as an explicit Compose input. DetectedVideo contains mutable probe
+            // fields, so a copied List can remain structurally equal even though its ranking changed.
+            val detectedMediaRevision = VideoDetector.processingVersion
+            val detectedVideos = when {
+                forcedVideos != null -> forcedVideos!!
+                forcePlaylistSheet != null -> listOf(forcePlaylistSheet!!)
+                else -> VideoDetector.getVideosForTab(selectedTabId ?: "").toList()
             }
-            val videoCount by remember(selectedTabId) {
-                derivedStateOf { detectedVideos.count { !it.isSubtitle } }
-            }
+            val videoCount = detectedVideos.count { it.isVideo }
+            val detectedMediaBadge = buildDetectedMediaBadge(detectedVideos)
 
             val haptic = LocalHapticFeedback.current
 
@@ -1037,7 +1034,7 @@ class BrowserActivity : ComponentActivity() {
 
                 scope.launch {
                     if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice) {
-                        showBrowserConnectSheet = true
+                        showBrowserConnectDialog = true
                         return@launch
                     }
                     val externalTarget = connectionViewModel.activeExternalDevice.value
@@ -1057,11 +1054,10 @@ class BrowserActivity : ComponentActivity() {
                             if (autoSwitchToRemote) currentScreen = Screen.Remote
                             return@launch
                         }
-                        val video = detectedVideos.filter { !it.isSubtitle }
-                            .sortedWith(
-                                compareByDescending<DetectedVideo> { it.castScore() }
-                                    .thenByDescending { it.timestamp }
-                            )
+                        val video = buildCastSheetVideos(detectedVideos)
+                            .filter {
+                                it.effectiveValidationState != MediaValidationState.FAILED
+                            }
                             .firstOrNull()
                         if (video == null) {
                             Toast.makeText(this@BrowserActivity, "No video detected to cast", Toast.LENGTH_SHORT).show()
@@ -1149,11 +1145,10 @@ class BrowserActivity : ComponentActivity() {
                     }
 
                     // 2. Check detected videos
-                    val playable = detectedVideos.filter { !it.isSubtitle }
-                        .sortedWith(
-                            compareByDescending<DetectedVideo> { it.castScore() }
-                                .thenByDescending { it.timestamp }
-                        )
+                    val playable = buildCastSheetVideos(detectedVideos)
+                        .filter {
+                            it.effectiveValidationState != MediaValidationState.FAILED
+                        }
 
                     if (playable.isNotEmpty()) {
                         val video = playable.first()
@@ -1218,26 +1213,44 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            // Eagerly parse HLS/DASH qualities and fetch thumbnails for the current tab's videos
-            // so results are ready before the user opens the sheet.
+            // Parse adaptive manifests as soon as they are detected. This is lightweight metadata
+            // work that improves ranking and removes variant/segment duplicates before the sheet
+            // opens; thumbnail decoding is scheduled separately below.
             LaunchedEffect(selectedTabId) {
                 val tabId = selectedTabId ?: return@LaunchedEffect
-                val processedUrls = mutableSetOf<String>()
-                // Use snapshotFlow to observe additions to the tab's video list without
-                // restarting this LaunchedEffect (which would cancel pending background tasks).
-                snapshotFlow { VideoDetector.getVideosForTab(tabId) }.collect { videos ->
+                val parsedManifestUrls = mutableSetOf<String>()
+                snapshotFlow { VideoDetector.getVideosForTab(tabId).toList() }.collect { videos ->
                     for (video in videos) {
-                        if (video.isSubtitle) continue
-                        if (processedUrls.contains(video.url)) continue
+                        if (!video.isVideo || video.qualitiesChecked) continue
+                        val isAdaptiveManifest =
+                            video.url.contains(".m3u8", ignoreCase = true) ||
+                                video.url.contains(".mpd", ignoreCase = true) ||
+                                video.contentType?.contains("mpegurl", ignoreCase = true) == true ||
+                                video.contentType?.contains("dash", ignoreCase = true) == true
+                        if (isAdaptiveManifest && parsedManifestUrls.add(video.url)) {
+                            launch { VideoDetector.fetchHlsQualities(video, tabId) }
+                        }
+                    }
+                }
+            }
 
-                        if (!video.qualitiesChecked || !VideoDetector.hasThumbnail(video.url)) {
-                            processedUrls.add(video.url)
-                            if (!video.qualitiesChecked) {
-                                launch { VideoDetector.fetchHlsQualities(video, tabId) }
-                            }
-                            if (!VideoDetector.hasThumbnail(video.url)) {
-                                launch { VideoDetector.fetchThumbnail(video) }
-                            }
+            // Warm only the two best candidates. collectLatest cancels queued speculative work
+            // when detection/ranking changes or the user navigates; visible sheet rows use a
+            // higher-priority request and can immediately retry a failed prefetch.
+            LaunchedEffect(selectedTabId) {
+                val tabId = selectedTabId ?: return@LaunchedEffect
+                snapshotFlow {
+                    @Suppress("UNUSED_EXPRESSION")
+                    VideoDetector.processingVersion
+                    VideoDetector.getVideosForTab(tabId).toList()
+                }.collectLatest { videos ->
+                    delay(500L)
+                    for (video in thumbnailPrefetchCandidates(videos)) {
+                        if (!VideoDetector.hasThumbnail(video.url)) {
+                            VideoDetector.fetchThumbnail(
+                                video,
+                                priority = ThumbnailRequestPriority.PREFETCH,
+                            )
                         }
                     }
                 }
@@ -1472,7 +1485,7 @@ class BrowserActivity : ComponentActivity() {
                                         isTvConnected = activeExternalDevice != null ||
                                             (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
                                                 connectionState is WebSocketClient.ConnectionState.Connected),
-                                        onTvClick = { showBrowserConnectSheet = true },
+                                        onTvClick = { showBrowserConnectDialog = true },
                                         onRemoteClick = {
                                             if (connectionState is WebSocketClient.ConnectionState.Connected) {
                                                 connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -1480,16 +1493,17 @@ class BrowserActivity : ComponentActivity() {
                                             currentScreen = Screen.Remote
                                         },
                                         isPlayEnabled = currentUrl.isNotEmpty() && currentUrl != "about:blank",
-                                        videoCount = videoCount,
+                                        mediaCount = detectedMediaBadge?.count ?: 0,
+                                        mediaKind = detectedMediaBadge?.kind,
                                         onPlayClick = { showVideoSheet = true },
                                         onPlayLongClick = { performQuickCast() }
                                     )
 
-                                    if (showBrowserConnectSheet) {
-                                        DeviceConnectionSheet(
-                                            onDismiss = { showBrowserConnectSheet = false },
+                                    if (showBrowserConnectDialog) {
+                                        DeviceConnectionDialog(
+                                            onDismiss = { showBrowserConnectDialog = false },
                                             onOpenAllDevices = {
-                                                showBrowserConnectSheet = false
+                                                showBrowserConnectDialog = false
                                                 connectionInitialTab = 1
                                                 currentScreen = Screen.Connection
                                             },
@@ -1914,6 +1928,7 @@ class BrowserActivity : ComponentActivity() {
                     // Cast Sheet States
                     showVideoSheet = showVideoSheet,
                     detectedVideos = detectedVideos,
+                    detectedMediaRevision = detectedMediaRevision,
                     pendingContentPayload = pendingContentPayload,
                     isTvPlaying = castRoute is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv &&
                         tvActiveContext == "player",
