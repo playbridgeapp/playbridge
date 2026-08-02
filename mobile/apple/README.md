@@ -68,6 +68,26 @@ xcodebuild -project "PlayBridge Phone.xcodeproj" -scheme "PlayBridge Phone" \
 open "PlayBridge Phone.xcodeproj"
 ```
 
+### Google Cast Core groundwork
+
+The Apple sender has an ABI-v2 adapter in
+`PlayBridge Phone/Network/GoogleCastSession.swift`. Build the optional native
+XCFramework from the repository root:
+
+```bash
+./cast/build-apple.sh
+```
+
+Then add `mobile/apple/Native/PlayBridgeCastCore.xcframework` to the phone
+target as **Do Not Embed**. The adapter remains a safe unavailable stub when
+the framework is not linked, so ordinary source builds continue to work.
+
+Set `PlayBridgeGoogleCastApplicationID` in the target build settings to the
+published Styled Media Receiver application ID. `CC1AD845` is the unbranded
+Default Media Receiver fallback. `_googlecast._tcp` is already declared for
+Local Network permission; discovery and UI adoption are the remaining Apple
+product work.
+
 On a device, Bonjour requires the **Local Network** permission (granted on first scan). The
 network keys live in `PlayBridge Phone/Info.plist`: `NSBonjourServices`,
 `NSLocalNetworkUsageDescription`, and `NSAppTransportSecurity` (`NSAllowsLocalNetworking` for LAN

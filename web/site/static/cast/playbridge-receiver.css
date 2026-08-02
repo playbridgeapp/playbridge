@@ -1,0 +1,33 @@
+/*
+ * Google Cast Styled Media Receiver skin.
+ *
+ * Register this HTTPS URL as the Skin URL in the Google Cast SDK Developer
+ * Console:
+ *   https://playbridge.app/cast/playbridge-receiver.css
+ */
+
+.background {
+  background-color: #08111f;
+  background-image:
+    radial-gradient(circle at 50% 42%, rgba(52, 111, 219, 0.2), transparent 42%),
+    linear-gradient(145deg, #101f38 0%, #08111f 58%, #050a12 100%);
+}
+
+.logo {
+  background: center / contain no-repeat
+    url("https://playbridge.app/cast/playbridge-cast-logo.svg");
+}
+
+.splash {
+  background: center / cover no-repeat
+    url("https://playbridge.app/cast/playbridge-cast-splash.svg");
+}
+
+.progressBar {
+  background-color: #65a7ff;
+}
+
+.watermark {
+  background: center / contain no-repeat
+    url("https://playbridge.app/cast/playbridge-cast-logo.svg");
+}

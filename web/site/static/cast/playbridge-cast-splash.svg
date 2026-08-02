@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" role="img" aria-labelledby="title desc">
+  <title id="title">PlayBridge is ready to cast</title>
+  <desc id="desc">PlayBridge logo on a dark blue background with the words Ready to cast.</desc>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="42%" r="58%">
+      <stop offset="0" stop-color="#285fae" stop-opacity=".42"/>
+      <stop offset=".55" stop-color="#10213b" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#050a12" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101f38"/>
+      <stop offset=".58" stop-color="#08111f"/>
+      <stop offset="1" stop-color="#050a12"/>
+    </linearGradient>
+  </defs>
+  <rect width="1920" height="1080" fill="url(#background)"/>
+  <rect width="1920" height="1080" fill="url(#glow)"/>
+  <g transform="translate(600 342)">
+    <rect width="180" height="180" rx="43" fill="#e6f0ff"/>
+    <g transform="rotate(-13 90 90)" fill="none" stroke="#1a3fa6"
+       stroke-width="31" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M59 136V44"/>
+      <path d="M59 44h38c25 0 40 14 40 30s-15 28-40 28H59"/>
+    </g>
+  </g>
+  <text x="816" y="460" fill="#f4f8ff"
+        font-family="Inter, Roboto, Arial, sans-serif"
+        font-size="92" font-weight="650" letter-spacing="-2">PlayBridge</text>
+  <text x="960" y="635" fill="#f4f8ff" text-anchor="middle"
+        font-family="Inter, Roboto, Arial, sans-serif"
+        font-size="54" font-weight="500">Ready to cast</text>
+  <text x="960" y="704" fill="#aabbd4" text-anchor="middle"
+        font-family="Inter, Roboto, Arial, sans-serif"
+        font-size="27" font-weight="400">Choose something to play on your phone or computer</text>
+</svg>

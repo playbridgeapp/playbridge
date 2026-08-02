@@ -233,6 +233,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = "0.3.3-alpha";
+				INFOPLIST_KEY_PlayBridgeGoogleCastApplicationID = CC1AD845;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.PlayBridge-Phone";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -263,6 +264,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = "0.3.3-alpha";
+				INFOPLIST_KEY_PlayBridgeGoogleCastApplicationID = CC1AD845;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.PlayBridge-Phone";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;

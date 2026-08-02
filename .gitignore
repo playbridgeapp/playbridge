@@ -57,6 +57,7 @@ protocol/bin
 
 # Swift Package Manager
 **/.build/
+/mobile/apple/Native/*.xcframework/
 
 # Xcode User State
 **/xcuserdata/

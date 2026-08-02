@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 180" role="img" aria-labelledby="title">
+  <title id="title">PlayBridge</title>
+  <g transform="translate(26 10)">
+    <rect width="160" height="160" rx="38" fill="#e6f0ff"/>
+    <g transform="rotate(-13 80 80)" fill="none" stroke="#1a3fa6"
+       stroke-width="27" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M52 121V39"/>
+      <path d="M52 39h34c22 0 35 13 35 27s-13 25-35 25H52"/>
+    </g>
+  </g>
+  <text x="218" y="112" fill="#f4f8ff"
+        font-family="Inter, Roboto, Arial, sans-serif"
+        font-size="76" font-weight="650" letter-spacing="-2">PlayBridge</text>
+</svg>

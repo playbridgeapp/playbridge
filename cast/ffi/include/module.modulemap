@@ -1,0 +1,4 @@
+module PlayBridgeCastCore {
+  header "playbridge_cast_core.h"
+  export *
+}
