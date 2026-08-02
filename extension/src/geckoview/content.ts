@@ -4,6 +4,7 @@
  */
 
 import browser from "./browser";
+import { isSupportedDomImage } from "./detected-media-kind";
 
 // cloneInto is Firefox/GeckoView-only (not on TypeScript's DOM lib).
 const cloneIntoFn = (globalThis as { cloneInto?: (obj: unknown, scope: Window) => unknown })
@@ -20,26 +21,89 @@ browser.runtime.onMessage.addListener((message: { type?: string }) => {
   return false;
 });
 
-function reportVideoSrc(src: string | null | undefined): void {
+type DomMediaAction =
+  | "dom_video_found"
+  | "dom_audio_found"
+  | "dom_image_found";
+
+function reportMediaSrc(
+  action: DomMediaAction,
+  src: string | null | undefined,
+  contentType?: string,
+  width?: number,
+  height?: number,
+): void {
   if (!src || src.startsWith("blob:") || src.startsWith("data:")) return;
   if (!src.startsWith("http")) return;
   browser.runtime
     .sendMessage({
-      action: "dom_video_found",
+      action,
       url: src,
       origin: window.location.href,
+      contentType,
+      width,
+      height,
     })
     .catch(() => {});
 }
 
+function reportImageElement(image: HTMLImageElement): void {
+  const src = image.currentSrc || image.src;
+  if (!src || !isSupportedDomImage(src)) return;
+  const width = image.naturalWidth || image.width || image.clientWidth;
+  const height = image.naturalHeight || image.height || image.clientHeight;
+  if (width < 64 || height < 64 || width * height < 16_384) return;
+  reportMediaSrc("dom_image_found", src, undefined, width, height);
+}
+
+const waitingForImageLoad = new WeakSet<HTMLImageElement>();
+
 function scanElement(el: Element): void {
-  if (el.tagName === "VIDEO" || el.tagName === "SOURCE") {
-    reportVideoSrc((el as HTMLVideoElement | HTMLSourceElement).src);
+  if (el instanceof HTMLVideoElement) {
+    reportMediaSrc("dom_video_found", el.currentSrc || el.src);
+    if (el.poster) {
+      reportMediaSrc(
+        "dom_image_found",
+        el.poster,
+        undefined,
+        el.videoWidth || el.clientWidth,
+        el.videoHeight || el.clientHeight,
+      );
+    }
+    for (const source of Array.from(el.querySelectorAll("source"))) {
+      reportMediaSrc("dom_video_found", source.src, source.type);
+    }
+    return;
+  }
+  if (el instanceof HTMLAudioElement) {
+    reportMediaSrc("dom_audio_found", el.currentSrc || el.src);
+    for (const source of Array.from(el.querySelectorAll("source"))) {
+      reportMediaSrc("dom_audio_found", source.src, source.type);
+    }
+    return;
+  }
+  if (el instanceof HTMLSourceElement) {
+    const parent = el.closest("audio, video");
+    reportMediaSrc(
+      parent instanceof HTMLAudioElement
+        ? "dom_audio_found"
+        : "dom_video_found",
+      el.src,
+      el.type,
+    );
+    return;
+  }
+  if (el instanceof HTMLImageElement) {
+    reportImageElement(el);
+    if (!el.complete && !waitingForImageLoad.has(el)) {
+      waitingForImageLoad.add(el);
+      el.addEventListener("load", () => reportImageElement(el), { once: true });
+    }
   }
 }
 
 function scanAll(): void {
-  document.querySelectorAll("video, source").forEach(scanElement);
+  document.querySelectorAll("video, audio, source, img").forEach(scanElement);
 }
 
 if (document.readyState === "loading") {
@@ -54,7 +118,7 @@ const videoObserver = new MutationObserver((mutations) => {
       if (node.nodeType !== 1) continue;
       const el = node as Element;
       scanElement(el);
-      el.querySelectorAll?.("video, source").forEach(scanElement);
+      el.querySelectorAll?.("video, audio, source, img").forEach(scanElement);
     }
     if (mutation.type === "attributes" && mutation.target.nodeType === 1) {
       scanElement(mutation.target as Element);
@@ -66,7 +130,7 @@ videoObserver.observe(document.documentElement, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ["src"],
+  attributeFilter: ["src", "srcset", "poster"],
 });
 
 window.addEventListener("PlayBridgeMediaFound", ((event: CustomEvent) => {

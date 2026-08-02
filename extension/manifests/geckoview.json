@@ -1,8 +1,8 @@
 {
   "manifest_version": 2,
-  "name": "PlayBridge Video Detector",
+  "name": "PlayBridge Media Detector",
   "version": "2.0.0",
-  "description": "Detects video URLs for PlayBridge casting (GeckoView phone)",
+  "description": "Detects video, audio, image, and subtitle URLs for PlayBridge casting (GeckoView phone)",
   "background": {
     "scripts": ["background.js"],
     "persistent": true
@@ -11,6 +11,8 @@
     {
       "matches": ["<all_urls>"],
       "js": ["content.js"],
+      "all_frames": true,
+      "match_about_blank": true,
       "run_at": "document_start"
     }
   ],

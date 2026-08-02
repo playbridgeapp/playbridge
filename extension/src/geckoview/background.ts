@@ -7,10 +7,23 @@
  */
 
 import browser from "./browser";
+import {
+  advanceNavigationGeneration,
+  currentNavigationGeneration,
+  isCurrentNavigationGeneration,
+  responseBodyNavigationGeneration,
+} from "./detection-lifecycle";
+import {
+  detectedMediaKind,
+  inferredMediaContentType,
+  shouldReportNetworkImage,
+  type DetectedMediaKind,
+} from "./detected-media-kind";
 import { enrichReplayHeaders } from "./header-enrichment";
 import { HlsParser } from "../core/hls-parser";
 import {
   classifyHlsUrl,
+  detectionEvidencePriority,
   effectiveHlsRole,
   hlsIdentityKey,
   hlsStreamGroupKey,
@@ -60,6 +73,17 @@ const VIDEO_EXTENSIONS = [
   ".wmv",
   ".3gp",
 ];
+const AUDIO_EXTENSIONS = [
+  ".mp3",
+  ".m4a",
+  ".aac",
+  ".ogg",
+  ".oga",
+  ".opus",
+  ".wav",
+  ".flac",
+  ".weba",
+];
 const SUBTITLE_EXTENSIONS = [".vtt", ".srt"];
 const SEGMENT_OR_SUB_RE =
   /\.(?:vtt|srt|ts|m4s)(?:$|\?)|\/segment|frag(?:ment)?|\/chunks?\/|init[-_][^/]*\.mp4|seg[-_][^/]*\.mp4/i;
@@ -82,6 +106,10 @@ interface VideoData {
   syntheticPlaylist?: string;
   qualities?: unknown[];
   frameId?: number;
+  navigationGeneration?: number;
+  mediaKind?: DetectedMediaKind;
+  width?: number;
+  height?: number;
 }
 
 const tabVideos = new Map<number, VideoData[]>();
@@ -93,6 +121,11 @@ const requestHeadersMap = new Map<
 >();
 const urlToTab = new Map<string, { tabId: number; ts: number }>();
 const tabLastUrl = new Map<number, string>();
+const tabNavigationGenerations = new Map<number, number>();
+
+// Identifies this background-script lifetime. Android uses the epoch together
+// with each tab generation to reject late messages from an older detector.
+const DETECTOR_EPOCH = Date.now();
 
 const URL_TAB_TTL_MS = 60_000;
 const HEADER_TTL_MS = 60_000;
@@ -101,14 +134,44 @@ function plog(...args: unknown[]): void {
   if (DEBUG) console.log("[VideoDetector BG]", ...args);
 }
 
-function sendToNative(message: Record<string, unknown>): void {
+async function trySendToNative(message: Record<string, unknown>): Promise<boolean> {
   try {
-    browser.runtime.sendNativeMessage(NATIVE_APP_ID, message).catch((e: Error) => {
-      plog("sendNativeMessage failed:", e?.message);
-    });
+    await browser.runtime.sendNativeMessage(NATIVE_APP_ID, message);
+    return true;
   } catch (e) {
-    console.error("[VideoDetector BG] sendNativeMessage threw:", e);
+    plog("sendNativeMessage failed:", (e as Error)?.message);
+    return false;
   }
+}
+
+let nativeReady = false;
+let nativeSyncTimer: ReturnType<typeof setTimeout> | undefined;
+let nativeReplayInProgress = false;
+
+function scheduleNativeSync(delayMs = 1_000): void {
+  if (nativeReady || nativeSyncTimer !== undefined) return;
+  nativeSyncTimer = setTimeout(() => {
+    nativeSyncTimer = undefined;
+    void syncNativeConnection();
+  }, delayMs);
+}
+
+function markNativeUnavailable(): void {
+  nativeReady = false;
+  scheduleNativeSync();
+}
+
+function sendToNative(message: Record<string, unknown>): void {
+  void trySendToNative(message).then((delivered) => {
+    if (!delivered) {
+      markNativeUnavailable();
+      return;
+    }
+    if (!nativeReady) {
+      nativeReady = true;
+      void replayCachedState();
+    }
+  });
 }
 
 function getTabVideos(tabId: number): VideoData[] {
@@ -124,11 +187,32 @@ function getTabHeadersCaptured(tabId: number): Set<string> {
   return tabHeadersCaptured.get(tabId)!;
 }
 
-function cleanupTab(tabId: number): void {
+function trimDetectedMedia(videos: VideoData[], kind: DetectedMediaKind): void {
+  // Images are far more numerous on a typical page. Bound each category
+  // independently so artwork cannot evict a playable stream from the cache.
+  const limit = kind === "image" || kind === "audio" ? 30 : 50;
+  let matching = videos.reduce(
+    (count, video) => count + (video.mediaKind === kind ? 1 : 0),
+    0,
+  );
+  while (matching > limit) {
+    const oldest = videos.findIndex((video) => video.mediaKind === kind);
+    if (oldest === -1) break;
+    videos.splice(oldest, 1);
+    matching -= 1;
+  }
+}
+
+function clearTabDetectionState(tabId: number): void {
   tabVideos.delete(tabId);
   tabSeenUrls.delete(tabId);
   tabHeadersCaptured.delete(tabId);
+}
+
+function cleanupTab(tabId: number): void {
+  clearTabDetectionState(tabId);
   tabLastUrl.delete(tabId);
+  tabNavigationGenerations.delete(tabId);
 }
 
 function rememberUrlTab(url: string, tabId: number): void {
@@ -230,14 +314,24 @@ function attachCompanionAudioToGroup(
   }
 }
 
-function emitNativeVideo(video: VideoData): void {
+function nativeVideoForEmission(video: VideoData): VideoData {
   // Prefer synthetic cast URL + body when available for this group.
   let out = video;
-  if (!video.isSyntheticMaster && video.hlsGroupKey) {
+  if (
+    video.mediaKind !== "audio" &&
+    video.mediaKind !== "image" &&
+    !video.isSyntheticMaster &&
+    video.hlsGroupKey
+  ) {
     const synth = findSyntheticForGroup(video.tabId, video.hlsGroupKey);
     if (synth) out = synth;
   }
-  sendToNative({
+  return out;
+}
+
+function nativeVideoMessage(video: VideoData): Record<string, unknown> {
+  const out = nativeVideoForEmission(video);
+  return {
     type: "video_detected",
     url: out.url,
     tabId: out.tabId,
@@ -245,6 +339,7 @@ function emitNativeVideo(video: VideoData): void {
     detectedBy: out.detectedBy,
     originUrl: out.originUrl,
     timestamp: out.timestamp,
+    lastSeen: out.lastSeen ?? out.timestamp,
     headers: out.headers ?? null,
     hlsRole: out.hlsRole,
     hlsGroupKey: out.hlsGroupKey,
@@ -252,7 +347,81 @@ function emitNativeVideo(video: VideoData): void {
     audioUrl: out.audioUrl ?? null,
     playlistBody: out.syntheticPlaylist ?? null,
     isSyntheticMaster: out.isSyntheticMaster ?? false,
+    mediaKind:
+      out.mediaKind ?? detectedMediaKind(out.url, out.contentType, out.hlsRole),
+    width: out.width ?? null,
+    height: out.height ?? null,
+    detectorEpoch: DETECTOR_EPOCH,
+    navigationGeneration:
+      out.navigationGeneration ??
+      currentNavigationGeneration(tabNavigationGenerations, out.tabId),
+  };
+}
+
+function emitNativeVideo(video: VideoData): void {
+  sendToNative(nativeVideoMessage(video));
+}
+
+async function replayCachedState(): Promise<void> {
+  if (!nativeReady || nativeReplayInProgress) return;
+  nativeReplayInProgress = true;
+  let delivered = true;
+  try {
+    // Navigation first: Android can clear an older page before replayed media
+    // arrives. The same generation on a later navigation message is a no-op.
+    for (const [tabId, generation] of tabNavigationGenerations) {
+      const url = tabLastUrl.get(tabId);
+      if (!url) continue;
+      delivered = await trySendToNative({
+        type: "navigation",
+        tabId,
+        url,
+        originUrl: url,
+        transitionType: "native_replay",
+        timestamp: Date.now(),
+        detectorEpoch: DETECTOR_EPOCH,
+        navigationGeneration: generation,
+      });
+      if (!delivered) return;
+    }
+
+    const replayed = new Set<string>();
+    for (const [tabId, videos] of tabVideos) {
+      const generation = currentNavigationGeneration(
+        tabNavigationGenerations,
+        tabId,
+      );
+      for (const video of videos) {
+        if ((video.navigationGeneration ?? generation) !== generation) {
+          continue;
+        }
+        const out = nativeVideoForEmission(video);
+        const key = `${tabId}:${detectionKey(out.url)}`;
+        if (replayed.has(key)) continue;
+        replayed.add(key);
+        delivered = await trySendToNative(nativeVideoMessage(out));
+        if (!delivered) return;
+      }
+    }
+  } finally {
+    nativeReplayInProgress = false;
+    if (!delivered) markNativeUnavailable();
+  }
+}
+
+async function syncNativeConnection(): Promise<void> {
+  if (nativeReady) return;
+  const delivered = await trySendToNative({
+    type: "detector_hello",
+    detectorEpoch: DETECTOR_EPOCH,
+    timestamp: Date.now(),
   });
+  if (!delivered) {
+    scheduleNativeSync();
+    return;
+  }
+  nativeReady = true;
+  await replayCachedState();
 }
 
 function installSyntheticMaster(
@@ -290,6 +459,11 @@ function installSyntheticMaster(
     audioUrl: synthetic.audioUrls[0],
     isSyntheticMaster: true,
     syntheticPlaylist: synthetic.content,
+    mediaKind: "video",
+    navigationGeneration: currentNavigationGeneration(
+      tabNavigationGenerations,
+      tabId,
+    ),
   };
 
   const videos = getTabVideos(tabId);
@@ -305,7 +479,7 @@ function installSyntheticMaster(
     };
   } else {
     videos.push(record);
-    if (videos.length > 50) videos.shift();
+    trimDetectedMedia(videos, "video");
   }
   getTabSeenUrls(tabId).add(record.hlsIdentityKey!);
   console.log(
@@ -406,11 +580,34 @@ function reportVideo(
   tabId: number,
   headers: Record<string, string> | null,
 ): void {
+  const navigationGeneration =
+    video.navigationGeneration ??
+    currentNavigationGeneration(tabNavigationGenerations, tabId);
+  if (
+    !isCurrentNavigationGeneration(
+      tabNavigationGenerations,
+      tabId,
+      navigationGeneration,
+    )
+  ) {
+    plog(
+      "discarding stale detection",
+      tabId,
+      navigationGeneration,
+      currentNavigationGeneration(tabNavigationGenerations, tabId),
+    );
+    return;
+  }
   const annotated = annotateHlsFields({
     ...video,
     tabId,
     lastSeen: video.lastSeen ?? video.timestamp ?? Date.now(),
+    navigationGeneration,
   });
+  annotated.mediaKind =
+    video.mediaKind ??
+    detectedMediaKind(annotated.url, annotated.contentType, annotated.hlsRole) ??
+    "video";
   const hasHeaders = !!(headers && Object.keys(headers).length > 0);
   const seenUrls = getTabSeenUrls(tabId);
   const headersCaptured = getTabHeadersCaptured(tabId);
@@ -420,6 +617,18 @@ function reportVideo(
 
   if (seenUrls.has(key) && existing) {
     existing.lastSeen = Date.now();
+    const evidenceEnriched =
+      detectionEvidencePriority(annotated.detectedBy) >
+      detectionEvidencePriority(existing.detectedBy);
+    const hasSpecificContentType =
+      annotated.contentType !== "unknown" &&
+      !annotated.contentType.endsWith("/unknown");
+    const metadataEnriched =
+      (annotated.mediaKind != null && existing.mediaKind !== annotated.mediaKind) ||
+      (annotated.width != null && existing.width !== annotated.width) ||
+      (annotated.height != null && existing.height !== annotated.height) ||
+      (hasSpecificContentType &&
+        annotated.contentType !== existing.contentType);
     const headersEnriched = enrichReplayHeaders(
       existing,
       headers,
@@ -431,6 +640,13 @@ function reportVideo(
     if (annotated.hlsRole) {
       existing.hlsRole = annotated.hlsRole;
     }
+    if (evidenceEnriched) existing.detectedBy = annotated.detectedBy;
+    if (annotated.mediaKind) existing.mediaKind = annotated.mediaKind;
+    if (annotated.width != null) existing.width = annotated.width;
+    if (annotated.height != null) existing.height = annotated.height;
+    if (hasSpecificContentType) {
+      existing.contentType = annotated.contentType;
+    }
     attachCompanionAudioToGroup(tabId, existing.hlsGroupKey);
     if (
       existing.hlsRole === "video_media" ||
@@ -439,7 +655,7 @@ function reportVideo(
     ) {
       maybeSynthesizeFromObservations(tabId, existing.hlsGroupKey);
     }
-    if (headersEnriched) {
+    if (headersEnriched || metadataEnriched || evidenceEnriched) {
       emitNativeVideo(existing);
     }
     return;
@@ -475,7 +691,7 @@ function reportVideo(
     videos[idx] = { ...videos[idx], ...annotated, headers: annotated.headers ?? videos[idx].headers };
   } else {
     videos.push(annotated);
-    if (videos.length > 50) videos.shift();
+    trimDetectedMedia(videos, annotated.mediaKind ?? "video");
   }
 
   attachCompanionAudioToGroup(tabId, annotated.hlsGroupKey);
@@ -499,7 +715,9 @@ function reportVideo(
     }
   }
   if (annotated.hlsRole === "audio_media") {
-    // Companion only — attach and let video emit.
+    // It remains a companion for video ranking, but the Audio tab also exposes
+    // the playlist as an intentional audio-only cast target.
+    emitNativeVideo(annotated);
     return;
   }
 
@@ -521,6 +739,15 @@ function applyMasterBody(
   tabId: number,
   rawBody: string,
 ): void {
+  if (
+    !isCurrentNavigationGeneration(
+      tabNavigationGenerations,
+      tabId,
+      stored.navigationGeneration ?? 0,
+    )
+  ) {
+    return;
+  }
   try {
     const playlist = HlsParser.parsePlaylistContent(rawBody, stored.url);
     if (playlist.role === "master" || playlist.videoQualities.length > 0) {
@@ -587,8 +814,12 @@ function handleNavigation(
     tabLastUrl.set(tabId, url);
     return;
   }
+  const navigationGeneration = advanceNavigationGeneration(
+    tabNavigationGenerations,
+    tabId,
+  );
+  clearTabDetectionState(tabId);
   tabLastUrl.set(tabId, url);
-  cleanupTab(tabId);
   sendToNative({
     type: "navigation",
     tabId,
@@ -596,6 +827,8 @@ function handleNavigation(
     originUrl: url,
     transitionType,
     timestamp: Date.now(),
+    detectorEpoch: DETECTOR_EPOCH,
+    navigationGeneration,
   });
 }
 
@@ -687,8 +920,21 @@ browser.webRequest.onHeadersReceived.addListener(
       (h) => h.name.toLowerCase() === "content-type",
     );
     const contentType = ctHeader?.value?.toLowerCase() ?? "";
+    const contentLengthValue = details.responseHeaders?.find(
+      (h) => h.name.toLowerCase() === "content-length",
+    )?.value;
+    const parsedContentLength = contentLengthValue
+      ? Number.parseInt(contentLengthValue, 10)
+      : Number.NaN;
+    const contentLength = Number.isFinite(parsedContentLength)
+      ? parsedContentLength
+      : null;
     const stored = requestHeadersMap.get(details.requestId);
     const tabId = resolveTabId(details.tabId, details.url);
+    const navigationGeneration = currentNavigationGeneration(
+      tabNavigationGenerations,
+      tabId,
+    );
     const urlFull = details.url.toLowerCase();
     const urlPath = urlFull.split("?")[0] ?? urlFull;
     const hasSubExt = SUBTITLE_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
@@ -716,22 +962,33 @@ browser.webRequest.onHeadersReceived.addListener(
     const isM3u8Url = urlFull.includes("m3u8");
     const isMpdUrl = urlPath.endsWith(".mpd") || urlFull.includes(".mpd?");
     const hasVideoExt = VIDEO_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
-    const isVideo =
+    const hasAudioExt = AUDIO_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
+    const isAudio = contentType.startsWith("audio/") || hasAudioExt;
+    const isImage = shouldReportNetworkImage(
+      details.url,
+      contentType,
+      contentLength,
+    );
+    const isDetectedMedia =
       isVideoContentType ||
       isM3u8Url ||
       isMpdUrl ||
       hasVideoExt ||
       hasSubExt ||
-      isSubtitleContentType;
+      isSubtitleContentType ||
+      isAudio ||
+      isImage;
 
     const frameId =
       typeof details.frameId === "number" && details.frameId >= 0
         ? details.frameId
         : undefined;
 
-    if (isVideo) {
+    if (isDetectedMedia) {
       let detectedBy = "unknown";
-      if (isVideoContentType) detectedBy = "content_type";
+      if (isImage) detectedBy = "image_content_type";
+      else if (isAudio) detectedBy = "audio_content_type";
+      else if (isVideoContentType) detectedBy = "content_type";
       else if (isM3u8Url) detectedBy = "url_pattern_m3u8";
       else if (isMpdUrl) detectedBy = "url_pattern_mpd";
       else if (hasVideoExt) detectedBy = "url_extension";
@@ -751,6 +1008,11 @@ browser.webRequest.onHeadersReceived.addListener(
           timestamp: Date.now(),
           frameId,
           hlsRole,
+          navigationGeneration,
+          mediaKind:
+            hlsRole === "audio_media"
+              ? "audio"
+              : detectedMediaKind(details.url, contentType, hlsRole) ?? "video",
         },
         tabId,
         stored?.headers ?? null,
@@ -771,6 +1033,13 @@ browser.webRequest.onHeadersReceived.addListener(
           }
         ).filterResponseData(details.requestId);
         attachBoundedResponseBodyScanner(filter, (body) => {
+          const bodyNavigationGeneration = responseBodyNavigationGeneration(
+            navigationGeneration,
+            currentNavigationGeneration(tabNavigationGenerations, tabId),
+            details.type,
+            details.url,
+            tabLastUrl.get(tabId),
+          );
           const scan = scanResponseBodyForMedia(
             body,
             details.url,
@@ -803,6 +1072,7 @@ browser.webRequest.onHeadersReceived.addListener(
                 timestamp: Date.now(),
                 frameId,
                 hlsRole,
+                navigationGeneration: bodyNavigationGeneration,
               },
               tabId,
               stored?.headers ?? null,
@@ -835,6 +1105,7 @@ browser.webRequest.onHeadersReceived.addListener(
                 hlsRole: isHlsUrl(candidate.url, candidate.contentType)
                   ? classifyHlsUrl(candidate.url)
                   : "not_hls",
+                navigationGeneration: bodyNavigationGeneration,
               },
               tabId,
               null,
@@ -855,31 +1126,64 @@ browser.webRequest.onHeadersReceived.addListener(
 // DOM / player messages from content script
 browser.runtime.onMessage.addListener(
   (
-    message: { action?: string; url?: string; origin?: string },
+    message: {
+      action?: string;
+      url?: string;
+      origin?: string;
+      contentType?: string;
+      width?: number;
+      height?: number;
+    },
     sender: { tab?: { id?: number }; frameId?: number },
   ) => {
     if (
       message?.action !== "dom_video_found" &&
-      message?.action !== "player_video_found"
+      message?.action !== "player_video_found" &&
+      message?.action !== "dom_audio_found" &&
+      message?.action !== "dom_image_found"
     ) {
       return false;
     }
     const tabId = sender.tab?.id;
     if (tabId == null || tabId < 0 || !message.url) return false;
+    const mediaKind: DetectedMediaKind =
+      message.action === "dom_audio_found"
+        ? "audio"
+        : message.action === "dom_image_found"
+          ? "image"
+          : "video";
+    const contentType =
+      message.contentType ||
+      (mediaKind === "audio"
+        ? inferredMediaContentType(message.url, "audio")
+        : mediaKind === "image"
+          ? inferredMediaContentType(message.url, "image")
+          : message.url.toLowerCase().includes("m3u8")
+            ? "application/vnd.apple.mpegurl"
+            : inferredMediaContentType(message.url, "video"));
     reportVideo(
       {
         url: message.url,
         tabId,
-        contentType: message.url.toLowerCase().includes("m3u8")
-          ? "application/vnd.apple.mpegurl"
-          : "video/unknown",
+        contentType,
         detectedBy:
           message.action === "player_video_found"
             ? "player_config"
-            : "dom_source",
+            : mediaKind === "image"
+              ? "dom_image"
+              : mediaKind === "audio"
+                ? "dom_audio"
+                : "dom_source",
         originUrl: message.origin ?? "",
         timestamp: Date.now(),
         frameId: sender.frameId,
+        mediaKind,
+        width: message.width,
+        height: message.height,
+        navigationGeneration: currentNavigationGeneration(
+          tabNavigationGenerations,
+          tabId,
+        ),
       },
       tabId,
       null,
@@ -891,3 +1195,4 @@ browser.runtime.onMessage.addListener(
 console.log(
   "[VideoDetector BG] Starting (GeckoView + shared core, native messaging)...",
 );
+scheduleNativeSync(0);

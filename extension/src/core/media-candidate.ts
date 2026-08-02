@@ -727,6 +727,37 @@ export function isDomSourceDetection(detectedBy?: string): boolean {
 }
 
 /**
+ * Strength of the observation that produced a candidate. Seeing and parsing the
+ * response body is substantially stronger than guessing from a URL substring.
+ * Consumers use this to enrich an existing identity without allowing later weak
+ * observations to downgrade it.
+ */
+export function detectionEvidencePriority(detectedBy?: string): number {
+  switch (detectedBy?.toLowerCase()) {
+    case "body_content_m3u8":
+    case "body_content_mpd":
+      return 80;
+    case "synthetic_hls_master":
+      return 75;
+    case "player_config":
+      return 70;
+    case "content_type":
+      return 50;
+    case "dom_source":
+      return 30;
+    case "url_extension":
+      return 20;
+    case "url_pattern_m3u8":
+    case "url_pattern_mpd":
+      return 10;
+    case "response_body_url":
+      return 5;
+    default:
+      return 15;
+  }
+}
+
+/**
  * Rank a frame's detected media without allowing a same-origin fallback from a
  * different frame to outrank stronger local evidence.
  *

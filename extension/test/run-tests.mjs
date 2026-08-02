@@ -9,6 +9,8 @@ const directory = await mkdtemp(join(tmpdir(), "playbridge-extension-tests-"));
 const outfiles = [
   join(directory, "data-consent.test.mjs"),
   join(directory, "geckoview-header-enrichment.test.mjs"),
+  join(directory, "geckoview-detection-lifecycle.test.mjs"),
+  join(directory, "geckoview-detected-media-kind.test.mjs"),
   join(directory, "hls-parser.test.mjs"),
   join(directory, "media-candidate.test.mjs"),
   join(directory, "response-body-media.test.mjs"),
@@ -21,6 +23,8 @@ try {
     entryPoints: [
       "test/data-consent.test.ts",
       "test/geckoview-header-enrichment.test.ts",
+      "test/geckoview-detection-lifecycle.test.ts",
+      "test/geckoview-detected-media-kind.test.ts",
       "test/hls-parser.test.ts",
       "test/media-candidate.test.ts",
       "test/response-body-media.test.ts",

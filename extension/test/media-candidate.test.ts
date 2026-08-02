@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   classifyHlsPlaylistBody,
   classifyHlsUrl,
+  detectionEvidencePriority,
   filterPrimaryCastCandidates,
   hlsIdentityKey,
   hlsStreamGroupKey,
@@ -41,6 +42,17 @@ const VIDEO_0_POLL = `${STREAM_DIR}chunklist_0_video_123_llhls.m3u8?session=s1&_
 const VIDEO_1 = `${STREAM_DIR}chunklist_1_video_123_llhls.m3u8?session=s1`;
 const AUDIO = `${STREAM_DIR}chunklist_5_audio_123_llhls.m3u8?session=s1`;
 const AUDIO_POLL = `${STREAM_DIR}chunklist_5_audio_123_llhls.m3u8?session=s1&_HLS_msn=2105&_HLS_part=0`;
+
+test("response-body evidence outranks URL guesses", () => {
+  assert.ok(
+    detectionEvidencePriority("body_content_m3u8") >
+      detectionEvidencePriority("url_pattern_m3u8"),
+  );
+  assert.ok(
+    detectionEvidencePriority("player_config") >
+      detectionEvidencePriority("dom_source"),
+  );
+});
 
 test("an exact DOM URL is authoritative", () => {
   const exact = candidate("https://media.example/main.mp4", {
