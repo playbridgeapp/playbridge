@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::crypto::{EncryptionHandler, ProxyData};
 use crate::dash::DashManifestRewriter;
 use crate::epg::EpgCache;
-use crate::hls::HlsPlaylistRewriter;
+use crate::hls::{HlsPlaylistRewriter, HlsResourceKind};
 use crate::local_file::FileGrantManager;
 use crate::session::SessionManager;
 use crate::upstream::{filter_upstream_headers, ConnectionEngine, UpstreamResponse};
@@ -440,6 +440,14 @@ async fn stateful_proxy_handler(
     let is_hls = target_url.to_lowercase().contains(".m3u8")
         || req.uri().path().to_lowercase().contains(".m3u8");
     let is_dash = is_dash_manifest(&target_url, req.uri().path());
+    let hls_segment_mime = query_params
+        .iter()
+        .find(|(key, _)| key == "pb_hls")
+        .and_then(|(_, value)| match value.as_str() {
+            "ts" => Some("video/mp2t"),
+            "fmp4" => Some("video/iso.segment"),
+            _ => None,
+        });
 
     if wants_mpv_edl {
         handle_stateful_dash_edl(
@@ -475,6 +483,7 @@ async fn stateful_proxy_handler(
             &target_url,
             &forward_headers,
             &public_base_url,
+            hls_segment_mime,
         )
         .await
     }
@@ -586,9 +595,39 @@ fn rewrite_stateful_hls(
     // Absolute proxy URLs so VHS on the browser-receiver page (different port)
     // never resolves child playlists or LL-HLS parts against the CDN directly.
     let base = public_base_url.trim_end_matches('/');
-    let rewritten = HlsPlaylistRewriter::rewrite(&content, &base_uri, |resolved_target| {
-        format!("{}{}", base, stateful_item_url(session_id, resolved_target))
+    let playlist_uses_fmp4 = content.lines().any(|line| {
+        line.trim_start()
+            .to_ascii_uppercase()
+            .starts_with("#EXT-X-MAP:")
     });
+    // URI lines in a multivariant playlist point at child playlists, not
+    // media segments. Only media-playlist URI lines should receive a segment
+    // MIME/extension hint; otherwise a variant playlist can be made to look
+    // like a .ts resource to strict HLS clients.
+    let is_master_playlist = content.lines().any(|line| {
+        let line = line.trim_start();
+        line.starts_with("#EXT-X-STREAM-INF:") || line.starts_with("#EXT-X-MEDIA:")
+    });
+    let rewritten = HlsPlaylistRewriter::rewrite_with_context(
+        &content,
+        &base_uri,
+        |resolved_target, resource_kind| {
+            let hls_kind = match resource_kind {
+                HlsResourceKind::Media if !is_master_playlist => {
+                    hls_segment_kind(resolved_target, playlist_uses_fmp4)
+                }
+                HlsResourceKind::SegmentAttribute => {
+                    hls_segment_kind(resolved_target, playlist_uses_fmp4)
+                }
+                HlsResourceKind::Media | HlsResourceKind::Attribute => None,
+            };
+            format!(
+                "{}{}",
+                base,
+                stateful_item_url(session_id, resolved_target, hls_kind)
+            )
+        },
+    );
 
     let prefetch_urls = crate::upstream::hls_media_segment_urls(&content, &base_uri, 3);
     if !prefetch_urls.is_empty() {
@@ -605,6 +644,29 @@ fn rewrite_stateful_hls(
         .into_response())
 }
 
+/// Returns a Cast-safe container override only when the playlist or URI proves
+/// it. Map-less playlists may contain packed audio or subtitles, so unknown and
+/// known non-video extensions must retain their upstream MIME type. JPEG is the
+/// explicit exception for supported CDNs that disguise MPEG-TS segment bytes.
+fn hls_segment_kind(target: &str, playlist_uses_fmp4: bool) -> Option<&'static str> {
+    if playlist_uses_fmp4 {
+        return Some("fmp4");
+    }
+    let path = Url::parse(target)
+        .ok()
+        .map(|url| url.path().to_owned())
+        .unwrap_or_else(|| target.split('?').next().unwrap_or(target).to_owned());
+    let extension = Path::new(&path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("m4s" | "mp4" | "cmfv" | "cmfa") => Some("fmp4"),
+        Some("ts" | "m2ts" | "mts" | "jpg" | "jpeg") => Some("ts"),
+        _ => None,
+    }
+}
+
 /// Extensionless HLS entry points are common on live CDNs. Inspect the upstream
 /// response before treating an unknown URL as a media segment; otherwise the
 /// unmodified master playlist sends the browser directly to authenticated CDN
@@ -615,6 +677,7 @@ async fn handle_stateful_unknown_or_segment(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
+    hls_segment_mime: Option<&'static str>,
 ) -> Result<Response, (StatusCode, String)> {
     let upstream = state
         .engine
@@ -646,7 +709,11 @@ async fn handle_stateful_unknown_or_segment(
         );
     }
 
-    Ok(upstream_into_response(target_url, upstream))
+    Ok(upstream_into_response_with_content_type(
+        target_url,
+        upstream,
+        hls_segment_mime,
+    ))
 }
 
 fn response_is_hls(headers: &HeaderMap) -> bool {
@@ -686,7 +753,11 @@ async fn handle_stateful_dash_manifest(
     let content = String::from_utf8_lossy(&bytes);
     let base = public_base_url.trim_end_matches('/');
     let rewritten = DashManifestRewriter::rewrite(&content, &base_uri, |resolved_target| {
-        format!("{}{}", base, stateful_item_url(session_id, resolved_target))
+        format!(
+            "{}{}",
+            base,
+            stateful_item_url(session_id, resolved_target, None)
+        )
     });
 
     Ok((
@@ -727,7 +798,7 @@ async fn handle_stateful_dash_edl(
         format!(
             "{}{}",
             public_base_url,
-            stateful_item_url(session_id, resolved_target)
+            stateful_item_url(session_id, resolved_target, None)
         )
     })
     .map_err(|error| (StatusCode::UNPROCESSABLE_ENTITY, error))?;
@@ -955,6 +1026,14 @@ async fn handle_segment(
 }
 
 fn upstream_into_response(target_url: &str, upstream: UpstreamResponse) -> Response {
+    upstream_into_response_with_content_type(target_url, upstream, None)
+}
+
+fn upstream_into_response_with_content_type(
+    target_url: &str,
+    upstream: UpstreamResponse,
+    content_type_override: Option<&'static str>,
+) -> Response {
     let mime = mime_for(target_url);
     let mut response_builder = Response::builder().status(upstream.status);
 
@@ -966,6 +1045,9 @@ fn upstream_into_response(target_url: &str, upstream: UpstreamResponse) -> Respo
         );
         for (k, v) in &upstream.headers {
             headers_map.insert(k.clone(), v.clone());
+        }
+        if let Some(content_type) = content_type_override {
+            headers_map.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
         }
     }
 
@@ -996,27 +1078,81 @@ fn request_public_base_url(headers: &HeaderMap) -> String {
         .unwrap_or_else(|| "http://127.0.0.1".to_string())
 }
 
-fn stateful_item_url(session_id: &str, resolved_target: &str) -> String {
-    let filename = target_filename(resolved_target);
+fn stateful_item_url(
+    session_id: &str,
+    resolved_target: &str,
+    hls_segment_kind: Option<&str>,
+) -> String {
+    let filename = hls_segment_kind.map_or_else(
+        || target_filename(resolved_target),
+        |kind| hls_segment_filename(resolved_target, kind),
+    );
     let encoded_target = urlencoding::encode(resolved_target).replace("%24", "$");
-    format!(
+    let mut url = format!(
         "/s/{}/{}?uri={}",
         session_id,
         urlencoding::encode(&filename),
         encoded_target
-    )
+    );
+    if let Some(kind) = hls_segment_kind {
+        url.push_str("&pb_hls=");
+        url.push_str(kind);
+    }
+    url
+}
+
+fn hls_segment_filename(target: &str, kind: &str) -> String {
+    let filename = target_filename(target);
+    let extension = match kind {
+        "ts" => "ts",
+        "fmp4" => "m4s",
+        _ => return filename,
+    };
+    let stem = filename
+        .rsplit_once('.')
+        .map(|(stem, _)| stem)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or(&filename);
+    format!("{stem}.{extension}")
 }
 
 fn target_filename(target: &str) -> String {
     Url::parse(target)
         .ok()
         .and_then(|url| {
-            url.path_segments()
-                .and_then(|mut segments| segments.next_back())
+            let segments = url
+                .path_segments()?
                 .filter(|value| !value.is_empty())
-                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let filename = *segments.last()?;
+            let parent = segments
+                .get(segments.len().saturating_sub(2))
+                .copied()
+                .filter(|value| *value != filename);
+            Some(match parent {
+                Some(parent) => format!(
+                    "{}-{}",
+                    cast_safe_filename_component(parent),
+                    cast_safe_filename_component(filename)
+                ),
+                None => cast_safe_filename_component(filename),
+            })
         })
         .unwrap_or_else(|| "item".to_string())
+}
+
+fn cast_safe_filename_component(value: &str) -> String {
+    value
+        .chars()
+        .take(64)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn resolve_target_url(

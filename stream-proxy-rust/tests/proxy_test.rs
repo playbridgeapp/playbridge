@@ -178,12 +178,12 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
         }
         (
             [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
-            "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=4000000\nchild?session=test\n",
+            "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"stereo\",NAME=\"Japanese\",DEFAULT=YES,URI=\"audio/child?session=test\"\n#EXT-X-STREAM-INF:BANDWIDTH=4000000,AUDIO=\"stereo\"\nvideo/child?session=test\n",
         )
             .into_response()
     }
 
-    async fn child(headers: HeaderMap) -> impl IntoResponse {
+    async fn video_child(headers: HeaderMap) -> impl IntoResponse {
         if headers
             .get(ORIGIN_HEADER)
             .and_then(|value| value.to_str().ok())
@@ -193,7 +193,22 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
         }
         (
             [(header::CONTENT_TYPE, "application/x-mpegURL")],
-            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\nseg.m4s?session=test\n",
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXT-X-PART:DURATION=0.333,URI=\"part.jpg?session=test\"\n#EXTINF:2,\n000.jpg?session=test\n",
+        )
+            .into_response()
+    }
+
+    async fn audio_child(headers: HeaderMap) -> impl IntoResponse {
+        if headers
+            .get(ORIGIN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            != Some("allowed")
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        (
+            [(header::CONTENT_TYPE, "application/x-mpegURL")],
+            "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\n000.aac?session=test\n",
         )
             .into_response()
     }
@@ -207,10 +222,23 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
             return StatusCode::FORBIDDEN.into_response();
         }
         (
-            [(header::CONTENT_TYPE, "video/iso.segment")],
-            "segment-bytes",
+            // Some anime CDNs disguise MPEG-TS HLS segments as JPEGs. Cast
+            // rejects image/jpeg even though the body is transport-stream data.
+            [(header::CONTENT_TYPE, "image/jpeg")],
+            "G-transport-stream-segment",
         )
             .into_response()
+    }
+
+    async fn audio_segment(headers: HeaderMap) -> impl IntoResponse {
+        if headers
+            .get(ORIGIN_HEADER)
+            .and_then(|value| value.to_str().ok())
+            != Some("allowed")
+        {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+        ([(header::CONTENT_TYPE, "audio/aac")], "packed-aac-segment").into_response()
     }
 
     let origin_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -220,8 +248,11 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
             origin_listener,
             Router::new()
                 .route("/live", get(master))
-                .route("/child", get(child))
-                .route("/seg.m4s", get(segment)),
+                .route("/audio/child", get(audio_child))
+                .route("/video/child", get(video_child))
+                .route("/audio/000.aac", get(audio_segment))
+                .route("/video/000.jpg", get(segment))
+                .route("/video/part.jpg", get(segment)),
         )
         .await
         .unwrap();
@@ -267,12 +298,68 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
         .text()
         .await
         .unwrap();
+    assert!(master_body.contains("AUTOSELECT=YES"));
     let child_url = master_body
         .lines()
         .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
         .unwrap();
     assert!(child_url.starts_with(&proxy.base_url("127.0.0.1")));
     assert!(!child_url.starts_with(&format!("http://{origin_addr}")));
+    let child_uri = reqwest::Url::parse(child_url).unwrap();
+    assert_eq!(child_uri.path().rsplit('/').next(), Some("video-child"));
+    assert!(!child_uri.query_pairs().any(|(key, _)| key == "pb_hls"));
+    let audio_url = master_body
+        .lines()
+        .find_map(|line| {
+            line.split_once("URI=\"")?
+                .1
+                .split_once('"')
+                .map(|item| item.0)
+        })
+        .unwrap();
+    let audio_uri = reqwest::Url::parse(audio_url).unwrap();
+    assert_eq!(audio_uri.path().rsplit('/').next(), Some("audio-child"));
+    assert_ne!(audio_uri.path(), child_uri.path());
+
+    let audio_body = client
+        .get(audio_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let audio_segment_url = audio_body
+        .lines()
+        .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .unwrap();
+    let audio_segment_uri = reqwest::Url::parse(audio_segment_url).unwrap();
+    assert_eq!(
+        audio_segment_uri.path().rsplit('/').next(),
+        Some("audio-000.aac")
+    );
+    assert!(
+        !audio_segment_uri
+            .query_pairs()
+            .any(|(key, _)| key == "pb_hls"),
+        "packed audio must not be relabelled as MPEG-TS"
+    );
+    let audio_response = client
+        .get(audio_segment_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(
+        audio_response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("audio/aac")
+    );
 
     let child_body = client
         .get(child_url)
@@ -289,19 +376,57 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
         .find(|line| !line.trim().is_empty() && !line.starts_with('#'))
         .unwrap();
     assert!(segment_url.starts_with(&proxy.base_url("127.0.0.1")));
+    let segment_uri = reqwest::Url::parse(segment_url).unwrap();
+    assert_eq!(segment_uri.path().rsplit('/').next(), Some("video-000.ts"));
+    assert!(segment_uri
+        .query_pairs()
+        .any(|(key, value)| key == "pb_hls" && value == "ts"));
+    assert!(segment_uri
+        .query_pairs()
+        .any(|(key, value)| key == "uri" && value.ends_with("/000.jpg?session=test")));
+    let segment_response = client
+        .get(segment_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
     assert_eq!(
-        client
-            .get(segment_url)
-            .send()
-            .await
-            .unwrap()
-            .error_for_status()
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap()
-            .as_ref(),
-        b"segment-bytes"
+        segment_response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("video/mp2t")
+    );
+    assert_eq!(
+        segment_response.bytes().await.unwrap().as_ref(),
+        b"G-transport-stream-segment"
+    );
+
+    let part_url = child_body
+        .lines()
+        .find(|line| line.starts_with("#EXT-X-PART:"))
+        .and_then(|line| line.split_once("URI=\"")?.1.split_once('"'))
+        .map(|item| item.0)
+        .unwrap();
+    let part_uri = reqwest::Url::parse(part_url).unwrap();
+    assert_eq!(part_uri.path().rsplit('/').next(), Some("video-part.ts"));
+    assert!(part_uri
+        .query_pairs()
+        .any(|(key, value)| key == "pb_hls" && value == "ts"));
+    let part_response = client
+        .get(part_url)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(
+        part_response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("video/mp2t")
     );
 
     let hinted = proxy
