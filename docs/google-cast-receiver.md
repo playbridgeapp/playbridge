@@ -1,25 +1,26 @@
-# Google Cast Styled Media Receiver
+# Google Cast Web Receiver
 
-PlayBridge uses a Google-hosted Styled Media Receiver (SMR). Launching the
-receiver before loading media gives senders a real application-ready state and
-shows branded idle artwork on the TV.
+PlayBridge hosts a Custom Web Receiver built on Google's Cast Application
+Framework (CAF). Launching the receiver before loading media gives senders a
+real application-ready state and shows branded idle artwork on the TV.
 
-The hosted skin is:
+The receiver URL is:
 
 ```text
-https://playbridge.app/cast/playbridge-receiver.css
+https://cast.playbridge.app/cast/
 ```
 
-The repository owns the CSS and referenced SVG artwork under
-`web/site/static/cast/`. Google owns and hosts the receiver runtime.
+The canonical source is under `browser-receiver-rust/web/`. Its reproducible
+build writes fingerprinted receiver assets to `web/site/static/cast/`; Google
+hosts the CAF runtime loaded by that page.
 
 ## One-time Google Cast setup
 
-1. Deploy `web/site` and verify that the skin and both SVG URLs return `200`
-   over public HTTPS.
-2. In the Google Cast SDK Developer Console, add a **Styled Media Receiver**
+1. Deploy `web/site` and verify that the receiver URL returns `200` over public
+   HTTPS.
+2. In the Google Cast SDK Developer Console, add a **Custom Receiver**
    named **PlayBridge**.
-3. Set its Skin URL to the URL above.
+3. Set its Receiver Application URL to the URL above.
 4. Register the Cast device serial numbers used for pre-publication testing.
 5. Copy the generated application ID into the PlayBridge build/release
    configuration.
@@ -30,10 +31,19 @@ The repository owns the CSS and referenced SVG artwork under
 8. Publish the receiver application before releasing senders that use its
    application ID.
 
-Google's Default Media Receiver application ID, `CC1AD845`, remains useful as
-an unbranded development fallback. It cannot display the PlayBridge skin.
+Google's Default Media Receiver application ID, `CC1AD845`, remains the
+production-development fallback when no PlayBridge ID is supplied. It cannot
+display the PlayBridge receiver UI.
 Never ship an unpublished PlayBridge application ID to general users: only
 registered test devices can launch an unpublished receiver.
+
+The unpublished PlayBridge test application ID is `30FDC6BC`. Test Desktop
+without changing its production default:
+
+```bash
+cd desktop
+flutter run -d macos --dart-define=PLAYBRIDGE_GOOGLE_CAST_APP_ID=30FDC6BC
+```
 
 ## Readiness contract
 
@@ -52,9 +62,9 @@ the receiver application is an explicit, separate operation.
 
 ## Release configuration
 
-The receiver application ID is intentionally not committed until Google has
-issued and published it. All clients should consume the same value from their
-release configuration and fall back to `CC1AD845` for local development.
+The unpublished application ID is documented only for registered-device
+testing. It must not become a sender or release default until the receiver is
+published. All clients continue to fall back to `CC1AD845`.
 
 Configuration points:
 

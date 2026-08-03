@@ -1,5 +1,8 @@
 // Video.js + VHS adaptive playback with PlayBridge's lightweight custom chrome.
 import videojs from 'video.js';
+import { detectStreamKind, normalizeReceiverMedia, sourceTypeForKind } from './shared/media.js';
+import { createLoadLifecycle, normalizePlaybackState } from './shared/lifecycle.js';
+import { createReceiverPresentation, redactUrl } from './shared/presentation.js';
 
 (function () {
   var playerWrap = document.getElementById('player-wrap');
@@ -25,7 +28,7 @@ import videojs from 'video.js';
   var statusHideTimer = null;
   var lastPlaybackStatusKey = null;
   /** Bumps on every load/teardown so late media events ignore stale work. */
-  var loadGeneration = 0;
+  var loadLifecycle = createLoadLifecycle();
   var chromeHideTimer = null;
   var statsTimer = null;
   /** null = Auto ABR; otherwise playlist id/uri lock */
@@ -52,6 +55,7 @@ import videojs from 'video.js';
   var infoOverlay = document.getElementById('info-overlay');
   var infoContent = document.getElementById('info-content');
   var infoClose = document.getElementById('info-close');
+  var receiverPresentation = createReceiverPresentation(document, { mode: 'browser' });
 
   function receiverId() {
     var key = 'playbridge.browser.receiverId';
@@ -294,7 +298,7 @@ import videojs from 'video.js';
   }
 
   function teardownPlayer() {
-    loadGeneration += 1;
+    loadLifecycle.cancel();
     mediaActive = false;
     currentMedia = null;
     currentStreamKind = null;
@@ -319,48 +323,8 @@ import videojs from 'video.js';
   function showReadyScreen() {
     teardownPlayer();
     currentTitle = null;
-    setup.style.display = 'block';
-    hidePlayerStage();
-    instructions.textContent = 'Connected. Choose media in PlayBridge.';
-    code.textContent = '';
-    deviceName.textContent = receiverName();
+    receiverPresentation.showReady({ deviceName: receiverName() });
     setStatus('Ready');
-  }
-
-  function pathFromUrl(url) {
-    try {
-      var parsed = new URL(url, location.href);
-      return (parsed.pathname || '').toLowerCase();
-    } catch (_) {
-      return String(url || '').split('?')[0].split('#')[0].toLowerCase();
-    }
-  }
-
-  function detectStreamKind(url, contentType) {
-    var type = (contentType || '').toLowerCase();
-    var path = pathFromUrl(url);
-    if (
-      type.indexOf('mpegurl') >= 0 ||
-      type.indexOf('x-mpegurl') >= 0 ||
-      /\.m3u8$/i.test(path) ||
-      /[?&](format|type|ext)=m3u8\b/i.test(url)
-    ) {
-      return 'hls';
-    }
-    if (
-      type.indexOf('dash') >= 0 ||
-      type.indexOf('mpd') >= 0 ||
-      /\.mpd$/i.test(path)
-    ) {
-      return 'dash';
-    }
-    return 'progressive';
-  }
-
-  function sourceTypeForKind(kind) {
-    if (kind === 'hls') return 'application/x-mpegURL';
-    if (kind === 'dash') return 'application/dash+xml';
-    return 'video/mp4';
   }
 
   /** Strip native/Video.js controls; our chrome owns the UI. */
@@ -469,7 +433,7 @@ import videojs from 'video.js';
       sendStatus(requestId, 'buffering');
       showStatus('Buffering…');
       function tick() {
-        if (generation !== loadGeneration || !mediaActive) {
+        if (!loadLifecycle.isCurrent(generation) || !mediaActive) {
           resolve(false);
           return;
         }
@@ -607,7 +571,7 @@ import videojs from 'video.js';
       });
 
       vjsPlayer.one('error', function () {
-        if (generation !== loadGeneration || !mediaActive) return;
+        if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
         var err = vjsPlayer.error();
         var msg =
           (err && (err.message || (err.code != null && 'Media error ' + err.code))) ||
@@ -619,7 +583,7 @@ import videojs from 'video.js';
       // Live often fires canplay/loadeddata before (or without) a useful
       // loadedmetadata duration — do not wait only on loadedmetadata.
       function onCanStart() {
-        if (generation !== loadGeneration || !mediaActive) return;
+        if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
         disableNativeControls();
         softenVhsAbrForProxy();
         done();
@@ -631,7 +595,7 @@ import videojs from 'video.js';
 
       // If metadata never arrives (some live edges), still proceed to prebuffer/play.
       var timeoutId = window.setTimeout(function () {
-        if (generation !== loadGeneration || !mediaActive) return;
+        if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
         disableNativeControls();
         softenVhsAbrForProxy();
         done();
@@ -642,15 +606,15 @@ import videojs from 'video.js';
         try {
           vjsPlayer.src({
             src: url,
-            type: sourceTypeForKind(kind)
+            type: sourceTypeForKind(kind, currentMedia && currentMedia.contentType)
           });
           // After src is set, VHS creates loaders — soften ABR ASAP.
           // Preload downloads segments while paused so prebuffer can fill.
           window.setTimeout(function () {
-            if (generation === loadGeneration && mediaActive) softenVhsAbrForProxy();
+            if (loadLifecycle.isCurrent(generation) && mediaActive) softenVhsAbrForProxy();
           }, 0);
           window.setTimeout(function () {
-            if (generation === loadGeneration && mediaActive) softenVhsAbrForProxy();
+            if (loadLifecycle.isCurrent(generation) && mediaActive) softenVhsAbrForProxy();
           }, 500);
         } catch (e) {
           done(e);
@@ -661,8 +625,24 @@ import videojs from 'video.js';
 
   function loadMedia(requestId, media) {
     teardownPlayer();
-    var generation = loadGeneration;
+    var generation = loadLifecycle.current();
     mediaActive = true;
+    try {
+      var normalized = normalizeReceiverMedia(media, { baseUrl: location.href });
+      media = Object.assign({}, media, {
+        url: normalized.url,
+        contentType: normalized.contentType,
+        streamType: normalized.streamType,
+        title: normalized.title,
+        posterUrl: normalized.artwork[0] && normalized.artwork[0].url,
+        subtitleUrl: normalized.subtitleTracks[0] && normalized.subtitleTracks[0].url,
+        startPositionMs: normalized.startPosition * 1000
+      });
+    } catch (error) {
+      mediaActive = false;
+      reportPlaybackError(requestId, error, 'Invalid media');
+      return;
+    }
     currentTitle = media.title || null;
     ensureVideoElement();
     if (media.posterUrl) player.poster = media.posterUrl;
@@ -684,7 +664,7 @@ import videojs from 'video.js';
     currentStreamKind = kind;
 
     function afterReady() {
-      if (generation !== loadGeneration || !mediaActive) return;
+      if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
       var el = mediaElement();
       // Never seek live to startPositionMs (often 0) — that leaves the playhead
       // outside the live window and VHS buffers forever (spinner / Loading…).
@@ -708,13 +688,13 @@ import videojs from 'video.js';
       refreshChrome();
       // HLS subtitle playlists / in-band captions appear after playlist parse.
       window.setTimeout(function () {
-        if (generation === loadGeneration && mediaActive) {
+        if (loadLifecycle.isCurrent(generation) && mediaActive) {
           rebuildCaptionsMenu();
           rebuildQualityMenu();
         }
       }, 1200);
       window.setTimeout(function () {
-        if (generation === loadGeneration && mediaActive) {
+        if (loadLifecycle.isCurrent(generation) && mediaActive) {
           rebuildCaptionsMenu();
           rebuildQualityMenu();
         }
@@ -728,7 +708,7 @@ import videojs from 'video.js';
           : false;
       if (needsPrebuffer) {
         waitForLivePrebuffer(el, generation, requestId).then(function () {
-          if (generation !== loadGeneration || !mediaActive) return;
+          if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
           tryPlay(requestId);
         });
         return;
@@ -743,7 +723,7 @@ import videojs from 'video.js';
           afterReady();
         })
         .catch(function (error) {
-          if (generation !== loadGeneration || !mediaActive) return;
+          if (!loadLifecycle.isCurrent(generation) || !mediaActive) return;
           reportPlaybackError(requestId, error, 'Could not start adaptive playback');
         });
       return;
@@ -1116,29 +1096,6 @@ import videojs from 'video.js';
     return parts.join(' · ');
   }
 
-  function redactUrl(raw) {
-    if (!raw) return '—';
-    try {
-      var parsed = new URL(raw, location.href);
-      var sensitive =
-        /(^|[_-])(token|session|sig|signature|auth|authorization|key|policy|cookie|expires|credential|secret)($|[_-])/i;
-      var pairs = [];
-      parsed.searchParams.forEach(function (value, name) {
-        if (sensitive.test(name) || /^(hdnea|jwt)$/i.test(name)) {
-          pairs.push(encodeURIComponent(name) + '=<redacted>');
-        } else if (name.toLowerCase() === 'uri') {
-          pairs.push(encodeURIComponent(name) + '=' + encodeURIComponent(redactUrl(value)));
-        } else {
-          pairs.push(encodeURIComponent(name) + '=' + encodeURIComponent(value));
-        }
-      });
-      parsed.search = pairs.length ? '?' + pairs.join('&') : '';
-      return parsed.href;
-    } catch (_) {
-      return String(raw);
-    }
-  }
-
   function inferredRoute(raw) {
     try {
       var parsed = new URL(raw, location.href);
@@ -1491,7 +1448,7 @@ import videojs from 'video.js';
     if (el.error) return 'error';
     if (el.ended) return 'ended';
     if (el.readyState < 3 && !el.paused) return 'buffering';
-    return el.paused ? 'paused' : 'playing';
+    return normalizePlaybackState(el.paused ? 'paused' : 'playing');
   }
 
   function sendStatus(requestId, forcedState) {

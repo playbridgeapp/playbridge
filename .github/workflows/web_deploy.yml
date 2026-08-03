@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'web/site/**'
+      - 'browser-receiver-rust/web/**'
       - '.github/workflows/web_deploy.yml'
   workflow_dispatch:
 
@@ -25,7 +26,17 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: web/site/pnpm-lock.yaml
+          cache-dependency-path: |
+            web/site/pnpm-lock.yaml
+            browser-receiver-rust/web/pnpm-lock.yaml
+
+      - name: Install receiver dependencies
+        working-directory: ./browser-receiver-rust/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Test and build receiver assets
+        working-directory: ./browser-receiver-rust/web
+        run: pnpm test && pnpm build && pnpm check:generated
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

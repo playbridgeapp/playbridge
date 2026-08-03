@@ -8,6 +8,7 @@ description: Work on the PlayBridge Svelte website and static web assets. Use fo
 ## Establish ownership
 
 - Work from `web/site/`; treat it as an independent Svelte/Vite project.
+- Treat `static/cast/` as generated output for the CAF Custom Web Receiver owned by `browser-receiver-rust/web`; its SVG logo and splash assets remain web-owned inputs.
 - Keep website-only work separate from the extension even though both use TypeScript and browser APIs.
 - Load `playbridge-protocol` when the cast demo or another web surface emits PlayBridge wire messages.
 
@@ -17,6 +18,7 @@ description: Work on the PlayBridge Svelte website and static web assets. Use fo
 2. Keep release/download data compatible with the repository's publication conventions.
 3. Avoid introducing runtime server assumptions into pages built for static hosting.
 4. Do not place credentials, authenticated URLs, or private operational data in client assets.
+5. Keep the Cast receiver URL public, stable, HTTPS-compatible, and consistent with `docs/google-cast-receiver.md`; `CC1AD845` remains the unbranded development fallback.
 
 ## Verify
 

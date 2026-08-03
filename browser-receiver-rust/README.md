@@ -12,8 +12,13 @@ The Rust crate is both:
 The host serves a local page and WebSocket control channel. Every browser
 connection displays a short-lived six-digit code. The sender must approve that
 code before it can load or control media. Approved sessions report playback
-status and capabilities and support native media, HLS.js, DASH.js, WebVTT,
-seeking, and volume.
+status and capabilities and support native media, Video.js/VHS adaptive
+playback, WebVTT, seeking, and volume.
+
+The same web package also builds the Cloudflare-hosted CAF receiver at
+`https://cast.playbridge.app/cast/`. Shared modules own media normalization,
+load lifecycle safety, and presentation; the browser and CAF adapters keep
+their network transport and playback engines separate.
 
 ## Run
 
@@ -33,5 +38,7 @@ not need Node.js:
 ```sh
 cd browser-receiver-rust/web
 pnpm install
+pnpm test
 pnpm build
+pnpm check:generated
 ```

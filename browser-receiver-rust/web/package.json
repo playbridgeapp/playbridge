@@ -1,8 +1,11 @@
 {
   "name": "playbridge-browser-receiver-web",
   "private": true,
+  "type": "module",
   "scripts": {
-    "build": "esbuild src/receiver.js --bundle --target=es2015 --minify --outfile=dist/receiver.js"
+    "build": "node scripts/build.mjs",
+    "check:generated": "node scripts/build.mjs --check",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "video.js": "7.21.6"

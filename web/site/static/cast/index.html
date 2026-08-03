@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>PlayBridge Cast Receiver</title>
+  <link rel="stylesheet" href="./receiver.49b98aa381fb.css">
+</head>
+<body>
+  <main id="setup">
+    <img id="brand-logo" src="./playbridge-cast-logo.svg" alt="PlayBridge">
+    <h1>PlayBridge</h1>
+    <p id="instructions">Connecting to the sender…</p>
+    <div id="code" aria-live="polite"></div>
+    <p id="device-name"></p>
+  </main>
+
+  <div id="player-wrap">
+    <cast-media-player id="cast-media-player"></cast-media-player>
+    <video id="player" playsinline webkit-playsinline></video>
+    <button id="play-overlay" type="button">Press to play</button>
+
+    <div id="media-overlay" hidden>
+      <img id="media-artwork" alt="" hidden>
+      <h2 id="media-title"></h2>
+    </div>
+
+    <div id="chrome" aria-label="Playback controls">
+      <div id="stats" aria-live="polite"></div>
+      <div id="chrome-row">
+        <button type="button" class="pb-btn" id="btn-play" title="Play / Pause" aria-label="Play or pause">▶</button>
+        <div id="seek-wrap">
+          <input id="seek" type="range" min="0" max="1000" value="0" step="1" aria-label="Seek" disabled>
+          <span id="time-label">0:00</span>
+          <span id="live-badge" title="Live stream">LIVE</span>
+        </div>
+        <button type="button" class="pb-btn" id="btn-mute" title="Mute" aria-label="Mute">🔊</button>
+        <div class="menu-wrap">
+          <button type="button" class="pb-btn" id="btn-quality" title="Quality" aria-haspopup="listbox" aria-expanded="false">Auto</button>
+          <div id="menu-quality" class="pb-menu" role="listbox" aria-label="Quality"></div>
+        </div>
+        <div class="menu-wrap">
+          <button type="button" class="pb-btn" id="btn-captions" title="Captions" aria-haspopup="listbox" aria-expanded="false">CC</button>
+          <div id="menu-captions" class="pb-menu" role="listbox" aria-label="Captions"></div>
+        </div>
+        <div class="menu-wrap">
+          <button type="button" class="pb-btn" id="btn-speed" title="Speed" aria-haspopup="listbox" aria-expanded="false">1×</button>
+          <div id="menu-speed" class="pb-menu" role="listbox" aria-label="Playback speed"></div>
+        </div>
+        <button type="button" class="pb-btn" id="btn-fs" title="Fullscreen" aria-label="Fullscreen">⛶</button>
+        <button type="button" class="pb-btn" id="btn-info" title="Playback info (I)" aria-label="Playback info">ⓘ</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="info-overlay" hidden aria-hidden="true">
+    <section id="info-panel" role="dialog" aria-modal="true" aria-labelledby="info-title">
+      <div id="info-header">
+        <h2 id="info-title">Playback information</h2>
+        <button type="button" class="pb-btn" id="info-close" aria-label="Close playback information">×</button>
+      </div>
+      <pre id="info-content"></pre>
+      <p id="info-hint">Press I to toggle · Secret query values are redacted</p>
+    </section>
+  </div>
+
+  <div id="status" role="status" aria-live="polite">Starting…</div>
+  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
+  <script src="./receiver.3eb22e1bd941.js"></script>
+</body>
+</html>
