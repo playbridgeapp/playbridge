@@ -5,7 +5,7 @@ import PlayBridgeCastCore
 #endif
 
 enum GoogleCastConfiguration {
-    static let defaultMediaReceiverApplicationID = "CC1AD845"
+    static let defaultMediaReceiverApplicationID = "30FDC6BC"
 
     static var applicationID: String {
         let configured = Bundle.main.object(

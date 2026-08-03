@@ -83,10 +83,9 @@ target as **Do Not Embed**. The adapter remains a safe unavailable stub when
 the framework is not linked, so ordinary source builds continue to work.
 
 Set `PlayBridgeGoogleCastApplicationID` in the target build settings to the
-published Styled Media Receiver application ID. `CC1AD845` is the unbranded
-Default Media Receiver fallback. `_googlecast._tcp` is already declared for
-Local Network permission; discovery and UI adoption are the remaining Apple
-product work.
+published PlayBridge Custom Web Receiver application ID, `30FDC6BC`.
+`_googlecast._tcp` is already declared for Local Network permission; discovery
+and UI adoption are the remaining Apple product work.
 
 On a device, Bonjour requires the **Local Network** permission (granted on first scan). The
 network keys live in `PlayBridge Phone/Info.plist`: `NSBonjourServices`,

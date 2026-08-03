@@ -23,7 +23,7 @@ fn next_control_request_id() -> u32 {
     CONTROL_REQUEST_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-pub const DEFAULT_MEDIA_RECEIVER_APP_ID: &str = "CC1AD845";
+pub const DEFAULT_MEDIA_RECEIVER_APP_ID: &str = "30FDC6BC";
 
 pub const NS_CONNECTION: &str = "urn:x-cast:com.google.cast.tp.connection";
 pub const NS_HEARTBEAT: &str = "urn:x-cast:com.google.cast.tp.heartbeat";
@@ -1189,7 +1189,7 @@ mod tests {
     #[test]
     fn test_build_launch_payload() {
         let payload = build_launch_payload(DEFAULT_MEDIA_RECEIVER_APP_ID, 42);
-        assert!(payload.contains("CC1AD845"));
+        assert!(payload.contains("30FDC6BC"));
         assert!(payload.contains("42"));
     }
 

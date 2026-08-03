@@ -13,7 +13,7 @@ export 'tv_sender_client.dart' show SenderConnectionState, TvCredentials;
 
 const _googleCastApplicationId = String.fromEnvironment(
   'PLAYBRIDGE_GOOGLE_CAST_APP_ID',
-  defaultValue: 'CC1AD845',
+  defaultValue: '30FDC6BC',
 );
 
 @visibleForTesting
@@ -262,6 +262,15 @@ class RustCastTransport extends TvTransport {
     );
     _setState(SenderConnectionState.connecting);
     try {
+      if (protocol == TvProtocol.googleCast) {
+        final source = _googleCastApplicationId == '30FDC6BC'
+            ? 'default (no PLAYBRIDGE_GOOGLE_CAST_APP_ID override)'
+            : 'PLAYBRIDGE_GOOGLE_CAST_APP_ID override';
+        debugPrint(
+          '[tv-transport] Google Cast application ID: '
+          '$_googleCastApplicationId ($source)',
+        );
+      }
       final core = _core ??= rust.CastCoreLibrary.open();
       final session = await core.connect(
         rust.ReceiverEndpoint(

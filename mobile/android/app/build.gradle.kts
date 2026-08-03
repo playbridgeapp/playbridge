@@ -11,7 +11,7 @@ plugins {
 
 val googleCastApplicationId = providers.gradleProperty("PLAYBRIDGE_GOOGLE_CAST_APP_ID")
     .orElse(providers.environmentVariable("PLAYBRIDGE_GOOGLE_CAST_APP_ID"))
-    .orElse("CC1AD845")
+    .orElse("30FDC6BC")
     .map { applicationId ->
         require(applicationId.matches(Regex("[A-Za-z0-9_-]+"))) {
             "PLAYBRIDGE_GOOGLE_CAST_APP_ID contains unsupported characters"

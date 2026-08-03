@@ -26,7 +26,7 @@ void pb_discovery_free(const DiscoveryScanner *scanner);
  * Starts one resource-bounded receiver session worker. target_json:
  * {"protocol":"dlna|roku|google_cast","addresses":["192.0.2.1"],
  *  "port":8060,"location":"http://192.0.2.1/device.xml",
- *  "application_id":"CC1AD845","launch_policy":"reuse_or_launch",
+ *  "application_id":"30FDC6BC","launch_policy":"reuse_or_launch",
  *  "network_handle":467262165005}
  * network_handle is the optional Android Network#getNetworkHandle() used to
  * bind local Cast sockets around a VPN without changing the process route.
