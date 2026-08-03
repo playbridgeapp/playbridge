@@ -11,7 +11,9 @@ import {
   advanceNavigationGeneration,
   currentNavigationGeneration,
   isCurrentNavigationGeneration,
+  MainFrameDetectionGate,
   responseBodyNavigationGeneration,
+  shouldStageMainFrameDetection,
 } from "./detection-lifecycle";
 import {
   detectedMediaKind,
@@ -122,6 +124,9 @@ const requestHeadersMap = new Map<
 const urlToTab = new Map<string, { tabId: number; ts: number }>();
 const tabLastUrl = new Map<number, string>();
 const tabNavigationGenerations = new Map<number, number>();
+const mainFrameDetectionGate = new MainFrameDetectionGate<
+  (navigationGeneration: number) => void
+>();
 
 // Identifies this background-script lifetime. Android uses the epoch together
 // with each tab generation to reject late messages from an older detector.
@@ -210,6 +215,7 @@ function clearTabDetectionState(tabId: number): void {
 }
 
 function cleanupTab(tabId: number): void {
+  mainFrameDetectionGate.abort(tabId);
   clearTabDetectionState(tabId);
   tabLastUrl.delete(tabId);
   tabNavigationGenerations.delete(tabId);
@@ -734,6 +740,32 @@ function reportVideo(
   emitNativeVideo(annotated);
 }
 
+function reportVideoForRequest(
+  video: VideoData,
+  tabId: number,
+  headers: Record<string, string> | null,
+  requestType: string,
+  requestUrl: string,
+  afterReport?: () => void,
+): void {
+  const committedUrl = tabLastUrl.get(tabId);
+  const isUncommittedMainFrame = shouldStageMainFrameDetection(
+    requestType,
+    requestUrl,
+    committedUrl,
+    mainFrameDetectionGate.isNavigating(tabId),
+  );
+  if (isUncommittedMainFrame) {
+    mainFrameDetectionGate.stage(tabId, requestUrl, (generation) => {
+      reportVideo({ ...video, navigationGeneration: generation }, tabId, headers);
+      afterReport?.();
+    });
+    return;
+  }
+  reportVideo(video, tabId, headers);
+  afterReport?.();
+}
+
 function applyMasterBody(
   stored: VideoData,
   tabId: number,
@@ -787,33 +819,22 @@ setInterval(() => {
   }
 }, 30_000);
 
-browser.tabs.onRemoved.addListener((tabId: number) => cleanupTab(tabId));
-
-function isSignificantNavigation(url1?: string, url2?: string): boolean {
-  if (!url1 || !url2) return true;
-  if (url1 === url2) return false;
-  const noFrag1 = url1.split("#")[0];
-  const noFrag2 = url2.split("#")[0];
-  if (noFrag1 !== noFrag2) return true;
-  const frag1 = url1.split("#")[1] || "";
-  const frag2 = url2.split("#")[1] || "";
-  if (frag1 !== frag2 && (frag1.includes("/") || frag2.includes("/"))) {
-    return true;
-  }
-  return false;
-}
+browser.tabs.onRemoved.addListener((tabId: number) => {
+  cleanupTab(tabId);
+  sendToNative({
+    type: "detector_tab_closed",
+    tabId,
+    detectorEpoch: DETECTOR_EPOCH,
+    timestamp: Date.now(),
+  });
+});
 
 function handleNavigation(
   tabId: number,
   url: string,
   transitionType = "",
-  force = false,
 ): void {
-  const lastUrl = tabLastUrl.get(tabId);
-  if (!force && !isSignificantNavigation(lastUrl, url)) {
-    tabLastUrl.set(tabId, url);
-    return;
-  }
+  const previousUrl = tabLastUrl.get(tabId);
   const navigationGeneration = advanceNavigationGeneration(
     tabNavigationGenerations,
     tabId,
@@ -825,14 +846,31 @@ function handleNavigation(
     tabId,
     url,
     originUrl: url,
+    previousUrl: previousUrl ?? null,
     transitionType,
     timestamp: Date.now(),
     detectorEpoch: DETECTOR_EPOCH,
     navigationGeneration,
   });
+  for (const pending of mainFrameDetectionGate.commit(tabId, url)) {
+    pending(navigationGeneration);
+  }
+}
+
+function handleSameDocumentNavigation(tabId: number, url: string): void {
+  tabLastUrl.set(tabId, url);
+  browser.tabs
+    .sendMessage(tabId, { type: "detector_same_document_navigation" })
+    .catch(() => {});
 }
 
 if (browser.webNavigation) {
+  browser.webNavigation.onBeforeNavigate.addListener(
+    (details: { frameId: number; tabId: number }) => {
+      if (details.frameId !== 0) return;
+      mainFrameDetectionGate.begin(details.tabId);
+    },
+  );
   browser.webNavigation.onCommitted.addListener(
     (details: { frameId: number; tabId: number; url: string; transitionType?: string }) => {
       if (details.frameId !== 0) return;
@@ -840,25 +878,25 @@ if (browser.webNavigation) {
         details.tabId,
         details.url,
         details.transitionType || "committed",
-        true,
       );
     },
   );
   browser.webNavigation.onHistoryStateUpdated.addListener(
     (details: { frameId: number; tabId: number; url: string }) => {
       if (details.frameId !== 0) return;
-      handleNavigation(details.tabId, details.url, "history_state_updated", false);
+      handleSameDocumentNavigation(details.tabId, details.url);
     },
   );
   browser.webNavigation.onReferenceFragmentUpdated?.addListener?.(
     (details: { frameId: number; tabId: number; url: string }) => {
       if (details.frameId !== 0) return;
-      handleNavigation(
-        details.tabId,
-        details.url,
-        "reference_fragment_updated",
-        false,
-      );
+      handleSameDocumentNavigation(details.tabId, details.url);
+    },
+  );
+  browser.webNavigation.onErrorOccurred.addListener(
+    (details: { frameId: number; tabId: number }) => {
+      if (details.frameId !== 0) return;
+      mainFrameDetectionGate.abort(details.tabId);
     },
   );
 }
@@ -998,24 +1036,27 @@ browser.webRequest.onHeadersReceived.addListener(
         ? classifyHlsUrl(details.url)
         : ("not_hls" as HlsRole);
 
-      reportVideo(
-        {
-          url: details.url,
-          tabId,
-          contentType: contentType || "unknown",
-          detectedBy,
-          originUrl: details.originUrl ?? "",
-          timestamp: Date.now(),
-          frameId,
-          hlsRole,
-          navigationGeneration,
-          mediaKind:
-            hlsRole === "audio_media"
-              ? "audio"
-              : detectedMediaKind(details.url, contentType, hlsRole) ?? "video",
-        },
+      const video: VideoData = {
+        url: details.url,
+        tabId,
+        contentType: contentType || "unknown",
+        detectedBy,
+        originUrl: details.originUrl ?? "",
+        timestamp: Date.now(),
+        frameId,
+        hlsRole,
+        navigationGeneration,
+        mediaKind:
+          hlsRole === "audio_media"
+            ? "audio"
+            : detectedMediaKind(details.url, contentType, hlsRole) ?? "video",
+      };
+      reportVideoForRequest(
+        video,
         tabId,
         stored?.headers ?? null,
+        details.type,
+        details.url,
       );
 
     }
@@ -1056,44 +1097,48 @@ browser.webRequest.onHeadersReceived.addListener(
               hlsRole =
                 playlist.role === "not_hls" ? "media" : playlist.role;
             }
-            reportVideo(
-              {
-                url: details.url,
-                tabId,
-                contentType:
-                  scan.responseKind === "hls"
-                    ? "application/vnd.apple.mpegurl"
-                    : "application/dash+xml",
-                detectedBy:
-                  scan.responseKind === "hls"
-                    ? "body_content_m3u8"
-                    : "body_content_mpd",
-                originUrl: details.originUrl ?? "",
-                timestamp: Date.now(),
-                frameId,
-                hlsRole,
-                navigationGeneration: bodyNavigationGeneration,
-              },
+            const video: VideoData = {
+              url: details.url,
+              tabId,
+              contentType:
+                scan.responseKind === "hls"
+                  ? "application/vnd.apple.mpegurl"
+                  : "application/dash+xml",
+              detectedBy:
+                scan.responseKind === "hls"
+                  ? "body_content_m3u8"
+                  : "body_content_mpd",
+              originUrl: details.originUrl ?? "",
+              timestamp: Date.now(),
+              frameId,
+              hlsRole,
+              navigationGeneration: bodyNavigationGeneration,
+            };
+            reportVideoForRequest(
+              video,
               tabId,
               stored?.headers ?? null,
+              details.type,
+              details.url,
+              () => {
+                if (
+                  playlist &&
+                  (playlist.role === "master" ||
+                    playlist.videoQualities.length > 0 ||
+                    isExclusiveBootstrapMaster(details.url, hlsRole))
+                ) {
+                  const storedVideo = findVideoByIdentity(
+                    getTabVideos(tabId),
+                    details.url,
+                  );
+                  if (storedVideo) applyMasterBody(storedVideo, tabId, body);
+                }
+              },
             );
-
-            if (
-              playlist &&
-              (playlist.role === "master" ||
-                playlist.videoQualities.length > 0 ||
-                isExclusiveBootstrapMaster(details.url, hlsRole))
-            ) {
-              const storedVideo = findVideoByIdentity(
-                getTabVideos(tabId),
-                details.url,
-              );
-              if (storedVideo) applyMasterBody(storedVideo, tabId, body);
-            }
           }
 
           for (const candidate of scan.embeddedCandidates) {
-            reportVideo(
+            reportVideoForRequest(
               {
                 url: candidate.url,
                 tabId,
@@ -1109,6 +1154,8 @@ browser.webRequest.onHeadersReceived.addListener(
               },
               tabId,
               null,
+              details.type,
+              details.url,
             );
           }
         });

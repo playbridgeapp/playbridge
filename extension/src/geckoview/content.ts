@@ -17,6 +17,8 @@ browser.runtime.onMessage.addListener((message: { type?: string }) => {
         ? cloneIntoFn(message, window)
         : message;
     window.dispatchEvent(new CustomEvent("PlayBridgeFeedback", { detail }));
+  } else if (message?.type === "detector_same_document_navigation") {
+    scanAll();
   }
   return false;
 });

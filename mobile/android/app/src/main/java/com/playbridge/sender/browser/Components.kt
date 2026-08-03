@@ -12,9 +12,11 @@ import coil.disk.DiskCache
 import coil.memory.MemoryCache
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import com.playbridge.shared.protocol.decodeVisualMetadataJson
 import playbridge.PlayPayload
@@ -522,6 +524,7 @@ object Components {
 
     // Store extension reference for later use
     private var videoDetectorExtension: GeckoWebExtension? = null
+    private val detectorTabBindingTracker = DetectorTabBindingTracker()
 
     // NOTE: the old 2-second "video polling" Handler was removed — it was a
     // no-op (native→extension messaging isn't possible; the extension pushes
@@ -529,10 +532,10 @@ object Components {
 
     /**
      * Process incoming message from extension.
-     * Resolves the Kotlin tab ID by matching the message's originUrl against
-     * the currently open tabs in BrowserStore.
+     * Resolves the Kotlin tab through an epoch-scoped WebExtension tab binding,
+     * bootstrapped only by exact current/previous document URL matches.
      */
-    private fun processMessage(message: Any) {
+    private fun processMessage(message: Any, resolutionAttempt: Int = 0) {
         try {
             val jsonString = when (message) {
                 is JSONObject -> message.toString()
@@ -551,20 +554,26 @@ object Components {
                         "Video detector native channel ready " +
                             "epoch=${jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: "legacy"}",
                     )
+                } else if (type == "detector_tab_closed") {
+                    val detectorEpoch = jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull
+                    val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
+                    if (detectorEpoch != null && detectorTabId != null) {
+                        detectorTabBindingTracker.forgetDetectorTab(detectorEpoch, detectorTabId)
+                    }
                 } else if (type == "http_error") {
                     val statusCode = jsonObject["statusCode"]?.jsonPrimitive?.content ?: "unknown"
                     val url = jsonObject["url"]?.jsonPrimitive?.content ?: "unknown"
                     val tabId = jsonObject["tabId"]?.jsonPrimitive?.content
                     Log.e(TAG, "HTTP ERROR detected via extension: $statusCode for $url (Tab: $tabId)")
 
+                    val kotlinTabId = resolveKotlinTabId(jsonObject)
+                    if (kotlinTabId == null) {
+                        retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
+                        return
+                    }
                     Handler(Looper.getMainLooper()).post {
                         // Find the session for the tab and load error page
-                        val sessionToLoad = if (tabId != null) {
-                            tabManager.sessions[resolveKotlinTabId(jsonObject)]
-                        } else {
-                            store.state.selectedTabId?.let { tabManager.sessions[it] }
-                        }
-
+                        val sessionToLoad = tabManager.sessions[kotlinTabId]
                         sessionToLoad?.loadUrl(ErrorPageUtils.generateErrorPage(url, statusCode))
                     }
                 } else if (type == "cast") {
@@ -596,6 +605,10 @@ object Components {
                     }
                 } else if (type == "navigation") {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
+                    if (kotlinTabId == null) {
+                        retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
+                        return
+                    }
                     val version = detectorPageVersion(jsonObject)
                     if (version == null) {
                         VideoDetector.clearTab(kotlinTabId)
@@ -612,6 +625,10 @@ object Components {
                     Log.d(TAG, "Video detection disabled — ignoring detection message")
                 } else {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
+                    if (kotlinTabId == null) {
+                        retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
+                        return
+                    }
                     val version = detectorPageVersion(jsonObject)
                     if (
                         type == "video_detected" &&
@@ -642,56 +659,58 @@ object Components {
     }
     
     /**
-     * Resolve the Kotlin tab ID from a video detection message.
-     * Matches the originUrl from the message against the URLs of currently open tabs.
-     * Falls back to the selected tab, then "_unknown".
+     * Resolve the WebExtension tab to a Kotlin tab using an existing binding or
+     * an exact current/previous document URL match. Unknown tabs are left
+     * unresolved so a blocked popup cannot clear the selected opener tab.
      */
-    private fun resolveKotlinTabId(message: JsonObject): String {
-        try {
-            val originUrl = message["originUrl"]?.jsonPrimitive?.content
-            if (!originUrl.isNullOrEmpty()) {
-                val state = store.state
-                // Since EngineMiddleware, ALL tabs have live URLs in the store —
-                // multiple tabs can share a URL/domain. Prefer the selected tab
-                // when it matches, so detections aren't misfiled to a background
-                // tab and the cast sheet (keyed by selected tab) misses them.
-                val selectedTab = state.selectedTabId?.let { id -> state.tabs.find { it.id == id } }
-                fun urlMatches(tabUrl: String) =
-                    tabUrl == originUrl || tabUrl.substringBefore("#") == originUrl.substringBefore("#")
-
-                if (selectedTab != null && urlMatches(selectedTab.content.url)) {
-                    return selectedTab.id
-                }
-                val matchedTab = state.tabs.find { urlMatches(it.content.url) }
-                if (matchedTab != null) {
-                    return matchedTab.id
-                }
-
-                // Try domain match as fallback — selected tab first
-                val originDomain = try { java.net.URI(originUrl).host } catch (e: Exception) { null }
-                if (originDomain != null) {
-                    fun domainMatches(tabUrl: String) =
-                        try { java.net.URI(tabUrl).host == originDomain } catch (e: Exception) { false }
-
-                    if (selectedTab != null && domainMatches(selectedTab.content.url)) {
-                        return selectedTab.id
-                    }
-                    val domainMatch = state.tabs.find { domainMatches(it.content.url) }
-                    if (domainMatch != null) {
-                        return domainMatch.id
-                    }
-                }
+    private fun resolveKotlinTabId(message: JsonObject): String? {
+        return try {
+            val state = store.state
+            val messageUrls = listOfNotNull(
+                message["previousUrl"]?.jsonPrimitive?.contentOrNull,
+                message["originUrl"]?.jsonPrimitive?.contentOrNull,
+                message["url"]?.jsonPrimitive?.contentOrNull,
+            )
+            val candidates = state.tabs.map { tab ->
+                DetectorTabCandidate(tab.id, tab.content.url)
             }
-            
-            // Fallback: use the currently selected tab
-            val selectedId = store.state.selectedTabId
-            if (selectedId != null) {
-                return selectedId
+            val detectorEpoch = message["detectorEpoch"]?.jsonPrimitive?.longOrNull
+            val detectorTabId = message["tabId"]?.jsonPrimitive?.intOrNull
+            if (detectorEpoch != null && detectorTabId != null) {
+                detectorTabBindingTracker.resolve(
+                    incomingEpoch = detectorEpoch,
+                    detectorTabId = detectorTabId,
+                    messageUrls = messageUrls,
+                    candidates = candidates,
+                    selectedKotlinTabId = state.selectedTabId,
+                )
+            } else {
+                detectorTabBindingTracker.resolveLegacy(
+                    messageUrls = messageUrls,
+                    candidates = candidates,
+                    selectedKotlinTabId = state.selectedTabId,
+                )
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error resolving Kotlin tab ID", e)
+            null
         }
-        return "_unknown"
+    }
+
+    private fun retryUnresolvedDetectorMessage(
+        jsonString: String,
+        resolutionAttempt: Int,
+        type: String?,
+    ) {
+        val delayMs = listOf(50L, 150L, 400L).getOrNull(resolutionAttempt)
+        if (delayMs == null) {
+            Log.d(TAG, "Ignoring detector $type from an unmapped Gecko tab")
+            return
+        }
+        Handler(Looper.getMainLooper()).postDelayed(
+            { processMessage(jsonString, resolutionAttempt + 1) },
+            delayMs,
+        )
     }
     
 }

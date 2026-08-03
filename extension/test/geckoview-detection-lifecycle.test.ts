@@ -5,7 +5,9 @@ import {
   advanceNavigationGeneration,
   currentNavigationGeneration,
   isCurrentNavigationGeneration,
+  MainFrameDetectionGate,
   responseBodyNavigationGeneration,
+  shouldStageMainFrameDetection,
 } from "../src/geckoview/detection-lifecycle";
 
 test("advances independent navigation generations per GeckoView tab", () => {
@@ -65,5 +67,89 @@ test("does not move stale subresource bodies into a newer page", () => {
       "https://site.example/next",
     ),
     4,
+  );
+});
+
+test("holds a direct main-frame detection until its document commits", () => {
+  const gate = new MainFrameDetectionGate<string>();
+
+  gate.begin(7);
+  gate.stage(7, "https://media.example/movie.mp4", "direct-mp4");
+
+  assert.equal(gate.isNavigating(7), true);
+  assert.deepEqual(
+    gate.commit(7, "https://media.example/movie.mp4#playback"),
+    ["direct-mp4"],
+  );
+  assert.equal(gate.isNavigating(7), false);
+});
+
+test("stages only uncommitted top-level response detections", () => {
+  assert.equal(
+    shouldStageMainFrameDetection(
+      "main_frame",
+      "https://media.example/movie.mp4",
+      "https://site.example/watch",
+      true,
+    ),
+    true,
+  );
+  assert.equal(
+    shouldStageMainFrameDetection(
+      "main_frame",
+      "https://media.example/movie.mp4",
+      "https://media.example/movie.mp4",
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    shouldStageMainFrameDetection(
+      "xmlhttprequest",
+      "https://media.example/movie.mp4",
+      "https://site.example/watch",
+      true,
+    ),
+    false,
+  );
+});
+
+test("an aborted navigation drops staged media without affecting another tab", () => {
+  const gate = new MainFrameDetectionGate<string>();
+
+  gate.begin(4);
+  gate.stage(4, "https://blocked.example/popup.mp4", "popup");
+  gate.begin(9);
+  gate.stage(9, "https://media.example/kept.mp4", "kept");
+  gate.abort(4);
+
+  assert.deepEqual(gate.commit(4, "https://blocked.example/popup.mp4"), []);
+  assert.deepEqual(gate.commit(9, "https://media.example/kept.mp4"), ["kept"]);
+});
+
+test("a redirect commits only the matching final main-frame detection", () => {
+  const gate = new MainFrameDetectionGate<string>();
+
+  gate.begin(3);
+  gate.stage(3, "https://media.example/redirect.mp4", "redirect-response");
+  gate.stage(3, "https://cdn.example/final.mp4", "final-response");
+
+  assert.deepEqual(
+    gate.commit(3, "https://cdn.example/final.mp4"),
+    ["final-response"],
+  );
+});
+
+test("a superseding navigation drops candidates from the abandoned attempt", () => {
+  const gate = new MainFrameDetectionGate<string>();
+
+  gate.begin(5);
+  gate.stage(5, "https://first.example/movie.mp4", "first");
+  gate.begin(5);
+  gate.stage(5, "https://second.example/movie.mp4", "second");
+
+  assert.deepEqual(
+    gate.commit(5, "https://second.example/movie.mp4"),
+    ["second"],
   );
 });
