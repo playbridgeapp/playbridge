@@ -48,7 +48,7 @@ async function generate(browserOutput, castOutput) {
   const castHtml = sourceHtml
     .replace('<title>PlayBridge Browser Receiver</title>', '<title>PlayBridge Cast Receiver</title>')
     .replace(style[0], `<link rel="stylesheet" href="./${cssName}">`)
-    .replace('<img id="brand-logo" alt="PlayBridge">', '<img id="brand-logo" src="./playbridge-cast-logo.svg" alt="PlayBridge">')
+    .replace('<img id="brand-logo" alt="PlayBridge">', '<img id="brand-logo" src="./playbridge-cast-splash.svg" alt="PlayBridge">')
     .replace(
       '<script src="/assets/receiver.js"></script>',
       '<script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>\n' +
