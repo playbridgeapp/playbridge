@@ -8,8 +8,10 @@ description: Work on PlayBridge's native Apple phone and Apple TV applications. 
 ## Establish ownership
 
 - Treat `mobile/apple/` and `tv/apple/` as separate Xcode projects with shared product behavior but no shared build root.
+- The phone contains optional ABI-v2 Google Cast groundwork in `Network/GoogleCastSession.swift`; discovery and product UI adoption are not complete, and ordinary source builds must keep working without the XCFramework linked.
 - Keep one Apple specialist by default. Split phone and TV work only for substantial, non-overlapping implementations.
 - Load `playbridge-protocol` when JSON envelopes, pairing, authentication, or generated Swift bindings change.
+- Load `playbridge-rust-core` when the Cast Core adapter, C ABI, module map, or `cast/build-apple.sh` changes.
 
 ## Work safely
 
@@ -33,3 +35,8 @@ xcodebuild -workspace "PlayBridge TV.xcworkspace" -scheme "PlayBridge TV" -confi
 ```
 
 Report simulator, SDK, signing, or CocoaPods limitations explicitly; do not treat an unavailable Apple toolchain as successful verification.
+
+For Google Cast adapter or native ABI work, build the optional XCFramework from
+the repository root with `sh cast/build-apple.sh`, then build the phone target
+with it linked as **Do Not Embed**. The script intentionally refuses to
+overwrite an existing generated XCFramework.

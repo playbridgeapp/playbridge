@@ -10,6 +10,7 @@ description: Work on the PlayBridge Rust stream proxy server. Use for stream pro
 - Treat `stream-proxy-rust/` as a high-performance standalone Rust proxy service.
 - Keep proxy routing, HTTP streaming, HLS rewriting, debrid link resolution, and MediaFlow AES-256 encryption within `stream-proxy-rust/`.
 - Coordinate changes that affect Desktop proxy integration with the `playbridge-desktop-proxy` owner.
+- Coordinate embedded sender-services or proxy-upstream ABI changes with `playbridge-rust-core`; include `playbridge-android` when JNI upstream callbacks or the phone proxy are affected.
 - Load `playbridge-protocol` for any cross-platform wire payload or message contract changes.
 
 ## Work safely
@@ -18,6 +19,7 @@ description: Work on the PlayBridge Rust stream proxy server. Use for stream pro
 2. Never log Debrid tokens, authentication credentials, private keys, or full authenticated stream URLs.
 3. Preserve HTTP header forwarding and HLS manifest rewriting without leaking user session tokens in logs or errors.
 4. Ensure non-blocking async IO using Tokio and Axum for high-concurrency stream forwarding.
+5. Preserve the Android host-callback ownership contract: native code requests upstream data, the JVM performs the authenticated origin request, and handles/strings are closed or freed exactly once.
 
 ## Verify
 

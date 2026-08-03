@@ -24,7 +24,7 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 | `playbridge-extension` | Browser extension and native-messaging integration |
 | `playbridge-web` | Svelte website and static web assets |
 | `playbridge-protocol` | Protocol schema, generated bindings, and consumer compatibility |
-| `playbridge-rust-core` | Portable Rust casting and receiver engines, UniFFI/C/JNI bindings, and Rust CLI |
+| `playbridge-rust-core` | Portable Rust casting/receiver engines, sender-hosted browser receiver, FFI bindings, and Rust CLI |
 | `playbridge-stream-proxy-rust` | High-performance Rust streaming proxy and MediaFlow encryption |
 
 Before working in a project, load the matching specialist skill. For cross-project work, load each affected specialist or delegate non-overlapping consumers to subagents using those skills. Keep shared contracts and files with one designated writer, and keep the primary agent responsible for integration and final verification.
@@ -42,19 +42,22 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Android phone | `mobile/android/` | Kotlin, Compose, GeckoView; Gradle modules `:app` and `:shared` |
 | Android TV | `tv/android/` | Kotlin, TV UI, MPV/VLC; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
 | Shared Kotlin | `shared/` | KMP protocol and shared playback/domain logic, included by both Android builds |
-| Apple phone | `mobile/apple/` | Swift/Xcode project |
+| Apple phone | `mobile/apple/` | SwiftUI/Xcode sender; optional Cast Core Google Cast adapter groundwork |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
-| Desktop | `desktop/` | Flutter receiver for macOS, Windows, and Linux |
-| Stream proxy (Dart) | `stream-proxy-dart/` | Standalone Dart proxy, embedded by Desktop and released as a Docker image |
+| Desktop | `desktop/` | Flutter receiver and sender for macOS, Windows, and Linux |
+| Stream proxy (Dart) | `stream-proxy-dart/` | Standalone Dart proxy implementation; separate from Desktop's current Rust-backed in-process proxy |
 | Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption |
 | Rust Cast Core | `cast/core/` | Portable discovery, protocol clients, pairing primitives, and casting sessions |
 | Rust Receiver | `cast/receiver/` | Secure reusable PlayBridge WSS receiver runtime; consumers provide playback and platform lifecycle |
-| Rust FFI | `cast/ffi/` | UniFFI plus stable C/JNI bindings for Cast Core and the receiver runtime |
+| Rust FFI | `cast/ffi/` | UniFFI plus stable C/JNI bindings for Cast sessions, sender services, and receiver runtime |
 | Dart Cast bindings | `packages/playbridge_cast_core_dart/` | Dart FFI wrappers consumed by Flutter Desktop and standalone Dart applications |
 | Rust CLI | `cli/` | Command-line client binary (`playbridge`) for Rust Core |
+| Browser receiver (Rust) | `browser-receiver-rust/` | Embeddable/standalone sender-hosted web receiver used by Desktop and CLI |
 | Extension | `extension/` | Browser extension, JavaScript/TypeScript |
-| Web | `web/` | Svelte site |
+| Web | `web/site/` | Static Svelte/Vite site and Google Cast receiver skin assets |
 | Protocol assets | `protocol/` | In-repository AsyncAPI contract, protocol documentation, and generated artifacts |
+
+`docs/design-home-relay.md` is a design plan, not an implemented relay service.
 
 ## Build and test
 
@@ -74,6 +77,20 @@ zsh -c "source ~/.zshrc && ./gradlew lint"
 # Desktop — from desktop
 flutter test
 flutter analyze
+
+# Rust workspace — from repository root
+cargo fmt --all -- --check
+cargo test --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+
+# Browser extension — from extension
+pnpm typecheck
+pnpm test
+pnpm build
+
+# Static website — from web/site
+pnpm check
+pnpm build
 
 # Prefer a focused test while iterating
 zsh -c "source ~/.zshrc && ./gradlew :app:testFossDebugUnitTest --tests \"fully.qualified.TestClass.methodName\""
@@ -124,6 +141,38 @@ emitted by a successful pairing. Bump the receiver ABI version for incompatible
 C/Dart changes, rebuild Desktop libraries with `cast/build-desktop.sh`, and run
 the native receiver smoke test.
 
+### Cast session and sender-services ABI ripple
+
+Changes to Cast Core discovery/session behavior, the `pb_session_*` API, the
+`pb_sender_services_*` API, their JSON command/event contracts, or proxy upstream
+callbacks must be checked across:
+
+- `cast/core/src/session.rs`, `cast/core/src/castv2.rs`, and `cast/ffi/src/lib.rs`
+- `cast/ffi/src/sender_services.rs` and `cast/ffi/include/playbridge_cast_core.h`
+- `packages/playbridge_cast_core_dart/lib/src/`
+- `mobile/android/app/src/main/java/com/playbridge/sender/cast/googlecast/`
+- `desktop/lib/tv_transport.dart`, `desktop/lib/tv_sender_controller.dart`, and bundled native libraries
+- `mobile/apple/PlayBridge Phone/PlayBridge Phone/Network/GoogleCastSession.swift`
+- `cli/src/google_cast.rs` and `cli/src/send.rs`
+
+Keep Google Cast readiness tied to application launch/join plus media
+`GET_STATUS`, keep media `STOP` separate from ending the receiver application,
+discard stale sessions after receiver exit, and preserve Android's explicit
+local-network handle around split-tunnel VPNs. Bump the matching Cast Core or
+sender-services ABI version for incompatible C/JSON changes. Rebuild affected
+artifacts with `cast/build-android.sh`, `cast/build-desktop.sh`, and/or
+`cast/build-apple.sh`; do not assume one platform's checked-in binary updates the
+others.
+
+### GeckoView detector ripple
+
+The phone's built-in detector is generated from `extension/src/core/` and
+`extension/src/geckoview/`. Do not hand-edit the generated JavaScript under
+`mobile/android/app/src/main/assets/extensions/video_detector/`. Run
+`pnpm build` from `extension/`, and when detector payload fields or lifecycle
+semantics change, check the Kotlin consumer in `VideoDetector.kt`, page-generation
+handling, ranking, and cast-sheet tests together.
+
 ### Shared dependency versions
 
 Phone and TV consume the root `gradle/libs.versions.toml`. Keep GeckoView/Media3 changes compatible with both Android projects and the shared decoder AARs under `prebuilt/media3/`.
@@ -145,6 +194,8 @@ The graph updates through repository hooks. Do not impose fixed tool-call or tok
 
 ## Environment
 
-- Target SDK 36; phone min SDK 26
-- JDK 17; AGP 9.0.1; Kotlin 2.2.10
+- Android compile SDK 37; target SDK 36; phone/TV min SDK 26
+- Gradle 9.5.1; AGP 9.2.1; Kotlin 2.4.0
+- CI bootstraps JDK 17; the phone Gradle daemon criteria resolve JetBrains JDK 21; Android source/target compatibility is Java 11
+- Rust stable 1.85+; Dart SDK `^3.6.0`; extension Node.js 20+ with pnpm 9.15.2; web CI uses Node.js 22
 - Root version catalog: `gradle/libs.versions.toml`

@@ -9,11 +9,12 @@ description: Work on PlayBridge Flutter Desktop, its Rust-backed receiver adapte
 
 - Treat `desktop/` and `stream-proxy-dart/` as separate build and release units.
 - Treat `desktop/lib/receiver_server.dart` as the production PlayBridge receiver adapter. Rust owns TLS/WSS, pairing, authentication, limits, and command decoding; Dart owns `PlayerController`, UI, certificate/token persistence, discovery publishing, and application lifecycle.
+- Treat Rust sender services as the owner of Desktop's outbound discovery/cast workers, embedded Rust stream proxy, and sender-hosted browser receiver lifecycle. Dart owns UI policy, routing choices, media preparation, and session orchestration around those services.
 - Treat `desktop/lib/server.dart` as legacy/test-only until an explicit cleanup removes it. Do not implement production receiver behavior there.
 - Keep small in-process proxy adaptations with the Desktop owner. Split out a proxy owner for API, authentication, networking, HLS rewriting, FFmpeg, Docker, or standalone release work.
 - Give shared Desktop/proxy interfaces one writer while the other consumer reviews compatibility.
 - Load `playbridge-extension` for native-messaging or browser-to-Desktop bridge changes.
-- Load `playbridge-rust-core` for receiver runtime, C ABI, bundled native library, or `packages/playbridge_cast_core_dart/` changes.
+- Load `playbridge-rust-core` for receiver runtime, Cast session/sender-services ABI, browser receiver host, bundled native library, or `packages/playbridge_cast_core_dart/` changes.
 - Load `playbridge-protocol` for cast envelopes, pairing, authentication, or generated Dart binding changes.
 
 ## Work safely
@@ -33,7 +34,8 @@ flutter test
 flutter analyze
 ```
 
-When the Rust receiver, C ABI, Dart wrapper, or bundled library changes, run from
+When the Rust receiver, Cast/sender-services C ABI, Dart wrapper, browser receiver,
+or bundled library changes, run from
 the repository root before the Desktop checks:
 
 ```bash
