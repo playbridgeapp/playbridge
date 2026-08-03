@@ -123,13 +123,6 @@ class ConnectionViewModel(
         castSessionManager.setPreferredStreamRoute(mode)
     }
 
-    fun noteEffectiveStreamRoute(
-        mode: com.playbridge.sender.cast.proxy.StreamRouteMode,
-        proxyFallback: Boolean = false,
-    ) {
-        castSessionManager.noteEffectiveStreamRoute(mode, proxyFallback)
-    }
-
     // Foreground discovery session (ref-counted so Connection screen + cast sheet can share).
     // Each window is time-boxed (SCAN_WINDOW_MS); while any UI holds the session we quietly
     // rescan every BACKGROUND_RESCAN_MS so the sticky list stays fresh without flashing empty.

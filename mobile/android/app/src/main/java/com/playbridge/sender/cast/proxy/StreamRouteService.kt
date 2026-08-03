@@ -140,15 +140,6 @@ class StreamRouteService(
      * are missing or register fails (one-release safety net).
      */
     private suspend fun packageViaPhoneRemote(media: CastableMedia): PackagedMedia {
-        // Already packaged for Via phone — do not double-wrap.
-        if (PhoneProxyUrls.isAnyPhoneProxyUrl(media.url)) {
-            return PackagedMedia(
-                url = media.url,
-                contentType = media.contentType,
-                headers = null,
-            )
-        }
-
         val jniReady = SenderServicesNative.jniUpstreamReady &&
             runCatching { SenderServicesNative.upstreamCallbacksRegistered() }.getOrDefault(false)
 

@@ -4,6 +4,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.playbridge.sender.BuildConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +68,12 @@ internal class GoogleCastConnectionLostException : GoogleCastSessionInvalidExcep
 )
 
 internal class GoogleCastLocalNetworkUnavailableException(message: String) :
+    IllegalStateException(message)
+
+/**
+ * Connection/session setup failed before any media LOAD was attempted.
+ */
+class GoogleCastNotReadyException(message: String = "Google Cast receiver is not ready") :
     IllegalStateException(message)
 
 /**
@@ -251,6 +258,17 @@ internal class RustCastSessionClient(
             return withTimeout(OPERATION_TIMEOUT_MS) { deferred.await() }.also {
                 logCommand(command, requestId, "complete elapsed=${elapsedSince(startedAt)}ms")
             }
+        } catch (error: TimeoutCancellationException) {
+            // Keep operation timeout distinct from user cancellation for diagnostics.
+            Log.w(
+                TAG,
+                "$tracePrefix command=$command requestId=$requestId timed out " +
+                    "after ${elapsedSince(startedAt)}ms",
+            )
+            throw IllegalStateException(
+                "Google Cast media operation timed out",
+                error,
+            )
         } catch (error: Throwable) {
             if (error is CancellationException) {
                 trace(

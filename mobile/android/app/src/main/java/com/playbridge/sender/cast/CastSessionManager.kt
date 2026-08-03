@@ -8,9 +8,11 @@ import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.sender.cast.dlna.RenderingControlClient
 import com.playbridge.sender.cast.googlecast.GoogleCastTarget
+import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
 import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.cast.roku.RokuCastTarget
+import com.playbridge.sender.cast.routing.ExternalLoadEventGate
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.ReceiverDiscoveryRepository
 import com.playbridge.sender.connection.WebSocketClient
@@ -22,6 +24,7 @@ import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -37,6 +40,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal fun externalSessionPhase(
     targetKind: TargetKind,
@@ -176,7 +180,7 @@ class CastSessionManager(
 
     /**
      * User-selected stream route for the next cast packaging (cast sheet chips).
-     * Browser packaging maps Direct → Via phone and always uses Via phone for local files.
+     * Third-party targets default to Via phone; local files always use Via phone.
      */
     private val _preferredStreamRoute = MutableStateFlow(
         StreamProxySettingsStore.load(context).initialRouteMode(),
@@ -198,12 +202,23 @@ class CastSessionManager(
     private val _castNotices = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val castNotices: SharedFlow<String> = _castNotices.asSharedFlow()
 
-    fun noteEffectiveStreamRoute(mode: StreamRouteMode, proxyFallback: Boolean = false) {
+    private fun setActiveStreamRoute(mode: StreamRouteMode, proxyFallback: Boolean = false) {
         _lastEffectiveStreamRoute.value = mode
+        _phonePathActive.value = mode == StreamRouteMode.VIA_PHONE
         if (proxyFallback) {
             _castNotices.tryEmit("Remote proxy unavailable — using Via phone")
         }
     }
+
+    /**
+     * True while the phone is actively proxying/serving media bytes for an external cast
+     * (Via phone). Distinct from general session activity and from Direct external playback.
+     */
+    private val _phonePathActive = MutableStateFlow(false)
+    val phonePathActive: StateFlow<Boolean> = _phonePathActive.asStateFlow()
+
+    /** Generation token so stale callbacks cannot overwrite a newer load. */
+    private var externalLoadGeneration: Long = 0L
 
     /** Library identity of what's loaded on an external target (null = untracked content). */
     private val _externalNowPlayingMeta = MutableStateFlow<playbridge.VisualMetadata?>(null)
@@ -286,9 +301,6 @@ class CastSessionManager(
                 sessionId = sessionId,
                 name = device.name,
                 routeMode = { _preferredStreamRoute.value },
-                onRouteResolved = { effective, proxyFallback ->
-                    noteEffectiveStreamRoute(effective, proxyFallback)
-                },
             ),
         )
     }
@@ -381,7 +393,7 @@ class CastSessionManager(
     /**
      * True while a cast session should keep the process alive (drives the FGS).
      *
-     * - External target selected
+     * - External media whose bytes are being served Via phone
      * - Live native WebSocket (connected/connecting), any non-external route — includes
      *   auto-connect while the persisted route is still "This Device", so a cold start
      *   still surfaces the Connected notification
@@ -391,12 +403,12 @@ class CastSessionManager(
      *   from the background after a stop)
      */
     val hasActiveSession: StateFlow<Boolean> = combine(
-        _externalMediaLoaded,
+        _phonePathActive,
         webSocketClient.connectionState,
         connectionCoordinator.tvActiveContext,
         _route,
         _reconnecting,
-    ) { externalMediaLoaded, state, ctx, route, reconnecting ->
+    ) { externalPhonePath, state, ctx, route, reconnecting ->
         val connectedOrConnecting = state is WebSocketClient.ConnectionState.Connected ||
             state is WebSocketClient.ConnectionState.Connecting
         // Any live native socket — casting or idle-linked. Route.ThisDevice only means
@@ -405,7 +417,7 @@ class CastSessionManager(
         val nativeReconnecting = route is Route.NativeTv && reconnecting
         // Keep FGS across a drop while we still think content is on the TV.
         val nativeStickyPlaying = ctx == "player" && route !is Route.External
-        externalMediaLoaded || nativeLive || nativeReconnecting || nativeStickyPlaying
+        externalPhonePath || nativeLive || nativeReconnecting || nativeStickyPlaying
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
@@ -428,16 +440,26 @@ class CastSessionManager(
     private var lastNativeDeviceName: String? = null
 
     /**
-     * True while the phone is actually playing/proxying bytes (vs merely linked-but-idle).
-     * Drives the FGS *type* (mediaPlayback vs connectedDevice) and the CPU wake lock in
-     * [CastSessionService]: DLNA with media loaded (proxy serving), or the native TV in the
-     * "player" context.
+     * True while casting is in progress (external media loaded or native TV in player context).
+     * Drives notification "Casting" copy. CPU wake lock for serving media is gated separately
+     * by [phonePathActive] (see [CastSessionService]).
      */
     val isActivelyPlaying: StateFlow<Boolean> = combine(
         _externalMediaLoaded,
         connectionCoordinator.tvActiveContext,
     ) { externalMediaLoaded, ctx ->
         externalMediaLoaded || ctx == "player"
+    }.stateIn(scope, SharingStarted.Eagerly, false)
+
+    /**
+     * True when a wake lock is justified: phone data path active, or native TV player context
+     * (queue top-ups / WS keep-alive under Doze). Direct external playback does not qualify.
+     */
+    val needsCastWakeLock: StateFlow<Boolean> = combine(
+        _phonePathActive,
+        connectionCoordinator.tvActiveContext,
+    ) { phonePath, ctx ->
+        phonePath || ctx == "player"
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /** What the session notification shows. */
@@ -562,7 +584,8 @@ class CastSessionManager(
                     // begin from a user action in the foreground, so this is belt-and-braces.
                     Log.d(TAG, "hasActiveSession=true → ensure cast FGS")
                     ensureCastServiceRunning()
-                    maybeRequestBatteryExemption()
+                    // Battery exemption is offered only from an explicit phone-path cast
+                    // (see load()), never from this background session collector.
                 } else {
                     Log.d(TAG, "hasActiveSession=false → stop cast FGS after ${STOP_GRACE_MS}ms")
                     delay(STOP_GRACE_MS)
@@ -896,8 +919,10 @@ class CastSessionManager(
         _externalStatus.value = PlaybackStatus(PlaybackState.IDLE)
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
+        _phonePathActive.value = false
         _externalNowPlayingMeta.value = null
         _lastEffectiveStreamRoute.value = null
+        _preferredStreamRoute.value = StreamRouteMode.VIA_PHONE
         webSocketClient.disconnect()
         stopReconnectSupervisor()
         // External routes cannot be restored without reconnecting, so their restart/clear
@@ -907,12 +932,18 @@ class CastSessionManager(
         externalStatusJob = scope.launch {
             target.status().collect { status ->
                 if (_externalTarget.value !== target) return@collect
-                _externalStatus.value = status
-                if (_externalMediaLoaded.value && status.state in TERMINAL_EXTERNAL_STATES) {
-                    _externalMediaLoaded.value = false
-                    _externalMediaTitle.value = null
-                    _externalNowPlayingMeta.value = null
+                val generation = externalLoadGeneration
+                if (!ExternalLoadEventGate.isCurrent(
+                        eventEpoch = status.loadEpoch,
+                        currentGeneration = generation,
+                        mediaLoaded = _externalMediaLoaded.value,
+                    )
+                ) {
+                    Log.v(TAG, "Ignoring stale ${target.kind} status epoch=${status.loadEpoch}")
+                    return@collect
                 }
+                _externalStatus.value = status
+                maybeClearTerminalExternalMedia(status)
             }
         }
         Log.d(TAG, "Selected ${target.kind} target: ${device.name}")
@@ -924,6 +955,7 @@ class CastSessionManager(
     fun stopAndClearExternalTarget() = detachExternalTarget(stopFirst = true)
 
     private fun detachExternalTarget(stopFirst: Boolean) {
+        externalLoadGeneration++
         externalLoadJob?.cancel()
         externalLoadJob = null
         externalStatusJob?.cancel()
@@ -934,6 +966,7 @@ class CastSessionManager(
         _externalStatus.value = null
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
+        _phonePathActive.value = false
         _externalNowPlayingMeta.value = null
         _lastEffectiveStreamRoute.value = null
         if (_route.value is Route.External) {
@@ -990,38 +1023,83 @@ class CastSessionManager(
 
     fun load(media: MediaItem, userInitiated: Boolean = true): Boolean {
         val target = _externalTarget.value ?: return false
+        val route = media.effectiveRoute ?: if (target is BrowserCastTarget) {
+            BrowserStreamRoute.effectiveMode(
+                requested = _preferredStreamRoute.value,
+                isLocalMedia = BrowserStreamRoute.isLocalMediaUrl(media.url),
+            )
+        } else {
+            StreamRouteMode.VIA_PHONE
+        }
         DebugNetworkLogger.urlAndHeaders(
             TAG,
-            "External ${target.kind} cast input",
+            "External ${target.kind} cast input route=${route.prefsValue} reason=${media.routeReason}",
             media.url,
             media.headers,
+        )
+        Log.i(
+            TAG,
+            "External load protocol=${target.kind} selectedRoute=${route.prefsValue} " +
+                "policyReason=${media.routeReason ?: "-"}",
         )
         if (userInitiated) _externalInterrupts.tryEmit(Unit)
         _externalMediaTitle.value = media.title ?: "Casting media"
         _externalMediaLoaded.value = true
+        setActiveStreamRoute(route)
         _externalNowPlayingMeta.value = media.visualMetadata
-        _externalStatus.value = PlaybackStatus(PlaybackState.BUFFERING)
         externalLoadJob?.cancel()
+        val generation = ++externalLoadGeneration
+        val epochMedia = media.copy(loadEpoch = generation)
+        _externalStatus.value = PlaybackStatus(
+            state = PlaybackState.BUFFERING,
+            loadEpoch = generation,
+        )
+        val loadTarget = target
         externalLoadJob = scope.launch {
-            runCatching { target.load(media) }
-                .onSuccess {
-                    if (_externalTarget.value === target && target is BrowserCastTarget) {
-                        target.lastEffectiveRoute?.let { noteEffectiveStreamRoute(it, target.lastProxyFallback) }
+            val primary = runCatching { loadTarget.load(epochMedia) }
+            if (generation != externalLoadGeneration || _externalTarget.value !== loadTarget) {
+                return@launch
+            }
+            primary.onSuccess {
+                if (loadTarget is BrowserCastTarget) {
+                    loadTarget.lastEffectiveRoute?.let {
+                        setActiveStreamRoute(it, loadTarget.lastProxyFallback)
+                    }
+                } else {
+                    setActiveStreamRoute(route)
+                }
+                _externalStatus.value?.let { maybeClearTerminalExternalMedia(it) }
+                if (_phonePathActive.value && userInitiated) {
+                    maybeRequestBatteryExemption()
+                }
+            }
+            primary.onFailure { error ->
+                if (error is CancellationException) return@onFailure
+                if (generation == externalLoadGeneration && _externalTarget.value === loadTarget) {
+                    _externalStatus.value = PlaybackStatus(
+                        PlaybackState.ERROR,
+                        failure = error,
+                        loadEpoch = generation,
+                    )
+                    _externalMediaLoaded.value = false
+                    _phonePathActive.value = false
+                    Log.w(TAG, "${loadTarget.kind} load failed: ${error.message}")
+                    if (loadTarget is BrowserCastTarget) {
+                        _castNotices.tryEmit("TV browser couldn’t play this stream")
                     }
                 }
-                .onFailure {
-                    if (it is CancellationException) return@onFailure
-                    if (_externalTarget.value === target) {
-                        _externalStatus.value = PlaybackStatus(PlaybackState.ERROR)
-                        _externalMediaLoaded.value = false
-                        Log.w(TAG, "${target.kind} load failed: ${it.message}")
-                        if (target is BrowserCastTarget) {
-                            _castNotices.tryEmit("TV browser couldn’t play this stream")
-                        }
-                    }
-                }
+            }
         }
         return true
+    }
+
+    private fun maybeClearTerminalExternalMedia(status: PlaybackStatus) {
+        if (!_externalMediaLoaded.value) return
+        if (status.state !in TERMINAL_EXTERNAL_STATES) return
+        _externalMediaLoaded.value = false
+        _phonePathActive.value = false
+        _externalMediaTitle.value = null
+        _externalNowPlayingMeta.value = null
     }
 
     fun play() = controlExternal("play") { it.play() }
@@ -1049,11 +1127,13 @@ class CastSessionManager(
 
     fun stop() {
         _externalInterrupts.tryEmit(Unit)
+        externalLoadGeneration++ // invalidate in-flight load callbacks
         externalLoadJob?.cancel()
         externalLoadJob = null
         controlExternal("stop") { it.stop() }
         _externalMediaTitle.value = null
         _externalMediaLoaded.value = false
+        _phonePathActive.value = false
         _externalNowPlayingMeta.value = null
         _externalStatus.value = PlaybackStatus(PlaybackState.STOPPED)
     }
@@ -1095,31 +1175,40 @@ class CastSessionManager(
      * eventually the process — even with the cast FGS running, killing the local
      * proxy mid-stream.
      *
-     * Deliberately does NOT use ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: the
-     * direct-exemption dialog requires the REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-     * permission, which Google Play restricts to a narrow allowlist. Instead we open
-     * the system battery-optimization settings page (no permission needed) with an
-     * explanatory toast, and the user flips the switch manually. Prompted here rather
-     * than at app launch so a fresh install isn't greeted by a stack of system
-     * screens; a session always starts from a foreground user action, so launching
-     * the settings screen is permitted.
+     * Use the direct exemption dialog when the build declares the restricted
+     * REQUEST_IGNORE_BATTERY_OPTIMIZATIONS permission. Play builds intentionally do
+     * not declare it, so they fall back to this app's own system settings page rather
+     * than dumping the user into the unfiltered battery-optimization list.
      */
-    private fun maybeRequestBatteryExemption() {
+    private suspend fun maybeRequestBatteryExemption() = withContext(Dispatchers.Main.immediate) {
         val pm = context.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
-        if (pm.isIgnoringBatteryOptimizations(context.packageName)) return
+        if (pm.isIgnoringBatteryOptimizations(context.packageName)) return@withContext
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-        if (prefs.getBoolean("battery_exemption_prompted", false)) return
+        if (prefs.getBoolean("battery_exemption_prompted", false)) return@withContext
         runCatching {
             android.widget.Toast.makeText(
                 context,
-                "To keep casting stable with the screen off, find PlayBridge in this list " +
-                    "and set battery usage to “Unrestricted” / “Don’t optimize”.",
+                "To keep casting stable with the screen off, set PlayBridge battery usage " +
+                    "to “Unrestricted” / “Don’t optimize”.",
                 android.widget.Toast.LENGTH_LONG
             ).show()
-            context.startActivity(
-                android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
+            val directIntent = android.content.Intent(
+                android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+            ).setData(android.net.Uri.parse("package:${context.packageName}"))
+            val appSettingsIntent = android.content.Intent(
+                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+            ).setData(android.net.Uri.parse("package:${context.packageName}"))
+            val intent = if (
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    android.Manifest.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                directIntent
+            } else {
+                appSettingsIntent
+            }
+            context.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onSuccess {
             // Only burn the one-shot AFTER the settings screen actually launched — if the
             // intent fails (odd OEM builds), the next cast session gets another chance.

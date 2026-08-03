@@ -1960,13 +1960,21 @@ class BrowserActivity : ComponentActivity() {
                                  if (playlist != null) {
                                      startExternalPlaylist(playlist)
                                  } else {
-                                     val mediaHeaders = com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                                     val mediaHeaders = video.headers
+                                         ?: com.playbridge.sender.cast.VideoDetector.mediaHeaders(video)
+                                     val routeMode = video.effectiveStreamRoute?.let {
+                                         com.playbridge.sender.cast.proxy.StreamRouteMode.fromPrefs(it)
+                                     }
                                      connectionViewModel.castToSelectedExternal(
                                          com.playbridge.sender.cast.MediaItem(
                                              url = video.url,
                                              headers = mediaHeaders,
                                              mimeType = video.contentType,
                                              title = video.title ?: selectedTab?.content?.title,
+                                             startPositionMs = video.startPositionMs,
+                                             visualMetadata = video.visualMetadata,
+                                             effectiveRoute = routeMode,
+                                             routeReason = video.streamRouteReason,
                                          )
                                      )
                                  }

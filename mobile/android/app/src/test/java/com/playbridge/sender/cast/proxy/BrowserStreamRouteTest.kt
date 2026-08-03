@@ -19,9 +19,9 @@ class BrowserStreamRouteTest {
     }
 
     @Test
-    fun directMapsToViaPhoneForRemote() {
+    fun directHonoredForRemote() {
         assertEquals(
-            StreamRouteMode.VIA_PHONE,
+            StreamRouteMode.DIRECT,
             BrowserStreamRoute.effectiveMode(StreamRouteMode.DIRECT, isLocalMedia = false),
         )
     }
@@ -59,11 +59,10 @@ class BrowserStreamRouteTest {
                 isLocalMedia = true,
             ),
         )
-        assertEquals(
-            "Browsers cast Via phone by default.",
+        assertNull(
             BrowserStreamRoute.overrideReason(
                 StreamRouteMode.DIRECT,
-                StreamRouteMode.VIA_PHONE,
+                StreamRouteMode.DIRECT,
                 isLocalMedia = false,
             ),
         )

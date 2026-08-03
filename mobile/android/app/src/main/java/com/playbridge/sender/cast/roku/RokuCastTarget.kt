@@ -9,6 +9,7 @@ import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.TargetKind
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,16 +43,13 @@ class RokuCastTarget(
 
     private val _status = MutableStateFlow(PlaybackStatus(PlaybackState.IDLE))
     private var pollJob: Job? = null
+    @Volatile private var activeLoadEpoch: Long? = null
 
     override suspend fun load(media: MediaItem) {
-        val proxy = DlnaProxyHolder.proxy(context)
-        val reachableUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
-            proxy.publishLocal(media.url.toUri(), media.mimeType)
-        } else if (media.headers.isNotEmpty()) {
-            proxy.publish(media.url, media.headers, media.mimeType)
-        } else {
-            media.url
-        }
+        stopPolling()
+        activeLoadEpoch = media.loadEpoch
+        _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
+        val reachableUrl = resolveLoadUrl(media)
         val ok = client.launchMedia(
             host = device.ip,
             port = device.port.takeIf { it > 0 } ?: 8060,
@@ -59,10 +57,28 @@ class RokuCastTarget(
             title = media.title
         )
         if (ok) {
-            _status.value = PlaybackStatus(PlaybackState.PLAYING)
-            startPolling()
+            _status.value = PlaybackStatus(PlaybackState.PLAYING, loadEpoch = media.loadEpoch)
+            startPolling(media.loadEpoch)
         } else {
-            _status.value = PlaybackStatus(PlaybackState.ERROR)
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
+            throw IllegalStateException("Roku refused media launch")
+        }
+    }
+
+    private fun resolveLoadUrl(media: MediaItem): String {
+        when (media.effectiveRoute) {
+            StreamRouteMode.DIRECT -> return media.url
+            StreamRouteMode.VIA_PROXY -> return media.url
+            StreamRouteMode.VIA_PHONE -> return media.url
+            null -> Unit
+        }
+        val proxy = DlnaProxyHolder.proxy(context)
+        return if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
+            proxy.publishLocal(media.url.toUri(), media.mimeType)
+        } else if (media.headers.isNotEmpty()) {
+            proxy.publish(media.url, media.headers, media.mimeType)
+        } else {
+            media.url
         }
     }
 
@@ -77,7 +93,7 @@ class RokuCastTarget(
     override suspend fun stop() {
         sendKeypress("Stop")
         stopPolling()
-        _status.value = PlaybackStatus(PlaybackState.STOPPED)
+        _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
 
     override suspend fun seekTo(positionMs: Long) {
@@ -98,7 +114,7 @@ class RokuCastTarget(
 
     override fun status(): Flow<PlaybackStatus> = _status.asStateFlow()
 
-    private fun startPolling() {
+    private fun startPolling(loadEpoch: Long? = activeLoadEpoch) {
         stopPolling()
         pollJob = scope.launch(Dispatchers.IO) {
             while (isActive) {
@@ -117,7 +133,8 @@ class RokuCastTarget(
                     _status.value = PlaybackStatus(
                         state = state,
                         positionMs = st.positionMs,
-                        durationMs = st.durationMs
+                        durationMs = st.durationMs,
+                        loadEpoch = loadEpoch,
                     )
                     if (state == PlaybackState.STOPPED) {
                         break

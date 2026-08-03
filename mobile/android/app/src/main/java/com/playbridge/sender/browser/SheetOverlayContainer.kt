@@ -192,7 +192,6 @@ fun SheetOverlayContainer(
                 onVideoClick = onVideoClick,
                 onQueueVideo = onQueueVideo,
                 onDownload = onDownloadVideo,
-                onClear = onClearVideos,
                 isTvPlaying = isTvPlaying,
                 playerMode = playerMode,
                 onPlayerModeChange = onPlayerModeChange,

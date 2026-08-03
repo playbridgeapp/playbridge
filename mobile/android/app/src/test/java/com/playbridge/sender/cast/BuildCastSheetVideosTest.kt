@@ -211,6 +211,49 @@ class BuildCastSheetVideosTest {
     }
 
     @Test
+    fun multivariantMasterOutranksChildThatFinishedPreviewFirst() {
+        val masterUrl = "https://cdn.example/master.m3u8"
+        val child = DetectedVideo(
+            url = "https://cdn.example/playlist.m3u8",
+            detectedBy = "body_content_m3u8",
+            headers = mapOf("Referer" to "https://example.com/watch"),
+            timestamp = 20,
+            lastSeen = 20,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = emptyList(),
+                masterPlaylistUrl = "https://cdn.example/playlist.m3u8",
+                validation = HlsPlaylistValidation.VALID_MEDIA,
+            ),
+        )
+        val qualities = listOf(
+            VideoQuality("1920x1080", 5_000_000, "https://cdn.example/1080p.m3u8"),
+            VideoQuality("1280x720", 2_500_000, "https://cdn.example/720p.m3u8"),
+            VideoQuality("854x480", 1_200_000, "https://cdn.example/480p.m3u8"),
+        )
+        val master = DetectedVideo(
+            url = masterUrl,
+            detectedBy = "url_pattern_m3u8",
+            timestamp = 10,
+            lastSeen = 10,
+            qualities = qualities,
+            qualitiesChecked = true,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = qualities,
+                masterPlaylistUrl = masterUrl,
+                validation = HlsPlaylistValidation.VALID_MASTER,
+            ),
+        )
+
+        assertEquals(
+            listOf(master.url, child.url),
+            buildCastSheetVideos(listOf(child, master)).map { it.url },
+        )
+    }
+
+    @Test
     fun failedCandidateRanksBelowPendingCandidate() {
         val failed = DetectedVideo(
             url = "https://cdn.example/fake.m3u8",

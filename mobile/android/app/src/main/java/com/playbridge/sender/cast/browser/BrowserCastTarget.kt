@@ -11,7 +11,6 @@ import com.playbridge.sender.cast.TargetKind
 import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.CastableMedia
 import com.playbridge.sender.cast.proxy.PackagedMedia
-import com.playbridge.sender.cast.proxy.PhoneProxyUrls
 import com.playbridge.sender.cast.proxy.PhoneSenderServices
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
 import com.playbridge.sender.cast.proxy.StreamRouteMode
@@ -39,7 +38,6 @@ class BrowserCastTarget(
     private val routeMode: () -> StreamRouteMode = {
         StreamProxySettingsStore.load(context).defaultRoute
     },
-    private val onRouteResolved: ((effective: StreamRouteMode, proxyFallback: Boolean) -> Unit)? = null,
 ) : CastTarget {
 
     override val id: String = sessionId
@@ -58,6 +56,7 @@ class BrowserCastTarget(
     private val routeService = StreamRouteService(context)
     private var statusJob: Job? = null
     private var volumeFraction: Double = 1.0
+    @Volatile private var activeLoadEpoch: Long? = null
 
     /** Last packaging mode actually used for a load (for NOW / diagnostics). */
     @Volatile
@@ -75,7 +74,8 @@ class BrowserCastTarget(
     override suspend fun load(media: MediaItem) {
         val services = PhoneSenderServices.get()
             ?: error("Browser host unavailable")
-        _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+        activeLoadEpoch = media.loadEpoch
+        _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
         try {
             val packaged = packageMedia(media)
             services.loadBrowser(
@@ -91,10 +91,11 @@ class BrowserCastTarget(
                 state = PlaybackState.PLAYING,
                 positionMs = media.startPositionMs,
                 durationMs = media.durationMs,
+                loadEpoch = media.loadEpoch,
             )
         } catch (e: Exception) {
             Log.w(TAG, "browser load failed: ${e.message}")
-            _status.value = PlaybackStatus(PlaybackState.ERROR)
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
             throw e
         }
     }
@@ -111,7 +112,7 @@ class BrowserCastTarget(
 
     override suspend fun stop() {
         control("stop")
-        _status.value = PlaybackStatus(PlaybackState.STOPPED)
+        _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
 
     override suspend fun seekTo(positionMs: Long) {
@@ -171,6 +172,7 @@ class BrowserCastTarget(
                         state = mapBrowserState(stateRaw),
                         positionMs = positionMs,
                         durationMs = durationMs,
+                        loadEpoch = activeLoadEpoch,
                     )
                     if (title != null) {
                         // Title updates flow through CastSessionManager via media title on load;
@@ -182,7 +184,10 @@ class BrowserCastTarget(
                 }
             }
             "disconnected" -> {
-                _status.value = PlaybackStatus(PlaybackState.STOPPED)
+                _status.value = PlaybackStatus(
+                    PlaybackState.STOPPED,
+                    loadEpoch = activeLoadEpoch,
+                )
             }
         }
     }
@@ -208,20 +213,19 @@ class BrowserCastTarget(
     private suspend fun packageMedia(media: MediaItem): PackagedMedia {
         val isLocal = BrowserStreamRoute.isLocalMediaUrl(media.url)
 
-        // Already a Via phone LAN URL (Rust `/s/...` or LocalProxy token).
-        if (PhoneProxyUrls.isAnyPhoneProxyUrl(media.url)) {
-            lastEffectiveRoute = StreamRouteMode.VIA_PHONE
+        // An explicit route means the caller already packaged this URL for that route.
+        media.effectiveRoute?.let { explicit ->
+            lastEffectiveRoute = explicit
             lastProxyFallback = false
-            onRouteResolved?.invoke(StreamRouteMode.VIA_PHONE, false)
             return PackagedMedia(
                 url = media.url,
                 contentType = media.mimeType,
-                headers = null,
+                headers = media.headers.takeIf { explicit == StreamRouteMode.DIRECT },
             )
         }
 
-        // Never Direct-cast raw origins to the browser (CORS/auth). Package Via phone
-        // (Rust /s/ + JNI HttpURLConnection) unless Via proxy is selected and works.
+        // Package according to the explicit route. Via phone remains the default; Direct is
+        // an opt-in for URLs the receiver browser can fetch itself.
         val requested = if (isLocal) StreamRouteMode.VIA_PHONE else routeMode()
         val effective = BrowserStreamRoute.effectiveMode(requested, isLocalMedia = isLocal)
         val castable = CastableMedia(
@@ -239,15 +243,13 @@ class BrowserCastTarget(
             val packaged = routeService.packageForCast(castable, effective)
             lastEffectiveRoute = effective
             lastProxyFallback = false
-            onRouteResolved?.invoke(effective, false)
             packaged
         } catch (e: Exception) {
-            if (effective == StreamRouteMode.VIA_PHONE) throw e
+            if (effective != StreamRouteMode.VIA_PROXY) throw e
             Log.i(TAG, "Browser packaging fell back to Via phone: ${e.message}")
             val packaged = routeService.packageForCast(castable, StreamRouteMode.VIA_PHONE)
             lastEffectiveRoute = StreamRouteMode.VIA_PHONE
             lastProxyFallback = true
-            onRouteResolved?.invoke(StreamRouteMode.VIA_PHONE, true)
             packaged
         }
     }

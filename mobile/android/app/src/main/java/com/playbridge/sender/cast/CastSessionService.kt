@@ -29,18 +29,15 @@ import org.koin.core.component.inject
 /**
  * Foreground service that keeps the process alive while a cast session is active, so the
  * WebSocket session (episode queue top-ups, remote control) and the DLNA local proxy
- * survive screen-off and app backgrounding. Replaces the DLNA-only DlnaProxyService and
- * extends the same guarantee to native (WebSocket) sessions.
+ * survive screen-off and app backgrounding.
  *
  * Lifecycle is driven entirely by [CastSessionManager.hasActiveSession]; the notification
- * mirrors [CastSessionManager.sessionInfo] and exposes a state-dependent action:
- *  - **Casting** → **Stop** ([CastSessionManager.endCastSession]) — ends playback; link may remain
- *  - **Connected** → **Disconnect** ([CastSessionManager.disconnectSession]) — drops the link
+ * mirrors [CastSessionManager.sessionInfo].
  *
- * Notification persistence (Android 13+): FGS notifications are user-dismissible by default;
- * [setOngoing] alone is insufficient on many Android 14+ OEMs. We always update via
- * [startForeground] (never a bare [NotificationManager.notify]), set ongoing + no-clear
- * flags, and re-promote on [ACTION_NOTIFICATION_DISMISSED] while the session is still live.
+ * External playback uses this FGS only while the phone is serving the media path.
+ * High-performance Wi-Fi and partial CPU wake locks are held only while
+ * [CastSessionManager.needsCastWakeLock] is true (phone data path or native player
+ * context). Direct and remote-proxy external playback do not keep this service alive.
  */
 class CastSessionService : Service(), KoinComponent {
 
@@ -50,45 +47,40 @@ class CastSessionService : Service(), KoinComponent {
     private var wakeLock: PowerManager.WakeLock? = null
     private var foregroundStarted = false
     private var currentlyPlaying = false
+    private var locksHeld = false
 
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        // Keep WiFi responsive for WS pings / proxy traffic the whole time we're linked.
-        // It's cheap relative to the CPU wake lock, which we only hold while actually
-        // playing/proxying (see acquireWake/releaseWake). Released in onDestroy.
         val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-        @Suppress("DEPRECATION") // FULL_LOW_LATENCY is only effective while the screen is on
+        @Suppress("DEPRECATION")
         wifiLock = wifi.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "playbridge:cast").apply {
             setReferenceCounted(false)
-            acquire()
+            // Not acquired here — only while needsCastWakeLock (phone path / native player).
         }
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        // Created but NOT acquired here — only held while actively playing/proxying.
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "playbridge:cast").apply {
             setReferenceCounted(false)
         }
-        // Drive the notification, FGS type, and wake lock from session info + play/idle state.
-        // Always go through startForegroundWithType — bare notify() can demote the notif from
-        // the FGS association on some OEMs and make it swipe-dismissible.
         scope.launch {
-            combine(manager.sessionInfo, manager.isActivelyPlaying) { info, playing -> info to playing }
-                .collect { (info, playing) ->
-                    if (!foregroundStarted) return@collect
-                    if (playing != currentlyPlaying) {
-                        currentlyPlaying = playing
-                        if (playing) acquireWake() else releaseWake()
-                    }
-                    startForegroundWithType(info, playing)
-                }
+            combine(
+                manager.sessionInfo,
+                manager.isActivelyPlaying,
+                manager.needsCastWakeLock,
+            ) { info, playing, needsWake ->
+                Triple(info, playing, needsWake)
+            }.collect { (info, playing, needsWake) ->
+                if (!foregroundStarted) return@collect
+                currentlyPlaying = playing
+                applyResourceLocks(needsWake)
+                startForegroundWithType(info, playing)
+            }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_CAST -> {
-                // End playback only. If the native link stays up, hasActiveSession remains
-                // true and the notif morphs to "Connected" + Disconnect — do not stopSelf.
                 manager.endCastSession()
                 if (!manager.hasActiveSession.value) {
                     stopSelf()
@@ -97,7 +89,7 @@ class CastSessionService : Service(), KoinComponent {
                 val playing = manager.isActivelyPlaying.value
                 currentlyPlaying = playing
                 startForegroundWithType(manager.sessionInfo.value, playing)
-                if (!playing) releaseWake()
+                applyResourceLocks(manager.needsCastWakeLock.value)
                 return START_STICKY
             }
             ACTION_DISCONNECT -> {
@@ -106,15 +98,13 @@ class CastSessionService : Service(), KoinComponent {
                 return START_NOT_STICKY
             }
             ACTION_NOTIFICATION_DISMISSED -> {
-                // Android 13+ lets users swipe FGS notifications. If the session is still
-                // live, re-enter foreground so the notif returns; do not end the cast/link.
                 if (manager.hasActiveSession.value) {
                     Log.i(TAG, "Cast notification dismissed while session active — re-showing")
                     val playing = manager.isActivelyPlaying.value
                     currentlyPlaying = playing
                     startForegroundWithType(manager.sessionInfo.value, playing)
                     foregroundStarted = true
-                    if (playing) acquireWake()
+                    applyResourceLocks(manager.needsCastWakeLock.value)
                 } else {
                     stopSelf()
                 }
@@ -125,21 +115,10 @@ class CastSessionService : Service(), KoinComponent {
         currentlyPlaying = playing
         startForegroundWithType(manager.sessionInfo.value, playing)
         foregroundStarted = true
-        if (playing) acquireWake()
+        applyResourceLocks(manager.needsCastWakeLock.value)
         return START_STICKY
     }
 
-    /**
-     * (Re)enter the foreground as a **connectedDevice** session.
-     *
-     * We previously used [ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK] whenever the
-     * TV reported context "player". That is wrong: the phone is a cast remote / WS client,
-     * not a media player — there is no MediaSession. On Android 14+ the system stops
-     * mediaPlayback FGSes without a session after a short time, which made the Casting
-     * notification vanish a few seconds after cold-start reconnect (B7).
-     *
-     * [playing] still drives notification copy and the CPU wake lock (series queue top-up).
-     */
     private fun startForegroundWithType(info: CastSessionManager.SessionInfo, playing: Boolean) {
         val notif = buildNotification(info, playing)
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -154,6 +133,25 @@ class CastSessionService : Service(), KoinComponent {
         ServiceCompat.startForeground(this, NOTIF_ID, notif, type)
     }
 
+    /**
+     * Acquire or release both high-performance Wi-Fi and partial CPU wake locks together.
+     * Direct / remote Via-proxy playback releases them; Via phone or native player reacquires.
+     */
+    private fun applyResourceLocks(needed: Boolean) {
+        if (needed == locksHeld) return
+        if (needed) {
+            acquireWifi()
+            acquireWake()
+            locksHeld = true
+            Log.d(TAG, "Cast resource locks acquired (phone path / native player)")
+        } else {
+            releaseWake()
+            releaseWifi()
+            locksHeld = false
+            Log.d(TAG, "Cast resource locks released (Direct or idle session)")
+        }
+    }
+
     @android.annotation.SuppressLint("WakelockTimeout")
     private fun acquireWake() {
         wakeLock?.let { if (!it.isHeld) it.acquire() }
@@ -163,11 +161,18 @@ class CastSessionService : Service(), KoinComponent {
         wakeLock?.let { if (it.isHeld) runCatching { it.release() } }
     }
 
+    private fun acquireWifi() {
+        wifiLock?.let { if (!it.isHeld) runCatching { it.acquire() } }
+    }
+
+    private fun releaseWifi() {
+        wifiLock?.let { if (it.isHeld) runCatching { it.release() } }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
         scope.cancel()
-        // Drop the notification explicitly so a killed FGS doesn't leave a swipe-orphaned row.
         runCatching {
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(NOTIF_ID)
         }
@@ -175,6 +180,7 @@ class CastSessionService : Service(), KoinComponent {
         runCatching { wakeLock?.release() }
         wifiLock = null
         wakeLock = null
+        locksHeld = false
         super.onDestroy()
     }
 
@@ -202,7 +208,6 @@ class CastSessionService : Service(), KoinComponent {
         }
         val title = if (playing) "Casting to ${info.deviceName}" else "Connected to ${info.deviceName}"
         val text = if (playing) (info.title ?: "Playing") else "Ready to cast"
-        // Casting → Stop (end playback, keep link). Connected → Disconnect (drop the link).
         val actionLabel = if (playing) "Stop" else "Disconnect"
         val actionPi = if (playing) stopCastPi else disconnectPi
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -220,7 +225,6 @@ class CastSessionService : Service(), KoinComponent {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
 
         val notification = builder.build()
-        // Belt-and-braces: some OEMs honor these flags more reliably than setOngoing alone.
         notification.flags = notification.flags or
             Notification.FLAG_ONGOING_EVENT or
             Notification.FLAG_NO_CLEAR
@@ -265,14 +269,6 @@ class CastSessionService : Service(), KoinComponent {
             context.stopService(Intent(context, CastSessionService::class.java))
         }
 
-        /**
-         * Stop the service and remove the ongoing notification immediately. Use on full
-         * app exit — [stop] alone can leave the shade row briefly (or stuck) if the
-         * process outlives a racing [startForeground] from [CastSessionManager].
-         *
-         * Main-process only: Gecko child processes must never cancel the cast notif
-         * (package-wide NotificationManager.cancel + stopService hit the main FGS).
-         */
         fun stopAndCancelNotification(context: Context) {
             if (!ProcessUtil.isMainProcess(context)) {
                 Log.w(
@@ -290,4 +286,3 @@ class CastSessionService : Service(), KoinComponent {
         }
     }
 }
-

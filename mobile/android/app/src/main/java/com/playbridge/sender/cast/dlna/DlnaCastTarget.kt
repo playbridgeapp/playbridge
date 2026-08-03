@@ -8,6 +8,7 @@ import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.TargetKind
+import com.playbridge.sender.cast.proxy.StreamRouteMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,22 +55,32 @@ class DlnaCastTarget(
     @Volatile private var durationTries = 0
     private val _status = MutableStateFlow(PlaybackStatus(PlaybackState.IDLE))
     private var pollJob: Job? = null
+    @Volatile private var activeLoadEpoch: Long? = null
 
     override suspend fun load(media: MediaItem) {
-        _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+        stopPolling()
+        activeLoadEpoch = media.loadEpoch
+        _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
         cachedDurationMs = media.durationMs.coerceAtLeast(0L) // e.g. MediaStore for local files
         durationTries = 0
-        val proxyUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
-            proxy.publishLocal(media.url.toUri(), media.mimeType)
-        } else {
-            proxy.publish(media.url, media.headers, media.mimeType)
-        }
-        currentProxyUrl = proxyUrl
+        val loadUrl = resolveLoadUrl(media)
+        currentProxyUrl = loadUrl
         // SetAVTransportURI resets the playhead to 0; Play then starts the hand-off.
-        avTransport.setAvTransportUri(proxyUrl)
-        avTransport.play()
-        _status.value = PlaybackStatus(PlaybackState.PLAYING)
-        startPolling()
+        // SOAP/connection failures are control errors. Generic STOPPED is not enough to
+        // distinguish an incompatible stream from normal renderer behavior.
+        try {
+            avTransport.setAvTransportUri(loadUrl)
+            avTransport.play()
+        } catch (error: java.io.IOException) {
+            _status.value = PlaybackStatus(
+                PlaybackState.ERROR,
+                failure = error,
+                loadEpoch = media.loadEpoch,
+            )
+            throw error
+        }
+        _status.value = PlaybackStatus(PlaybackState.PLAYING, loadEpoch = media.loadEpoch)
+        startPolling(media.loadEpoch)
 
         // Resume point: seek once the renderer has begun playback (an immediate Seek is
         // ignored by most renderers while still TRANSITIONING). Poll the transport state
@@ -98,16 +109,32 @@ class DlnaCastTarget(
                 delay(2000) // let the renderer fetch the playlist so live/VOD + duration are known
                 val isHls = proxy.isLiveStream || proxy.vodDurationMs > 0L
                 if (cachedDurationMs <= 0L && !isHls) {
-                    val probed = probeDurationMs(proxyUrl)
+                    val probed = probeDurationMs(loadUrl)
                     if (probed > 0L) cachedDurationMs = probed
                 }
             }
         }
     }
 
+    private fun resolveLoadUrl(media: MediaItem): String {
+        when (media.effectiveRoute) {
+            StreamRouteMode.DIRECT -> return media.url
+            StreamRouteMode.VIA_PROXY -> return media.url
+            StreamRouteMode.VIA_PHONE -> return media.url
+            null -> Unit
+        }
+        return if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
+            proxy.publishLocal(media.url.toUri(), media.mimeType)
+        } else if (media.headers.isNotEmpty()) {
+            proxy.publish(media.url, media.headers, media.mimeType)
+        } else {
+            media.url
+        }
+    }
+
     override suspend fun play() {
         avTransport.play()
-        startPolling()
+        startPolling(activeLoadEpoch)
     }
 
     override suspend fun pause() {
@@ -117,7 +144,7 @@ class DlnaCastTarget(
     override suspend fun stop() {
         avTransport.stop()
         stopPolling()
-        _status.value = PlaybackStatus(PlaybackState.STOPPED)
+        _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
 
     override suspend fun seekTo(positionMs: Long) {
@@ -136,7 +163,7 @@ class DlnaCastTarget(
 
     override fun status(): Flow<PlaybackStatus> = _status.asStateFlow()
 
-    private fun startPolling() {
+    private fun startPolling(loadEpoch: Long? = activeLoadEpoch) {
         if (pollJob?.isActive == true) return
         pollJob = scope.launch {
             while (isActive) {
@@ -164,6 +191,7 @@ class DlnaCastTarget(
                         positionMs = parseTime(pos?.relTime),
                         durationMs = durationMs,
                         isLive = live,
+                        loadEpoch = loadEpoch,
                     )
                     if (state == PlaybackState.STOPPED) stopPolling()
                 }

@@ -13,6 +13,7 @@ import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.TargetKind
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
+import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.model.TvDevice
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -63,6 +64,9 @@ class GoogleCastTarget(
     private val _status = MutableStateFlow(PlaybackStatus(PlaybackState.BUFFERING))
     private var pollJob: Job? = null
     private var connectionAttempt = 0
+
+    @Volatile
+    private var activeLoadEpoch: Long? = null
 
     @Volatile
     private var client: RustCastSessionClient? = null
@@ -183,7 +187,11 @@ class GoogleCastTarget(
 
     override suspend fun load(media: MediaItem) {
         val loadStartedAt = SystemClock.elapsedRealtime()
-        _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+        // Cancel any status request for the previous item before assigning the new epoch.
+        // Otherwise its late PLAYING/ERROR could be mistaken for this load.
+        stopMonitoring()
+        activeLoadEpoch = media.loadEpoch
+        _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
         Log.d(
             TAG,
             "LOAD requested target=${device.name} source=${mediaEndpoint(media.url)} " +
@@ -193,34 +201,25 @@ class GoogleCastTarget(
         val connectedClient = try {
             ensureConnected()
         } catch (error: GoogleCastLocalNetworkUnavailableException) {
-            _status.value = PlaybackStatus(PlaybackState.ERROR)
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
             logLocalNetworkUnavailable(error)
             throw error
         }
         if (connectedClient == null) {
             Log.w(TAG, "LOAD aborted: no ready Google Cast client for ${device.name}")
-            _status.value = PlaybackStatus(PlaybackState.ERROR)
-            return
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
+            throw GoogleCastNotReadyException(
+                "Google Cast receiver is not ready for ${device.name}",
+            )
         }
 
-        // Relay only when the receiver cannot fetch the source itself. Public HTTP(S) media
-        // without custom headers goes direct to Cast, avoiding needless phone bandwidth,
-        // wake time, and a single point of failure during long playback.
-        val proxy = DlnaProxyHolder.proxy(context)
-        val proxyUrl = if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
-            proxy.publishLocal(media.url.toUri(), media.mimeType)
-        } else if (media.headers.isNotEmpty() ||
-            (!media.url.startsWith("http://") && !media.url.startsWith("https://"))
-        ) {
-            proxy.publish(media.url, media.headers, media.mimeType)
-        } else {
-            media.url
-        }
-        val route = if (proxyUrl == media.url) "direct" else "phone_proxy"
+        val proxyUrl = resolveLoadUrl(media)
+        val route = media.effectiveRoute?.prefsValue
+            ?: if (proxyUrl == media.url) "direct" else "phone_proxy"
         Log.d(
             TAG,
-            "LOAD route=$route source=${mediaEndpoint(proxyUrl)} " +
-                "startMs=${media.startPositionMs}",
+            "LOAD route=$route reason=${media.routeReason ?: "-"} " +
+                "source=${mediaEndpoint(proxyUrl)} startMs=${media.startPositionMs}",
         )
 
         try {
@@ -230,6 +229,7 @@ class GoogleCastTarget(
                 // TV Back (or another receiver app replacing ours) is terminal for the
                 // old session. A receiver that never acknowledges LOAD is equally
                 // unusable. This explicit action gets one completely fresh retry.
+                // These are session/connection failures, so restart the receiver session.
                 receiverEnded = error is GoogleCastReceiverEndedException
                 forceRelaunchPending = true
                 Log.w(
@@ -238,19 +238,32 @@ class GoogleCastTarget(
                         "reason=${error.javaClass.simpleName}; discarding old client and " +
                         "force-relaunching once",
                 )
-                _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+                _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
                 discardClient(connectedClient)
                 val freshClient = ensureConnected(forceRelaunch = true)
-                    ?: throw IllegalStateException("Could not restart the Google Cast receiver")
+                    ?: throw GoogleCastNotReadyException(
+                        "Could not restart the Google Cast receiver",
+                    )
                 loadOnClient(freshClient, proxyUrl, media)
             }
-            _status.value = PlaybackStatus(PlaybackState.PLAYING)
+            // LOAD accepted — keep BUFFERING until the monitor observes receiver state.
+            _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
             Log.d(TAG, "LOAD accepted after ${elapsedSince(loadStartedAt)}ms route=$route")
             startMonitoring()
         } catch (error: CancellationException) {
+            // User/job cancellation only — operation timeouts are wrapped by the client.
+            throw error
+        } catch (error: GoogleCastNotReadyException) {
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
+            throw error
+        } catch (error: GoogleCastSessionInvalidException) {
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
+            throw error
+        } catch (error: GoogleCastLocalNetworkUnavailableException) {
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
             throw error
         } catch (error: Exception) {
-            _status.value = PlaybackStatus(PlaybackState.ERROR)
+            _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
             Log.e(
                 TAG,
                 "LOAD failed after ${elapsedSince(loadStartedAt)}ms route=$route: " +
@@ -287,7 +300,7 @@ class GoogleCastTarget(
 
     override suspend fun stop() {
         withContext(Dispatchers.IO) { requireReadyClient().stop() }
-        _status.value = PlaybackStatus(PlaybackState.STOPPED)
+        _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
 
     override suspend fun seekTo(positionMs: Long) {
@@ -348,17 +361,26 @@ class GoogleCastTarget(
         while (scope.isActive && !released) {
             var connectedClient = client?.takeIf { it.isReady }
             if (connectedClient == null) {
-                _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+                _status.value = PlaybackStatus(
+                    PlaybackState.BUFFERING,
+                    loadEpoch = activeLoadEpoch,
+                )
                 connectedClient = try {
                     ensureConnected()
                 } catch (error: GoogleCastLocalNetworkUnavailableException) {
-                    _status.value = PlaybackStatus(PlaybackState.ERROR)
+                    _status.value = PlaybackStatus(
+                        PlaybackState.ERROR,
+                        loadEpoch = activeLoadEpoch,
+                    )
                     logLocalNetworkUnavailable(error)
                     return
                 }
                 if (connectedClient == null) {
                     if (released) return
-                    _status.value = PlaybackStatus(PlaybackState.ERROR)
+                    _status.value = PlaybackStatus(
+                        PlaybackState.ERROR,
+                        loadEpoch = activeLoadEpoch,
+                    )
                     Log.w(
                         TAG,
                         "Google Cast connect attempt unavailable; retrying in ${reconnectDelayMs}ms",
@@ -370,11 +392,16 @@ class GoogleCastTarget(
             }
 
             try {
+                val observedLoadEpoch = activeLoadEpoch
                 val status = connectedClient.status()
+                val mapped = mapState(status.state)
+                val positionMs = (status.positionSeconds * 1000).toLong()
+                val durationMs = (status.durationSeconds * 1000).toLong()
                 _status.value = PlaybackStatus(
-                    state = mapState(status.state),
-                    positionMs = (status.positionSeconds * 1000).toLong(),
-                    durationMs = (status.durationSeconds * 1000).toLong(),
+                    state = mapped,
+                    positionMs = positionMs,
+                    durationMs = durationMs,
+                    loadEpoch = observedLoadEpoch,
                 )
                 if (_status.value.state != lastLoggedState) {
                     lastLoggedState = _status.value.state
@@ -398,7 +425,11 @@ class GoogleCastTarget(
                 receiverEnded = true
                 forceRelaunchPending = true
                 discardClient(connectedClient)
-                _status.value = PlaybackStatus(PlaybackState.IDLE)
+                // Session/receiver exit is terminal until the next user cast.
+                _status.value = PlaybackStatus(
+                    PlaybackState.IDLE,
+                    loadEpoch = activeLoadEpoch,
+                )
                 return
             } catch (error: Exception) {
                 if (googleCastStatusErrorEndsSession(error)) {
@@ -409,7 +440,11 @@ class GoogleCastTarget(
                             "${reconnectDelayMs}ms: ${error.javaClass.simpleName}: ${error.message}",
                         error,
                     )
-                    _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+                    // Connection/session recovery path — not typed media failure.
+                    _status.value = PlaybackStatus(
+                        PlaybackState.BUFFERING,
+                        loadEpoch = activeLoadEpoch,
+                    )
                     // A receiver that stopped responding needs a clean application launch.
                     // A transport loss can first rejoin an application that is still alive.
                     forceRelaunchPending = error is GoogleCastSessionUnresponsiveException
@@ -424,7 +459,10 @@ class GoogleCastTarget(
                             "Google Cast status failed $consecutiveStatusFailures times; " +
                                 "discarding stale client and forcing a fresh receiver session",
                         )
-                        _status.value = PlaybackStatus(PlaybackState.BUFFERING)
+                        _status.value = PlaybackStatus(
+                            PlaybackState.BUFFERING,
+                            loadEpoch = activeLoadEpoch,
+                        )
                         forceRelaunchPending = true
                         discardClient(connectedClient)
                         consecutiveStatusFailures = 0
@@ -466,6 +504,29 @@ class GoogleCastTarget(
     }
 
     private fun castPort(): Int = device.port.takeIf { it > 0 } ?: 8009
+
+    /**
+     * Honor the explicit route from packaging. Never re-proxy an already phone-hosted URL,
+     * and never re-infer Direct from empty headers when [MediaItem.effectiveRoute] is set.
+     */
+    private fun resolveLoadUrl(media: MediaItem): String {
+        when (media.effectiveRoute) {
+            StreamRouteMode.DIRECT -> return media.url
+            StreamRouteMode.VIA_PROXY -> return media.url
+            StreamRouteMode.VIA_PHONE -> return media.url
+            null -> Unit
+        }
+        val proxy = DlnaProxyHolder.proxy(context)
+        return if (media.url.startsWith("content://") || media.url.startsWith("file://")) {
+            proxy.publishLocal(media.url.toUri(), media.mimeType)
+        } else if (media.headers.isNotEmpty() ||
+            (!media.url.startsWith("http://") && !media.url.startsWith("https://"))
+        ) {
+            proxy.publish(media.url, media.headers, media.mimeType)
+        } else {
+            media.url
+        }
+    }
 
     /**
      * Select the physical local network whose routes contain the receiver. Only return an

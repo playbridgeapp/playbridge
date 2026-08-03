@@ -99,6 +99,15 @@ data class MediaItem(
     val startPositionMs: Long = 0L,
     /** Library identity (tmdb/imdb/season/episode) for watch-progress tracking; null = untracked. */
     val visualMetadata: playbridge.VisualMetadata? = null,
+    /**
+     * Explicit packaging route chosen by the cast sheet / policy. When set, targets must not
+     * re-infer Direct vs Via phone from empty headers or re-proxy an already packaged URL.
+     */
+    val effectiveRoute: com.playbridge.sender.cast.proxy.StreamRouteMode? = null,
+    /** Stable policy reason code for logs (never a raw authenticated URL). */
+    val routeReason: String? = null,
+    /** Manager-assigned identity for one external load; never serialized or sent to receivers. */
+    val loadEpoch: Long? = null,
 )
 
 data class SubtitleRef(
@@ -113,6 +122,12 @@ data class PlaybackStatus(
     val durationMs: Long = 0L,
     /** Live stream (no fixed duration) — UI shows a LIVE indicator instead of a seekbar. */
     val isLive: Boolean = false,
+    /**
+     * Optional typed failure associated with this status snapshot for diagnostics and UI.
+     */
+    val failure: Throwable? = null,
+    /** Load that produced this snapshot. Null is reserved for target/session state outside a load. */
+    val loadEpoch: Long? = null,
 )
 
 enum class PlaybackState { IDLE, BUFFERING, PLAYING, PAUSED, STOPPED, ERROR }

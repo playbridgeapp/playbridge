@@ -89,6 +89,21 @@ data class DetectedVideo(
     val lastSeen: Long = timestamp,
     var validationState: MediaValidationState = MediaValidationState.PENDING,
     var thumbnailState: ThumbnailPreviewState = ThumbnailPreviewState.NOT_REQUESTED,
+    /**
+     * Explicit stream route chosen by the cast sheet policy after packaging.
+     * Prefs value of [com.playbridge.sender.cast.proxy.StreamRouteMode] or null.
+     */
+    val effectiveStreamRoute: String? = null,
+    /** Policy reason code for logs/UI (never a raw authenticated URL). */
+    val streamRouteReason: String? = null,
+    /**
+     * Optional library identity carried when packaging contentPayload through DetectedVideo
+     * so external casts retain watch-progress metadata without a global arm slot.
+     */
+    @kotlinx.serialization.Transient
+    val visualMetadata: playbridge.VisualMetadata? = null,
+    /** Resume point for library contentPayload casts packaged through DetectedVideo. */
+    val startPositionMs: Long = 0L,
 ) {
     val isSubtitle: Boolean
         get() = mediaKind.equals("subtitle", ignoreCase = true) ||
@@ -213,6 +228,9 @@ const val SYNTHETIC_CAST_ITEM_TITLE = "Synthetic playlist (Via phone)"
  * candidate, then adaptive-stream metadata, replay headers, and thumbnail success.
  * This keeps a URL that merely resembles an M3U8 below a manifest observed in a
  * response body, while still ranking unchecked candidates sensibly during validation.
+ * A verified manifest with multiple selectable qualities is more useful than one of
+ * its individual media playlists and must not lose that position merely because the
+ * child happened to finish thumbnail generation first.
  *
  * Synthetic handoff masters outrank everything else so the cast sheet prefers them.
  *
@@ -240,9 +258,18 @@ fun DetectedVideo.castScore(): Int {
         looksAdaptive -> 20
         else -> 10
     }
+    val qualityLadderScore = if (
+        qualities.size > 1 &&
+        (hlsPlaylist?.validation == HlsPlaylistValidation.VALID_MASTER || isDash)
+    ) {
+        125
+    } else {
+        0
+    }
     val replayScore = if (!headers.isNullOrEmpty()) 15 else 0
     val previewScore = if (thumbnailState == ThumbnailPreviewState.READY) 25 else 0
-    return validationScore + evidenceScore + adaptiveScore + replayScore + previewScore
+    return validationScore + evidenceScore + adaptiveScore + qualityLadderScore +
+        replayScore + previewScore
 }
 
 /**
