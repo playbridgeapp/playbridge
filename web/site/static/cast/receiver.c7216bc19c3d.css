@@ -282,6 +282,23 @@
     #media-title { margin: 0; font-size: clamp(26px, 4vw, 54px); }
     body[data-receiver-mode="cast"] #brand-logo { display: block; }
     body[data-receiver-mode="cast"] #media-overlay { display: none !important; }
+    body[data-receiver-mode="cast"] #setup {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      display: grid;
+      place-items: center;
+      margin: 0;
+    }
+    body[data-receiver-mode="cast"] #setup h1,
+    body[data-receiver-mode="cast"] #setup #instructions { display: none; }
+    body[data-receiver-mode="cast"] #brand-logo {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      object-fit: cover;
+    }
     body[data-receiver-mode="cast"] #code,
     body[data-receiver-mode="cast"] #device-name,
     body[data-receiver-mode="cast"] #play-overlay,

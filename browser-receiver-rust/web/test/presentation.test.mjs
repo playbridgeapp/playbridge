@@ -68,6 +68,7 @@ test('Cast shell keeps branding on ready and disables CAF playback branding', as
   assert.match(html, /--splash-image:\s*none/);
   assert.match(html, /--watermark-image:\s*none/);
   assert.match(html, /data-receiver-mode="cast"\] #brand-logo \{ display: block; \}/);
+  assert.match(html, /data-receiver-mode="cast"\] #brand-logo \{[\s\S]*object-fit: cover/);
   assert.doesNotMatch(html, /data-receiver-mode="cast"\] #status/);
 
   const buildScript = await readFile(new URL('../scripts/build.mjs', import.meta.url), 'utf8');
