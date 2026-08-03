@@ -196,6 +196,8 @@ class RustCastTransport extends TvTransport {
   String? _currentTitle;
   DiscoveredTv? _selectedTv;
   bool _receiverEnded = false;
+  int _loadIntentGeneration = 0;
+  Future<void> _operationTail = Future<void>.value();
 
   final _state = StreamController<SenderConnectionState>.broadcast();
   final _messages = StreamController<String>.broadcast();
@@ -237,6 +239,7 @@ class RustCastTransport extends TvTransport {
     String? token,
     String? expectedPin,
   }) async {
+    _loadIntentGeneration++;
     _selectedTv = tv;
     _receiverEnded = false;
     await _connectSession(
@@ -300,20 +303,32 @@ class RustCastTransport extends TvTransport {
   }
 
   @override
-  Future<void> disconnect() => _closeSession(
-        sendDisconnected: true,
-        clearSelection: true,
-      );
+  Future<void> disconnect() {
+    _loadIntentGeneration++;
+    return _closeSession(
+      sendDisconnected: true,
+      clearSelection: true,
+    );
+  }
 
   @override
-  Future<bool> castVideo(PlayPayload video) =>
-      _castVideo(video, allowFreshSessionRetry: true);
+  Future<bool> castVideo(PlayPayload video) {
+    final loadGeneration = ++_loadIntentGeneration;
+    return _serializeOperation(() => _castVideo(
+          video,
+          loadGeneration: loadGeneration,
+          allowFreshSessionRetry: true,
+        ));
+  }
 
   Future<bool> _castVideo(
     PlayPayload video, {
+    required int loadGeneration,
     required bool allowFreshSessionRetry,
   }) async {
-    if (video.url.isEmpty) return false;
+    if (video.url.isEmpty || loadGeneration != _loadIntentGeneration) {
+      return false;
+    }
     var session = _session;
     if (!isConnected || session == null) {
       if (protocol != TvProtocol.googleCast ||
@@ -344,6 +359,7 @@ class RustCastTransport extends TvTransport {
           'streamType=$streamType',
         );
       }
+      _stopPolling();
       await session.load(rust.MediaRequest(
         url: video.url,
         title: title,
@@ -359,23 +375,34 @@ class RustCastTransport extends TvTransport {
         hlsSegmentFormat: hlsAudioFormat,
         hlsVideoSegmentFormat: hlsVideoFormat,
       ));
+      if (loadGeneration != _loadIntentGeneration) return false;
       _currentTitle = title;
       _startPolling();
       return true;
     } on Object catch (error) {
       if (protocol == TvProtocol.googleCast &&
+          loadGeneration == _loadIntentGeneration &&
           allowFreshSessionRetry &&
           (isGoogleCastRestartableSessionError(error) || _receiverEnded)) {
-        _receiverEnded = true;
-        session.dispose();
-        _markSessionUnavailable(session, receiverEnded: true);
-        if (await _connectSelectedGoogleCast(forceRelaunch: true)) {
-          return _castVideo(video, allowFreshSessionRetry: false);
+        if (await _restartSelectedGoogleCastSession(session)) {
+          return _castVideo(
+            video,
+            loadGeneration: loadGeneration,
+            allowFreshSessionRetry: false,
+          );
         }
       }
       _emitError('load', error);
       return false;
     }
+  }
+
+  Future<bool> _restartSelectedGoogleCastSession(
+      rust.CastSession session) async {
+    _receiverEnded = true;
+    session.dispose();
+    _markSessionUnavailable(session, receiverEnded: true);
+    return _connectSelectedGoogleCast(forceRelaunch: true);
   }
 
   Future<bool> _connectSelectedGoogleCast({bool? forceRelaunch}) async {
@@ -408,7 +435,12 @@ class RustCastTransport extends TvTransport {
   }
 
   @override
-  Future<bool> sendControl(String command) async {
+  Future<bool> sendControl(String command) {
+    if (command == 'stop') _loadIntentGeneration++;
+    return _serializeOperation(() => _sendControl(command));
+  }
+
+  Future<bool> _sendControl(String command) async {
     final session = _session;
     if (!isConnected || session == null) return false;
     try {
@@ -450,7 +482,7 @@ class RustCastTransport extends TvTransport {
       }
       if (command != 'stop') {
         _startPolling();
-        await _pollStatus();
+        await _pollStatusNow();
       }
       return true;
     } on Object catch (error) {
@@ -583,7 +615,9 @@ class RustCastTransport extends TvTransport {
     _statusPollFailures = 0;
   }
 
-  Future<bool> _pollStatus() async {
+  Future<bool> _pollStatus() => _serializeOperation(_pollStatusNow);
+
+  Future<bool> _pollStatusNow() async {
     final session = _session;
     if (_polling || session == null || !isConnected) return false;
     _polling = true;
@@ -596,6 +630,15 @@ class RustCastTransport extends TvTransport {
     } finally {
       _polling = false;
     }
+  }
+
+  Future<T> _serializeOperation<T>(Future<T> Function() operation) {
+    final result = _operationTail.then((_) => operation());
+    _operationTail = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
   }
 
   void _emitStatus(rust.PlaybackStatus status) {

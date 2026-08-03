@@ -1086,7 +1086,7 @@ pub async fn load_media(
                         v["reason"].as_str().unwrap_or("unknown reason")
                     )));
                 }
-                if let Some(status) = v["status"].as_array().and_then(|a| a.first())
+                if let Some(status) = v["status"].as_array().and_then(|statuses| statuses.first())
                     && let Some(msid) = status["mediaSessionId"].as_i64()
                 {
                     media_session_id = Some(msid);

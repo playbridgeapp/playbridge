@@ -861,9 +861,16 @@ async fn execute_session_command(
             }
         }
     };
-    tokio::time::timeout(operation_timeout, operation)
-        .await
-        .map_err(|_| CastError::Protocol(format!("{} timed out", command.operation())))?
+    match tokio::time::timeout(operation_timeout, operation).await {
+        Ok(result) => result,
+        Err(_) if target.protocol == SessionProtocol::GoogleCast => {
+            Err(CastError::ReceiverSessionUnresponsive)
+        }
+        Err(_) => Err(CastError::Protocol(format!(
+            "{} timed out",
+            command.operation()
+        ))),
+    }
 }
 
 fn receiver_mut(receiver: &mut Option<ReceiverSession>) -> Result<&mut ReceiverSession, CastError> {
