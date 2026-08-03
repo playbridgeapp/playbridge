@@ -122,6 +122,12 @@ export function startCastReceiver(dependencies = {}) {
   addPlayerEvent(eventTypes.REQUEST_STOP, () => returnToReady('stopped'));
   addPlayerEvent(eventTypes.MEDIA_FINISHED, (event) => {
     const reason = event && event.endedReason || 'finished';
+    if (String(reason).toLowerCase() === 'interrupted') {
+      // CAF emits this for the item displaced by a replacement LOAD. The new
+      // media is already current, so clearing it here hides the live receiver UI.
+      log('interrupted');
+      return;
+    }
     returnToReady(String(reason).toLowerCase());
   });
 

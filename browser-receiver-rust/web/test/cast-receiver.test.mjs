@@ -69,6 +69,9 @@ test('CAF starts with Shaka HLS, intercepts only LOAD, and STOP returns to ready
   contextListeners.get('READY')();
   const request = await interceptors.get('LOAD')({ media: { contentId: 'https://cdn.test/movie.mp4' } });
   assert.equal(request.media.contentUrl, 'https://cdn.test/movie.mp4');
+  const readyCount = calls.filter((value) => value === 'ready').length;
+  playerListeners.get('MEDIA_FINISHED')({ endedReason: 'INTERRUPTED' });
+  assert.equal(calls.filter((value) => value === 'ready').length, readyCount);
   playerListeners.get('REQUEST_STOP')();
   assert.ok(calls.filter((value) => value === 'ready').length >= 3);
   delete globalThis.WebSocket;
