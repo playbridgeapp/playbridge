@@ -261,8 +261,9 @@
       width: 100vw;
       height: 100vh;
       --background-color: #05070a;
-      --splash-image: url("./playbridge-cast-splash.svg");
-      --watermark-image: url("./playbridge-cast-logo.svg");
+      /* The ready screen owns branding. CAF must transition directly to media. */
+      --splash-image: none;
+      --watermark-image: none;
     }
     #media-overlay {
       position: fixed;
@@ -280,6 +281,7 @@
     #media-artwork[hidden] { display: none; }
     #media-title { margin: 0; font-size: clamp(26px, 4vw, 54px); }
     body[data-receiver-mode="cast"] #brand-logo { display: block; }
+    body[data-receiver-mode="cast"] #media-overlay { display: none !important; }
     body[data-receiver-mode="cast"] #code,
     body[data-receiver-mode="cast"] #device-name,
     body[data-receiver-mode="cast"] #play-overlay,

@@ -47,6 +47,10 @@ export function createReceiverPresentation(document, options = {}) {
     if (code) code.textContent = details.code || '';
     if (deviceName) deviceName.textContent = details.deviceName || '';
     if (mediaOverlay) mediaOverlay.hidden = true;
+    if (mode === 'cast' && status) {
+      status.classList.remove('error');
+      status.classList.add('hidden');
+    }
   }
 
   function showMedia(media, state) {
@@ -59,7 +63,16 @@ export function createReceiverPresentation(document, options = {}) {
       if (artwork) mediaArtwork.src = artwork.url;
     }
     if (mediaOverlay) mediaOverlay.hidden = state === 'playing';
-    showStatus(state === 'buffering' ? 'Loading…' : (media && media.title) || 'Playing');
+    if (mode === 'cast') {
+      // CAF owns the on-screen playback state and controls. Keeping our browser
+      // status pill visible here leaves stale text in the Cast top-left corner.
+      if (status) {
+        status.classList.remove('error');
+        status.classList.add('hidden');
+      }
+    } else {
+      showStatus(state === 'buffering' ? 'Loading…' : (media && media.title) || 'Playing');
+    }
   }
 
   function showStatus(message, error) {
