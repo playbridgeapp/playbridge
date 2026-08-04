@@ -9,6 +9,7 @@ import com.playbridge.shared.protocol.protocolJson
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.security.MessageDigest
 import java.util.UUID
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "pairing_store")
@@ -134,6 +135,11 @@ class PairingStore(private val context: Context) {
         }
     }
     
+    private fun hashToken(token: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(token.toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+
     /**
      * Add a paired device
      */
@@ -151,7 +157,7 @@ class PairingStore(private val context: Context) {
             current.removeAll {
                 (device.deviceUUID.isNotEmpty() && it.deviceUUID == device.deviceUUID) || it.id == device.id
             }
-            current.add(device)
+            current.add(device.copy(token = hashToken(device.token)))
             
             prefs[PAIRED_DEVICES] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(PairedDevice.serializer()),
@@ -211,16 +217,42 @@ class PairingStore(private val context: Context) {
         }
     }
 
-    suspend fun isTokenAuthorized(token: String): Boolean =
-        getAuthorizedTokenSet().contains(token)
+    suspend fun isTokenAuthorized(token: String): Boolean {
+        val set = getAuthorizedTokenSet()
+        val hashedToken = hashToken(token)
+
+        // Constant-time string comparison is achieved implicitly using isEqual over byte arrays.
+        // It prevents timing attacks compared to standard string equality.
+        if (set.any { MessageDigest.isEqual(it.toByteArray(), hashedToken.toByteArray()) }) {
+            return true
+        }
+
+        // Handle token migration from plaintext to hashed token
+        if (set.any { MessageDigest.isEqual(it.toByteArray(), token.toByteArray()) }) {
+            removeAuthorizedTokenRaw(token)
+            addAuthorizedTokenRaw(hashedToken)
+            return true
+        }
+
+        return false
+    }
 
     suspend fun addAuthorizedToken(token: String) {
+        addAuthorizedTokenRaw(hashToken(token))
+    }
+
+    suspend fun removeAuthorizedToken(token: String) {
+        removeAuthorizedTokenRaw(token)
+        removeAuthorizedTokenRaw(hashToken(token))
+    }
+
+    private suspend fun addAuthorizedTokenRaw(rawStorageString: String) {
         context.dataStore.edit { prefs ->
             val set = prefs[AUTHORIZED_TOKENS]?.let {
                 try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
                 catch (e: Exception) { mutableSetOf() }
             } ?: mutableSetOf()
-            set.add(token)
+            set.add(rawStorageString)
             prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
                 set.toList()
@@ -228,13 +260,13 @@ class PairingStore(private val context: Context) {
         }
     }
 
-    suspend fun removeAuthorizedToken(token: String) {
+    private suspend fun removeAuthorizedTokenRaw(rawStorageString: String) {
         context.dataStore.edit { prefs ->
             val set = prefs[AUTHORIZED_TOKENS]?.let {
                 try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
                 catch (e: Exception) { mutableSetOf() }
             } ?: mutableSetOf()
-            set.remove(token)
+            set.remove(rawStorageString)
             prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
                 set.toList()

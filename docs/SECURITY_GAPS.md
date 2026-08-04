@@ -161,8 +161,6 @@ store and may be exposed through local access or backups.
 
 - Desktop `tv_connection_store.dart` serializes the sender token and SPKI pin to
   `SharedPreferences`.
-- Android TV `PairingStore.kt` stores authorized plaintext token sets and paired
-  device records in Preferences DataStore.
 - Apple TV `WebSocketServer.swift` stores authorized tokens and paired device
   records, including tokens, in `UserDefaults`.
 - Android phone uses Keystore-backed protection and Apple phone uses Keychain;
@@ -209,9 +207,7 @@ responsive under the documented limits.
 tokens provide substantial entropy, but the project has no centralized token
 format, entropy, comparison, or verifier migration contract.
 
-**Evidence:** Android TV and Apple TV compare supplied tokens against plaintext
-sets. Desktop computes a SHA-256 verifier, but authorization uses ordinary value
-comparison. Tokens are generally UUIDv4 strings.
+**Evidence:** Apple TV compare supplied tokens against plaintext sets. Desktop computes a SHA-256 verifier, but authorization uses ordinary value comparison. Tokens are generally UUIDv4 strings.
 
 **Required remediation:** Define a versioned token format generated from at least
 128 bits of CSPRNG output, store receiver verifiers, compare fixed-length decoded

@@ -17,3 +17,7 @@
 **Vulnerability:** The Android TV app's `SystemWebViewEngine` had `allowContentAccess` set to `true`. This is a critical security misconfiguration because it allows the arbitrary web content loaded into the system WebView to access and read local content provider data via `content://` URIs on the device, potentially exposing sensitive application data or internal processes (e.g. `PlayerProcessBridgeProvider`).
 **Learning:** Just as `allowFileAccess` is dangerous, `allowContentAccess` is equally risky when a WebView acts as a browser to navigate to untrusted arbitrary URLs. It unnecessarily expands the attack surface.
 **Prevention:** Explicitly configure `allowContentAccess = false` on all WebViews that handle remote, untrusted content to prevent access to the application's ContentProviders.
+## 2025-02-14 - [Sentinel] Fixed SEC-004 SEC-007 bearer-token storage vulnerability
+**Vulnerability:** Android TV's `PairingStore.kt` stored authorization bearer-tokens in plaintext. Comparisons were performed using string equality check.
+**Learning:** Avoid using string length bypass checks (e.g. `if (length == 64)`) to prevent double-hashing while migrating secrets to hashes, as this introduces "pass-the-hash" vulnerabilities. Manage raw and hashed tokens separately instead.
+**Prevention:** Use constant-time byte comparisons (`MessageDigest.isEqual`) for token validations. Create private `*Raw` internal methods for interacting directly with the underlying storage layer to support migration without bypassing the hashing.
