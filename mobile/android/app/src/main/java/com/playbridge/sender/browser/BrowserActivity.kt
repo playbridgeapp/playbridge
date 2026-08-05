@@ -34,7 +34,10 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.shape.CircleShape
@@ -2552,7 +2555,24 @@ class BrowserActivity : ComponentActivity() {
         // `session` is unused for rendering but kept for callsite compatibility.
         val featureHolder = remember { arrayOfNulls<mozilla.components.feature.session.SessionFeature>(1) }
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    // Observe (never consume) downs so a Gecko long-press can later be
+                    // suppressed when it started inside a system gesture edge zone.
+                    awaitEachGesture {
+                        val down = awaitFirstDown(
+                            requireUnconsumed = false,
+                            pass = PointerEventPass.Initial,
+                        )
+                        EdgeLongPressGuard.recordDown(
+                            down.position.x,
+                            down.position.y,
+                            size.width,
+                            size.height,
+                        )
+                    }
+                },
             factory = { context ->
                 GeckoEngineView(context).also { view ->
                     featureHolder[0] = mozilla.components.feature.session.SessionFeature(

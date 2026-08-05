@@ -9,6 +9,8 @@ import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.widget.EditText
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -17,6 +19,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -93,6 +97,21 @@ fun SessionObserverSetup(
     val blacklistState = rememberUpdatedState(blacklist)
     val selectedTabState = rememberUpdatedState(selectedTab)
     val fullScreenCb = rememberUpdatedState(onFullScreenChange)
+
+    // Edge-swipe (system back/home gesture) touches reach GeckoView before the system
+    // steals the stream; Gecko's ~500 ms long-press timer can fire first and pop link
+    // options mid-gesture. Suppress long-presses that began inside a gesture zone.
+    val density = LocalDensity.current
+    val layoutDirection = LocalLayoutDirection.current
+    val systemGestureInsets = WindowInsets.systemGestures
+    val suppressEdgeLongPress = rememberUpdatedState {
+        EdgeLongPressGuard.shouldSuppressLongPress(
+            leftInset = systemGestureInsets.getLeft(density, layoutDirection),
+            topInset = systemGestureInsets.getTop(density),
+            rightInset = systemGestureInsets.getRight(density, layoutDirection),
+            bottomInset = systemGestureInsets.getBottom(density),
+        )
+    }
 
     // Magnet/Stremio links are intercepted at the engine level (RequestInterceptor
     // in Components) so they work in every tab; wire its callbacks here.
@@ -239,6 +258,10 @@ fun SessionObserverSetup(
             // ── Long-press context menu ───────────────────────────────
 
             override fun onLongPress(hitResult: HitResult) {
+                if (suppressEdgeLongPress.value()) {
+                    Log.d(TAG, "Ignoring long-press that began in a system gesture zone")
+                    return
+                }
                 val link = when (hitResult) {
                     is HitResult.UNKNOWN -> hitResult.src
                     is HitResult.IMAGE_SRC -> hitResult.uri
