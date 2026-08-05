@@ -10,6 +10,7 @@ import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
 import coil.memory.MemoryCache
+import com.playbridge.sender.BuildConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -45,6 +46,11 @@ object Components {
     
     private const val TAG = "Components"
     private lateinit var appContext: Context
+
+    /** Detector native traffic may include media URLs and headers — debug builds only. */
+    private fun debugDetectorLog(message: String) {
+        if (BuildConfig.DEBUG) Log.d(TAG, message)
+    }
     
     /**
      * Process-wide TabManager singleton. Owning it here (instead of per-Activity)
@@ -361,11 +367,11 @@ object Components {
         // Register a global message delegate on the WebExtensionController
         val globalMessageDelegate = object : GeckoWebExtension.MessageDelegate {
             override fun onConnect(port: GeckoWebExtension.Port) {
-                Log.i(TAG, "=== PORT CONNECTED: ${port.name} ===")
+                debugDetectorLog("PORT CONNECTED: ${port.name}")
                 
                 port.setDelegate(object : GeckoWebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: GeckoWebExtension.Port) {
-                        Log.i(TAG, "=== PORT MESSAGE: $message ===")
+                        debugDetectorLog("PORT MESSAGE: $message")
                         processMessage(message)
                         
                         // Send feedback back to the extension
@@ -381,7 +387,7 @@ object Components {
                     }
                     
                     override fun onDisconnect(port: GeckoWebExtension.Port) {
-                        Log.i(TAG, "Port disconnected: ${port.name}")
+                        debugDetectorLog("Port disconnected: ${port.name}")
                     }
                 })
             }
@@ -391,10 +397,9 @@ object Components {
                 message: Any,
                 sender: GeckoWebExtension.MessageSender
             ): GeckoResult<Any>? {
-                Log.i(TAG, "=== NATIVE MESSAGE RECEIVED ===")
-                Log.i(TAG, "From app: $nativeApp")
-                Log.i(TAG, "Message: $message")
-                Log.i(TAG, "Sender: ${sender.webExtension?.id}")
+                debugDetectorLog(
+                    "NATIVE MESSAGE from=$nativeApp sender=${sender.webExtension?.id} body=$message",
+                )
                 
                 processMessage(message)
                 
@@ -543,14 +548,14 @@ object Components {
                 else -> message.toString()
             }
             
-            Log.i(TAG, "Processing message: $jsonString")
+            // Full payload can include authenticated media URLs and header maps.
+            debugDetectorLog("Processing detector message: $jsonString")
             
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
                 val type = jsonObject["type"]?.jsonPrimitive?.content
                 if (type == "detector_hello") {
-                    Log.d(
-                        TAG,
+                    debugDetectorLog(
                         "Video detector native channel ready " +
                             "epoch=${jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: "legacy"}",
                     )
@@ -564,7 +569,12 @@ object Components {
                     val statusCode = jsonObject["statusCode"]?.jsonPrimitive?.content ?: "unknown"
                     val url = jsonObject["url"]?.jsonPrimitive?.content ?: "unknown"
                     val tabId = jsonObject["tabId"]?.jsonPrimitive?.content
-                    Log.e(TAG, "HTTP ERROR detected via extension: $statusCode for $url (Tab: $tabId)")
+                    // Status-only in release; full URL only in debug builds.
+                    if (BuildConfig.DEBUG) {
+                        Log.e(TAG, "HTTP ERROR detected via extension: $statusCode for $url (Tab: $tabId)")
+                    } else {
+                        Log.e(TAG, "HTTP ERROR detected via extension: $statusCode (Tab: $tabId)")
+                    }
 
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
                     if (kotlinTabId == null) {
@@ -591,7 +601,10 @@ object Components {
                             PlayPayload(url = url, title = title, visual_metadata = metadata)
                         }
                         if (items.isNotEmpty()) {
-                            Log.i(TAG, "CAST MESSAGE received via extension: ${items.size} items, startIndex: $startIndex")
+                            debugDetectorLog(
+                                "CAST MESSAGE received via extension: ${items.size} items, " +
+                                    "startIndex: $startIndex",
+                            )
                             onBridgeCastRequest?.invoke(items, startIndex, playlistMetadata)
                         }
                     } else {
@@ -599,7 +612,7 @@ object Components {
                         val url = jsonObject["url"]?.jsonPrimitive?.content
                         val title = jsonObject["title"]?.jsonPrimitive?.content
                         if (url != null) {
-                            Log.i(TAG, "CAST MESSAGE received via extension (legacy): $url")
+                            debugDetectorLog("CAST MESSAGE received via extension (legacy): $url")
                             onBridgeCastRequest?.invoke(listOf(PlayPayload(url = url, title = title)), 0, null)
                         }
                     }
@@ -610,19 +623,36 @@ object Components {
                         return
                     }
                     val version = detectorPageVersion(jsonObject)
-                    if (version == null) {
+                    val transitionType = jsonObject["transitionType"]?.jsonPrimitive?.contentOrNull
+                    if (transitionType == "same_document") {
+                        // SPA view change: rows are kept, but the tab's media lifecycle
+                        // advances so ranking prefers the view the user navigated to.
+                        if (version != null) {
+                            val accepted = VideoDetector.onSameDocumentNavigation(
+                                kotlinTabId,
+                                version,
+                                jsonObject["timestamp"]?.jsonPrimitive?.longOrNull
+                                    ?: System.currentTimeMillis(),
+                            )
+                            debugDetectorLog(
+                                "Detector same-document navigation tab=$kotlinTabId " +
+                                    "generation=${version.navigationGeneration} accepted=$accepted",
+                            )
+                        }
+                    } else if (version == null) {
                         VideoDetector.clearTab(kotlinTabId)
-                        Log.d(TAG, "Legacy navigation — cleared detected videos for tab $kotlinTabId")
+                        debugDetectorLog(
+                            "Legacy navigation — cleared detected videos for tab $kotlinTabId",
+                        )
                     } else {
                         val order = VideoDetector.onDetectorNavigation(kotlinTabId, version)
-                        Log.d(
-                            TAG,
+                        debugDetectorLog(
                             "Detector navigation tab=$kotlinTabId " +
                                 "generation=${version.navigationGeneration} order=$order",
                         )
                     }
                 } else if (type == "video_detected" && !detectVideosEnabled) {
-                    Log.d(TAG, "Video detection disabled — ignoring detection message")
+                    debugDetectorLog("Video detection disabled — ignoring detection message")
                 } else {
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
                     if (kotlinTabId == null) {
@@ -635,15 +665,14 @@ object Components {
                         version != null &&
                         !VideoDetector.acceptDetectorVideo(kotlinTabId, version)
                     ) {
-                        Log.d(
-                            TAG,
+                        debugDetectorLog(
                             "Ignoring stale detector video tab=$kotlinTabId " +
                                 "generation=${version.navigationGeneration}",
                         )
                         return
                     }
                     VideoDetector.onMessageReceived(jsonObject, kotlinTabId)
-                    Log.i(TAG, "Message sent to VideoDetector for tab $kotlinTabId")
+                    debugDetectorLog("Message sent to VideoDetector for tab $kotlinTabId type=$type")
                 }
             }
         } catch (e: Exception) {
@@ -704,7 +733,7 @@ object Components {
     ) {
         val delayMs = listOf(50L, 150L, 400L).getOrNull(resolutionAttempt)
         if (delayMs == null) {
-            Log.d(TAG, "Ignoring detector $type from an unmapped Gecko tab")
+            debugDetectorLog("Ignoring detector $type from an unmapped Gecko tab")
             return
         }
         Handler(Looper.getMainLooper()).postDelayed(

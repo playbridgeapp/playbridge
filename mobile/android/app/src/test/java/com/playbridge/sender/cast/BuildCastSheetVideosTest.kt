@@ -293,4 +293,215 @@ class BuildCastSheetVideosTest {
             buildCastSheetVideos(listOf(older, active)).map { it.url },
         )
     }
+
+    @Test
+    fun freshThumbnailReadyStreamOvertakesStaleLadderMaster() {
+        val now = 500_000_000L
+        val qualities = listOf(
+            VideoQuality("1920x1080", 5_000_000, "https://cdn.example/old/1080p.m3u8"),
+            VideoQuality("1280x720", 2_500_000, "https://cdn.example/old/720p.m3u8"),
+            VideoQuality("854x480", 1_200_000, "https://cdn.example/old/480p.m3u8"),
+        )
+        // Maximally scored but ten minutes stale: verified, body evidence, master ladder,
+        // replay headers, thumbnail — yet no longer what the user just started watching.
+        val staleMaster = DetectedVideo(
+            url = "https://cdn.example/old/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "body_content_m3u8",
+            headers = mapOf("Referer" to "https://example.com/watch"),
+            timestamp = now - 10 * 60_000L,
+            lastSeen = now - 10 * 60_000L,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+            qualities = qualities,
+            qualitiesChecked = true,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = qualities,
+                masterPlaylistUrl = "https://cdn.example/old/master.m3u8",
+                validation = HlsPlaylistValidation.VALID_MASTER,
+            ),
+        )
+        val fresh = DetectedVideo(
+            url = "https://cdn.example/new/playlist.m3u8",
+            detectedBy = "body_content_m3u8",
+            headers = mapOf("Referer" to "https://example.com/watch"),
+            timestamp = now,
+            lastSeen = now,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+        )
+
+        assertEquals(
+            listOf(fresh.url, staleMaster.url),
+            buildCastSheetVideos(listOf(staleMaster, fresh)).map { it.url },
+        )
+    }
+
+    @Test
+    fun spaLifecycle_pendingNewViewDetectionOutranksStaleVerifiedMaster() {
+        val now = 500_000_000L
+        val qualities = listOf(
+            VideoQuality("1920x1080", 5_000_000, "https://cdn.example/old/1080p.m3u8"),
+            VideoQuality("1280x720", 2_500_000, "https://cdn.example/old/720p.m3u8"),
+        )
+        // Listing view leftovers: fully processed ladder master, ten minutes stale.
+        val staleMaster = DetectedVideo(
+            url = "https://cdn.example/old/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "body_content_m3u8",
+            headers = mapOf("Referer" to "https://example.com/"),
+            timestamp = now - 10 * 60_000L,
+            lastSeen = now - 10 * 60_000L,
+            lifecycleIndex = 0,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+            qualities = qualities,
+            qualitiesChecked = true,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = qualities,
+                masterPlaylistUrl = "https://cdn.example/old/master.m3u8",
+                validation = HlsPlaylistValidation.VALID_MASTER,
+            ),
+        )
+        // The video the user just clicked on the SPA: brand new lifecycle, still
+        // pending verification. It must surface at the top immediately.
+        val clicked = DetectedVideo(
+            url = "https://cdn.example/new/playlist.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "content_type",
+            headers = mapOf("Referer" to "https://example.com/watch/42"),
+            timestamp = now,
+            lastSeen = now,
+            lifecycleIndex = 1,
+        )
+
+        assertEquals(
+            listOf(clicked.url, staleMaster.url),
+            buildCastSheetVideos(listOf(staleMaster, clicked)).map { it.url },
+        )
+    }
+
+    @Test
+    fun spaLifecycle_activePreviousStreamHoldsUntilNewDetectionVerifies() {
+        val now = 500_000_000L
+        val qualities = listOf(
+            VideoQuality("1920x1080", 5_000_000, "https://cdn.example/old/1080p.m3u8"),
+            VideoQuality("1280x720", 2_500_000, "https://cdn.example/old/720p.m3u8"),
+        )
+        // Previous view's stream is still actively observed (e.g. live playlist polls
+        // keep lastSeen fresh): it should not be dethroned by an unchecked candidate.
+        val activePrevious = DetectedVideo(
+            url = "https://cdn.example/old/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "body_content_m3u8",
+            headers = mapOf("Referer" to "https://example.com/"),
+            timestamp = now - 10 * 60_000L,
+            lastSeen = now,
+            lifecycleIndex = 0,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+            qualities = qualities,
+            qualitiesChecked = true,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = qualities,
+                masterPlaylistUrl = "https://cdn.example/old/master.m3u8",
+                validation = HlsPlaylistValidation.VALID_MASTER,
+            ),
+        )
+        val clickedPending = DetectedVideo(
+            url = "https://cdn.example/new/playlist.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "content_type",
+            headers = mapOf("Referer" to "https://example.com/watch/42"),
+            timestamp = now,
+            lastSeen = now,
+            lifecycleIndex = 1,
+        )
+
+        assertEquals(
+            listOf(activePrevious.url, clickedPending.url),
+            buildCastSheetVideos(listOf(clickedPending, activePrevious)).map { it.url },
+        )
+
+        // Once the new view's stream verifies (and has a preview), it takes the top.
+        val clickedVerified = clickedPending.copy(
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+        )
+        assertEquals(
+            listOf(clickedVerified.url, activePrevious.url),
+            buildCastSheetVideos(listOf(activePrevious, clickedVerified)).map { it.url },
+        )
+    }
+
+    @Test
+    fun spaLifecycle_syntheticRowPrefersNewestLifecycle() {
+        val now = 500_000_000L
+        val oldSynthetic = DetectedVideo(
+            url = "https://cdn.example/old/session.m3u8",
+            isSyntheticMaster = true,
+            playlistBody = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://cdn.example/old/v.m3u8\n",
+            detectedBy = "synthetic_hls_master",
+            timestamp = now - 5 * 60_000L,
+            lastSeen = now - 5 * 60_000L,
+            lifecycleIndex = 0,
+        )
+        val newSynthetic = DetectedVideo(
+            url = "https://cdn.example/new/session.m3u8",
+            isSyntheticMaster = true,
+            playlistBody = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nhttps://cdn.example/new/v.m3u8\n",
+            detectedBy = "synthetic_hls_master",
+            timestamp = now,
+            lastSeen = now,
+            lifecycleIndex = 1,
+        )
+
+        val out = buildCastSheetVideos(listOf(oldSynthetic, newSynthetic))
+
+        assertEquals(1, out.size)
+        assertEquals(SYNTHETIC_CAST_ITEM_TITLE, out[0].title)
+        assertEquals(newSynthetic.url, out[0].url)
+        assertEquals(newSynthetic.playlistBody, out[0].playlistBody)
+    }
+
+    @Test
+    fun sameWindowLadderMasterKeepsTopOverBarelyNewerStream() {
+        val now = 500_000_000L
+        val qualities = listOf(
+            VideoQuality("1920x1080", 5_000_000, "https://cdn.example/old/1080p.m3u8"),
+            VideoQuality("1280x720", 2_500_000, "https://cdn.example/old/720p.m3u8"),
+        )
+        // Same detections as the stale case, but the master was seen one minute ago:
+        // its verified ladder still outranks a barely newer thumbnail-ready stream.
+        val recentMaster = DetectedVideo(
+            url = "https://cdn.example/old/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "body_content_m3u8",
+            headers = mapOf("Referer" to "https://example.com/watch"),
+            timestamp = now - 60_000L,
+            lastSeen = now - 60_000L,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+            qualities = qualities,
+            qualitiesChecked = true,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = qualities,
+                masterPlaylistUrl = "https://cdn.example/old/master.m3u8",
+                validation = HlsPlaylistValidation.VALID_MASTER,
+            ),
+        )
+        val fresh = DetectedVideo(
+            url = "https://cdn.example/new/playlist.m3u8",
+            detectedBy = "url_pattern_m3u8",
+            timestamp = now,
+            lastSeen = now,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+        )
+
+        assertEquals(
+            listOf(recentMaster.url, fresh.url),
+            buildCastSheetVideos(listOf(fresh, recentMaster)).map { it.url },
+        )
+    }
 }

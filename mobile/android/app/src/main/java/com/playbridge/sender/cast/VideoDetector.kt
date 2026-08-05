@@ -16,11 +16,14 @@ import androidx.media3.common.C
 import androidx.media3.exoplayer.hls.playlist.HlsMediaPlaylist as Media3HlsMediaPlaylist
 import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist as Media3HlsMultivariantPlaylist
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser as Media3HlsPlaylistParser
+import com.playbridge.sender.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -87,6 +90,12 @@ data class DetectedVideo(
     val width: Int? = null,
     val height: Int? = null,
     val lastSeen: Long = timestamp,
+    /**
+     * Media lifecycle this detection belongs to within its tab. Bumped when the page
+     * performs a same-document (SPA) navigation, so cast-sheet ranking can prefer streams
+     * from the view the user is currently on without discarding older detections.
+     */
+    val lifecycleIndex: Int = 0,
     var validationState: MediaValidationState = MediaValidationState.PENDING,
     var thumbnailState: ThumbnailPreviewState = ThumbnailPreviewState.NOT_REQUESTED,
     /**
@@ -281,16 +290,22 @@ fun buildCastSheetVideos(videos: List<DetectedVideo>): List<DetectedVideo> {
     val playable = videos.filter { it.isVideo }
     val handoffSources = playable.filter { it.hasSyntheticHandoff }
     if (handoffSources.isEmpty()) {
-        return playable.sortedWith(castSheetComparator())
+        return playable.sortedWith(castSheetComparator(playable))
     }
 
     // Prefer a detector-emitted synthetic master with a body; else any body; else newest.
-    val source = handoffSources.firstOrNull {
-        it.isSyntheticMaster && !it.playlistBody.isNullOrBlank()
-    }
-        ?: handoffSources.firstOrNull { !it.playlistBody.isNullOrBlank() }
+    // Within each tier, prefer the newest media lifecycle / activity so an SPA's latest
+    // view wins over synthetic rows left over from previously opened streams.
+    val byLifecycleThenActivity = compareBy<DetectedVideo> { it.lifecycleIndex }
+        .thenBy { maxOf(it.timestamp, it.lastSeen) }
+    val source = handoffSources
+        .filter { it.isSyntheticMaster && !it.playlistBody.isNullOrBlank() }
+        .maxWithOrNull(byLifecycleThenActivity)
+        ?: handoffSources
+            .filter { !it.playlistBody.isNullOrBlank() }
+            .maxWithOrNull(byLifecycleThenActivity)
         ?: handoffSources.maxByOrNull { it.timestamp }
-        ?: return playable.sortedWith(castSheetComparator())
+        ?: return playable.sortedWith(castSheetComparator(playable))
 
     val syntheticRow = source.copy(
         title = SYNTHETIC_CAST_ITEM_TITLE,
@@ -301,11 +316,10 @@ fun buildCastSheetVideos(videos: List<DetectedVideo>): List<DetectedVideo> {
     )
 
     // Drop other synthetic masters and the handoff source URL (replaced by syntheticRow).
-    val rest = playable
-        .filter { video ->
-            !video.isSyntheticMaster && video.url != source.url
-        }
-        .sortedWith(castSheetComparator())
+    val restCandidates = playable.filter { video ->
+        !video.isSyntheticMaster && video.url != source.url
+    }
+    val rest = restCandidates.sortedWith(castSheetComparator(restCandidates))
 
     return listOf(syntheticRow) + rest
 }
@@ -340,9 +354,49 @@ internal fun thumbnailPrefetchCandidates(
     }.take(limit)
 }
 
-private fun castSheetComparator(): Comparator<DetectedVideo> =
-    compareByDescending<DetectedVideo> { it.castScore() }
-        .thenByDescending { maxOf(it.timestamp, it.lastSeen) }
+/**
+ * Freshness influence on [castSheetComparator]. The newest candidate in the ranked list
+ * receives the full bonus; it decays by [RECENCY_BONUS_PER_MINUTE] per whole minute of age
+ * (relative to that newest candidate) down to zero. Verification, evidence, and quality
+ * ladders still dominate a same-minute arrival, but a fully loaded stream that is minutes
+ * fresher than a stale ladder master wins — the latest detected video should sit at the top
+ * once earlier detections have had their moment. Timestamps are detector epoch millis, so
+ * sub-minute differences (and the toy timestamps used in tests) produce no bonus difference.
+ */
+private const val RECENCY_BONUS_CAP = 150
+private const val RECENCY_BONUS_PER_MINUTE = 50
+private const val RECENCY_MINUTE_MS = 60_000L
+
+/**
+ * Bonus for detections born in the tab's newest media lifecycle (see
+ * [DetectedVideo.lifecycleIndex]). On single-page apps each view change (clicking a
+ * video on a listing page) starts a new lifecycle without clearing older rows. The
+ * bonus is large enough that the stream for the view the user just opened rises to the
+ * top immediately — above stale verified/laddered rows from previous views — while a
+ * previous view's stream that is *still actively observed* (fresh lastSeen, e.g. live
+ * playlist polls) holds the top until the new candidate finishes verification. Rows
+ * from older lifecycles are demoted, never removed, so they remain castable.
+ * Uniform when every candidate shares one lifecycle (e.g. no SPA navigations).
+ */
+private const val LIFECYCLE_BONUS = 400
+
+private fun recencyBonus(video: DetectedVideo, newestMs: Long): Int {
+    val seenMs = maxOf(video.timestamp, video.lastSeen)
+    val ageMinutes = (newestMs - seenMs).coerceAtLeast(0L) / RECENCY_MINUTE_MS
+    val decay = (ageMinutes * RECENCY_BONUS_PER_MINUTE).coerceAtMost(RECENCY_BONUS_CAP.toLong())
+    return (RECENCY_BONUS_CAP - decay).toInt()
+}
+
+private fun lifecycleBonus(video: DetectedVideo, newestLifecycle: Int): Int =
+    if (video.lifecycleIndex >= newestLifecycle) LIFECYCLE_BONUS else 0
+
+private fun castSheetComparator(videos: List<DetectedVideo>): Comparator<DetectedVideo> {
+    val newestMs = videos.maxOfOrNull { maxOf(it.timestamp, it.lastSeen) } ?: 0L
+    val newestLifecycle = videos.maxOfOrNull { it.lifecycleIndex } ?: 0
+    return compareByDescending<DetectedVideo> {
+        it.castScore() + recencyBonus(it, newestMs) + lifecycleBonus(it, newestLifecycle)
+    }.thenByDescending { maxOf(it.timestamp, it.lastSeen) }
+}
 
 /**
  * Data class representing an active subtitle period
@@ -364,7 +418,44 @@ object VideoDetector {
     private const val MAX_HLS_THUMBNAIL_BYTES = 12 * 1024 * 1024
     private const val HLS_THUMBNAIL_SEGMENT_COUNT = 3
 
+    /** Streams first seen this close before an SPA navigation adopt the new lifecycle. */
+    private const val SAME_DOCUMENT_ADOPT_GRACE_MS = 2_000L
+
     private var appContext: Context? = null
+
+    /**
+     * Detection diagnostics may include media URLs, origins, and header *names*.
+     * Debug builds only — never emit on release (see AGENTS.md logging rules).
+     */
+    private fun debugLog(message: String) {
+        if (BuildConfig.DEBUG) Log.d(TAG, message)
+    }
+
+    private val detectorDebugJson = Json {
+        prettyPrint = true
+        prettyPrintIndent = "  "
+    }
+
+    /**
+     * Pretty-print a detector payload one logcat line at a time.
+     * Android truncates single log lines; multi-line JSON must be split.
+     */
+    private fun debugLogJson(label: String, message: JsonObject) {
+        if (!BuildConfig.DEBUG) return
+        val pretty = try {
+            detectorDebugJson.encodeToString(message)
+        } catch (_: Exception) {
+            try {
+                org.json.JSONObject(message.toString()).toString(2)
+            } catch (_: Exception) {
+                message.toString()
+            }
+        }
+        Log.d(TAG, "$label — payload:")
+        pretty.lineSequence().forEach { line ->
+            if (line.isNotEmpty()) Log.d(TAG, line)
+        }
+    }
 
     /** Call once from Application or Activity.onCreate so HLS thumbnail extraction has a cache dir. */
     fun init(context: Context) {
@@ -414,6 +505,10 @@ object VideoDetector {
 
     // Per-tab seen URLs to avoid duplicates
     private val tabSeenUrls = mutableMapOf<String, MutableSet<String>>()
+
+    // Per-tab media lifecycle counter: bumped on same-document (SPA) navigations.
+    // Detections stamp the current value into DetectedVideo.lifecycleIndex.
+    private val tabLifecycleIndex = mutableMapOf<String, Int>()
 
     // Last document generation accepted from the GeckoView detector per Kotlin tab.
     private val detectorPageTracker = DetectorPageTracker()
@@ -527,12 +622,54 @@ object VideoDetector {
         }
     }
 
+    /** Current media lifecycle for [tabId]; detections stamp this into their row. */
+    internal fun lifecycleIndexForTab(tabId: String): Int = tabLifecycleIndex[tabId] ?: 0
+
+    /**
+     * A same-document (SPA) navigation starts a new media lifecycle WITHOUT clearing
+     * detections: streams from earlier views may still be playing and stay castable,
+     * just ranked below what the user navigated to. Rows first seen within the grace
+     * window adopt the new lifecycle because the stream that triggered the route change
+     * can race ahead of this message. Returns false for stale detector messages.
+     */
+    internal fun onSameDocumentNavigation(
+        tabId: String,
+        incoming: DetectorPageVersion,
+        atMs: Long,
+    ): Boolean {
+        return when (detectorPageTracker.observe(tabId, incoming)) {
+            DetectorMessageOrder.ADVANCE -> {
+                // Generation moved underneath us (missed commit); fall back to clearing.
+                clearTabMedia(tabId)
+                true
+            }
+            DetectorMessageOrder.CURRENT -> {
+                val next = (tabLifecycleIndex[tabId] ?: 0) + 1
+                tabLifecycleIndex[tabId] = next
+                tabVideos[tabId]?.let { videos ->
+                    for (i in videos.indices) {
+                        val video = videos[i]
+                        if (video.lifecycleIndex < next &&
+                            maxOf(video.timestamp, video.lastSeen) >=
+                                atMs - SAME_DOCUMENT_ADOPT_GRACE_MS
+                        ) {
+                            videos[i] = video.copy(lifecycleIndex = next)
+                        }
+                    }
+                }
+                notifyVideoUpdated()
+                true
+            }
+            DetectorMessageOrder.STALE -> false
+        }
+    }
+
     /**
      * Process a message received from the video detector extension,
      * associating it with the given Kotlin tab ID.
      */
     fun onMessageReceived(message: JsonObject, kotlinTabId: String) {
-        Log.d(TAG, "Received message for tab $kotlinTabId: $message")
+        debugLogJson("Received message for tab $kotlinTabId", message)
 
         val type = message["type"]?.jsonPrimitive?.content
 
@@ -542,7 +679,7 @@ object VideoDetector {
 
                 // Check if URL is in exact ignore list or starts with an ignored segment prefix
                 if (ignoredUrls.contains(url) || ignoredUrls.any { url.startsWith(it) }) {
-                    Log.d(TAG, "Ignoring video URL (matched blocklist or segment prefix): $url")
+                    debugLog("Ignoring media URL (matched blocklist or segment prefix): $url")
                     return
                 }
 
@@ -589,7 +726,11 @@ object VideoDetector {
                             evidenceUpgraded ||
                             incomingLastSeen > existing.lastSeen
                     if (shouldUpdate) {
-                        Log.i(TAG, "Updating detection for tab $kotlinTabId (evidence/media metadata)")
+                        debugLog(
+                            "Updating detection for tab $kotlinTabId " +
+                                "kind=${incomingMediaKind ?: existing.mediaKind ?: "?"} " +
+                                "by=$incomingDetectedBy evidenceUpgraded=$evidenceUpgraded",
+                        )
                         videos[existingIndex] = existing.copy(
                             headers = headers ?: existing.headers,
                             originUrl = message["originUrl"]?.jsonPrimitive?.content
@@ -611,6 +752,11 @@ object VideoDetector {
                                 existing.detectedBy
                             },
                             lastSeen = maxOf(existing.lastSeen, incomingLastSeen),
+                            // Fresh detector activity in a newer SPA view re-homes the row.
+                            lifecycleIndex = maxOf(
+                                existing.lifecycleIndex,
+                                lifecycleIndexForTab(kotlinTabId),
+                            ),
                             validationState = if (
                                 incomingValidation == MediaValidationState.VERIFIED_PLAYABLE
                             ) {
@@ -650,22 +796,26 @@ object VideoDetector {
                     width = message["width"]?.jsonPrimitive?.intOrNull,
                     height = message["height"]?.jsonPrimitive?.intOrNull,
                     lastSeen = incomingLastSeen,
+                    lifecycleIndex = lifecycleIndexForTab(kotlinTabId),
                     validationState = validationStateForDetection(
                         incomingDetectedBy,
                         isSynthetic,
                     ),
                 )
 
-                Log.i(TAG, "VIDEO DETECTED in tab $kotlinTabId")
-                Log.i(TAG, "  Type: ${video.contentType ?: "N/A"}")
-                Log.i(TAG, "  Header Count: ${video.headers?.size ?: 0}")
+                debugLog(
+                    "MEDIA DETECTED tab=$kotlinTabId kind=${video.mediaKind ?: video.kind} " +
+                        "by=${video.detectedBy} type=${video.contentType ?: "N/A"} " +
+                        "headers=${video.headers?.size ?: 0} lifecycle=${video.lifecycleIndex} " +
+                        "url=$url",
+                )
 
                 seenUrls.add(url)
                 videos.add(video)
                 notifyVideoUpdated()
             }
             else -> {
-                Log.w(TAG, "Unknown message type: $type")
+                debugLog("Unknown detector message type: $type")
             }
         }
     }
@@ -725,16 +875,16 @@ object VideoDetector {
                 ) {
                     video.isPlayable = false
                     video.validationState = MediaValidationState.FAILED
-                    Log.w(TAG, "Video probe confirmed unavailable: HTTP $responseCode")
+                    debugLog("Media probe confirmed unavailable: HTTP $responseCode")
                 } else {
                     // HEAD is commonly rejected even when GET playback works. Only a definitive
                     // missing response should invalidate a candidate; manifest/preview work will
                     // establish playability for other statuses.
-                    Log.d(TAG, "Video HEAD probe inconclusive: HTTP $responseCode")
+                    debugLog("Media HEAD probe inconclusive: HTTP $responseCode")
                 }
 
                 video.fileSizeChecked = true
-                Log.d(TAG, "File size for ${video.url.take(50)}: ${video.fileSize ?: "unknown"}")
+                debugLog("File size for ${video.url.take(50)}: ${video.fileSize ?: "unknown"}")
 
                 withContext(Dispatchers.Main) {
                     syncProbeStateToTrackedCopies(video, fileSize = true)
@@ -817,7 +967,9 @@ object VideoDetector {
                         }
 
                         video.subtitlePreviewChecked = true
-                        Log.d(TAG, "Subtitle preview for ${video.url.take(30)}: ${video.subtitlePreview}")
+                        debugLog(
+                            "Subtitle preview for ${video.url.take(30)}: ${video.subtitlePreview}",
+                        )
                         video.subtitlePreview
                     } else {
                         video.subtitlePreviewChecked = true
@@ -954,7 +1106,7 @@ object VideoDetector {
                         video.isPlayable = false
                         video.validationState = MediaValidationState.FAILED
                     }
-                    Log.d(TAG, "Fetched ${qualities.size} DASH qualities for ${video.url}")
+                    debugLog("Fetched ${qualities.size} DASH qualities for ${video.url}")
                     // Bump the version so the cast sheet re-derives and re-ranks live — the
                     // HLS path below does this, but DASH was returning early without it, so a
                     // parsed DASH stream only moved up after the sheet was reopened.
@@ -1025,7 +1177,7 @@ object VideoDetector {
                         }
                     }
 
-                    Log.d(TAG, "Fetched ${playlist.videoQualities.size} qualities for ${video.url}")
+                    debugLog("Fetched ${playlist.videoQualities.size} HLS qualities for ${video.url}")
                     withContext(Dispatchers.Main) {
                         syncProbeStateToTrackedCopies(video, manifest = true)
                         notifyVideoUpdated()
@@ -1037,7 +1189,11 @@ object VideoDetector {
                     emptyList()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching HLS qualities for ${video.url}: ${e.message}")
+                // Avoid logging the stream URL in release; message alone is enough for failures.
+                Log.e(TAG, "Error fetching HLS qualities: ${e.message}")
+                if (BuildConfig.DEBUG) {
+                    Log.e(TAG, "HLS qualities URL was: ${video.url}")
+                }
                 video.isPlayable = false
                 video.validationState = MediaValidationState.FAILED
                 video.qualitiesChecked = true
@@ -1218,8 +1374,7 @@ object VideoDetector {
         val targetIndex = ((segments.size - 1) * 0.25).toInt()
         val target = segments[targetIndex]
         val isFragmentedMp4 = target.initializationSegment != null
-        Log.d(
-            TAG,
+        debugLog(
             "HLS thumbnail: segment [${targetIndex + 1}/${segments.size}] " +
                 "init=$isFragmentedMp4 encrypted=${target.fullSegmentEncryptionKeyUri != null} " +
                 "range=${target.byteRangeLength != C.LENGTH_UNSET.toLong()}",
@@ -1343,7 +1498,9 @@ object VideoDetector {
                     writtenSegments++
                 }
             }
-            Log.d(TAG, "HLS thumbnail: reconstructed $writtenSegments segment(s), $totalBytes bytes")
+            debugLog(
+                "HLS thumbnail: reconstructed $writtenSegments segment(s), $totalBytes bytes",
+            )
             writtenSegments > 0 && outFile.length() > 0L
         } catch (e: Exception) {
             Log.w(TAG, "HLS thumbnail sample reconstruction failed: ${e.message}")
@@ -1525,18 +1682,22 @@ object VideoDetector {
     }
 
     private fun clearTabMedia(tabId: String) {
-        Log.d(TAG, "Clearing videos for tab $tabId (had ${tabVideos[tabId]?.size ?: 0})")
+        if (tabVideos.containsKey(tabId) || tabSeenUrls.containsKey(tabId)) {
+            debugLog("Clearing videos for tab $tabId (had ${tabVideos[tabId]?.size ?: 0})")
+        }
         tabVideos.remove(tabId)
         tabSeenUrls.remove(tabId)
+        tabLifecycleIndex.remove(tabId)
     }
 
     /**
      * Clear all detected videos across all tabs.
      */
     fun clear() {
-        Log.d(TAG, "Clearing all detected videos across ${tabVideos.size} tabs")
+        debugLog("Clearing all detected videos across ${tabVideos.size} tabs")
         tabVideos.clear()
         tabSeenUrls.clear()
+        tabLifecycleIndex.clear()
         detectorPageTracker.clear()
         ignoredUrls.clear()
     }

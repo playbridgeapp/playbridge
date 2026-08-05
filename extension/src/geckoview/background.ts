@@ -857,11 +857,35 @@ function handleNavigation(
   }
 }
 
-function handleSameDocumentNavigation(tabId: number, url: string): void {
+function handleSameDocumentNavigation(
+  tabId: number,
+  url: string,
+  notifyNative = true,
+): void {
+  const previousUrl = tabLastUrl.get(tabId);
   tabLastUrl.set(tabId, url);
   browser.tabs
     .sendMessage(tabId, { type: "detector_same_document_navigation" })
     .catch(() => {});
+  if (!notifyNative) return;
+  // Same-document (SPA) navigations deliberately do not advance the page
+  // generation — detections for streams that may still be playing survive.
+  // The phone instead starts a new media lifecycle so its cast-sheet ranking
+  // prefers streams detected in the view the user just navigated to.
+  sendToNative({
+    type: "navigation",
+    tabId,
+    url,
+    originUrl: url,
+    previousUrl: previousUrl ?? null,
+    transitionType: "same_document",
+    timestamp: Date.now(),
+    detectorEpoch: DETECTOR_EPOCH,
+    navigationGeneration: currentNavigationGeneration(
+      tabNavigationGenerations,
+      tabId,
+    ),
+  });
 }
 
 if (browser.webNavigation) {
@@ -890,7 +914,8 @@ if (browser.webNavigation) {
   browser.webNavigation.onReferenceFragmentUpdated?.addListener?.(
     (details: { frameId: number; tabId: number; url: string }) => {
       if (details.frameId !== 0) return;
-      handleSameDocumentNavigation(details.tabId, details.url);
+      // Hash-only changes are in-page anchors, not a new media view.
+      handleSameDocumentNavigation(details.tabId, details.url, false);
     },
   );
   browser.webNavigation.onErrorOccurred.addListener(
