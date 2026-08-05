@@ -191,7 +191,6 @@ internal object JniUpstreamHttpClient {
                 lk != "host" &&
                 lk != "accept-encoding" &&
                 lk != "connection" &&
-                lk != "origin" &&
                 lk != "content-length" &&
                 lk != "content-type" &&
                 lk != "transfer-encoding" &&

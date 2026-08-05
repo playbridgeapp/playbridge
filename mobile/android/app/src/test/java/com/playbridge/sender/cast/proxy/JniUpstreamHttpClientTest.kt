@@ -28,7 +28,8 @@ class JniUpstreamHttpClientTest {
         assertEquals("https://example.com/", filtered["Referer"])
         assertEquals("a=1", filtered["Cookie"])
         assertEquals("bytes=0-1", filtered["Range"])
-        assertFalse(filtered.containsKey("Origin"))
+        // Origin is forwarded (origin-protected same-site CDNs 403 without it), matching Desktop.
+        assertEquals("https://evil.example", filtered["Origin"])
         assertFalse(filtered.containsKey("Sec-Fetch-Mode"))
         assertFalse(filtered.containsKey("Host"))
         assertFalse(filtered.containsKey("Accept-Encoding"))

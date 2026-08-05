@@ -118,6 +118,8 @@ class LocalProxyServer(
     /**
      * Drop browser-context / hop-by-hop headers that break third-party CDN fetches when
      * replaying a captured page request from the phone proxy (not the page origin).
+     * Origin is intentionally kept: origin-protected same-site CDNs return 403 without
+     * it (Desktop forwards Origin to the CDN too).
      */
     private fun filterHeaders(headers: Map<String, String>): Map<String, String> =
         headers.filterKeys { k ->
@@ -128,7 +130,6 @@ class LocalProxyServer(
                 lk != "accept-encoding" &&
                 lk != "connection" &&
                 lk != "range" &&
-                lk != "origin" && // page Origin is wrong when the proxy is the client
                 lk != "content-length" &&
                 lk != "content-type" &&
                 lk != "transfer-encoding" &&

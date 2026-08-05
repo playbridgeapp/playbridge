@@ -17,6 +17,7 @@ import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
+import com.playbridge.sender.BuildConfig
 
 data class CastableMedia(
     val url: String,
@@ -168,6 +169,15 @@ class StreamRouteService(
         val host = lanIpv4()
             ?: throw StreamRouteException("No LAN address for Via phone")
         val headers = ensureProxyUpstreamHeaders(media.headers.orEmpty())
+        // Header names only — never values. Debug builds only: raw capture first
+        // (does GeckoView surface Origin/referrer?), then the set registered upstream.
+        if (BuildConfig.DEBUG) {
+            Log.d(
+                TAG,
+                "Via phone raw captured headers: ${media.headers.orEmpty().keys.sorted()}",
+            )
+            Log.d(TAG, "Via phone registerUrl upstream headers: ${headers.keys.sorted()}")
+        }
         val registered = services.registerUrl(
             host = host,
             url = media.url,
@@ -248,8 +258,8 @@ class StreamRouteService(
         if (out.keys.none { it.equals("Accept", ignoreCase = true) }) {
             out["Accept"] = "*/*"
         }
-        // Never forward page Origin through the phone proxy.
-        out.keys.filter { it.equals("Origin", ignoreCase = true) }.forEach { out.remove(it) }
+        // Keep page Origin: origin-protected CDNs (e.g. same-site media hosts)
+        // return 403 without it. Desktop forwards Origin to the CDN too.
         return out
     }
 
