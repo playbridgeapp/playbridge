@@ -42,8 +42,8 @@ android {
         applicationId = "com.playbridge.sender"
         minSdk = 26
         targetSdk = 36
-        versionCode = 221
-        versionName = "0.11.2"
+        versionCode = 222
+        versionName = "0.12.0"
         buildConfigField(
             "String",
             "GOOGLE_CAST_APPLICATION_ID",

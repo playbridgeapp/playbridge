@@ -3,6 +3,24 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] — 2026-08-03 (versionCode 222)
+
+### Added
+- **Google Cast**: Chromecast/Google Cast sender support with persistent sessions, standard media controls, and the PlayBridge custom receiver.
+- **Phone-hosted casting**: Browser receiver target hosted by the phone, with selectable Direct, Via phone, and Via proxy stream routes.
+- **Receiver discovery**: Unified PlayBridge, DLNA, and Roku discovery with destination-specific casting.
+- **HLS Cast segment hints**: When packaging Via phone/proxy, probe playlists and attach segment-format hints so Google Cast loads accept MPEG-TS bytes behind misleading suffixes (e.g. `.jpg` on some CDNs).
+
+### Changed
+- **Casting experience**: Redesigned Devices and cast destination flows, including richer media previews, route selection, and active-session state.
+- **Playback and routing**: Improved external cast loading, reconnects, timeline handling, stream proxying, and playback-engine failover for difficult streams.
+- **Cast sheet ranking (SPA)**: Same-document navigations keep earlier detections castable while advancing a media lifecycle so the view you just opened is preferred in ranking.
+- **Diagnostics**: Debug network diagnostics and expanded casting/connection telemetry; detector media URLs and sensitive headers stay debug-build-only, with redaction in persisted logs.
+
+### Fixed
+- **Origin-protected CDNs**: Forward page `Origin` on Via-phone/DLNA upstream fetches so same-site media hosts no longer return 403 (aligned with Desktop).
+- **Edge long-press vs gestures**: Suppress Gecko link context menus when the press began inside system back/home gesture insets.
+
 ## [0.11.2] — 2026-07-14 (versionCode 221)
 
 ### Fixed
