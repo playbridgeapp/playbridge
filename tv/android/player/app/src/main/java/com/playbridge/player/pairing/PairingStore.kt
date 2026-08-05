@@ -200,6 +200,36 @@ class PairingStore(private val context: Context) {
         }
     }
 
+    /**
+     * Replaces an old plaintext token with a new hashed token in PairedDevices.
+     */
+    suspend fun migrateDeviceToken(oldToken: String, newTokenHash: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[PAIRED_DEVICES]?.let {
+                try {
+                    protocolJson.decodeFromString<List<PairedDevice>>(it).toMutableList()
+                } catch (e: Exception) {
+                    mutableListOf()
+                }
+            } ?: mutableListOf()
+
+            var modified = false
+            for (i in current.indices) {
+                if (current[i].token == oldToken) {
+                    current[i] = current[i].copy(token = newTokenHash)
+                    modified = true
+                }
+            }
+
+            if (modified) {
+                prefs[PAIRED_DEVICES] = protocolJson.encodeToString(
+                    kotlinx.serialization.builtins.ListSerializer(PairedDevice.serializer()),
+                    current
+                )
+            }
+        }
+    }
+
     // ── Per-device token authorization ────────────────────────────────────────
 
     private suspend fun getAuthorizedTokenSet(): MutableSet<String> {

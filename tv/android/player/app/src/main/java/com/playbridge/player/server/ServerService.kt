@@ -308,16 +308,36 @@ class ServerService : Service() {
             val tlsDir = java.io.File(filesDir, "tls").also { it.mkdirs() }
             webSocketServer = WebSocketServer(
                 port = port,
-                isTokenAuthorized = { token -> pairingStore.isTokenAuthorized(token) },
+                isTokenAuthorized = { token ->
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    val bytes = md.digest(token.toByteArray())
+                    val hashedToken = bytes.joinToString("") { "%02x".format(it) }
+
+                    if (pairingStore.isTokenAuthorized(hashedToken)) {
+                        true
+                    } else if (token.length != 64 && pairingStore.isTokenAuthorized(token)) {
+                        // Legacy token found, migrate it
+                        pairingStore.removeAuthorizedToken(token)
+                        pairingStore.addAuthorizedToken(hashedToken)
+                        pairingStore.migrateDeviceToken(token, hashedToken)
+                        true
+                    } else {
+                        false
+                    }
+                },
                 onPairingApproved = { deviceName, deviceUUID ->
                     val newToken = java.util.UUID.randomUUID().toString()
-                    pairingStore.addAuthorizedToken(newToken)
+                    val md = java.security.MessageDigest.getInstance("SHA-256")
+                    val bytes = md.digest(newToken.toByteArray())
+                    val hashedToken = bytes.joinToString("") { "%02x".format(it) }
+
+                    pairingStore.addAuthorizedToken(hashedToken)
                     pairingStore.addPairedDevice(
                         com.playbridge.player.model.PairedDevice(
                             id = java.util.UUID.randomUUID().toString(),
                             name = deviceName,
                             deviceUUID = deviceUUID,
-                            token = newToken
+                            token = hashedToken
                         )
                     )
                     newToken
