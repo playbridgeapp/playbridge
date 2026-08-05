@@ -421,7 +421,7 @@ jobs:
 
       # Play Store publishes are independent: one failing must not block the
       # others (continue-on-error), but any failure is re-surfaced at the end.
-      - name: Publish Phone to Play Store (alpha)
+      - name: Publish Phone to Play Store (open testing)
         id: play_phone
         if: needs.build-phone.outputs.skipped == 'false'
         continue-on-error: true
@@ -430,7 +430,8 @@ jobs:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.sender
           releaseFiles: output/phone-release-aab/*.aab
-          tracks: alpha
+          # Play API: beta = Open testing (alpha = Closed testing).
+          tracks: beta
           status: completed
 
       - name: Publish TV Player to Play Store (alpha)
