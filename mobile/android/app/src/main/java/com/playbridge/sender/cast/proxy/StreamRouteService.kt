@@ -3,6 +3,8 @@ package com.playbridge.sender.cast.proxy
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.playbridge.sender.BuildConfig
+import com.playbridge.sender.cast.HlsSegmentHints
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -17,7 +19,6 @@ import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
-import com.playbridge.sender.BuildConfig
 
 data class CastableMedia(
     val url: String,
@@ -71,11 +72,38 @@ class StreamRouteService(
                 throw StreamRouteException("Configure stream proxy in Settings")
         }
 
-        when (mode) {
+        val packaged = when (mode) {
             StreamRouteMode.DIRECT -> packageDirect(media)
             StreamRouteMode.VIA_PHONE -> packageViaPhone(media)
             StreamRouteMode.VIA_PROXY -> packageViaRemote(media, settings)
         }
+        if (mode == StreamRouteMode.DIRECT) packaged else attachCastHlsHints(packaged, media)
+    }
+
+    /**
+     * Attaches pb_hls_format/pb_hls_stream to packaged HLS URLs so Google Cast
+     * loads can tell receivers the real segment container (e.g. MPEG-TS bytes
+     * behind .jpg suffixes). Mirrors Desktop TvCastMediaPreparer.withHlsHints.
+     */
+    private suspend fun attachCastHlsHints(
+        packaged: PackagedMedia,
+        media: CastableMedia,
+    ): PackagedMedia {
+        val contentType = packaged.contentType ?: media.contentType
+        if (!HlsSegmentHints.isHlsContentType(contentType)) return packaged
+        val suppliedBody = media.playlistBody?.takeIf { it.isNotBlank() }
+            ?: media.url.takeIf { it.startsWith("data:") }?.let { decodeDataUri(it) }
+        val evidence = HlsSegmentHints.probe(
+            url = media.url,
+            headers = ensureProxyUpstreamHeaders(media.headers.orEmpty()),
+            suppliedBody = suppliedBody,
+        )
+        val hinted = HlsSegmentHints.withHints(
+            url = packaged.url,
+            format = evidence?.format,
+            streamType = evidence?.streamType ?: HlsSegmentHints.streamTypeForBody(suppliedBody),
+        )
+        return packaged.copy(url = hinted)
     }
 
     private fun packageDirect(media: CastableMedia): PackagedMedia {

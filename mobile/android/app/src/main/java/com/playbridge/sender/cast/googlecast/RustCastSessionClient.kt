@@ -172,6 +172,9 @@ internal class RustCastSessionClient(
         title: String?,
         artUrl: String?,
         startSeconds: Double,
+        streamType: String? = null,
+        hlsSegmentFormat: String? = null,
+        hlsVideoSegmentFormat: String? = null,
     ) {
         submit(
             "load",
@@ -180,7 +183,10 @@ internal class RustCastSessionClient(
                 .putIfNotNull("content_type", contentType)
                 .putIfNotNull("title", title)
                 .putIfNotNull("art_url", artUrl)
-                .put("start_seconds", startSeconds.coerceAtLeast(0.0)),
+                .put("start_seconds", startSeconds.coerceAtLeast(0.0))
+                .putIfNotNull("stream_type", streamType)
+                .putIfNotNull("hls_segment_format", hlsSegmentFormat)
+                .putIfNotNull("hls_video_segment_format", hlsVideoSegmentFormat),
         )
     }
 

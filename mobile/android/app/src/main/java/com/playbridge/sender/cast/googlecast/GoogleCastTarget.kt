@@ -6,8 +6,10 @@ import android.net.NetworkCapabilities
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.net.toUri
+import com.playbridge.sender.BuildConfig
 import com.playbridge.sender.cast.Capability
 import com.playbridge.sender.cast.CastTarget
+import com.playbridge.sender.cast.HlsSegmentHints
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
 import com.playbridge.sender.cast.PlaybackStatus
@@ -279,6 +281,21 @@ class GoogleCastTarget(
         proxyUrl: String,
         media: MediaItem,
     ) {
+        // Hints attached by packaging (pb_hls_format/pb_hls_stream) become Cast
+        // LOAD metadata so receivers accept MPEG-TS bytes behind misleading
+        // segment suffixes (e.g. .jpg on some anime CDNs). Mirrors Desktop.
+        val hlsContainer = HlsSegmentHints.formatFromUrl(proxyUrl)
+        val streamType = HlsSegmentHints.streamTypeFromUrl(proxyUrl)
+        val audioFormat = HlsSegmentHints.googleCastAudioFormat(hlsContainer)
+        val videoFormat = HlsSegmentHints.googleCastVideoFormat(hlsContainer)
+        if (BuildConfig.DEBUG) {
+            val source = if (media.effectiveRoute?.prefsValue == "direct") "direct" else "phone_proxy"
+            Log.d(
+                TAG,
+                "proxied Google Cast media → $proxyUrl (source=$source) " +
+                    "streamType=$streamType audio=$audioFormat video=$videoFormat",
+            )
+        }
         withContext(Dispatchers.IO) {
             connectedClient.load(
                 contentUrl = proxyUrl,
@@ -286,6 +303,9 @@ class GoogleCastTarget(
                 title = media.title,
                 artUrl = media.artUrl,
                 startSeconds = media.startPositionMs / 1000.0,
+                streamType = streamType,
+                hlsSegmentFormat = audioFormat,
+                hlsVideoSegmentFormat = videoFormat,
             )
         }
     }
