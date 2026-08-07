@@ -17,3 +17,7 @@
 **Vulnerability:** The Android TV app's `SystemWebViewEngine` had `allowContentAccess` set to `true`. This is a critical security misconfiguration because it allows the arbitrary web content loaded into the system WebView to access and read local content provider data via `content://` URIs on the device, potentially exposing sensitive application data or internal processes (e.g. `PlayerProcessBridgeProvider`).
 **Learning:** Just as `allowFileAccess` is dangerous, `allowContentAccess` is equally risky when a WebView acts as a browser to navigate to untrusted arbitrary URLs. It unnecessarily expands the attack surface.
 **Prevention:** Explicitly configure `allowContentAccess = false` on all WebViews that handle remote, untrusted content to prevent access to the application's ContentProviders.
+## 2026-07-12 - [Store Token Verifiers on Android TV Receiver]
+**Vulnerability:** SEC-004 / SEC-007 Plaintext receiver token persistence
+**Learning:** Tokens were stored in plaintext on disk (`PairingStore.kt`), risking token theft. Also, UI models like `PairedDevice` exposed plaintext tokens.
+**Prevention:** Store SHA-256 token hashes (verifiers). Manage raw and hashed tokens in separate preference structures (`AUTHORIZED_TOKENS` vs `AUTHORIZED_TOKEN_VERIFIERS`). Migrate legacy tokens securely upon authorization and provide a new schema property (`tokenVerifier`) in the UI object while leaving the legacy one for backward compatibility.

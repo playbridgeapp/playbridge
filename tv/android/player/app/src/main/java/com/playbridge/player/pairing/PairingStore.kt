@@ -26,6 +26,7 @@ class PairingStore(private val context: Context) {
         private val DEVICE_ID = stringPreferencesKey("device_id")
         private val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
         private val AUTHORIZED_TOKENS = stringPreferencesKey("authorized_tokens")
+        private val AUTHORIZED_TOKEN_VERIFIERS = stringPreferencesKey("authorized_token_verifiers")
 
         const val DEFAULT_PORT = com.playbridge.shared.protocol.Config.DEFAULT_PORT
     }
@@ -187,7 +188,13 @@ class PairingStore(private val context: Context) {
      */
     suspend fun forgetDevice(device: PairedDevice) {
         removePairedDevice(device.id)
-        if (device.token.isNotEmpty()) removeAuthorizedToken(device.token)
+        if (device.tokenVerifier.isNotEmpty()) {
+            removeAuthorizedTokenVerifier(device.tokenVerifier)
+        }
+        if (device.token.isNotEmpty()) {
+            removeAuthorizedToken(device.token)
+            removeAuthorizedTokenVerifier(hashToken(device.token))
+        }
     }
 
     /**
@@ -197,10 +204,17 @@ class PairingStore(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[PAIRED_DEVICES] = "[]"
             prefs[AUTHORIZED_TOKENS] = "[]"
+            prefs[AUTHORIZED_TOKEN_VERIFIERS] = "[]"
         }
     }
 
     // ── Per-device token authorization ────────────────────────────────────────
+
+    fun hashToken(token: String): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val hashBytes = digest.digest(token.toByteArray(Charsets.UTF_8))
+        return hashBytes.joinToString("") { "%02x".format(it) }
+    }
 
     private suspend fun getAuthorizedTokenSet(): MutableSet<String> {
         val json = context.dataStore.data.first()[AUTHORIZED_TOKENS] ?: "[]"
@@ -211,8 +225,28 @@ class PairingStore(private val context: Context) {
         }
     }
 
-    suspend fun isTokenAuthorized(token: String): Boolean =
-        getAuthorizedTokenSet().contains(token)
+    private suspend fun getAuthorizedTokenVerifierSet(): MutableSet<String> {
+        val json = context.dataStore.data.first()[AUTHORIZED_TOKEN_VERIFIERS] ?: "[]"
+        return try {
+            protocolJson.decodeFromString<List<String>>(json).toMutableSet()
+        } catch (e: Exception) {
+            mutableSetOf()
+        }
+    }
+
+    suspend fun isTokenAuthorized(token: String): Boolean {
+        val verifier = hashToken(token)
+        if (getAuthorizedTokenVerifierSet().contains(verifier)) return true
+
+        val legacyTokens = getAuthorizedTokenSet()
+        if (legacyTokens.contains(token)) {
+            // Migrate it seamlessly
+            addAuthorizedTokenVerifier(verifier)
+            removeAuthorizedToken(token)
+            return true
+        }
+        return false
+    }
 
     suspend fun addAuthorizedToken(token: String) {
         context.dataStore.edit { prefs ->
@@ -236,6 +270,34 @@ class PairingStore(private val context: Context) {
             } ?: mutableSetOf()
             set.remove(token)
             prefs[AUTHORIZED_TOKENS] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+                set.toList()
+            )
+        }
+    }
+
+    suspend fun addAuthorizedTokenVerifier(verifier: String) {
+        context.dataStore.edit { prefs ->
+            val set = prefs[AUTHORIZED_TOKEN_VERIFIERS]?.let {
+                try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
+                catch (e: Exception) { mutableSetOf() }
+            } ?: mutableSetOf()
+            set.add(verifier)
+            prefs[AUTHORIZED_TOKEN_VERIFIERS] = protocolJson.encodeToString(
+                kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
+                set.toList()
+            )
+        }
+    }
+
+    suspend fun removeAuthorizedTokenVerifier(verifier: String) {
+        context.dataStore.edit { prefs ->
+            val set = prefs[AUTHORIZED_TOKEN_VERIFIERS]?.let {
+                try { protocolJson.decodeFromString<List<String>>(it).toMutableSet() }
+                catch (e: Exception) { mutableSetOf() }
+            } ?: mutableSetOf()
+            set.remove(verifier)
+            prefs[AUTHORIZED_TOKEN_VERIFIERS] = protocolJson.encodeToString(
                 kotlinx.serialization.builtins.ListSerializer(kotlinx.serialization.serializer<String>()),
                 set.toList()
             )
