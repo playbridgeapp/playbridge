@@ -84,11 +84,13 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 - 📱 **Phone App (Android / iOS)**: Browse video sites in the built-in ad-blocked browser, cast movies/episodes from your Stremio library and add-ons, load IPTV playlists, or stream local phone files.
 - 🖥️ **Desktop App (Receiver & Sender)**: Plays incoming casts from phone and extension senders. Also acts as a sender to cast local video files (with drag-and-drop) or stream URLs to TVs.
 - 🧩 **Browser Extension (Firefox & Chrome)**: Detects streams in active browser tabs and casts them to your TV via the Desktop app.
-- 💻 **Rust CLI (`playbridge`)**: Discover receivers and send local files or URLs directly from your terminal:
+- 💻 **Rust CLI (`playbridge`)**: Use a full-screen terminal dashboard to discover receivers, cast local files or URLs, host a browser receiver, or receive casts through `mpv`:
   ```bash
-  playbridge discover               # Discover local network receivers
-  playbridge send video.mp4         # Send a local file or stream URL to a receiver
-  playbridge receiver               # Receive casts using the installed mpv
+  playbridge                         # Open the dashboard
+  playbridge discover                # Open dashboard discovery
+  playbridge send video.mp4          # Open Cast with media preselected
+  playbridge browser video.mp4       # Host and pair a browser receiver
+  playbridge receiver                # Start the mpv receiver in the dashboard
   ```
 
 ## Screenshots

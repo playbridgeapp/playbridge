@@ -77,12 +77,10 @@ mod google_cast;
 mod preferred;
 mod receive;
 mod send;
+mod ui;
 mod update;
 
 use google_cast::run_google_cast;
-use preferred::PreferredDevice;
-use receive::run_receiver;
-use send::{run_browser_send, run_send};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -114,18 +112,23 @@ async fn main() -> ExitCode {
 fn should_check_for_updates(arguments: &[String]) -> bool {
     if !std::io::stderr().is_terminal()
         || env::var_os("PLAYBRIDGE_NO_UPDATE_CHECK").is_some()
+        || arguments.is_empty()
         || arguments
             .iter()
             .any(|value| matches!(value.as_str(), "--json" | "--json-lines"))
     {
         return false;
     }
-    !arguments
-        .iter()
-        .any(|value| matches!(value.as_str(), "--help" | "-h" | "--version" | "-V"))
+    arguments
+        .first()
+        .is_some_and(|command| matches!(command.as_str(), "google-cast" | "googlecast" | "config"))
+        && !arguments
+            .iter()
+            .any(|value| matches!(value.as_str(), "--help" | "-h" | "--version" | "-V"))
 }
 
 async fn run(arguments: Vec<String>) -> Result<(), String> {
+    let (arguments, globals) = GlobalOptions::extract(arguments)?;
     if arguments
         .first()
         .is_some_and(|value| value == "--help" || value == "-h")
@@ -141,21 +144,40 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
         return Ok(());
     }
     let Some(command) = arguments.first() else {
-        return Err("missing command or media target. Usage: playbridge <filename|URL> or playbridge [send|cast|discover|preferred]".into());
+        return run_dashboard(globals.theme.as_deref(), ui::DashboardLaunch::Home).await;
     };
 
     match command.as_str() {
+        "dashboard" | "tui" => {
+            run_dashboard(globals.theme.as_deref(), ui::DashboardLaunch::Home).await
+        }
         "send" | "cast" => {
             let Some(target) = arguments.get(1) else {
                 return Err("missing media file or URL to send".into());
             };
-            run_send(target.clone()).await
+            send::validate_media_target(target)?;
+            run_dashboard(
+                globals.theme.as_deref(),
+                ui::DashboardLaunch::Cast {
+                    source: Some(target.clone()),
+                    browser: false,
+                },
+            )
+            .await
         }
         "browser" => {
             let Some(target) = arguments.get(1) else {
                 return Err("missing media file or URL for browser receiver".into());
             };
-            run_browser_send(target.clone()).await
+            send::validate_media_target(target)?;
+            run_dashboard(
+                globals.theme.as_deref(),
+                ui::DashboardLaunch::Cast {
+                    source: Some(target.clone()),
+                    browser: true,
+                },
+            )
+            .await
         }
         "receiver" | "receive" => {
             if arguments[1..]
@@ -165,7 +187,14 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 println!("{}", usage());
                 return Ok(());
             }
-            run_receiver(&arguments[1..]).await
+            run_dashboard(
+                globals.theme.as_deref(),
+                ui::DashboardLaunch::Receiver {
+                    arguments: arguments[1..].to_vec(),
+                    auto_start: true,
+                },
+            )
+            .await
         }
         "discover" => {
             if arguments[1..]
@@ -176,35 +205,116 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 return Ok(());
             }
             let args = parse_discover_args(&arguments[1..])?;
-            discover(args).await
+            if args.output == OutputFormat::Human {
+                run_dashboard(
+                    globals.theme.as_deref(),
+                    ui::DashboardLaunch::Discover {
+                        protocols: args.protocols,
+                        timeout: args.timeout,
+                    },
+                )
+                .await
+            } else {
+                discover(args).await
+            }
         }
         "google-cast" | "googlecast" => run_google_cast(&arguments[1..]).await,
         "preferred" => {
             if let Some(sub) = arguments.get(1)
                 && sub == "clear"
             {
-                PreferredDevice::clear()?;
-                println!("Cleared preferred device configuration.");
-                return Ok(());
+                return run_dashboard(
+                    globals.theme.as_deref(),
+                    ui::DashboardLaunch::Settings {
+                        clear_preferred: true,
+                    },
+                )
+                .await;
             }
-            if let Some(pref) = PreferredDevice::load() {
-                println!("Preferred Device Configuration:");
-                println!("  Name:     {}", pref.name);
-                println!("  Protocol: {}", pref.protocol);
-                println!("  Address:  {}", pref.address);
-                if let Some(port) = pref.port {
-                    println!("  Port:     {}", port);
-                }
-                println!("  UUID:     {}", pref.uuid);
-            } else {
-                println!("No preferred device configured.");
-            }
-            Ok(())
+            run_dashboard(
+                globals.theme.as_deref(),
+                ui::DashboardLaunch::Settings {
+                    clear_preferred: false,
+                },
+            )
+            .await
         }
+        "config" => match arguments.get(1).map(String::as_str) {
+            Some("path") => {
+                let path = ui::config_path().ok_or("could not determine config path")?;
+                println!("{}", path.display());
+                Ok(())
+            }
+            Some("check") => {
+                ui::validate_config(globals.theme.as_deref())?;
+                println!("PlayBridge CLI configuration is valid.");
+                Ok(())
+            }
+            _ => Err("expected: playbridge config <path|check>".into()),
+        },
         target => {
             // Default to sending the media target directly
-            run_send(target.to_string()).await
+            send::validate_media_target(target)?;
+            run_dashboard(
+                globals.theme.as_deref(),
+                ui::DashboardLaunch::Cast {
+                    source: Some(target.to_owned()),
+                    browser: false,
+                },
+            )
+            .await
         }
+    }
+}
+
+async fn run_dashboard(
+    theme_override: Option<&str>,
+    launch: ui::DashboardLaunch,
+) -> Result<(), String> {
+    if !ui::dashboard_available() {
+        return Err(
+            "the PlayBridge dashboard requires an interactive terminal; use `discover --json` or `discover --json-lines` for machine-readable discovery"
+                .into(),
+        );
+    }
+    ui::run_dashboard(theme_override, launch).await
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct GlobalOptions {
+    theme: Option<String>,
+}
+
+impl GlobalOptions {
+    fn extract(arguments: Vec<String>) -> Result<(Vec<String>, Self), String> {
+        let mut remaining = Vec::with_capacity(arguments.len());
+        let mut options = Self::default();
+        let mut index = 0;
+        while index < arguments.len() {
+            match arguments[index].as_str() {
+                "--no-tui" => {
+                    return Err(
+                        "--no-tui has been removed; PlayBridge interactive workflows now run in the dashboard"
+                            .into(),
+                    );
+                }
+                "--theme" => {
+                    index += 1;
+                    options.theme = Some(
+                        arguments
+                            .get(index)
+                            .ok_or("--theme requires a value")?
+                            .clone(),
+                    );
+                }
+                value if value.starts_with("--theme=") => {
+                    options.theme = Some(value["--theme=".len()..].to_owned());
+                }
+                _ => remaining.push(arguments[index].clone()),
+            }
+            index += 1;
+        }
+        Ok((remaining, options))
     }
 }
 
@@ -372,33 +482,52 @@ fn usage() -> &'static str {
     r#"PlayBridge CLI
 
 Usage:
-  playbridge --version                     Print the CLI version
-  playbridge <filename|URL>              Interactively cast a file/URL with auto-send
-  playbridge send <filename|URL>         Explicit send command
-  playbridge cast <filename|URL>         Explicit cast command
-  playbridge browser <filename|URL>      Cast through a sender-hosted browser receiver
-  playbridge receiver [options]         Run as a PlayBridge receiver using mpv
-  playbridge discover [options]          Discover receivers on your local network
-  playbridge google-cast status [options] Query receiver status without launching
-  playbridge google-cast launch [options] Launch/join the receiver and wait until ready
-  playbridge preferred [clear]           View or clear the saved preferred device
+  playbridge [global options]
+  playbridge [global options] <filename|URL>
+  playbridge [global options] <command> [options]
+
+Dashboard Commands:
+  dashboard                         Open the interactive dashboard
+  <filename|URL>                    Open Cast with a source preselected
+  send|cast <filename|URL>          Open Cast with a source preselected
+  receiver [options]                Open Receiver and start the local mpv receiver
+  discover [options]                Open Discover for human-readable scans
+  browser <filename|URL>            Host and pair a browser receiver in Cast
+  preferred                         Open Settings for the preferred receiver
+  preferred clear                   Open Settings and clear the preferred receiver
+
+Machine Commands:
+  discover --json                   Print one final discovery report
+  discover --json-lines             Stream discovery events
+  google-cast status [options]      Query Google Cast status without launching
+  google-cast launch [options]      Launch or join a Google Cast receiver
+  config <path|check>               Locate or validate UI configuration
+
+Global Options:
+      --theme <name>               Override the configured UI theme
+  -V, --version                    Print the CLI version
+  -h, --help                       Show this help
 
 Discover Options:
-  -p, --protocol <names>  playbridge, native, dlna, roku, dial, googlecast, or all
-                         Repeat the option or use comma-separated names
-  -t, --timeout <seconds> Bounded scan duration (1-300, default 5)
-      --json              Print one final JSON report
-      --json-lines        Stream one JSON event per line
+  -p, --protocol <names>           playbridge, native, dlna, roku, dial, googlecast,
+                                  or all; repeat or use comma-separated names
+  -t, --timeout <seconds>          Bounded scan duration (1-300, default 5)
+      --json                      Print one final JSON report without the dashboard
+      --json-lines                Stream JSON events without the dashboard
+
 Google Cast Options:
-      --device <name>     Select a discovered Google Cast receiver
-      --address <address> Connect directly instead of discovering
-      --port <port>       CastV2 port (default 8009)
-      --app-id <id>       Receiver application ID (or PLAYBRIDGE_GOOGLE_CAST_APP_ID)
-      --json              Print the receiver status as JSON
+      --device <name>             Select a discovered Google Cast receiver
+      --address <address>         Connect directly instead of discovering
+      --port <port>               CastV2 port (default 8009)
+      --app-id <id>               Receiver application ID (or PLAYBRIDGE_GOOGLE_CAST_APP_ID)
+      --json                      Print the receiver status as JSON
+
 Receiver Options:
-      --name <name>       Receiver name advertised on the LAN
-      --port <port>       Preferred WSS port (default 8765; tries 10 ports)
-  -h, --help              Show this help"#
+      --name <name>               Receiver name advertised on the LAN
+      --port <port>               Preferred WSS port (default 8765; tries 10 ports)
+
+Interactive workflows require a terminal and remain inside the dashboard.
+Use JSON discovery or the diagnostic commands above for machine-readable output."#
 }
 
 #[cfg(test)]
@@ -445,5 +574,27 @@ mod tests {
         let json = serde_json::to_value(json_line(&event)).unwrap();
         assert_eq!(json["event"], "started");
         assert_eq!(json["protocol"], "playbridge");
+    }
+
+    #[test]
+    fn extracts_dashboard_global_options_without_reordering_commands() {
+        let (arguments, options) =
+            GlobalOptions::extract(strings(&["--theme", "terminal", "send", "video.mp4"])).unwrap();
+        assert_eq!(arguments, strings(&["send", "video.mp4"]));
+        assert_eq!(options.theme.as_deref(), Some("terminal"));
+    }
+
+    #[test]
+    fn help_distinguishes_dashboard_and_direct_command_routes() {
+        let help = usage();
+        assert!(help.contains("Dashboard Commands:"));
+        assert!(help.contains("Machine Commands:"));
+        assert!(help.contains("Interactive workflows require a terminal"));
+    }
+
+    #[tokio::test]
+    async fn removed_no_tui_option_is_rejected() {
+        let error = run(strings(&["--no-tui"])).await.unwrap_err();
+        assert!(error.contains("has been removed"));
     }
 }

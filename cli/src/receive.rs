@@ -22,6 +22,55 @@ use tokio::{
 
 const DEFAULT_PORT: u16 = 8765;
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ReceiverDashboardCommand {
+    StopHost,
+    PlayPause,
+    SeekRelative(i64),
+    Previous,
+    Next,
+    VolumeDelta(f32),
+    ToggleMute,
+    ToggleLoop,
+    SetSpeed(f32),
+    StopPlayback,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ReceiverPlaybackSnapshot {
+    pub state: String,
+    pub position_ms: u64,
+    pub duration_ms: u64,
+    pub title: Option<String>,
+    pub queue_len: usize,
+    pub current_index: usize,
+    pub volume: f32,
+    pub muted: bool,
+    pub looping: bool,
+    pub speed: f32,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ReceiverUiEvent {
+    HostStarted {
+        name: String,
+        port: u16,
+    },
+    ClientCount {
+        total: usize,
+        authenticated: usize,
+    },
+    PairingRequested {
+        device_name: String,
+        sas_code: String,
+    },
+    Paired {
+        device_name: String,
+    },
+    Playback(ReceiverPlaybackSnapshot),
+    Warning(String),
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct ReceiverState {
     uuid: String,
@@ -42,6 +91,8 @@ struct Mpv {
     ipc_path: Option<PathBuf>,
     state: &'static str,
     title: Option<String>,
+    #[cfg(debug_assertions)]
+    quiet: bool,
 }
 
 struct MpvSnapshot {
@@ -49,10 +100,14 @@ struct MpvSnapshot {
     position_ms: u64,
     duration_ms: u64,
     title: Option<String>,
+    volume: f32,
+    muted: bool,
+    looping: bool,
+    speed: f32,
 }
 
 impl Mpv {
-    fn new() -> Self {
+    fn new(_quiet: bool) -> Self {
         Self {
             child: None,
             #[cfg(not(unix))]
@@ -63,6 +118,8 @@ impl Mpv {
             ipc_path: None,
             state: "idle",
             title: None,
+            #[cfg(debug_assertions)]
+            quiet: _quiet,
         }
     }
 
@@ -187,7 +244,7 @@ impl Mpv {
             .filter_map(|(key, value)| value.as_str().map(|value| format!("{key}: {value}")))
             .collect::<Vec<_>>();
         #[cfg(debug_assertions)]
-        {
+        if !self.quiet {
             eprintln!("[debug][receiver] playback URL: {url}");
             eprintln!(
                 "[debug][receiver] playback headers ({}):",
@@ -303,6 +360,10 @@ impl Mpv {
             position_ms: 0,
             duration_ms: 0,
             title: self.title.clone(),
+            volume: 100.0,
+            muted: false,
+            looping: false,
+            speed: 1.0,
         }
     }
 }
@@ -321,6 +382,10 @@ async fn query_mpv_status(
         (2, "duration"),
         (3, "pause"),
         (4, "idle-active"),
+        (5, "volume"),
+        (6, "mute"),
+        (7, "loop-file"),
+        (8, "speed"),
     ] {
         let mut frame = serde_json::to_vec(&json!({
             "command": ["get_property", property],
@@ -338,8 +403,12 @@ async fn query_mpv_status(
     let mut duration = None;
     let mut paused = None;
     let mut idle = None;
+    let mut volume = None;
+    let mut muted = None;
+    let mut looping = None;
+    let mut speed = None;
     let mut lines = BufReader::new(reader).lines();
-    for _ in 0..4 {
+    for _ in 0..8 {
         let line = tokio::time::timeout(Duration::from_millis(500), lines.next_line())
             .await
             .map_err(|_| "mpv status query timed out".to_owned())?
@@ -351,6 +420,15 @@ async fn query_mpv_status(
             Some(2) => duration = response.get("data").and_then(Value::as_f64),
             Some(3) => paused = response.get("data").and_then(Value::as_bool),
             Some(4) => idle = response.get("data").and_then(Value::as_bool),
+            Some(5) => volume = response.get("data").and_then(Value::as_f64),
+            Some(6) => muted = response.get("data").and_then(Value::as_bool),
+            Some(7) => {
+                looping = response
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .map(|value| value != "no")
+            }
+            Some(8) => speed = response.get("data").and_then(Value::as_f64),
             _ => {}
         }
     }
@@ -367,6 +445,10 @@ async fn query_mpv_status(
         position_ms: seconds_to_millis(position),
         duration_ms: seconds_to_millis(duration),
         title,
+        volume: volume.unwrap_or(100.0) as f32,
+        muted: muted.unwrap_or(false),
+        looping: looping.unwrap_or(false),
+        speed: speed.unwrap_or(1.0) as f32,
     })
 }
 
@@ -377,7 +459,23 @@ fn seconds_to_millis(seconds: Option<f64>) -> u64 {
         .unwrap_or(0)
 }
 
-pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
+/// Dashboard receiver lifecycle. The terminal UI owns the stop action while
+/// this task owns the receiver runtime and mpv process.
+pub(crate) async fn run_receiver_dashboard(
+    arguments: Vec<String>,
+    commands: tokio::sync::mpsc::Receiver<ReceiverDashboardCommand>,
+    events: tokio::sync::mpsc::Sender<ReceiverUiEvent>,
+) -> Result<(), String> {
+    run_receiver_mode(&arguments, Some((commands, events))).await
+}
+
+async fn run_receiver_mode(
+    arguments: &[String],
+    mut dashboard: Option<(
+        tokio::sync::mpsc::Receiver<ReceiverDashboardCommand>,
+        tokio::sync::mpsc::Sender<ReceiverUiEvent>,
+    )>,
+) -> Result<(), String> {
     let mut port = DEFAULT_PORT;
     let mut requested_name = None;
     let mut index = 0;
@@ -429,25 +527,40 @@ pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
     config.advertise = true;
     let host = ReceiverHost::start(config).await?;
     let mut events = host.subscribe();
-    let mut playback = ReceiverPlayback::new();
+    let mut playback = ReceiverPlayback::new(dashboard.is_some());
     let mut status_tick = tokio::time::interval(Duration::from_millis(500));
     status_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    println!(
-        "PlayBridge receiver \"{}\" is ready on port {}.",
-        state.name,
-        host.port()
-    );
-    println!("Playback uses the installed mpv command. Press Ctrl+C to stop.");
+    if let Some((_, events)) = dashboard.as_ref() {
+        let _ = events
+            .send(ReceiverUiEvent::HostStarted {
+                name: state.name.clone(),
+                port: host.port(),
+            })
+            .await;
+    } else {
+        println!(
+            "PlayBridge receiver \"{}\" is ready on port {}.",
+            state.name,
+            host.port()
+        );
+        println!("Playback uses the installed mpv command. Press Ctrl+C to stop.");
+    }
 
     loop {
         tokio::select! {
             event = events.recv() => {
                 match event {
                     Ok(ReceiverEvent::PairingStarted { device_name, .. }) => {
-                        println!("Pairing request from {device_name}.");
+                        if dashboard.is_none() {
+                            println!("Pairing request from {device_name}.");
+                        }
                     }
-                    Ok(ReceiverEvent::PairingRequested { sas_code, .. }) => {
-                        println!("Pairing code: {sas_code}");
+                    Ok(ReceiverEvent::PairingRequested { device_name, sas_code, .. }) => {
+                        if let Some((_, events)) = dashboard.as_ref() {
+                            let _ = events.send(ReceiverUiEvent::PairingRequested { device_name, sas_code }).await;
+                        } else {
+                            println!("Pairing code: {sas_code}");
+                        }
                     }
                     Ok(ReceiverEvent::Paired {
                         device_name,
@@ -456,15 +569,34 @@ pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
                     }) => {
                         state.tokens.insert(token);
                         save_state(&state_path, &state)?;
-                        println!("Sender \"{device_name}\" paired.");
-                    }
-                    Ok(ReceiverEvent::Command { command, .. }) => {
-                        if let Err(error) = handle_command(&host, &mut playback, command).await {
-                            eprintln!("Playback command failed: {error}");
+                        if let Some((_, events)) = dashboard.as_ref() {
+                            let _ = events.send(ReceiverUiEvent::Paired { device_name }).await;
+                        } else {
+                            println!("Sender \"{device_name}\" paired.");
                         }
                     }
-                    Ok(ReceiverEvent::Error { message, .. }) => {
-                        eprintln!("receiver connection ended: {message}");
+                    Ok(ReceiverEvent::ClientCount { total, authenticated }) => {
+                        if let Some((_, events)) = dashboard.as_ref() {
+                            let _ = events.send(ReceiverUiEvent::ClientCount { total, authenticated }).await;
+                        }
+                    }
+                    Ok(ReceiverEvent::Command { command, .. }) => {
+                        if let Err(error) = handle_command(&host, &mut playback, command, dashboard.is_some()).await {
+                            if let Some((_, events)) = dashboard.as_ref() {
+                                let _ = events.send(ReceiverUiEvent::Warning(error)).await;
+                            } else {
+                                eprintln!("Playback command failed: {error}");
+                            }
+                        }
+                    }
+                    Ok(ReceiverEvent::Error { connection_id, message }) => {
+                        if let Some((_, events)) = dashboard.as_ref() {
+                            if !is_routine_handshake_rejection(connection_id, &message) {
+                                let _ = events.send(ReceiverUiEvent::Warning(message)).await;
+                            }
+                        } else {
+                            eprintln!("receiver connection ended: {message}");
+                        }
                     }
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -473,12 +605,26 @@ pub async fn run_receiver(arguments: &[String]) -> Result<(), String> {
             }
             _ = status_tick.tick() => {
                 broadcast_status(&host, &playback).await;
+                emit_receiver_playback(&playback, dashboard.as_ref().map(|(_, events)| events)).await;
             }
-            _ = tokio::signal::ctrl_c() => {
-                playback.mpv.stop_process().await;
-                host.shutdown().await;
-                return Ok(());
-            }
+            command = async {
+                match dashboard.as_mut() {
+                    Some((commands, _)) => commands.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match command {
+                Some(ReceiverDashboardCommand::StopHost) | None => break,
+                Some(command) => {
+                    let result = handle_dashboard_receiver_command(&host, &mut playback, command).await;
+                    if let Err(error) = result
+                        && let Some((_, events)) = dashboard.as_ref()
+                    {
+                        let _ = events.send(ReceiverUiEvent::Warning(error)).await;
+                    }
+                    emit_receiver_playback(&playback, dashboard.as_ref().map(|(_, events)| events)).await;
+                }
+            },
+            _ = tokio::signal::ctrl_c() => break,
         }
     }
     playback.mpv.stop_process().await;
@@ -493,19 +639,126 @@ struct ReceiverPlayback {
 }
 
 impl ReceiverPlayback {
-    fn new() -> Self {
+    fn new(quiet: bool) -> Self {
         Self {
-            mpv: Mpv::new(),
+            mpv: Mpv::new(quiet),
             queue: Vec::new(),
             current_index: 0,
         }
     }
 }
 
+async fn emit_receiver_playback(
+    playback: &ReceiverPlayback,
+    events: Option<&tokio::sync::mpsc::Sender<ReceiverUiEvent>>,
+) {
+    let Some(events) = events else { return };
+    let snapshot = playback.mpv.snapshot().await;
+    let _ = events.try_send(ReceiverUiEvent::Playback(ReceiverPlaybackSnapshot {
+        state: snapshot.state,
+        position_ms: snapshot.position_ms,
+        duration_ms: snapshot.duration_ms,
+        title: snapshot.title,
+        queue_len: playback.queue.len(),
+        current_index: playback.current_index,
+        volume: snapshot.volume,
+        muted: snapshot.muted,
+        looping: snapshot.looping,
+        speed: snapshot.speed,
+    }));
+}
+
+async fn handle_dashboard_receiver_command(
+    host: &ReceiverHost,
+    playback: &mut ReceiverPlayback,
+    command: ReceiverDashboardCommand,
+) -> Result<(), String> {
+    match command {
+        ReceiverDashboardCommand::StopHost => return Ok(()),
+        ReceiverDashboardCommand::PlayPause => playback.mpv.control("toggle").await?,
+        ReceiverDashboardCommand::SeekRelative(seconds) => {
+            playback
+                .mpv
+                .control(if seconds < 0 {
+                    "seek_back"
+                } else {
+                    "seek_forward"
+                })
+                .await?;
+        }
+        ReceiverDashboardCommand::Previous | ReceiverDashboardCommand::Next => {
+            if playback.queue.is_empty() {
+                return Err("The receiver queue is empty".into());
+            }
+            playback.current_index = match command {
+                ReceiverDashboardCommand::Previous => playback.current_index.saturating_sub(1),
+                ReceiverDashboardCommand::Next => {
+                    (playback.current_index + 1).min(playback.queue.len() - 1)
+                }
+                _ => unreachable!(),
+            };
+            playback
+                .mpv
+                .load(&playback.queue[playback.current_index])
+                .await?;
+            broadcast_playlist(host, playback);
+        }
+        ReceiverDashboardCommand::VolumeDelta(delta) => {
+            let amount = delta * 100.0;
+            playback
+                .mpv
+                .command(
+                    vec![json!("add"), json!("volume"), json!(amount)],
+                    format!("add volume {amount}"),
+                )
+                .await?;
+        }
+        ReceiverDashboardCommand::ToggleMute => {
+            playback
+                .mpv
+                .command(vec![json!("cycle"), json!("mute")], "cycle mute".into())
+                .await?;
+        }
+        ReceiverDashboardCommand::ToggleLoop => {
+            playback
+                .mpv
+                .command(
+                    vec![
+                        json!("cycle-values"),
+                        json!("loop-file"),
+                        json!("inf"),
+                        json!("no"),
+                    ],
+                    "cycle-values loop-file inf no".into(),
+                )
+                .await?;
+        }
+        ReceiverDashboardCommand::SetSpeed(speed) => {
+            playback
+                .mpv
+                .command(
+                    vec![json!("set_property"), json!("speed"), json!(speed)],
+                    format!("set speed {speed}"),
+                )
+                .await?;
+        }
+        ReceiverDashboardCommand::StopPlayback => {
+            playback.mpv.control("stop").await?;
+            playback.queue.clear();
+            playback.current_index = 0;
+            host.broadcast(json!({"type":"context","active":"idle"}));
+            broadcast_playlist(host, playback);
+        }
+    }
+    broadcast_status(host, playback).await;
+    Ok(())
+}
+
 async fn handle_command(
     host: &ReceiverHost,
     playback: &mut ReceiverPlayback,
     command: ReceiverCommand,
+    quiet: bool,
 ) -> Result<(), String> {
     match command {
         ReceiverCommand::ContextQuery => {
@@ -536,12 +789,16 @@ async fn handle_command(
                 .get("title")
                 .and_then(Value::as_str)
                 .unwrap_or("untitled media");
-            println!(
-                "Received playlist ({} item(s)); playing \"{title}\".",
-                items.len()
-            );
+            if !quiet {
+                println!(
+                    "Received playlist ({} item(s)); playing \"{title}\".",
+                    items.len()
+                );
+            }
             playback.mpv.load(item).await?;
-            println!("Sent playback request to mpv.");
+            if !quiet {
+                println!("Sent playback request to mpv.");
+            }
             broadcast_status(host, playback).await;
             broadcast_playlist(host, playback);
         }
@@ -720,6 +977,14 @@ fn host_name() -> String {
         .unwrap_or_else(|_| "PlayBridge CLI".into())
 }
 
+fn is_routine_handshake_rejection(connection_id: Option<u64>, message: &str) -> bool {
+    connection_id.is_some()
+        && matches!(
+            message,
+            "TLS handshake failed" | "TLS handshake timed out" | "WebSocket handshake failed"
+        )
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -728,6 +993,30 @@ mod tests {
         assert_eq!(super::seconds_to_millis(Some(f64::NAN)), 0);
         assert_eq!(super::seconds_to_millis(Some(-1.0)), 0);
         assert_eq!(super::seconds_to_millis(None), 0);
+    }
+
+    #[test]
+    fn dashboard_ignores_only_per_connection_handshake_noise() {
+        assert!(super::is_routine_handshake_rejection(
+            Some(7),
+            "TLS handshake failed"
+        ));
+        assert!(super::is_routine_handshake_rejection(
+            Some(8),
+            "TLS handshake timed out"
+        ));
+        assert!(super::is_routine_handshake_rejection(
+            Some(9),
+            "WebSocket handshake failed"
+        ));
+        assert!(!super::is_routine_handshake_rejection(
+            None,
+            "TLS handshake failed"
+        ));
+        assert!(!super::is_routine_handshake_rejection(
+            Some(10),
+            "receiver listener failed"
+        ));
     }
 
     #[cfg(unix)]
@@ -760,6 +1049,10 @@ mod tests {
                 (2, serde_json::json!(100.0)),
                 (3, serde_json::json!(false)),
                 (4, serde_json::json!(false)),
+                (5, serde_json::json!(75.0)),
+                (6, serde_json::json!(true)),
+                (7, serde_json::json!("inf")),
+                (8, serde_json::json!(1.25)),
             ] {
                 lines.next_line().await.unwrap().unwrap();
                 writer
@@ -787,5 +1080,9 @@ mod tests {
         assert_eq!(snapshot.position_ms, 12_500);
         assert_eq!(snapshot.duration_ms, 100_000);
         assert_eq!(snapshot.title.as_deref(), Some("Video"));
+        assert_eq!(snapshot.volume, 75.0);
+        assert!(snapshot.muted);
+        assert!(snapshot.looping);
+        assert_eq!(snapshot.speed, 1.25);
     }
 }

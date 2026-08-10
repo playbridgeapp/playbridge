@@ -16,6 +16,14 @@ description: Work on the PlayBridge Rust casting core, reusable receiver runtime
 - Keep command-line behavior and the external-mpv playback adapter in `cli/`; do not duplicate receiver networking there.
 - Coordinate FFI or protocol model changes with platform specialist owners (`playbridge-android`, `playbridge-apple`, `playbridge-desktop-proxy`).
 
+## Preserve the CLI dashboard model
+
+- Route every human-oriented CLI workflow through the full-screen dashboard. This includes bare invocation, media paths, `send`, `cast`, human-readable `discover`, `browser`, `receiver`, and preferred-device management.
+- Keep plain terminal output limited to explicit machine or diagnostic surfaces such as help/version, JSON discovery, configuration diagnostics, and low-level Google Cast diagnostics.
+- The dashboard owns terminal setup, restoration, input, overlays, and notices. Background cast, browser-host, discovery, and receiver tasks must report through typed channels and must not print directly to stdout or stderr while the dashboard is active.
+- Scope asynchronous cast and pairing events to their session generation. On successful connection, cancellation, replacement, or teardown, clear stale pairing state and overlays before navigating or accepting more input.
+- Preserve independent navigation and content focus. A retained cursor may identify the next content action, but only the focused pane should render an active selection.
+
 ## Work safely
 
 1. Follow the root `AGENTS.md` rules and preserve unrelated working-tree edits.
