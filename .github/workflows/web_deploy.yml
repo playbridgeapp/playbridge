@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'web/site/**'
+      - 'cli/install.sh'
+      - 'cli/install.ps1'
       - 'browser-receiver-rust/web/**'
       - '.github/workflows/web_deploy.yml'
   workflow_dispatch:

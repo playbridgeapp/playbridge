@@ -13,8 +13,10 @@ export const SITE = {
   versionLabel: 'Alpha'
 };
 
-export const CLI_INSTALL_CMD =
-  'curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh';
+export const CLI_INSTALL_COMMANDS = {
+  unix: 'curl -fsSL https://playbridge.app/install.sh | sh',
+  windows: 'irm https://playbridge.app/install.ps1 | iex'
+} as const;
 
 /** GitHub release body markers used in ?q= search links (see docs/release.md). */
 export const RELEASE_MARKERS = {
@@ -180,6 +182,7 @@ export const FEATURES: FeatureItem[] = [
 ];
 
 export type InstallRole = 'sender' | 'receiver';
+export type CliInstallPlatform = keyof typeof CLI_INSTALL_COMMANDS;
 
 export type InstallIcon =
   | 'android'
@@ -201,8 +204,8 @@ export type InstallDetail = {
   notice?: { badge: string; text: string };
   /** Use DESKTOP_PLATFORMS for OS-specific download steps. */
   desktop?: boolean;
-  /** Shell one-liner shown in a copyable block (CLI). */
-  installCommand?: string;
+  /** OS-specific one-liners shown in a copyable block (CLI). */
+  installCommands?: Record<CliInstallPlatform, string>;
   /** Optional plugin callout (Android TV GeckoView). */
   plugin?: {
     title: string;
@@ -385,7 +388,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     sender: {
       title: 'PlayBridge CLI (sender)',
       steps: [
-        ['Install', 'macOS & Linux: run the install script below (adds playbridge to ~/.local/bin).'],
+        ['Install', 'Choose your operating system above and run the verified installer command.'],
         [
           'Discover',
           'playbridge discover — list TVs, Desktop, and other receivers on your network.'
@@ -395,12 +398,12 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
           'playbridge send video.mp4 (or a stream URL) to the device you pick.'
         ],
         [
-          'Windows / archives',
-          `Download multi-arch packages from GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
+          'Manual archives',
+          `Verified multi-arch packages remain available on GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
         ]
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.cli),
-      installCommand: CLI_INSTALL_CMD,
+      installCommands: CLI_INSTALL_COMMANDS,
       meta: [
         ['role', 'sender'],
         ['binary', 'playbridge'],
@@ -414,7 +417,7 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     receiver: {
       title: 'PlayBridge CLI (receiver)',
       steps: [
-        ['Install', 'macOS & Linux: run the install script below (adds playbridge to ~/.local/bin).'],
+        ['Install', 'Choose your operating system above and run the verified installer command.'],
         [
           'Install mpv',
           'Receiver mode needs mpv on PATH (brew install mpv or your distro package).'
@@ -424,12 +427,12 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
           'playbridge receiver — approve senders and play incoming casts via mpv.'
         ],
         [
-          'Windows / archives',
-          `Download multi-arch packages from GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
+          'Manual archives',
+          `Verified multi-arch packages remain available on GitHub Releases (marker ${RELEASE_MARKERS.cli}).`
         ]
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.cli),
-      installCommand: CLI_INSTALL_CMD,
+      installCommands: CLI_INSTALL_COMMANDS,
       meta: [
         ['role', 'receiver'],
         ['binary', 'playbridge'],

@@ -3,6 +3,7 @@
   import {
     type InstallRole,
     type InstallProduct,
+    type CliInstallPlatform,
     productsForRole,
     detailFor,
     productIdFromHash,
@@ -20,6 +21,7 @@
   const products = $derived(productsForRole(role));
   let activeId = $state('');
   let activeDesktopOS = $state<'macos' | 'windows' | 'linux'>('macos');
+  let activeCliPlatform = $state<CliInstallPlatform>('unix');
   let activeBrowser = $state<'chrome' | 'firefox'>('chrome');
   let copyState = $state<'idle' | 'copied' | 'failed'>('idle');
   let panelEl = $state<HTMLElement | null>(null);
@@ -42,9 +44,16 @@
 
   onMount(() => {
     const ua = window.navigator.userAgent.toLowerCase();
-    if (ua.includes('win')) activeDesktopOS = 'windows';
-    else if (ua.includes('linux')) activeDesktopOS = 'linux';
-    else activeDesktopOS = 'macos';
+    if (ua.includes('win')) {
+      activeDesktopOS = 'windows';
+      activeCliPlatform = 'windows';
+    } else if (ua.includes('linux')) {
+      activeDesktopOS = 'linux';
+      activeCliPlatform = 'unix';
+    } else {
+      activeDesktopOS = 'macos';
+      activeCliPlatform = 'unix';
+    }
     if (ua.includes('firefox')) activeBrowser = 'firefox';
 
     applyHash(true);
@@ -77,6 +86,10 @@
 
   const isExtension = $derived(product?.id === 'extension');
   const isDesktop = $derived(!!detail?.desktop);
+  const isCliInstaller = $derived(product?.id === 'cli' && !!detail?.installCommands);
+  const cliInstallCommand = $derived(
+    isCliInstaller ? (detail?.installCommands?.[activeCliPlatform] ?? '') : ''
+  );
 
   const title = $derived(
     isDesktop ? desktopTab.title : isExtension ? browserTab.title : (detail?.title ?? '')
@@ -244,6 +257,33 @@
           </div>
         {/if}
 
+        {#if isCliInstaller}
+          <div class="installer__sub-selector" role="group" aria-label="CLI operating system">
+            <button
+              type="button"
+              class="sub-tab"
+              class:sub-tab--active={activeCliPlatform === 'unix'}
+              onclick={() => {
+                activeCliPlatform = 'unix';
+                copyState = 'idle';
+              }}
+            >
+              <Icon name="terminal" size={12} /> macOS &amp; Linux
+            </button>
+            <button
+              type="button"
+              class="sub-tab"
+              class:sub-tab--active={activeCliPlatform === 'windows'}
+              onclick={() => {
+                activeCliPlatform = 'windows';
+                copyState = 'idle';
+              }}
+            >
+              <Icon name="windows" size={12} /> Windows
+            </button>
+          </div>
+        {/if}
+
         {#if detail.notice}
           <div class="notice-box">
             <span class="notice-badge">{detail.notice.badge}</span>
@@ -251,14 +291,16 @@
           </div>
         {/if}
 
-        {#if detail.installCommand}
+        {#if cliInstallCommand}
           <div class="code-block">
             <div class="code-block__bar">
-              <span class="code-block__label">Install (macOS &amp; Linux)</span>
+              <span class="code-block__label">
+                Install ({activeCliPlatform === 'windows' ? 'Windows PowerShell' : 'macOS & Linux'})
+              </span>
               <button
                 type="button"
                 class="code-block__copy"
-                onclick={() => copyInstallCommand(detail.installCommand!)}
+                onclick={() => copyInstallCommand(cliInstallCommand)}
               >
                 {#if copyState === 'copied'}
                   Copied
@@ -269,7 +311,7 @@
                 {/if}
               </button>
             </div>
-            <pre class="code-block__pre"><code>{detail.installCommand}</code></pre>
+            <pre class="code-block__pre"><code>{cliInstallCommand}</code></pre>
           </div>
         {/if}
 

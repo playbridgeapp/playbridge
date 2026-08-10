@@ -33,6 +33,8 @@ jobs:
           filters: |
             relevant:
               - 'web/site/**'
+              - 'cli/install.sh'
+              - 'cli/install.ps1'
               - 'browser-receiver-rust/web/**'
               - 'browser-receiver-rust/src/**'
               - 'browser-receiver-rust/Cargo.toml'
