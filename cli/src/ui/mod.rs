@@ -208,7 +208,6 @@ struct App {
     cast_target: Option<String>,
     remote: RemoteUiState,
     pairing_device: Option<String>,
-    pairing_code: Option<String>,
     receiver_active: bool,
     receiver_state: ReceiverUiState,
     receiver_arguments: Vec<String>,
@@ -248,7 +247,6 @@ impl App {
             cast_target: None,
             remote: RemoteUiState::default(),
             pairing_device: None,
-            pairing_code: None,
             receiver_active: false,
             receiver_state: ReceiverUiState::default(),
             receiver_arguments: Vec::new(),
@@ -599,7 +597,6 @@ pub(crate) async fn run_dashboard(
                             app.cast_generation = app.cast_generation.wrapping_add(1);
                             app.remote = RemoteUiState::default();
                             app.pairing_device = None;
-                            app.pairing_code = None;
                             let generation = app.cast_generation;
                             let (command_tx, command_rx) = tokio::sync::mpsc::channel(16);
                             let (event_tx, event_rx) = tokio::sync::mpsc::channel(32);
@@ -771,7 +768,6 @@ pub(crate) async fn run_dashboard(
                     app.cast_target = None;
                     app.remote = RemoteUiState::default();
                     app.pairing_device = None;
-                    app.pairing_code = None;
                     app.browser_urls.clear();
                     if matches!(
                         app.overlay,
@@ -976,17 +972,16 @@ fn apply_cast_event(app: &mut App, event: crate::send::CastEvent) {
                 "Enter the six-digit code shown by the browser receiver",
             );
         }
-        crate::send::CastEvent::PairingCode {
+        crate::send::CastEvent::PairingCodeRequested {
             generation,
             device_name,
-            code,
         } if generation == app.cast_generation => {
             app.pairing_device = Some(device_name);
-            app.pairing_code = Some(code);
+            app.input.clear();
             app.overlay = Overlay::Pairing;
             app.notice(
                 NoticeLevel::Info,
-                "Compare the pairing code with the receiver",
+                "Enter the six-digit code shown by the receiver",
             );
         }
         crate::send::CastEvent::PairingCompleted {
@@ -994,7 +989,6 @@ fn apply_cast_event(app: &mut App, event: crate::send::CastEvent) {
             device_name,
         } if generation == app.cast_generation => {
             app.pairing_device = None;
-            app.pairing_code = None;
             app.input.clear();
             if app.overlay == Overlay::BrowserPairing {
                 app.overlay = Overlay::None;
@@ -1013,7 +1007,6 @@ fn apply_cast_event(app: &mut App, event: crate::send::CastEvent) {
             app.remote.capabilities = capabilities;
             app.remote.snapshot = Some(snapshot);
             app.pairing_device = None;
-            app.pairing_code = None;
             app.input.clear();
             app.overlay = Overlay::None;
             app.navigate_to(Section::Remote);
@@ -1080,7 +1073,7 @@ fn handle_event(app: &mut App, event: Event) -> Result<Option<DashboardAction>, 
             app.input.push_str(text.trim());
             Ok(None)
         }
-        Event::Paste(text) if matches!(app.overlay, Overlay::BrowserPairing) => {
+        Event::Paste(text) if matches!(app.overlay, Overlay::Pairing | Overlay::BrowserPairing) => {
             for character in text.chars().filter(|character| character.is_ascii_digit()) {
                 if app.input.len() < 6 {
                     app.input.push(character);
@@ -1209,16 +1202,28 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<Option<DashboardAction>, S
         }
         Overlay::Pairing => {
             return match key.code {
-                KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
-                    app.overlay = Overlay::None;
+                KeyCode::Char(character) if character.is_ascii_digit() && app.input.len() < 6 => {
+                    app.input.push(character);
+                    Ok(None)
+                }
+                KeyCode::Backspace => {
+                    app.input.pop();
+                    Ok(None)
+                }
+                KeyCode::Enter if app.input.len() == 6 => {
+                    let code = std::mem::take(&mut app.input);
                     Ok(Some(DashboardAction::CastCommand(
-                        crate::send::CastCommand::ConfirmPairing,
+                        crate::send::CastCommand::SubmitPairingCode(code),
                     )))
                 }
-                KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+                KeyCode::Enter => {
+                    app.notice(NoticeLevel::Warning, "Enter the complete six-digit code");
+                    Ok(None)
+                }
+                KeyCode::Esc => {
                     app.overlay = Overlay::None;
                     app.pairing_device = None;
-                    app.pairing_code = None;
+                    app.input.clear();
                     Ok(Some(DashboardAction::CastCommand(
                         crate::send::CastCommand::CancelPairing,
                     )))
@@ -2525,16 +2530,19 @@ fn render_pairing(frame: &mut Frame<'_>, app: &App) {
     let area = centered(frame.area(), 58, 34);
     frame.render_widget(Clear, area);
     let device = app.pairing_device.as_deref().unwrap_or("receiver");
-    let code = app.pairing_code.as_deref().unwrap_or("------");
+    let code = format!("{:_<6}", app.input);
     frame.render_widget(
         Paragraph::new(vec![
             Line::styled(format!("Pair with {device}"), app.theme.title()),
             Line::raw(""),
-            Line::raw("Confirm that this code matches the receiver:"),
+            Line::raw("Enter the six-digit code shown by the receiver:"),
             Line::raw(""),
             Line::styled(format!("        {code}"), app.theme.selected()),
             Line::raw(""),
-            Line::styled("Enter/Y  Codes match     Esc/N  Cancel", app.theme.muted()),
+            Line::styled(
+                "Enter verify   Backspace edit   Esc cancel",
+                app.theme.muted(),
+            ),
         ])
         .block(panel_block(app, "Secure pairing"))
         .alignment(Alignment::Center)
@@ -3206,41 +3214,41 @@ mod tests {
     }
 
     #[test]
-    fn pairing_event_shows_the_sas_code_inside_the_dashboard() {
+    fn pairing_event_prompts_for_the_receiver_sas_code() {
         let mut app = App::new(UiConfig::default()).unwrap();
         app.cast_generation = 11;
         app.cast_active = true;
         apply_cast_event(
             &mut app,
-            crate::send::CastEvent::PairingCode {
+            crate::send::CastEvent::PairingCodeRequested {
                 generation: 11,
                 device_name: "Living room TV".into(),
-                code: "482913".into(),
             },
         );
 
         assert_eq!(app.overlay, Overlay::Pairing);
         let output = render_app(100, 30, app);
         assert!(output.contains("Pair with Living room TV"));
-        assert!(output.contains("482913"));
-        assert!(output.contains("Codes match"));
+        assert!(output.contains("______"));
+        assert!(output.contains("shown by the receiver"));
     }
 
     #[test]
-    fn pairing_confirmation_is_returned_to_the_cast_actor() {
+    fn pairing_code_is_returned_to_the_cast_actor() {
         let mut app = App::new(UiConfig::default()).unwrap();
         app.overlay = Overlay::Pairing;
-        app.pairing_code = Some("123456".into());
+        app.input = "123456".into();
 
         let action =
             handle_key(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)).unwrap();
         assert!(matches!(
             action,
             Some(DashboardAction::CastCommand(
-                crate::send::CastCommand::ConfirmPairing
-            ))
+                crate::send::CastCommand::SubmitPairingCode(code)
+            )) if code == "123456"
         ));
-        assert_eq!(app.overlay, Overlay::None);
+        assert_eq!(app.overlay, Overlay::Pairing);
+        assert!(app.input.is_empty());
     }
 
     #[test]

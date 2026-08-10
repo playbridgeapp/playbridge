@@ -49,10 +49,9 @@ pub(crate) enum CastEvent {
         generation: u64,
         device_name: String,
     },
-    PairingCode {
+    PairingCodeRequested {
         generation: u64,
         device_name: String,
-        code: String,
     },
     PairingCompleted {
         generation: u64,
@@ -76,7 +75,7 @@ pub(crate) enum CastEvent {
 #[derive(Debug, Clone)]
 pub(crate) enum CastCommand {
     SubmitBrowserPairing(String),
-    ConfirmPairing,
+    SubmitPairingCode(String),
     CancelPairing,
     PlayPause,
     SeekRelative(i64),
@@ -181,7 +180,7 @@ pub(crate) async fn run_dashboard_cast(
             command = commands.recv() => {
                 match command {
                     Some(CastCommand::Stop) | None => break,
-                    Some(CastCommand::ConfirmPairing | CastCommand::CancelPairing | CastCommand::SubmitBrowserPairing(_)) => {}
+                    Some(CastCommand::SubmitPairingCode(_) | CastCommand::CancelPairing | CastCommand::SubmitBrowserPairing(_)) => {}
                     Some(command) => {
                         if let Err(message) = dashboard_control(&mut control, command, &mut snapshot).await {
                             let _ = events.send(CastEvent::Warning { generation, message }).await;
@@ -348,7 +347,7 @@ pub(crate) async fn run_dashboard_browser_cast(
         tokio::select! {
             command = commands.recv() => match command {
                 Some(CastCommand::Stop) | None => break,
-                Some(CastCommand::ConfirmPairing | CastCommand::CancelPairing | CastCommand::SubmitBrowserPairing(_)) => {}
+                Some(CastCommand::SubmitPairingCode(_) | CastCommand::CancelPairing | CastCommand::SubmitBrowserPairing(_)) => {}
                 Some(command) => {
                     if let Err(message) = dashboard_control(&mut control, command, &mut snapshot).await {
                         let _ = events.send(CastEvent::Warning { generation, message }).await;
@@ -634,7 +633,7 @@ async fn dashboard_control(
     let unsupported = || Err("This receiver does not support that control".into());
     match command {
         CastCommand::Stop
-        | CastCommand::ConfirmPairing
+        | CastCommand::SubmitPairingCode(_)
         | CastCommand::CancelPairing
         | CastCommand::SubmitBrowserPairing(_) => Ok(()),
         CastCommand::PlayPause => {
@@ -1038,10 +1037,9 @@ async fn cast_to_playbridge_dashboard(
                     .await
                     .map_err(|error| error.to_string())?;
                 events
-                    .send(CastEvent::PairingCode {
+                    .send(CastEvent::PairingCodeRequested {
                         generation,
                         device_name: device_name.to_owned(),
-                        code: sas.clone(),
                     })
                     .await
                     .map_err(|_| "dashboard closed during pairing".to_owned())?;
@@ -1049,15 +1047,22 @@ async fn cast_to_playbridge_dashboard(
                 loop {
                     tokio::select! {
                         command = commands.recv() => match command {
-                            Some(CastCommand::ConfirmPairing) => {
-                                let confirmation = pairing
-                                    .confirmation(&sas, &sas)
-                                    .map_err(|error| error.to_string())?;
-                                socket
-                                    .send(&confirmation)
-                                    .await
-                                    .map_err(|error| error.to_string())?;
-                                break;
+                            Some(CastCommand::SubmitPairingCode(code)) => {
+                                match pairing.confirmation(&code, &sas) {
+                                    Ok(confirmation) => {
+                                        socket
+                                            .send(&confirmation)
+                                            .await
+                                            .map_err(|error| error.to_string())?;
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        let _ = events.send(CastEvent::Warning {
+                                            generation,
+                                            message: "The code does not match the receiver. Try again.".into(),
+                                        }).await;
+                                    }
+                                }
                             }
                             Some(CastCommand::CancelPairing | CastCommand::Stop) | None => {
                                 let _ = socket.close().await;
