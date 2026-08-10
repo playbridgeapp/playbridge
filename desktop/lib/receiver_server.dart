@@ -8,6 +8,7 @@ import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
 import 'protocol.dart';
+import 'screen_mirror_receiver.dart';
 import 'system_volume.dart';
 import 'extension_request_debug_log.dart';
 
@@ -47,7 +48,11 @@ class ReceiverServer extends ChangeNotifier {
     this.onPromptStop,
     this.onPlaybackActivity,
     this.onNewMedia,
-  });
+    this.onScreenMirrorStarted,
+  }) {
+    screenMirror = ScreenMirrorReceiver(send: _sendScreenMirrorMessage);
+    screenMirror.addListener(_handleScreenMirrorChange);
+  }
 
   final PlayerController player;
   final PairingStore store;
@@ -56,6 +61,8 @@ class ReceiverServer extends ChangeNotifier {
   final VoidCallback? onPromptStop;
   final VoidCallback? onPlaybackActivity;
   final VoidCallback? onNewMedia;
+  final VoidCallback? onScreenMirrorStarted;
+  late final ScreenMirrorReceiver screenMirror;
 
   rust.ReceiverRuntime? _runtime;
   StreamSubscription<Map<String, Object?>>? _eventsSubscription;
@@ -67,6 +74,7 @@ class ReceiverServer extends ChangeNotifier {
   PendingPairingRequest? _pendingPairingRequest;
   int? _wssPort;
   String? tlsError;
+  bool _mirrorWasActive = false;
 
   int? get wssPort => _wssPort;
   int get connectedClientCount => _connectedClientCount;
@@ -95,6 +103,7 @@ class ReceiverServer extends ChangeNotifier {
           for (final device in store.pairedDevices) device.token,
         ],
         players: const ['internal_mpv'],
+        screenMirrorWebRtc: true,
       ),
     );
     _runtime = runtime;
@@ -138,8 +147,17 @@ class ReceiverServer extends ChangeNotifier {
         if (_connectedClientCount == 0) {
           _pairingInProgress = false;
           _pendingPairingRequest = null;
+          unawaited(screenMirror.stopForReplacement(
+            reason: 'sender_disconnected',
+            notifySender: false,
+          ));
         }
         notifyListeners();
+      case 'client_disconnected':
+        final connectionId = event['connection_id'];
+        if (connectionId is int) {
+          screenMirror.connectionClosed(connectionId);
+        }
       case 'pairing_started':
         _pairingInProgress = true;
         notifyListeners();
@@ -168,7 +186,10 @@ class ReceiverServer extends ChangeNotifier {
         unawaited(store.updateLastConnectedDigest(digest));
       case 'command':
         final raw = event['raw'];
-        if (raw is String) _handleCommand(parseCommand(raw));
+        final connectionId = event['connection_id'];
+        if (raw is String && connectionId is int) {
+          _handleCommand(parseCommand(raw), connectionId);
+        }
       case 'error':
         debugPrint('[server] Rust receiver: ${event['message']}');
       case 'finished':
@@ -176,6 +197,10 @@ class ReceiverServer extends ChangeNotifier {
         _authedClientCount = 0;
         _pairingInProgress = false;
         _pendingPairingRequest = null;
+        unawaited(screenMirror.stopForReplacement(
+          reason: 'receiver_stopped',
+          notifySender: false,
+        ));
         notifyListeners();
     }
   }
@@ -189,6 +214,8 @@ class ReceiverServer extends ChangeNotifier {
     player.queueChanges.removeListener(_broadcastPlaylistStatus);
     await _eventsSubscription?.cancel();
     _eventsSubscription = null;
+    screenMirror.removeListener(_handleScreenMirrorChange);
+    await screenMirror.disposeReceiver();
     _runtime?.dispose();
     _runtime = null;
     _wssPort = null;
@@ -217,17 +244,24 @@ class ReceiverServer extends ChangeNotifier {
     _runtime?.broadcast(const {'type': 'context', 'active': 'idle'});
   }
 
-  void _handleCommand(Command cmd) {
+  void _handleCommand(Command cmd, int connectionId) {
     switch (cmd) {
       case ContextQueryCmd():
         _runtime?.broadcast({
           'type': 'context',
-          'active': player.state == 'idle' ? 'idle' : 'player',
+          'active': screenMirror.isActive
+              ? 'screen_mirror'
+              : player.state == 'idle'
+                  ? 'idle'
+                  : 'player',
         });
         _broadcastStatus();
         _broadcastPlaylistStatus();
         _broadcastTracksIfChanged(force: true);
       case PlaylistCmd(:final items, :final startIndex):
+        unawaited(
+          screenMirror.stopForReplacement(reason: 'media_started'),
+        );
         onNewMedia?.call();
         unawaited(player.playPlaylist(
           items.map(_toQueueItem).toList(),
@@ -246,6 +280,17 @@ class ReceiverServer extends ChangeNotifier {
           onPlaybackActivity?.call();
         }
         unawaited(player.queueAdd(_toQueueItem(item), isRemote: true));
+      case ScreenMirrorStartCmd():
+        onNewMedia?.call();
+        unawaited(player.stop());
+        onScreenMirrorStarted?.call();
+        screenMirror.start(cmd, connectionId);
+      case ScreenMirrorOfferCmd():
+        screenMirror.applyOffer(cmd, connectionId);
+      case ScreenMirrorCandidateCmd():
+        screenMirror.addCandidate(cmd, connectionId);
+      case ScreenMirrorStopCmd():
+        screenMirror.stop(cmd, connectionId);
       case ControlCmd(:final command):
         _handleControl(command);
       case RemoteCmd(:final key):
@@ -258,6 +303,29 @@ class ReceiverServer extends ChangeNotifier {
       default:
         break;
     }
+  }
+
+  void _sendScreenMirrorMessage(
+    int connectionId,
+    Map<String, Object?> message,
+  ) {
+    _runtime?.sendTo(connectionId, message);
+  }
+
+  void _handleScreenMirrorChange() {
+    final active = screenMirror.isActive;
+    if (active != _mirrorWasActive) {
+      _mirrorWasActive = active;
+      _runtime?.broadcast({
+        'type': 'context',
+        'active': active
+            ? 'screen_mirror'
+            : player.state == 'idle'
+                ? 'idle'
+                : 'player',
+      });
+    }
+    notifyListeners();
   }
 
   void _handleControl(String command) {
@@ -304,7 +372,13 @@ class ReceiverServer extends ChangeNotifier {
         unawaited(player.state == 'playing' ? player.pause() : player.resume());
       case 'stop':
         unawaited(player.stop());
-        broadcastIdleContext();
+        if (screenMirror.isActive) {
+          unawaited(screenMirror.stopForReplacement(
+            reason: 'stopped_by_remote',
+          ));
+        } else {
+          broadcastIdleContext();
+        }
       case 'seek_back':
         unawaited(player.seek(
           Duration(

@@ -31,6 +31,7 @@ import 'playback_surface.dart';
 import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
 import 'receiver_server.dart';
+import 'screen_mirror_surface.dart';
 import 'settings_screen.dart';
 import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
@@ -276,6 +277,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       onPromptStop: () => unawaited(_stillWatching.stopWatching()),
       onPlaybackActivity: _stillWatching.recordUserActivity,
       onNewMedia: _stillWatching.resetForNewMedia,
+      onScreenMirrorStarted: _handleScreenMirrorStarted,
     );
     _discovery = DiscoveryPublisher(
       serviceName: widget.store.deviceName,
@@ -535,6 +537,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
         }
       }
     }
+  }
+
+  void _handleScreenMirrorStarted() {
+    if (mounted) setState(() => _showingVideo = false);
+    unawaited(_revealWindow());
   }
 
   Future<void> _revealWindow({bool fullScreen = false}) async {
@@ -923,12 +930,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                     builder: (context, _) {
                       final hasMedia = _player.queue.isNotEmpty;
                       final hasQueue = _player.queue.length > 1;
+                      final screenMirroring = _server.screenMirror.isActive;
                       const titleBarHeight = 28.0;
                       // Hide every piece of chrome (title bar, sidebar, status bar)
                       // when the user is watching video in full-screen — the video
                       // should fill the entire monitor, not be framed by panels.
-                      final hideChrome =
-                          _isFullScreen && _showingVideo && hasMedia;
+                      final hideChrome = _isFullScreen &&
+                          ((_showingVideo && hasMedia) || screenMirroring);
 
                       return Stack(
                         fit: StackFit.expand,
@@ -937,7 +945,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                           // watching video. Six-octave FBM + domain warping is expensive,
                           // and during playback the video texture covers most of it
                           // anyway, so leaving it running just steals GPU from mpv.
-                          if (!_showingVideo)
+                          if (!_showingVideo && !screenMirroring)
                             const Positioned.fill(child: AuroraBackground()),
 
                           Column(
@@ -994,6 +1002,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                         dest: _dest,
                                         showingVideo: _showingVideo,
                                         hasMedia: hasMedia,
+                                        screenMirroring: screenMirroring,
                                         playerState: _player.state,
                                         senderCasting: _sender.isCasting,
                                         enableHistory:
@@ -1024,7 +1033,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                               Positioned.fill(
                                                 child: Offstage(
                                                   offstage: !_showingVideo ||
-                                                      !hasMedia,
+                                                      !hasMedia ||
+                                                      screenMirroring,
                                                   child: Container(
                                                     color: Colors.black,
                                                     child: PlaybackSurface(
@@ -1068,9 +1078,17 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     },
                                                   ),
                                                 ),
-                                              if (!_showingVideo)
+                                              if (!_showingVideo &&
+                                                  !screenMirroring)
                                                 Positioned.fill(
                                                     child: _buildScreen()),
+                                              if (screenMirroring)
+                                                Positioned.fill(
+                                                  child: ScreenMirrorSurface(
+                                                    receiver:
+                                                        _server.screenMirror,
+                                                  ),
+                                                ),
                                               if (_showingVideo &&
                                                   hasMedia &&
                                                   _showStats.value &&
@@ -1282,6 +1300,7 @@ class _NavSidebar extends StatelessWidget {
     required this.dest,
     required this.showingVideo,
     required this.hasMedia,
+    required this.screenMirroring,
     required this.playerState,
     required this.senderCasting,
     required this.enableHistory,
@@ -1292,6 +1311,7 @@ class _NavSidebar extends StatelessWidget {
   final _Dest dest;
   final bool showingVideo;
   final bool hasMedia;
+  final bool screenMirroring;
   final String playerState;
   final bool senderCasting;
   final bool enableHistory;
@@ -1343,33 +1363,46 @@ class _NavSidebar extends StatelessWidget {
               ),
               // ── Receive: this computer plays what a phone casts to it ──
               const _NavSectionLabel('Receive'),
+              if (screenMirroring)
+                _NavItem(
+                  icon: Icons.screen_share,
+                  label: 'Screen Mirror',
+                  selected: true,
+                  accent: true,
+                  onTap: () {},
+                ),
               if (hasMedia)
                 _NavItem(
                   icon: playerState == 'playing'
                       ? Icons.play_circle
                       : Icons.pause_circle_outline,
                   label: 'Now Playing',
-                  selected: showingVideo,
+                  selected: showingVideo && !screenMirroring,
                   accent: true,
                   onTap: onShowVideo,
                 ),
               _NavItem(
                 icon: Icons.cast,
                 label: 'Cast',
-                selected: !showingVideo && dest == _Dest.cast,
+                selected:
+                    !screenMirroring && !showingVideo && dest == _Dest.cast,
                 onTap: () => onDestSelect(_Dest.cast),
               ),
               if (enableHistory)
                 _NavItem(
                   icon: Icons.history,
                   label: 'History',
-                  selected: !showingVideo && dest == _Dest.history,
+                  selected: !screenMirroring &&
+                      !showingVideo &&
+                      dest == _Dest.history,
                   onTap: () => onDestSelect(_Dest.history),
                 ),
               _NavItem(
                 icon: Icons.star_border,
                 label: 'Favorites',
-                selected: !showingVideo && dest == _Dest.favorites,
+                selected: !screenMirroring &&
+                    !showingVideo &&
+                    dest == _Dest.favorites,
                 onTap: () => onDestSelect(_Dest.favorites),
               ),
               // ── Send: this computer casts to a TV ──
@@ -1377,7 +1410,8 @@ class _NavSidebar extends StatelessWidget {
               _NavItem(
                 icon: Icons.connected_tv,
                 label: 'Send to TV',
-                selected: !showingVideo && dest == _Dest.sendToTv,
+                selected:
+                    !screenMirroring && !showingVideo && dest == _Dest.sendToTv,
                 onTap: () => onDestSelect(_Dest.sendToTv),
               ),
               // Only while something is casting — hidden when nothing is playing.
@@ -1385,7 +1419,9 @@ class _NavSidebar extends StatelessWidget {
                 _NavItem(
                   icon: Icons.cast_connected,
                   label: 'Now Playing',
-                  selected: !showingVideo && dest == _Dest.nowCasting,
+                  selected: !screenMirroring &&
+                      !showingVideo &&
+                      dest == _Dest.nowCasting,
                   onTap: () => onDestSelect(_Dest.nowCasting),
                 ),
               const Spacer(),
@@ -1400,7 +1436,8 @@ class _NavSidebar extends StatelessWidget {
               _NavItem(
                 icon: Icons.settings,
                 label: 'Settings',
-                selected: !showingVideo && dest == _Dest.settings,
+                selected:
+                    !screenMirroring && !showingVideo && dest == _Dest.settings,
                 onTap: () => onDestSelect(_Dest.settings),
               ),
               const SizedBox(height: 12),
