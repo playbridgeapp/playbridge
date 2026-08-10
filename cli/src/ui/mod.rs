@@ -68,6 +68,9 @@ enum DashboardAction {
     CastCommand(crate::send::CastCommand),
     StartReceiver,
     ReceiverCommand(crate::receive::ReceiverDashboardCommand),
+    CheckUpdate,
+    InstallUpdate,
+    CancelUpdate,
     Exit,
 }
 
@@ -136,6 +139,9 @@ enum Overlay {
     BrowserPairing,
     BrowserHost,
     ManualReceiver,
+    UpdateConfirm,
+    UpdateProgress,
+    UpdateManual,
     Quit,
 }
 
@@ -170,6 +176,17 @@ struct ReceiverUiState {
     playback: Option<crate::receive::ReceiverPlaybackSnapshot>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateStatus {
+    Disabled,
+    Idle,
+    Checking,
+    UpToDate,
+    Available,
+    Downloading,
+    Error,
+}
+
 struct App {
     config: UiConfig,
     theme: Theme,
@@ -200,6 +217,11 @@ struct App {
     browser_urls: Vec<String>,
     discovery_config: DiscoveryConfig,
     preferred_auto_selected: bool,
+    update_status: UpdateStatus,
+    available_update: Option<crate::update::AvailableUpdate>,
+    update_progress: Option<crate::update_installer::InstallProgress>,
+    update_error: Option<String>,
+    update_generation: u64,
 }
 
 impl App {
@@ -235,6 +257,15 @@ impl App {
             browser_urls: Vec::new(),
             discovery_config: DiscoveryConfig::default(),
             preferred_auto_selected: false,
+            update_status: if crate::update::checks_disabled() {
+                UpdateStatus::Disabled
+            } else {
+                UpdateStatus::Idle
+            },
+            available_update: None,
+            update_progress: None,
+            update_error: None,
+            update_generation: 0,
         })
     }
 
@@ -447,6 +478,24 @@ pub(crate) fn dashboard_available() -> bool {
 }
 
 type DashboardCastFuture = Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>;
+type UpdateCheckFuture = Pin<
+    Box<
+        dyn std::future::Future<
+                Output = (
+                    u64,
+                    bool,
+                    Result<Option<crate::update::AvailableUpdate>, String>,
+                ),
+            >,
+    >,
+>;
+type UpdatePrepareFuture = Pin<
+    Box<
+        dyn std::future::Future<
+                Output = (u64, Result<crate::update_installer::PreparedUpdate, String>),
+            >,
+    >,
+>;
 
 pub(crate) async fn run_dashboard(
     theme_override: Option<&str>,
@@ -455,6 +504,12 @@ pub(crate) async fn run_dashboard(
     let config = UiConfig::load(theme_override)?;
     let mut app = App::new(config)?;
     app.apply_launch(launch);
+    if let Some(result) = crate::update_installer::take_restart_notice() {
+        match result {
+            Ok(message) => app.notice(NoticeLevel::Success, message),
+            Err(message) => app.notice(NoticeLevel::Error, message),
+        }
+    }
     let mut terminal = TerminalSession::start(app.config.ui.mouse)?;
     let mut discovery = DiscoveryStream::start(app.discovery_config.clone());
     let mut cast_future: Option<DashboardCastFuture> = None;
@@ -466,6 +521,24 @@ pub(crate) async fn run_dashboard(
     > = None;
     let mut receiver_events: Option<tokio::sync::mpsc::Receiver<crate::receive::ReceiverUiEvent>> =
         None;
+    let mut update_check_future: Option<UpdateCheckFuture> = None;
+    let mut update_prepare_future: Option<UpdatePrepareFuture> = None;
+    let mut update_progress_rx: Option<
+        tokio::sync::mpsc::UnboundedReceiver<crate::update_installer::InstallProgress>,
+    > = None;
+
+    if app.update_status != UpdateStatus::Disabled {
+        app.update_status = UpdateStatus::Checking;
+        app.update_generation = app.update_generation.wrapping_add(1);
+        let generation = app.update_generation;
+        update_check_future = Some(Box::pin(async move {
+            (
+                generation,
+                false,
+                crate::update::check_for_update(false).await,
+            )
+        }));
+    }
 
     if app.receiver_start_requested {
         let (future, commands, events) = receiver_dashboard_task(app.receiver_arguments.clone());
@@ -598,6 +671,70 @@ pub(crate) async fn run_dashboard(
                             app.notice(NoticeLevel::Warning, "The local receiver is not running");
                         }
                     }
+                    DashboardAction::CheckUpdate => {
+                        if app.update_status == UpdateStatus::Disabled {
+                            app.notice(
+                                NoticeLevel::Warning,
+                                "Update checks are disabled by PLAYBRIDGE_NO_UPDATE_CHECK",
+                            );
+                        } else if update_check_future.is_some() || update_prepare_future.is_some() {
+                            app.notice(NoticeLevel::Info, "An update operation is already running");
+                        } else {
+                            app.update_generation = app.update_generation.wrapping_add(1);
+                            let generation = app.update_generation;
+                            app.update_status = UpdateStatus::Checking;
+                            app.update_error = None;
+                            update_check_future = Some(Box::pin(async move {
+                                (
+                                    generation,
+                                    true,
+                                    crate::update::check_for_update(true).await,
+                                )
+                            }));
+                            app.notice(NoticeLevel::Info, "Checking for CLI updates…");
+                        }
+                    }
+                    DashboardAction::InstallUpdate => {
+                        if app.cast_active || app.receiver_active {
+                            app.overlay = Overlay::None;
+                            app.notice(
+                                NoticeLevel::Warning,
+                                "Stop the active cast and local receiver before updating",
+                            );
+                        } else if update_prepare_future.is_some() {
+                            app.notice(NoticeLevel::Info, "The update is already downloading");
+                        } else if let Some(update) = app.available_update.clone() {
+                            app.update_generation = app.update_generation.wrapping_add(1);
+                            let generation = app.update_generation;
+                            let (progress_tx, progress_rx) = tokio::sync::mpsc::unbounded_channel();
+                            app.update_status = UpdateStatus::Downloading;
+                            app.update_progress = None;
+                            app.update_error = None;
+                            app.overlay = Overlay::UpdateProgress;
+                            update_progress_rx = Some(progress_rx);
+                            update_prepare_future = Some(Box::pin(async move {
+                                let result =
+                                    crate::update_installer::prepare(&update, progress_tx).await;
+                                (generation, result)
+                            }));
+                        } else {
+                            app.overlay = Overlay::None;
+                            app.notice(NoticeLevel::Warning, "No CLI update is available");
+                        }
+                    }
+                    DashboardAction::CancelUpdate => {
+                        update_prepare_future = None;
+                        update_progress_rx = None;
+                        app.update_generation = app.update_generation.wrapping_add(1);
+                        app.update_status = if app.available_update.is_some() {
+                            UpdateStatus::Available
+                        } else {
+                            UpdateStatus::Idle
+                        };
+                        app.update_progress = None;
+                        app.overlay = Overlay::None;
+                        app.notice(NoticeLevel::Info, "Update download cancelled");
+                    }
                     DashboardAction::Exit => {
                         if let Some(commands) = cast_commands.take() {
                             let _ = commands.send(crate::send::CastCommand::Stop).await;
@@ -681,6 +818,96 @@ pub(crate) async fn run_dashboard(
                 }
             } => {
                 if let Some(event) = event { apply_receiver_event(&mut app, event); }
+            }
+            result = async {
+                match update_check_future.as_mut() {
+                    Some(future) => Some(future.as_mut().await),
+                    None => pending().await,
+                }
+            } => {
+                if let Some((generation, manual, result)) = result {
+                    update_check_future = None;
+                    if generation == app.update_generation {
+                        match result {
+                            Ok(Some(update)) => {
+                                let version = update.version.clone();
+                                app.available_update = Some(update);
+                                app.update_status = UpdateStatus::Available;
+                                app.update_error = None;
+                                if manual {
+                                    app.notice(
+                                        NoticeLevel::Success,
+                                        format!("PlayBridge CLI v{version} is available"),
+                                    );
+                                }
+                            }
+                            Ok(None) => {
+                                app.available_update = None;
+                                app.update_status = UpdateStatus::UpToDate;
+                                app.update_error = None;
+                                if manual {
+                                    app.notice(
+                                        NoticeLevel::Success,
+                                        format!(
+                                            "PlayBridge CLI v{} is up to date",
+                                            env!("CARGO_PKG_VERSION")
+                                        ),
+                                    );
+                                }
+                            }
+                            Err(error) => {
+                                app.update_status = UpdateStatus::Error;
+                                app.update_error = Some(error.clone());
+                                if manual {
+                                    app.notice(NoticeLevel::Error, error);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            progress = async {
+                match update_progress_rx.as_mut() {
+                    Some(progress) => progress.recv().await,
+                    None => pending().await,
+                }
+            } => {
+                if let Some(progress) = progress {
+                    app.update_progress = Some(progress);
+                } else {
+                    update_progress_rx = None;
+                }
+            }
+            result = async {
+                match update_prepare_future.as_mut() {
+                    Some(future) => Some(future.as_mut().await),
+                    None => pending().await,
+                }
+            } => {
+                if let Some((generation, result)) = result {
+                    update_prepare_future = None;
+                    update_progress_rx = None;
+                    if generation == app.update_generation {
+                        match result {
+                            Ok(prepared) => {
+                                drop(terminal);
+                                crate::update_installer::handoff(prepared)?;
+                                return Ok(());
+                            }
+                            Err(error) => {
+                                app.update_status = if app.available_update.is_some() {
+                                    UpdateStatus::Available
+                                } else {
+                                    UpdateStatus::Error
+                                };
+                                app.update_error = Some(error.clone());
+                                app.update_progress = None;
+                                app.overlay = Overlay::None;
+                                app.notice(NoticeLevel::Error, error);
+                            }
+                        }
+                    }
+                }
             }
             event = discovery.next() => {
                 match event {
@@ -1029,6 +1256,30 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<Option<DashboardAction>, S
                 _ => Ok(None),
             };
         }
+        Overlay::UpdateConfirm => {
+            return match key.code {
+                KeyCode::Enter | KeyCode::Char('y' | 'Y') => {
+                    Ok(Some(DashboardAction::InstallUpdate))
+                }
+                KeyCode::Esc | KeyCode::Char('n' | 'N') => {
+                    app.overlay = Overlay::None;
+                    Ok(None)
+                }
+                _ => Ok(None),
+            };
+        }
+        Overlay::UpdateProgress => {
+            return match key.code {
+                KeyCode::Esc => Ok(Some(DashboardAction::CancelUpdate)),
+                _ => Ok(None),
+            };
+        }
+        Overlay::UpdateManual => {
+            if matches!(key.code, KeyCode::Enter | KeyCode::Esc) {
+                app.overlay = Overlay::None;
+            }
+            return Ok(None);
+        }
         Overlay::Help => {
             if app.config.matches("back", key) || app.config.matches("help", key) {
                 app.overlay = Overlay::None;
@@ -1115,6 +1366,25 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Result<Option<DashboardAction>, S
                 Ok(()) => app.notice(NoticeLevel::Success, "Preferred receiver cleared"),
                 Err(error) => app.notice(NoticeLevel::Error, error),
             },
+            KeyCode::Char('r' | 'R') => return Ok(Some(DashboardAction::CheckUpdate)),
+            KeyCode::Char('i' | 'I') => {
+                if app.cast_active || app.receiver_active {
+                    app.notice(
+                        NoticeLevel::Warning,
+                        "Stop the active cast and local receiver before updating",
+                    );
+                } else if app.available_update.is_none() {
+                    app.notice(NoticeLevel::Info, "No CLI update is available");
+                } else {
+                    match crate::update_installer::preflight() {
+                        Ok(_) => app.overlay = Overlay::UpdateConfirm,
+                        Err(error) => {
+                            app.update_error = Some(error);
+                            app.overlay = Overlay::UpdateManual;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -1484,6 +1754,9 @@ fn render(frame: &mut Frame<'_>, app: &mut App) {
         Overlay::BrowserPairing => render_browser_pairing(frame, app),
         Overlay::BrowserHost => render_browser_host(frame, app),
         Overlay::ManualReceiver => render_manual_receiver(frame, app),
+        Overlay::UpdateConfirm => render_update_confirm(frame, app),
+        Overlay::UpdateProgress => render_update_progress(frame, app),
+        Overlay::UpdateManual => render_update_manual(frame, app),
         Overlay::Quit => render_quit(frame, app),
         Overlay::None => {}
     }
@@ -1497,13 +1770,20 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, app: &App) {
     } else {
         "ready"
     };
-    let title = Line::from(vec![
+    let mut spans = vec![
         Span::styled(" PlayBridge ", app.theme.title()),
         Span::styled(
             format!("{} · {} receivers", status, app.devices.len()),
             app.theme.muted(),
         ),
-    ]);
+    ];
+    if let Some(update) = &app.available_update {
+        spans.push(Span::styled(
+            format!(" · Update v{}", update.version),
+            Style::default().fg(app.theme.warning),
+        ));
+    }
+    let title = Line::from(spans);
     frame.render_widget(
         Paragraph::new(title)
             .block(panel_block(app, ""))
@@ -1979,6 +2259,11 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, app: &App) {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "Unavailable".into());
     let rows = [
+        Row::new(vec![
+            "Version".to_owned(),
+            format!("v{}", env!("CARGO_PKG_VERSION")),
+        ]),
+        Row::new(vec!["Updates".to_owned(), update_status_text(app)]),
         Row::new(vec!["Theme".to_owned(), app.config.ui.theme.clone()]),
         Row::new(vec![
             "Mouse".to_owned(),
@@ -2001,11 +2286,49 @@ fn render_settings(frame: &mut Frame<'_>, area: Rect, app: &App) {
                     .bottom_margin(1),
             )
             .footer(
-                Row::new(["", "T theme   M mouse   U Unicode   C clear preferred"])
-                    .style(app.theme.muted()),
+                Row::new([
+                    "",
+                    "R check updates   I install   T theme   M mouse   U Unicode   C clear",
+                ])
+                .style(app.theme.muted()),
             ),
         area,
     );
+}
+
+fn update_status_text(app: &App) -> String {
+    match app.update_status {
+        UpdateStatus::Disabled => "Disabled by environment".into(),
+        UpdateStatus::Idle => "Not checked".into(),
+        UpdateStatus::Checking => "Checking…".into(),
+        UpdateStatus::UpToDate => "Up to date".into(),
+        UpdateStatus::Available => app
+            .available_update
+            .as_ref()
+            .map(|update| format!("v{} available", update.version))
+            .unwrap_or_else(|| "Available".into()),
+        UpdateStatus::Downloading => app
+            .update_progress
+            .map(format_update_progress)
+            .unwrap_or_else(|| "Preparing download…".into()),
+        UpdateStatus::Error => app
+            .update_error
+            .as_deref()
+            .map(|error| format!("Check failed: {error}"))
+            .unwrap_or_else(|| "Check failed".into()),
+    }
+}
+
+fn format_update_progress(progress: crate::update_installer::InstallProgress) -> String {
+    match progress.total {
+        Some(total) if total > 0 => format!(
+            "Downloading {:.0}% ({}/{})",
+            progress.downloaded as f64 / total as f64 * 100.0,
+            human_size(progress.downloaded),
+            human_size(total)
+        ),
+        _ => format!("Downloading {}", human_size(progress.downloaded)),
+    }
 }
 
 fn render_help(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -2286,6 +2609,85 @@ fn render_manual_receiver(frame: &mut Frame<'_>, app: &App) {
             Line::styled("Enter connect   Esc cancel", app.theme.muted()),
         ])
         .block(panel_block(app, "Manual receiver"))
+        .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn render_update_confirm(frame: &mut Frame<'_>, app: &App) {
+    let area = centered(frame.area(), 66, 12);
+    frame.render_widget(Clear, area);
+    let Some(update) = &app.available_update else {
+        return;
+    };
+    let size = update
+        .manifest
+        .asset
+        .size
+        .map(human_size)
+        .unwrap_or_else(|| "unknown size".into());
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled(
+                format!("Install PlayBridge CLI v{}?", update.version),
+                app.theme.title(),
+            )),
+            Line::from(""),
+            Line::from(format!("Download: {size}")),
+            Line::from("The archive will be verified with SHA-256."),
+            Line::from("The dashboard will close briefly and restart after installation."),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Enter/Y install   Esc/N cancel",
+                app.theme.muted(),
+            )),
+        ])
+        .block(panel_block(app, "CLI Update"))
+        .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn render_update_progress(frame: &mut Frame<'_>, app: &App) {
+    let area = centered(frame.area(), 62, 9);
+    frame.render_widget(Clear, area);
+    let status = app
+        .update_progress
+        .map(format_update_progress)
+        .unwrap_or_else(|| "Refreshing release metadata…".into());
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("Installing CLI update", app.theme.title())),
+            Line::from(""),
+            Line::from(status),
+            Line::from("The dashboard remains usable until replacement begins."),
+            Line::from(""),
+            Line::from(Span::styled("Esc cancel download", app.theme.muted())),
+        ])
+        .block(panel_block(app, "CLI Update"))
+        .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn render_update_manual(frame: &mut Frame<'_>, app: &App) {
+    let area = centered(frame.area(), 76, 12);
+    frame.render_widget(Clear, area);
+    let reason = app
+        .update_error
+        .as_deref()
+        .unwrap_or("This installation cannot be replaced automatically.");
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(Span::styled("Manual update required", app.theme.title())),
+            Line::from(""),
+            Line::from(reason),
+            Line::from(""),
+            Line::from(crate::update_installer::manual_install_hint()),
+            Line::from(""),
+            Line::from(Span::styled("Enter/Esc close", app.theme.muted())),
+        ])
+        .block(panel_block(app, "CLI Update"))
         .wrap(Wrap { trim: false }),
         area,
     );
@@ -2575,6 +2977,65 @@ mod tests {
     fn very_small_terminal_has_actionable_message() {
         let output = rendered(36, 10, Section::Home);
         assert!(output.contains("Resize to at least 40×12"));
+    }
+
+    #[test]
+    fn available_update_is_persistent_in_header_and_settings() {
+        let mut app = App::new(UiConfig::default()).unwrap();
+        app.section = Section::Settings;
+        app.update_status = UpdateStatus::Available;
+        app.available_update = Some(available_update("9.8.7"));
+        let output = render_app(120, 30, app);
+        assert!(output.contains("Update v9.8.7"));
+        assert!(output.contains("v9.8.7 available"));
+        assert!(output.contains("R check updates"));
+    }
+
+    #[test]
+    fn settings_update_keys_check_and_block_install_during_active_work() {
+        let mut app = App::new(UiConfig::default()).unwrap();
+        app.section = Section::Settings;
+        app.available_update = Some(available_update("9.8.7"));
+        let check = handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(matches!(check, Some(DashboardAction::CheckUpdate)));
+
+        app.cast_active = true;
+        let install = handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+        )
+        .unwrap();
+        assert!(install.is_none());
+        assert!(
+            app.notice
+                .as_ref()
+                .is_some_and(|notice| notice.message.contains("Stop the active cast"))
+        );
+    }
+
+    fn available_update(version: &str) -> crate::update::AvailableUpdate {
+        let target = crate::update::current_target().unwrap();
+        crate::update::AvailableUpdate {
+            version: semver::Version::parse(version).unwrap(),
+            manifest: crate::update::UpdateManifest {
+                schema_version: 1,
+                product: "cli".into(),
+                channel: "stable".into(),
+                version: version.into(),
+                published_at: "2026-08-01T00:00:00Z".into(),
+                release_url: "https://github.com/playbridgeapp/playbridge/releases".into(),
+                asset: crate::update::UpdateAsset {
+                    name: target.asset_name.into(),
+                    url: "https://github.com/playbridgeapp/playbridge/update.tar.gz".into(),
+                    sha256: "a".repeat(64),
+                    size: Some(1024),
+                },
+            },
+        }
     }
 
     #[test]

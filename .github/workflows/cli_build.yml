@@ -203,7 +203,7 @@ jobs:
             This is a **draft** candidate. Publish with **Actions → CLI Publish**
             (sets `draft=false`). Until then, `install.sh` will not pick it up as latest.
 
-            **Installation after publish (macOS & Linux):**
+            **Installation after publish and the 24-hour rollout hold (macOS & Linux):**
             ```sh
             curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh
             ```

@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, HashSet},
     env,
-    io::IsTerminal,
     process::ExitCode,
     time::Duration,
 };
@@ -79,25 +78,13 @@ mod receive;
 mod send;
 mod ui;
 mod update;
+mod update_installer;
 
 use google_cast::run_google_cast;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
-    if should_check_for_updates(&arguments)
-        && let Some(update) = update::check_for_update().await
-    {
-        eprintln!(
-            "\nUpdate available: PlayBridge CLI {} → {}",
-            env!("CARGO_PKG_VERSION"),
-            update.version
-        );
-        eprintln!(
-            "Run: curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh\n"
-        );
-    }
-
     match run(arguments).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -107,24 +94,6 @@ async fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
-}
-
-fn should_check_for_updates(arguments: &[String]) -> bool {
-    if !std::io::stderr().is_terminal()
-        || env::var_os("PLAYBRIDGE_NO_UPDATE_CHECK").is_some()
-        || arguments.is_empty()
-        || arguments
-            .iter()
-            .any(|value| matches!(value.as_str(), "--json" | "--json-lines"))
-    {
-        return false;
-    }
-    arguments
-        .first()
-        .is_some_and(|command| matches!(command.as_str(), "google-cast" | "googlecast" | "config"))
-        && !arguments
-            .iter()
-            .any(|value| matches!(value.as_str(), "--help" | "-h" | "--version" | "-V"))
 }
 
 async fn run(arguments: Vec<String>) -> Result<(), String> {
