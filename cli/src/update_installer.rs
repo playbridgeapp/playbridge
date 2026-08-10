@@ -50,9 +50,9 @@ struct PendingUpdate {
 
 pub fn manual_install_hint() -> &'static str {
     if cfg!(windows) {
-        "Download the latest Windows CLI archive from https://playbridge.app/cli"
+        "Run in PowerShell: irm https://playbridge.app/install.ps1 | iex"
     } else {
-        "Run: curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh"
+        "Run: curl -fsSL https://playbridge.app/install.sh | sh"
     }
 }
 
@@ -442,6 +442,13 @@ pub fn take_restart_notice() -> Option<Result<String, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manual_install_hint_uses_the_playbridge_distribution_endpoint() {
+        let hint = manual_install_hint();
+        assert!(hint.contains("https://playbridge.app/install."));
+        assert!(!hint.contains("raw.githubusercontent.com"));
+    }
 
     #[test]
     fn archive_requires_the_expected_binary() {
