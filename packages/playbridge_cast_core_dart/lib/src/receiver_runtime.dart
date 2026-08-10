@@ -33,6 +33,7 @@ final class ReceiverRuntimeConfig {
     this.authorizedTokens = const [],
     this.players = const [],
     this.browsers = const [],
+    this.screenMirrorWebRtc = false,
     this.advertise = false,
   });
 
@@ -46,6 +47,7 @@ final class ReceiverRuntimeConfig {
   final List<String> authorizedTokens;
   final List<String> players;
   final List<String> browsers;
+  final bool screenMirrorWebRtc;
   final bool advertise;
 
   Map<String, Object?> toJson() => {
@@ -59,6 +61,7 @@ final class ReceiverRuntimeConfig {
         'authorizedTokens': authorizedTokens,
         'players': players,
         'browsers': browsers,
+        'screenMirrorWebRtc': screenMirrorWebRtc,
         'advertise': advertise,
       };
 }

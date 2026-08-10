@@ -66,6 +66,7 @@ pub struct ReceiverConfig {
     pub authorized_tokens: Vec<String>,
     pub players: Vec<String>,
     pub browsers: Vec<String>,
+    pub screen_mirror_web_rtc: bool,
     pub advertise: bool,
     pub max_connections: usize,
     pub max_message_bytes: usize,
@@ -83,6 +84,7 @@ impl ReceiverConfig {
             authorized_tokens: Vec::new(),
             players: Vec::new(),
             browsers: Vec::new(),
+            screen_mirror_web_rtc: false,
             advertise: false,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
@@ -103,6 +105,10 @@ pub enum ReceiverCommand {
     Mouse(Value),
     Browser(Value),
     BrowserControl(Value),
+    ScreenMirrorStart(Value),
+    ScreenMirrorOffer(Value),
+    ScreenMirrorCandidate(Value),
+    ScreenMirrorStop(Value),
     Unknown { action: String, payload: Value },
 }
 
@@ -119,6 +125,10 @@ impl ReceiverCommand {
             "mouse" => Self::Mouse(payload),
             "browser" => Self::Browser(payload),
             "browser_control" => Self::BrowserControl(payload),
+            "screen_mirror_start" => Self::ScreenMirrorStart(payload),
+            "screen_mirror_offer" => Self::ScreenMirrorOffer(payload),
+            "screen_mirror_candidate" => Self::ScreenMirrorCandidate(payload),
+            "screen_mirror_stop" => Self::ScreenMirrorStop(payload),
             _ => Self::Unknown { action, payload },
         }
     }
@@ -134,6 +144,9 @@ pub enum ReceiverEvent {
     ClientCount {
         total: usize,
         authenticated: usize,
+    },
+    ClientDisconnected {
+        connection_id: u64,
     },
     PairingStarted {
         connection_id: u64,
@@ -187,6 +200,7 @@ struct Shared {
     fingerprint: String,
     players: Vec<String>,
     browsers: Vec<String>,
+    screen_mirror_web_rtc: bool,
     authorized_tokens: Mutex<HashSet<String>>,
     connections: Mutex<HashMap<u64, ConnectionHandle>>,
     authenticated: Mutex<HashMap<u64, String>>,
@@ -262,6 +276,7 @@ impl ReceiverHost {
             fingerprint: fingerprint.clone(),
             players: config.players.clone(),
             browsers: config.browsers.clone(),
+            screen_mirror_web_rtc: config.screen_mirror_web_rtc,
             authorized_tokens: Mutex::new(config.authorized_tokens.iter().cloned().collect()),
             connections: Mutex::new(HashMap::new()),
             authenticated: Mutex::new(HashMap::new()),
@@ -602,6 +617,7 @@ where
                                 "certFingerprint":shared.fingerprint,
                                 "players":shared.players,
                                 "browsers":shared.browsers,
+                                "screenMirrorWebRtc":shared.screen_mirror_web_rtc,
                             }),
                         ).await?;
                         if authenticated {
@@ -690,6 +706,7 @@ where
                                     cert_fingerprint: Some(shared.fingerprint.clone()),
                                     players: shared.players.clone(),
                                     browsers: shared.browsers.clone(),
+                                    screen_mirror_web_rtc: shared.screen_mirror_web_rtc,
                                 },
                             )
                             .map_err(|_| "pairing confirmation was invalid".to_owned())?;
@@ -741,6 +758,7 @@ fn cleanup_connection(id: u64, shared: &Shared) {
     {
         *owner = None;
     }
+    shared.emit(ReceiverEvent::ClientDisconnected { connection_id: id });
     shared.emit_counts();
 }
 
@@ -880,6 +898,13 @@ mod tests {
             ReceiverCommand::decode("control".into(), Some(json!({"command":"pause"}))),
             ReceiverCommand::Control(json!({"command":"pause"}))
         );
+        assert_eq!(
+            ReceiverCommand::decode(
+                "screen_mirror_start".into(),
+                Some(json!({"sessionId":"session","protocolVersion":1})),
+            ),
+            ReceiverCommand::ScreenMirrorStart(json!({"sessionId":"session","protocolVersion":1}))
+        );
         assert!(matches!(
             ReceiverCommand::decode("future".into(), Some(json!({"value":1}))),
             ReceiverCommand::Unknown { action, .. } if action == "future"
@@ -926,6 +951,7 @@ mod tests {
         config.preferred_port = 0;
         config.fallback_attempts = 1;
         config.players = vec!["internal_mpv".into()];
+        config.screen_mirror_web_rtc = true;
         let host = ReceiverHost::start(config).await.unwrap();
         let mut events = host.subscribe();
         let endpoint = format!("wss://127.0.0.1:{}/", host.port());
@@ -975,6 +1001,7 @@ mod tests {
         let credentials = pairing
             .decrypt_credentials(&nonce, &ciphertext, Some(&pin))
             .unwrap();
+        assert!(credentials.screen_mirror_web_rtc);
         socket
             .send(&SenderFrame::Command {
                 action: "control".into(),
@@ -982,10 +1009,15 @@ mod tests {
             })
             .await
             .unwrap();
-        let command = tokio::time::timeout(Duration::from_secs(2), async {
+        let (command_connection_id, command) = tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                if let ReceiverEvent::Command { command, .. } = events.recv().await.unwrap() {
-                    break command;
+                if let ReceiverEvent::Command {
+                    connection_id,
+                    command,
+                    ..
+                } = events.recv().await.unwrap()
+                {
+                    break (connection_id, command);
                 }
             }
         })
@@ -996,6 +1028,18 @@ mod tests {
             ReceiverCommand::Control(json!({"command":"pause"}))
         );
         socket.close().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let ReceiverEvent::ClientDisconnected { connection_id } =
+                    events.recv().await.unwrap()
+                {
+                    assert_eq!(connection_id, command_connection_id);
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("receiver did not report the disconnected connection");
 
         let mut authenticated = SecureWebSocket::connect_pinned(&endpoint, &pin)
             .await
@@ -1008,7 +1052,11 @@ mod tests {
             .unwrap();
         assert!(matches!(
             authenticated.receive().await.unwrap(),
-            Some(ReceiverFrame::AuthResponse { success: true, .. })
+            Some(ReceiverFrame::AuthResponse {
+                success: true,
+                screen_mirror_web_rtc: true,
+                ..
+            })
         ));
         host.replace_authorized_tokens(Vec::new());
         let revoked = tokio::time::timeout(Duration::from_secs(2), authenticated.receive())

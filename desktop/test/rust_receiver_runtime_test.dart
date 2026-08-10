@@ -28,6 +28,7 @@ void main() {
           preferredPort: 0,
           fallbackAttempts: 1,
           players: const ['internal_mpv'],
+          screenMirrorWebRtc: true,
         ),
         libraryPath: library.absolute.path,
       );

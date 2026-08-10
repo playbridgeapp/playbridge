@@ -38,6 +38,8 @@ struct RuntimeConfig {
     #[serde(default)]
     browsers: Vec<String>,
     #[serde(default)]
+    screen_mirror_web_rtc: bool,
+    #[serde(default)]
     advertise: bool,
 }
 
@@ -62,6 +64,7 @@ impl RuntimeConfig {
         config.authorized_tokens = self.authorized_tokens;
         config.players = self.players;
         config.browsers = self.browsers;
+        config.screen_mirror_web_rtc = self.screen_mirror_web_rtc;
         config.advertise = self.advertise;
         Ok(config)
     }
@@ -306,6 +309,24 @@ mod tests {
     #[test]
     fn receiver_runtime_abi_is_stable() {
         assert_eq!(pb_receiver_runtime_abi_version(), 1);
+    }
+
+    #[test]
+    fn receiver_runtime_forwards_screen_mirror_capability() {
+        let runtime = serde_json::from_value::<RuntimeConfig>(json!({
+            "name":"Desktop",
+            "uuid":"desktop-id",
+            "certificateDer":"",
+            "privateKeyDer":"",
+            "screenMirrorWebRtc":true
+        }))
+        .unwrap();
+        assert!(
+            runtime
+                .into_receiver_config()
+                .unwrap()
+                .screen_mirror_web_rtc
+        );
     }
 
     #[test]
