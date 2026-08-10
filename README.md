@@ -60,7 +60,7 @@ The PlayBridge senders and extensions are available on official store registries
   - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing (download from [TV Browser Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=3e7f9a&expanded=true)).
 - **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
 - **Desktop (receiver)**: download the build for your OS from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
-- **CLI (sender & receiver)**: on macOS or Linux, run `curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh`. Windows and manual archives are on [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+- **CLI (sender & receiver)**: on macOS or Linux, run `curl -fsSL https://playbridge.app/install.sh | sh`; on Windows PowerShell, run `irm https://playbridge.app/install.ps1 | iex`. Manual archives remain on [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
 - **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
 

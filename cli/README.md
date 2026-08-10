@@ -9,21 +9,32 @@ receiver, or receive PlayBridge casts through an installed `mpv`.
 On macOS or Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh
+curl -fsSL https://playbridge.app/install.sh | sh
+```
+
+On Windows, run in PowerShell:
+
+```powershell
+irm https://playbridge.app/install.ps1 | iex
 ```
 
 The installer resolves the latest stable build through `playbridge.app`, verifies
-its SHA-256 checksum, and installs `playbridge` to `~/.local/bin`. GitHub Releases
-remain the artifact store, while the PlayBridge update service controls which
-published build is offered. Override the defaults with:
+its SHA-256 checksum, and installs `playbridge` to `~/.local/bin` on macOS/Linux
+or `%LOCALAPPDATA%\PlayBridge\bin` on Windows. The Windows installer adds that
+directory to the current user's `PATH` without requiring administrator access.
+Windows ARM64 uses the published x64 build through Windows emulation. GitHub
+Releases remain the artifact store, while the PlayBridge update service controls
+which published build is offered. Override the defaults with:
 
 ```sh
 PLAYBRIDGE_VERSION=0.1.0 PLAYBRIDGE_INSTALL_DIR=/usr/local/bin \
   sh cli/install.sh
 ```
 
-Windows binaries and manual archives for every supported platform are available
-from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+The installer scripts are served over HTTPS by `playbridge.app`; release binaries
+are independently verified against the checksum advertised by the update service.
+Manual archives for every supported platform remain available from
+[GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 
 Receiver mode requires [`mpv`](https://mpv.io/) to be installed and available on
 `PATH`. Its TLS/WSS, pairing, authentication, limits, queue commands, and status

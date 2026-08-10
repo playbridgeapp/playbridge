@@ -103,9 +103,14 @@ jobs:
           echo "skipped=false" >> "$GITHUB_OUTPUT"
           echo "✅ Version uprev ${PREV_VERSION} → ${VERSION}; building draft $TAG"
 
-      - name: Validate installer
+      - name: Validate Unix installer
         if: steps.gate.outputs.skipped == 'false'
         run: sh -n cli/install.sh
+
+      - name: Validate Windows installer syntax
+        if: steps.gate.outputs.skipped == 'false'
+        shell: pwsh
+        run: '[scriptblock]::Create((Get-Content -Raw cli/install.ps1)) | Out-Null'
 
   build:
     name: ${{ matrix.asset }}
@@ -203,9 +208,16 @@ jobs:
             This is a **draft** candidate. Publish with **Actions → CLI Publish**
             (sets `draft=false`). Until then, `install.sh` will not pick it up as latest.
 
-            **Installation after publish and the 24-hour rollout hold (macOS & Linux):**
+            **Installation after publish and the 24-hour rollout hold:**
+
+            macOS & Linux:
             ```sh
-            curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh
+            curl -fsSL https://playbridge.app/install.sh | sh
+            ```
+
+            Windows PowerShell:
+            ```powershell
+            irm https://playbridge.app/install.ps1 | iex
             ```
 
             Receiver mode requires `mpv` (`brew install mpv` or `sudo apt install mpv`).
