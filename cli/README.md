@@ -12,8 +12,10 @@ On macOS or Linux:
 curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh
 ```
 
-The installer downloads the latest `cli-v*` GitHub release, verifies its SHA-256
-checksum, and installs `playbridge` to `~/.local/bin`. Override the defaults with:
+The installer resolves the latest stable build through `playbridge.app`, verifies
+its SHA-256 checksum, and installs `playbridge` to `~/.local/bin`. GitHub Releases
+remain the artifact store, while the PlayBridge update service controls which
+published build is offered. Override the defaults with:
 
 ```sh
 PLAYBRIDGE_VERSION=0.1.0 PLAYBRIDGE_INSTALL_DIR=/usr/local/bin \
@@ -83,11 +85,14 @@ selection = "blue"
 
 Run `playbridge --help` for all commands and options.
 
-Automatic update output is suppressed while the full-screen dashboard is active
-so it cannot corrupt the TUI. Selected non-dashboard diagnostic commands check
-for a newer `cli-v*` release at most once per day and print the install command
-when an update is available. Network failures are silent and retried after one
-hour. Set `PLAYBRIDGE_NO_UPDATE_CHECK=1` to disable these checks.
+The dashboard checks `playbridge.app` for updates in the background. An available
+version appears as a header badge and in Settings, where it can be reviewed and
+installed without leaving the TUI. Downloads are verified before a staged helper
+replaces the executable, keeps a rollback copy, and relaunches the dashboard.
+Installation is disabled while casting or hosting a receiver; stop that work
+first. Successful checks are cached for 24 hours and failures for one hour. Set
+`PLAYBRIDGE_NO_UPDATE_CHECK=1` to disable checks. Unsupported or read-only install
+locations show a manual install command instead of attempting replacement.
 
 ## Build from source
 

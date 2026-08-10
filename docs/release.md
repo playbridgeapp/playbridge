@@ -29,7 +29,8 @@ project does not require shipping the others.
    **upreved consumers** get release-build / publish.
 
 Draft releases are visible to collaborators with write access, not to anonymous
-users or `install.sh` (which uses published `cli-v*` releases only).
+users or the `playbridge.app` update resolver, which only considers published
+stable `cli-v*` releases after the rollout hold.
 
 ---
 
@@ -78,7 +79,8 @@ Keep the marker in every draft/publish body for that product. Do not reuse marke
    that push (or via `workflow_dispatch`), and no published tag exists yet.
 5. Inspect the **draft** GitHub Release `cli-vX.Y.Z` and download assets to test.
 6. Run **CLI Publish** (`workflow_dispatch`, input = version) to set `draft=false`.
-7. Users install with `cli/install.sh` or release assets.
+7. Wait for the 24-hour rollout hold. The `playbridge.app` manifest and download
+   endpoints then offer the release to `cli/install.sh` and the dashboard updater.
 
 ### Workflows
 
@@ -106,6 +108,21 @@ gh release edit cli-vX.Y.Z --draft=false
 ```
 
 No rebuild. Assets stay those attached at draft time. No app store for CLI.
+
+### CLI update distribution
+
+GitHub Releases remains the source of CI-built archives and `SHA256SUMS`. Clients
+do not query GitHub directly: Cloudflare Pages resolves the current eligible
+release at `GET /api/v1/updates/cli?os=<os>&arch=<arch>`. The resolver rejects
+drafts and prereleases, applies a strict 24-hour hold from publication, and
+returns the matching asset URL and SHA-256 digest. `/download/cli-<os>-<arch>`
+uses the same resolver for shell installs, preventing the installer and dashboard
+from drifting to different versions.
+
+The CLI caches successful checks for 24 hours and failed checks for one hour.
+Dashboard installation verifies the digest, stages a sibling executable, keeps a
+rollback copy, and relaunches only after the TUI has restored the terminal. It
+must not replace the executable while a cast or receiver session is active.
 
 ### Manual / force
 

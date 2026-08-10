@@ -23,6 +23,7 @@ description: Work on the PlayBridge Rust casting core, reusable receiver runtime
 - The dashboard owns terminal setup, restoration, input, overlays, and notices. Background cast, browser-host, discovery, and receiver tasks must report through typed channels and must not print directly to stdout or stderr while the dashboard is active.
 - Scope asynchronous cast and pairing events to their session generation. On successful connection, cancellation, replacement, or teardown, clear stale pairing state and overlays before navigating or accepting more input.
 - Preserve independent navigation and content focus. A retained cursor may identify the next content action, but only the focused pane should render an active selection.
+- Keep update checks and downloads behind typed dashboard events. Resolve releases through `playbridge.app`, verify the advertised SHA-256 before replacement, restore the terminal before handing off to a relaunch helper, and block self-update while cast or receiver work is active.
 
 ## Work safely
 
