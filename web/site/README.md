@@ -52,6 +52,21 @@ npx wrangler pages deploy build --project-name playbridge
 - `static/_headers` sets immutable caching for `/_app/immutable/*` and basic security headers.
 - `static/_redirects` provides short links like `/android` → GitHub releases.
 
+## Update and download endpoints
+
+Cloudflare Pages Functions resolve stable CLI releases from GitHub while keeping
+the client-facing contract on `playbridge.app`:
+
+- `GET /api/v1/updates/cli?os=<os>&arch=<arch>` returns a versioned JSON manifest
+  with the target asset URL and SHA-256 digest.
+- `/download/cli-<os>-<arch>` redirects installers to the same resolved asset and
+  includes version and checksum response headers.
+
+Only published, non-prerelease CLI releases older than the 24-hour rollout hold
+are eligible. Resolution uses GitHub's asset digest when available and otherwise
+verifies the release's `SHA256SUMS` entry. Set `GITHUB_TOKEN` in the Pages
+environment to increase GitHub API rate limits; clients never receive the token.
+
 ## Color tokens
 
 The palette in `src/app.css` mirrors the canonical PlayBridge `DESIGN.md`:

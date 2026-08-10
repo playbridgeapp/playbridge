@@ -1,8 +1,50 @@
+import { productAssetName, resolveProductRelease } from '../_lib/releases.js';
+
 const GITHUB_REPO = 'playbridgeapp/playbridge';
 
-export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) => {
+interface Env {
+  GITHUB_TOKEN?: string;
+}
+
+export const onRequestGet: PagesFunction<Env, 'platform'> = async (context) => {
   const platform = context.params.platform;
   const url = new URL(context.request.url);
+
+  const cliTarget = /^cli-(macos|linux|windows)-(x86_64|aarch64)$/.exec(platform);
+  if (cliTarget) {
+    const [, os, arch] = cliTarget;
+    if (!productAssetName('cli', os, arch)) {
+      return new Response('CLI target not found', { status: 404 });
+    }
+    const cacheKey = new Request(url.toString(), context.request);
+    const cache = caches.default;
+    const cachedResponse = await cache.match(cacheKey);
+    if (cachedResponse) return cachedResponse;
+    try {
+      const manifest = await resolveProductRelease({
+        product: 'cli',
+        os,
+        arch,
+        githubToken: context.env?.GITHUB_TOKEN
+      });
+      const response = new Response(null, {
+        status: 302,
+        headers: {
+          Location: manifest.asset.url,
+          'X-PlayBridge-Version': manifest.version,
+          'X-PlayBridge-SHA256': manifest.asset.sha256,
+          'Cache-Control': 'public, max-age=600'
+        }
+      });
+      context.waitUntil(cache.put(cacheKey, response.clone()));
+      return response;
+    } catch {
+      return new Response('CLI update metadata is temporarily unavailable', {
+        status: 502,
+        headers: { 'Cache-Control': 'no-store' }
+      });
+    }
+  }
 
   let tagPrefix = '';
   let assetPattern = '';
@@ -68,8 +110,8 @@ export const onRequestGet: PagesFunction<unknown, 'platform'> = async (context) 
       'User-Agent': 'PlayBridge-Downloader',
       'Accept': 'application/vnd.github+json'
     };
-    if (context.env && (context.env as any).GITHUB_TOKEN) {
-      headers['Authorization'] = `Bearer ${(context.env as any).GITHUB_TOKEN}`;
+    if (context.env?.GITHUB_TOKEN) {
+      headers['Authorization'] = `Bearer ${context.env.GITHUB_TOKEN}`;
     }
     const apiResponse = await fetch(githubUrl, { headers });
 

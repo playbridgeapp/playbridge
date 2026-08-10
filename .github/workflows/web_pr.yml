@@ -78,6 +78,10 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         run: pnpm check
 
+      - name: Update resolver tests
+        if: steps.filter.outputs.relevant == 'true'
+        run: pnpm test
+
       - name: Build
         if: steps.filter.outputs.relevant == 'true'
         run: pnpm build
