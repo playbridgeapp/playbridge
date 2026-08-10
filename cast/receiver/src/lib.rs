@@ -1009,20 +1009,21 @@ mod tests {
             })
             .await
             .unwrap();
-        let (command_connection_id, command) = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if let ReceiverEvent::Command {
-                    connection_id,
-                    command,
-                    ..
-                } = events.recv().await.unwrap()
-                {
-                    break (connection_id, command);
+        let (command_connection_id, command) =
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let ReceiverEvent::Command {
+                        connection_id,
+                        command,
+                        ..
+                    } = events.recv().await.unwrap()
+                    {
+                        break (connection_id, command);
+                    }
                 }
-            }
-        })
-        .await
-        .unwrap();
+            })
+            .await
+            .unwrap();
         assert_eq!(
             command,
             ReceiverCommand::Control(json!({"command":"pause"}))
