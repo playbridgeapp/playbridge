@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -15,7 +17,9 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import androidx.core.content.ContextCompat
 import com.playbridge.sender.R
+import com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator
 import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +44,14 @@ import org.koin.core.component.inject
  * context). Direct and remote-proxy external playback do not keep this service alive.
  */
 class CastSessionService : Service(), KoinComponent {
+
+    private data class ForegroundState(
+        val info: CastSessionManager.SessionInfo,
+        val playing: Boolean,
+        val needsWakeLock: Boolean,
+        val mirroring: Boolean,
+        val capturesDeviceAudio: Boolean,
+    )
 
     private val manager: CastSessionManager by inject()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -67,19 +79,56 @@ class CastSessionService : Service(), KoinComponent {
                 manager.sessionInfo,
                 manager.isActivelyPlaying,
                 manager.needsCastWakeLock,
-            ) { info, playing, needsWake ->
-                Triple(info, playing, needsWake)
-            }.collect { (info, playing, needsWake) ->
+                manager.screenMirrorState,
+            ) { info, playing, needsWake, mirror ->
+                ForegroundState(info, playing, needsWake, mirror.isActive, mirror.deviceAudioRequested)
+            }.collect { state ->
                 if (!foregroundStarted) return@collect
-                currentlyPlaying = playing
-                applyResourceLocks(needsWake)
-                startForegroundWithType(info, playing)
+                currentlyPlaying = state.playing
+                applyResourceLocks(state.needsWakeLock)
+                startForegroundWithType(
+                    state.info,
+                    state.playing,
+                    state.mirroring,
+                    state.capturesDeviceAudio,
+                )
             }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
+            ACTION_START_SCREEN_MIRROR -> {
+                val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(EXTRA_PROJECTION_PERMISSION, Intent::class.java)
+                } else {
+                    @Suppress("DEPRECATION") intent.getParcelableExtra(EXTRA_PROJECTION_PERMISSION)
+                }
+                if (permission == null) return START_NOT_STICKY
+                val quality = ScreenMirrorCoordinator.Quality.fromId(
+                    intent.getStringExtra(EXTRA_SCREEN_MIRROR_QUALITY),
+                )
+                val audioRequested = intent.getBooleanExtra(EXTRA_SCREEN_MIRROR_DEVICE_AUDIO, false)
+                val deviceAudio = audioRequested &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+                    PackageManager.PERMISSION_GRANTED
+                val options = ScreenMirrorCoordinator.Options(quality, deviceAudio)
+                // Android requires this foreground-service type before MediaProjection is acquired.
+                foregroundStarted = true
+                startForegroundWithType(
+                    manager.sessionInfo.value,
+                    playing = true,
+                    mirroring = true,
+                    capturesDeviceAudio = deviceAudio,
+                )
+                applyResourceLocks(true)
+                if (!manager.startScreenMirror(permission, options)) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                return START_STICKY
+            }
             ACTION_STOP_CAST -> {
                 manager.endCastSession()
                 if (!manager.hasActiveSession.value) {
@@ -88,7 +137,13 @@ class CastSessionService : Service(), KoinComponent {
                 }
                 val playing = manager.isActivelyPlaying.value
                 currentlyPlaying = playing
-                startForegroundWithType(manager.sessionInfo.value, playing)
+                val mirror = manager.screenMirrorState.value
+                startForegroundWithType(
+                    manager.sessionInfo.value,
+                    playing,
+                    mirror.isActive,
+                    mirror.deviceAudioRequested,
+                )
                 applyResourceLocks(manager.needsCastWakeLock.value)
                 return START_STICKY
             }
@@ -102,7 +157,13 @@ class CastSessionService : Service(), KoinComponent {
                     Log.i(TAG, "Cast notification dismissed while session active — re-showing")
                     val playing = manager.isActivelyPlaying.value
                     currentlyPlaying = playing
-                    startForegroundWithType(manager.sessionInfo.value, playing)
+                    val mirror = manager.screenMirrorState.value
+                    startForegroundWithType(
+                        manager.sessionInfo.value,
+                        playing,
+                        mirror.isActive,
+                        mirror.deviceAudioRequested,
+                    )
                     foregroundStarted = true
                     applyResourceLocks(manager.needsCastWakeLock.value)
                 } else {
@@ -113,22 +174,43 @@ class CastSessionService : Service(), KoinComponent {
         }
         val playing = manager.isActivelyPlaying.value
         currentlyPlaying = playing
-        startForegroundWithType(manager.sessionInfo.value, playing)
+        val mirror = manager.screenMirrorState.value
+        startForegroundWithType(
+            manager.sessionInfo.value,
+            playing,
+            mirror.isActive,
+            mirror.deviceAudioRequested,
+        )
         foregroundStarted = true
         applyResourceLocks(manager.needsCastWakeLock.value)
         return START_STICKY
     }
 
-    private fun startForegroundWithType(info: CastSessionManager.SessionInfo, playing: Boolean) {
+    private fun startForegroundWithType(
+        info: CastSessionManager.SessionInfo,
+        playing: Boolean,
+        mirroring: Boolean,
+        capturesDeviceAudio: Boolean,
+    ) {
         val notif = buildNotification(info, playing)
+        val microphoneType = if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mirroring && capturesDeviceAudio
+        ) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        } else {
+            0
+        }
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                (if (mirroring) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION else 0) or
+                microphoneType
         } else {
             0
         }
         Log.d(
             TAG,
-            "startForeground type=connectedDevice playing=$playing device=${info.deviceName} title=${info.title}",
+            "startForeground mirroring=$mirroring deviceAudio=$capturesDeviceAudio " +
+                "playing=$playing device=${info.deviceName} title=${info.title}",
         )
         ServiceCompat.startForeground(this, NOTIF_ID, notif, type)
     }
@@ -251,6 +333,11 @@ class CastSessionService : Service(), KoinComponent {
         private const val ACTION_DISCONNECT = "com.playbridge.sender.cast.action.DISCONNECT"
         private const val ACTION_NOTIFICATION_DISMISSED =
             "com.playbridge.sender.cast.action.NOTIFICATION_DISMISSED"
+        private const val ACTION_START_SCREEN_MIRROR =
+            "com.playbridge.sender.cast.action.START_SCREEN_MIRROR"
+        private const val EXTRA_PROJECTION_PERMISSION = "projection_permission"
+        private const val EXTRA_SCREEN_MIRROR_QUALITY = "screen_mirror_quality"
+        private const val EXTRA_SCREEN_MIRROR_DEVICE_AUDIO = "screen_mirror_device_audio"
 
         fun start(context: Context) {
             if (!ProcessUtil.isMainProcess(context)) {
@@ -259,6 +346,21 @@ class CastSessionService : Service(), KoinComponent {
             }
             val intent = Intent(context, CastSessionService::class.java)
             context.startForegroundService(intent)
+        }
+
+        fun startScreenMirror(
+            context: Context,
+            projectionPermission: Intent,
+            options: ScreenMirrorCoordinator.Options,
+        ) {
+            if (!ProcessUtil.isMainProcess(context)) return
+            context.startForegroundService(
+                Intent(context, CastSessionService::class.java)
+                    .setAction(ACTION_START_SCREEN_MIRROR)
+                    .putExtra(EXTRA_PROJECTION_PERMISSION, projectionPermission)
+                    .putExtra(EXTRA_SCREEN_MIRROR_QUALITY, options.quality.id)
+                    .putExtra(EXTRA_SCREEN_MIRROR_DEVICE_AUDIO, options.deviceAudio),
+            )
         }
 
         fun stop(context: Context) {

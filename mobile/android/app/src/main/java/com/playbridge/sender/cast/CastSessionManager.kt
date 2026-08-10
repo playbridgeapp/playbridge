@@ -86,8 +86,10 @@ class CastSessionManager(
     private val connectionStore: com.playbridge.sender.connection.ConnectionStore,
     private val discoveryRepository: ReceiverDiscoveryRepository,
     private val settingsRepository: SettingsRepository,
+    private val screenMirrorCoordinator: com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator,
 ) {
     private val TAG = "CastSessionManager"
+    val screenMirrorState = screenMirrorCoordinator.state
 
     // ------------------------------------------------------------------
     // Routing intent (authoritative)
@@ -403,12 +405,22 @@ class CastSessionManager(
      *   from the background after a stop)
      */
     val hasActiveSession: StateFlow<Boolean> = combine(
-        _phonePathActive,
-        webSocketClient.connectionState,
-        connectionCoordinator.tvActiveContext,
-        _route,
-        _reconnecting,
-    ) { externalPhonePath, state, ctx, route, reconnecting ->
+        combine(
+            _phonePathActive,
+            webSocketClient.connectionState,
+            connectionCoordinator.tvActiveContext,
+            _route,
+            _reconnecting,
+        ) { externalPhonePath, state, ctx, route, reconnecting ->
+            arrayOf(externalPhonePath, state, ctx, route, reconnecting)
+        },
+        screenMirrorCoordinator.state,
+    ) { inputs, mirror ->
+        val externalPhonePath = inputs[0] as Boolean
+        val state = inputs[1] as WebSocketClient.ConnectionState
+        val ctx = inputs[2] as String
+        val route = inputs[3] as Route
+        val reconnecting = inputs[4] as Boolean
         val connectedOrConnecting = state is WebSocketClient.ConnectionState.Connected ||
             state is WebSocketClient.ConnectionState.Connecting
         // Any live native socket — casting or idle-linked. Route.ThisDevice only means
@@ -417,7 +429,7 @@ class CastSessionManager(
         val nativeReconnecting = route is Route.NativeTv && reconnecting
         // Keep FGS across a drop while we still think content is on the TV.
         val nativeStickyPlaying = ctx == "player" && route !is Route.External
-        externalPhonePath || nativeLive || nativeReconnecting || nativeStickyPlaying
+        externalPhonePath || nativeLive || nativeReconnecting || nativeStickyPlaying || mirror.isActive
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
@@ -447,8 +459,9 @@ class CastSessionManager(
     val isActivelyPlaying: StateFlow<Boolean> = combine(
         _externalMediaLoaded,
         connectionCoordinator.tvActiveContext,
-    ) { externalMediaLoaded, ctx ->
-        externalMediaLoaded || ctx == "player"
+        screenMirrorCoordinator.state,
+    ) { externalMediaLoaded, ctx, mirror ->
+        externalMediaLoaded || ctx == "player" || mirror.isActive
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /**
@@ -458,20 +471,31 @@ class CastSessionManager(
     val needsCastWakeLock: StateFlow<Boolean> = combine(
         _phonePathActive,
         connectionCoordinator.tvActiveContext,
-    ) { phonePath, ctx ->
-        phonePath || ctx == "player"
+        screenMirrorCoordinator.state,
+    ) { phonePath, ctx, mirror ->
+        phonePath || ctx == "player" || mirror.isActive
     }.stateIn(scope, SharingStarted.Eagerly, false)
 
     /** What the session notification shows. */
     data class SessionInfo(val deviceName: String, val title: String?)
 
     val sessionInfo: StateFlow<SessionInfo> = combine(
-        _activeExternalDevice,
-        webSocketClient.connectionState,
-        connectionCoordinator.tvPlayback,
-        _externalMediaTitle,
-        connectionCoordinator.tvActiveContext,
-    ) { external, state, playback, externalTitle, ctx ->
+        combine(
+            _activeExternalDevice,
+            webSocketClient.connectionState,
+            connectionCoordinator.tvPlayback,
+            _externalMediaTitle,
+            connectionCoordinator.tvActiveContext,
+        ) { external, state, playback, externalTitle, ctx ->
+            arrayOf(external, state, playback, externalTitle, ctx)
+        },
+        screenMirrorCoordinator.state,
+    ) { inputs, mirror ->
+        val external = inputs[0] as TvDevice?
+        val state = inputs[1] as WebSocketClient.ConnectionState
+        val playback = inputs[2] as TvPlaybackStatus?
+        val externalTitle = inputs[3] as String?
+        val ctx = inputs[4] as String
         if (state is WebSocketClient.ConnectionState.Connected) {
             lastNativeDeviceName = state.serverName
         }
@@ -485,7 +509,11 @@ class CastSessionManager(
         val title = if (external != null) {
             externalTitle
         } else {
-            playback?.title ?: if (ctx == "player") "Playing" else null
+            playback?.title ?: when {
+                mirror.isActive -> "Screen mirror"
+                ctx == "player" -> "Playing"
+                else -> null
+            }
         }
         SessionInfo(deviceName = device, title = title)
     }.stateIn(scope, SharingStarted.Eagerly, SessionInfo("TV", null))
@@ -1281,6 +1309,11 @@ class CastSessionManager(
      * restorable linked-idle session.
      */
     fun endCastSession() {
+        if (screenMirrorCoordinator.state.value.isActive) {
+            screenMirrorCoordinator.stop("stopped_by_phone")
+            connectionCoordinator.markIdle()
+            return
+        }
         val external = _externalTarget.value
         if (external != null) {
             stopAndClearExternalTarget()
@@ -1308,6 +1341,7 @@ class CastSessionManager(
      */
     fun disconnectSession() {
         stopEpisodeQueues()
+        screenMirrorCoordinator.stop("disconnect")
         connectionCoordinator.markIdle()
         val external = _externalTarget.value
         if (external != null) {
@@ -1330,6 +1364,7 @@ class CastSessionManager(
         backgroundStandDownJob?.cancel()
         backgroundStandDownJob = null
         stopEpisodeQueues()
+        screenMirrorCoordinator.stop("app_exit")
         connectionCoordinator.markIdle()
         val external = _externalTarget.value
         if (external != null) {
@@ -1341,6 +1376,20 @@ class CastSessionManager(
         // otherwise finishAndRemoveTask can leave a sticky FGS row while the process lingers.
         CastSessionService.stopAndCancelNotification(context)
         cancelReconnectGaveUpNotification()
+    }
+
+    fun startScreenMirror(
+        projectionPermission: android.content.Intent,
+        options: com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator.Options,
+    ): Boolean {
+        if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+            return false
+        }
+        if (_route.value is Route.External) return false
+        _route.value = Route.NativeTv
+        persistBaseRoute("native")
+        screenMirrorCoordinator.start(projectionPermission, options)
+        return true
     }
 
     /** Best-effort stop of phone-side series queues (native + external). Lazy Koin to avoid cycles. */

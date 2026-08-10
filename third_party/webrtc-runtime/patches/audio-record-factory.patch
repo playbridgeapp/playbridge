@@ -1,0 +1,70 @@
+diff --git a/sdk/android/api/org/webrtc/audio/AudioRecordFactory.java b/sdk/android/api/org/webrtc/audio/AudioRecordFactory.java
+new file mode 100644
+index 0000000..5d8755d
+--- /dev/null
++++ b/sdk/android/api/org/webrtc/audio/AudioRecordFactory.java
+@@ -0,0 +1,11 @@
++package org.webrtc.audio;
++
++import android.media.AudioRecord;
++import androidx.annotation.Nullable;
++
++/** Creates the AudioRecord used as WebRTC's Java audio input. */
++public interface AudioRecordFactory {
++  @Nullable
++  AudioRecord createAudioRecord(
++      int sampleRate, int channelConfig, int audioFormat, int bufferSizeInBytes);
++}
+diff --git a/sdk/android/api/org/webrtc/audio/JavaAudioDeviceModule.java b/sdk/android/api/org/webrtc/audio/JavaAudioDeviceModule.java
+index 9f6d329..2b9fdd6 100644
+--- a/sdk/android/api/org/webrtc/audio/JavaAudioDeviceModule.java
++++ b/sdk/android/api/org/webrtc/audio/JavaAudioDeviceModule.java
+@@ -44,2 +44,3 @@ public class JavaAudioDeviceModule implements AudioDeviceModule {
+     private AudioRecordDataCallback audioRecordDataCallback;
++    private AudioRecordFactory audioRecordFactory;
+     private AudioTrackStateCallback audioTrackStateCallback;
+@@ -151,1 +152,7 @@ public class JavaAudioDeviceModule implements AudioDeviceModule {
++    /** Overrides creation of WebRTC's AudioRecord input. */
++    public Builder setAudioRecordFactory(AudioRecordFactory audioRecordFactory) {
++      this.audioRecordFactory = audioRecordFactory;
++      return this;
++    }
++
+     /**
+@@ -267,3 +276,3 @@ public class JavaAudioDeviceModule implements AudioDeviceModule {
+-          samplesReadyCallback, audioRecordDataCallback, useHardwareAcousticEchoCanceler,
+-          useHardwareNoiseSuppressor);
++          samplesReadyCallback, audioRecordDataCallback, audioRecordFactory,
++          useHardwareAcousticEchoCanceler, useHardwareNoiseSuppressor);
+       final WebRtcAudioTrack audioOutput =
+diff --git a/sdk/android/src/java/org/webrtc/audio/WebRtcAudioRecord.java b/sdk/android/src/java/org/webrtc/audio/WebRtcAudioRecord.java
+index 86aa70d..5095e01 100644
+--- a/sdk/android/src/java/org/webrtc/audio/WebRtcAudioRecord.java
++++ b/sdk/android/src/java/org/webrtc/audio/WebRtcAudioRecord.java
+@@ -108,2 +108,3 @@ class WebRtcAudioRecord {
+   private final @Nullable AudioRecordDataCallback audioRecordDataCallback;
++  private final @Nullable AudioRecordFactory audioRecordFactory;
+   private final boolean isAcousticEchoCancelerSupported;
+@@ -204,2 +205,3 @@ class WebRtcAudioRecord {
+         null /* audioSamplesReadyCallback */, null /* audioRecordDataCallback */,
++        null /* audioRecordFactory */,
+         WebRtcAudioEffects.isAcousticEchoCancelerSupported(),
+@@ -214,2 +216,3 @@ class WebRtcAudioRecord {
+       @Nullable AudioRecordDataCallback audioRecordDataCallback,
++      @Nullable AudioRecordFactory audioRecordFactory,
+       boolean isAcousticEchoCancelerSupported, boolean isNoiseSuppressorSupported) {
+@@ -230,2 +233,3 @@ class WebRtcAudioRecord {
+     this.audioRecordDataCallback = audioRecordDataCallback;
++    this.audioRecordFactory = audioRecordFactory;
+     this.isAcousticEchoCancelerSupported = isAcousticEchoCancelerSupported;
+@@ -322,2 +326,6 @@ class WebRtcAudioRecord {
+-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
++      if (audioRecordFactory != null) {
++        audioRecord = audioRecordFactory.createAudioRecord(
++            sampleRate, channelConfig, audioFormat, bufferSizeInBytes);
++        audioSourceMatchesRecordingSessionRef.set(null);
++      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+         // Use the AudioRecord.Builder class on Android M (23) and above.
+@@ -338,1 +347,1 @@ class WebRtcAudioRecord {
+-    } catch (IllegalArgumentException | UnsupportedOperationException e) {
++    } catch (RuntimeException e) {

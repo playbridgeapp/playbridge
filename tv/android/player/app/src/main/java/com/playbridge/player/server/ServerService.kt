@@ -16,6 +16,8 @@ import com.playbridge.player.player.MpvProcess
 import com.playbridge.player.player.RendererProcessSupervisor
 import androidx.core.app.NotificationCompat
 import com.playbridge.player.MainActivity
+import com.playbridge.player.mirror.ScreenMirrorActivity
+import com.playbridge.player.mirror.ScreenMirrorReceiverController
 import com.playbridge.player.R
 import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.shared.protocol.IncomingMessage
@@ -48,6 +50,7 @@ class ServerService : Service() {
     private var webSocketServer: WebSocketServer? = null
     private lateinit var pairingStore: PairingStore
     private lateinit var overlayWindow: OverlayWindowHelper
+    private lateinit var screenMirrorController: ScreenMirrorReceiverController
 
     // Track what is currently active on the TV. @Volatile: written by main-thread
     // lifecycle setters and the broadcast receiver, read by the IO-dispatcher command
@@ -161,6 +164,12 @@ class ServerService : Service() {
         _staticInstance = this
         pairingStore = PairingStore(applicationContext)
         overlayWindow = OverlayWindowHelper(applicationContext)
+        screenMirrorController = ScreenMirrorReceiverController(
+            context = applicationContext,
+            send = { frame -> scope.launch { webSocketServer?.broadcastStatus(frame) } },
+            onEnded = { mainHandler.post { setContextIdleInternal(setOf("screen_mirror")) } },
+        )
+        _screenMirrorController = screenMirrorController
         nsdManager = getSystemService(Context.NSD_SERVICE) as android.net.nsd.NsdManager
 
 
@@ -457,6 +466,15 @@ class ServerService : Service() {
             FileLogger.i(TAG, "Message type: ${msg.javaClass.simpleName}")
         }
 
+        val replacesScreenMirror = msg is IncomingMessage.Browser ||
+            msg is IncomingMessage.Playlist ||
+            (msg is IncomingMessage.Control && msg.payload.command == "stop")
+        if (activeContext == "screen_mirror" && replacesScreenMirror) {
+            // Only commands that actually replace/stop the visible content end mirroring.
+            // Status queries, volume keys, and unrelated management commands must not.
+            screenMirrorController.stop("replaced_by_cast_command")
+        }
+
         when (msg) {
             is IncomingMessage.Browser -> {
                 val url = msg.payload.url
@@ -607,6 +625,31 @@ class ServerService : Service() {
                     }
                     sendBroadcast(intent)
                 }
+            }
+            is IncomingMessage.ScreenMirrorStart -> {
+                if (activeContext != "screen_mirror") {
+                    sendBroadcast(Intent(ACTION_CONTROL).apply {
+                        putExtra(EXTRA_COMMAND, "stop")
+                        setPackage(packageName)
+                    })
+                    activeContext = "screen_mirror"
+                    broadcastContext()
+                }
+                screenMirrorController.start(msg.sessionId)
+                launchActivityFromBackground(
+                    Intent(this, ScreenMirrorActivity::class.java).addFlags(
+                        Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP,
+                    ),
+                    "Starting screen mirror",
+                )
+            }
+            is IncomingMessage.ScreenMirrorOffer,
+            is IncomingMessage.ScreenMirrorCandidate,
+            is IncomingMessage.ScreenMirrorStop -> screenMirrorController.handle(msg)
+            is IncomingMessage.ScreenMirrorReady,
+            is IncomingMessage.ScreenMirrorAnswer,
+            is IncomingMessage.ScreenMirrorEvent -> {
+                // These are receiver-to-sender frames and must never arrive as commands.
             }
             is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
@@ -1048,6 +1091,8 @@ class ServerService : Service() {
             registrationListener = null
         }
         webSocketServer?.stop()
+        if (::screenMirrorController.isInitialized) screenMirrorController.destroy()
+        if (_screenMirrorController === screenMirrorController) _screenMirrorController = null
         webSocketServer = null
         // Remove overlay window if still visible
         overlayWindow.hide()
@@ -1067,6 +1112,7 @@ class ServerService : Service() {
     }
 
     companion object {
+        @Volatile private var _screenMirrorController: ScreenMirrorReceiverController? = null
         const val ACTION_PLAY = "com.playbridge.player.ACTION_PLAY"
         const val ACTION_BROWSER = "com.playbridge.player.ACTION_BROWSER"
         const val ACTION_CONTROL = "com.playbridge.player.ACTION_CONTROL"
@@ -1079,6 +1125,8 @@ class ServerService : Service() {
         const val EXTRA_SUBTITLES = "subtitles"
         const val EXTRA_HEADERS = "headers"
         const val EXTRA_COMMAND = "command"
+
+        fun screenMirrorController(): ScreenMirrorReceiverController? = _screenMirrorController
         const val EXTRA_REMOTE_KEY = "remote_key"
         const val EXTRA_MOUSE_EVENT = "mouse_event"
         const val EXTRA_MOUSE_DX = "mouse_dx"

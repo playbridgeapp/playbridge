@@ -345,6 +345,13 @@ fun DashboardScreen(
                         listOf(Color(0xFF424242), Color(0xFF616161))
                 ),
                 DashboardItem(
+                    icon = Icons.Default.ScreenShare,
+                    title = "Screen Mirror",
+                    subtitle = "Share your screen",
+                    screen = Screen.ScreenMirror,
+                    gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
+                ),
+                DashboardItem(
                     icon = Icons.Default.Folder,
                     title = "Phone Files",
                     subtitle = "Cast videos & audio",

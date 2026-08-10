@@ -1638,6 +1638,7 @@ class BrowserActivity : ComponentActivity() {
                             Screen.AddonSettings -> {}
                             Screen.DebridLibrary -> {}
                             Screen.Dashboard -> {}
+                            Screen.ScreenMirror -> {}
                             Screen.PhoneFiles -> {}
                             Screen.Iptv -> {}
                             is Screen.IptvDetail -> {}

@@ -73,6 +73,8 @@ class WebSocketClient {
     // so it's a separate channel from [newCredentials].
     private val _tvCapabilities = MutableSharedFlow<TvCapabilities>(replay = 0)
     val tvCapabilities = _tvCapabilities.asSharedFlow()
+    private val _tvCapabilitiesState = MutableStateFlow(TvCapabilities(emptyList(), emptyList()))
+    val tvCapabilitiesState: StateFlow<TvCapabilities> = _tvCapabilitiesState.asStateFlow()
 
     private var targetConnection: TvConnectionInfo? = null
     private var isUserDisconnect = false
@@ -129,8 +131,12 @@ class WebSocketClient {
     /** Token + SPKI pin issued by the receiver, persisted together by the ViewModel. */
     data class IssuedCredentials(val token: String, val certFingerprint: String?)
 
-    /** Players/browsers (player_mode / browser_mode ids) the TV reported it supports. */
-    data class TvCapabilities(val players: List<String>, val browsers: List<String>)
+    /** Receiver capabilities reported at authenticated connection time. */
+    data class TvCapabilities(
+        val players: List<String>,
+        val browsers: List<String>,
+        val screenMirrorWebRtc: Boolean = false,
+    )
 
         sealed class ConnectionState {
             data object Disconnected : ConnectionState()
@@ -546,13 +552,16 @@ class WebSocketClient {
         calculatedSas = null
     }
 
-    /** Parse players/browsers from an auth/pairing response and publish them (if any). */
+    /** Parse capabilities from every auth/pairing response, including an empty legacy response. */
     private fun emitCapabilities(json: JsonObject) {
         val players = parseStringArray(json, "players")
         val browsers = parseStringArray(json, "browsers")
-        if (players.isNotEmpty() || browsers.isNotEmpty()) {
-            scope.launch { _tvCapabilities.emit(TvCapabilities(players, browsers)) }
-        }
+        val screenMirrorWebRtc = json["screenMirrorWebRtc"]?.jsonPrimitive?.contentOrNull == "true"
+        val capabilities = TvCapabilities(players, browsers, screenMirrorWebRtc)
+        // Always replace the previous receiver's capabilities. Otherwise connecting to an
+        // older TV after a capable one can leave screen mirroring incorrectly enabled.
+        _tvCapabilitiesState.value = capabilities
+        scope.launch { _tvCapabilities.emit(capabilities) }
     }
 
     private fun parseStringArray(json: JsonObject, key: String): List<String> =

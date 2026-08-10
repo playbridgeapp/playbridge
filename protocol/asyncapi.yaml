@@ -290,6 +290,10 @@ components:
         - $ref: '#/components/schemas/BrowserCommand'
         - $ref: '#/components/schemas/BrowserControlCommand'
         - $ref: '#/components/schemas/ContextQueryCommand'
+        - $ref: '#/components/schemas/ScreenMirrorStartCommand'
+        - $ref: '#/components/schemas/ScreenMirrorOfferCommand'
+        - $ref: '#/components/schemas/ScreenMirrorCandidateCommand'
+        - $ref: '#/components/schemas/ScreenMirrorStopCommand'
         - $ref: '#/components/schemas/UserScript'
         - $ref: '#/components/schemas/UserScriptQuery'
         - $ref: '#/components/schemas/UserAgent'
@@ -308,6 +312,10 @@ components:
         - $ref: '#/components/schemas/PlayerSettings'
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
+        - $ref: '#/components/schemas/ScreenMirrorReady'
+        - $ref: '#/components/schemas/ScreenMirrorAnswer'
+        - $ref: '#/components/schemas/ScreenMirrorCandidate'
+        - $ref: '#/components/schemas/ScreenMirrorEvent'
     Ping:
       type: object
       required: [type]
@@ -340,6 +348,7 @@ components:
         browsers:
           type: array
           items: { type: string }
+        screenMirrorWebRtc: { type: boolean, default: false }
       additionalProperties: false
     PairingRequest:
       deprecated: true
@@ -416,6 +425,7 @@ components:
         browsers:
           type: array
           items: { type: string }
+        screenMirrorWebRtc: { type: boolean, default: false }
       additionalProperties: false
     CommandEnvelope:
       type: object
@@ -543,6 +553,69 @@ components:
         - type: object
           properties:
             action: { const: context_query }
+    ScreenMirrorStartCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: screen_mirror_start }
+            payload:
+              $ref: '#/components/schemas/ScreenMirrorStartPayload'
+    ScreenMirrorOfferCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: screen_mirror_offer }
+            payload: { $ref: '#/components/schemas/ScreenMirrorSdpPayload' }
+    ScreenMirrorCandidateCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: screen_mirror_candidate }
+            payload: { $ref: '#/components/schemas/ScreenMirrorCandidatePayload' }
+    ScreenMirrorStopCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: screen_mirror_stop }
+            payload: { $ref: '#/components/schemas/ScreenMirrorStopPayload' }
+    ScreenMirrorStartPayload:
+      type: object
+      required: [sessionId, protocolVersion]
+      properties:
+        sessionId: { type: string, format: uuid }
+        protocolVersion: { const: 1 }
+      additionalProperties: false
+    ScreenMirrorSdpPayload:
+      type: object
+      required: [sessionId, sdp]
+      properties:
+        sessionId: { type: string, format: uuid }
+        sdp: { type: string, minLength: 1, maxLength: 131072, writeOnly: true }
+      additionalProperties: false
+    ScreenMirrorCandidatePayload:
+      type: object
+      required: [sessionId, sdpMLineIndex, candidate]
+      properties:
+        sessionId: { type: string, format: uuid }
+        sdpMid: { type: [string, 'null'] }
+        sdpMLineIndex: { type: integer, minimum: 0 }
+        candidate: { type: string, minLength: 1, maxLength: 8192, writeOnly: true }
+      additionalProperties: false
+    ScreenMirrorStopPayload:
+      type: object
+      required: [sessionId]
+      properties:
+        sessionId: { type: string, format: uuid }
+        reason: { type: [string, 'null'], maxLength: 256 }
+      additionalProperties: false
     PlayPayload:
       type: object
       required: [url]
@@ -622,7 +695,41 @@ components:
       required: [type, active]
       properties:
         type: { const: context }
-        active: { enum: [idle, player, browser] }
+        active: { enum: [idle, player, browser, screen_mirror] }
+      additionalProperties: false
+    ScreenMirrorReady:
+      type: object
+      required: [type, sessionId]
+      properties:
+        type: { const: screen_mirror_ready }
+        sessionId: { type: string, format: uuid }
+      additionalProperties: false
+    ScreenMirrorAnswer:
+      type: object
+      required: [type, sessionId, sdp]
+      properties:
+        type: { const: screen_mirror_answer }
+        sessionId: { type: string, format: uuid }
+        sdp: { type: string, minLength: 1, maxLength: 131072, writeOnly: true }
+      additionalProperties: false
+    ScreenMirrorCandidate:
+      type: object
+      required: [type, sessionId, sdpMLineIndex, candidate]
+      properties:
+        type: { const: screen_mirror_candidate }
+        sessionId: { type: string, format: uuid }
+        sdpMid: { type: [string, 'null'] }
+        sdpMLineIndex: { type: integer, minimum: 0 }
+        candidate: { type: string, minLength: 1, maxLength: 8192, writeOnly: true }
+      additionalProperties: false
+    ScreenMirrorEvent:
+      type: object
+      required: [type, sessionId, state]
+      properties:
+        type: { const: screen_mirror_event }
+        sessionId: { type: string, format: uuid }
+        state: { enum: [connected, stopped, failed] }
+        reason: { type: [string, 'null'], maxLength: 256 }
       additionalProperties: false
     PlaylistStatus:
       type: object
