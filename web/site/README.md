@@ -50,22 +50,25 @@ npx wrangler pages deploy build --project-name playbridge
 - Landing page emits a `SoftwareApplication` JSON-LD block.
 - `/sitemap.xml` and `/robots.txt` are generated at build time.
 - `static/_headers` sets immutable caching for `/_app/immutable/*` and basic security headers.
-- `static/_redirects` provides short links like `/android` → GitHub releases.
+- `static/_redirects` provides short links like `/android` → the managed download endpoint.
 
 ## Update and download endpoints
 
-Cloudflare Pages Functions resolve stable CLI releases from GitHub while keeping
-the client-facing contract on `playbridge.app`:
+Cloudflare Pages Functions resolve stable direct-download releases from GitHub
+while keeping the client-facing contract on `playbridge.app`:
 
 - `GET /api/v1/updates/cli?os=<os>&arch=<arch>` returns a versioned JSON manifest
   with the target asset URL and SHA-256 digest.
 - `/download/cli-<os>-<arch>` redirects installers to the same resolved asset and
-  includes version and checksum response headers.
+  includes version and checksum response headers. Android, Android TV, Desktop,
+  and Firefox download paths use the same resolver.
 
-Only published, non-prerelease CLI releases older than the 24-hour rollout hold
-are eligible. Resolution uses GitHub's asset digest when available and otherwise
-verifies the release's `SHA256SUMS` entry. Set `GITHUB_TOKEN` in the Pages
-environment to increase GitHub API rate limits; clients never receive the token.
+Only published, non-prerelease releases whose notes' rollout-delay marker has
+elapsed are eligible. The marker defaults to 24 hours and accepts `0` through
+`168`; see `docs/release.md`. CLI resolution uses GitHub's asset digest when
+available and otherwise verifies the release's `SHA256SUMS` entry. Set
+`GITHUB_TOKEN` in the Pages environment to increase GitHub API rate limits;
+clients never receive the token.
 
 ## Color tokens
 

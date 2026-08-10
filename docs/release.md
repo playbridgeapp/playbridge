@@ -29,8 +29,8 @@ project does not require shipping the others.
    **upreved consumers** get release-build / publish.
 
 Draft releases are visible to collaborators with write access, not to anonymous
-users or the `playbridge.app` update resolver, which only considers published
-stable `cli-v*` releases after the rollout hold.
+users or the `playbridge.app` download resolver, which only considers published
+stable releases after each release's rollout delay.
 
 ---
 
@@ -79,7 +79,7 @@ Keep the marker in every draft/publish body for that product. Do not reuse marke
    that push (or via `workflow_dispatch`), and no published tag exists yet.
 5. Inspect the **draft** GitHub Release `cli-vX.Y.Z` and download assets to test.
 6. Run **CLI Publish** (`workflow_dispatch`, input = version) to set `draft=false`.
-7. Wait for the 24-hour rollout hold. The `playbridge.app` manifest and download
+7. Wait for the configured rollout delay. The `playbridge.app` manifest and download
    endpoints then offer the release to `cli/install.sh` and the dashboard updater.
 
 ### Workflows
@@ -114,10 +114,30 @@ No rebuild. Assets stay those attached at draft time. No app store for CLI.
 GitHub Releases remains the source of CI-built archives and `SHA256SUMS`. Clients
 do not query GitHub directly: Cloudflare Pages resolves the current eligible
 release at `GET /api/v1/updates/cli?os=<os>&arch=<arch>`. The resolver rejects
-drafts and prereleases, applies a strict 24-hour hold from publication, and
-returns the matching asset URL and SHA-256 digest. `/download/cli-<os>-<arch>`
-uses the same resolver for shell installs, preventing the installer and dashboard
-from drifting to different versions.
+drafts and prereleases, applies the release-note rollout delay, and returns the
+matching asset URL and SHA-256 digest. `/download/cli-<os>-<arch>` uses the same
+resolver for shell installs, preventing the installer and dashboard from drifting
+to different versions.
+
+### Release rollout delay
+
+All PlayBridge artifacts distributed through `playbridge.app` use the same
+release-note marker:
+
+```html
+<!-- playbridge-rollout-delay-hours: 24 -->
+```
+
+The generated release notes include this marker by default. It is editable in
+the GitHub release form before or after publication: use `0` to make a published
+release eligible immediately, or an integer from `1` through `168` to delay it.
+If the marker is omitted or invalid, the resolver defaults to 24 hours. This
+applies to CLI, Android phone, Android TV Player, Android TV GeckoView plugin,
+Desktop, and Firefox extension downloads; store-distributed builds are excluded.
+
+The resolver caches a result for at most 10 minutes. GitHub release pages and
+their assets are public immediately after publication; the marker only controls
+what `playbridge.app` advertises through its download and update endpoints.
 
 The CLI caches successful checks for 24 hours and failed checks for one hour.
 Dashboard installation verifies the digest, stages a sibling executable, keeps a

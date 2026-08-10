@@ -368,6 +368,7 @@ jobs:
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
           body: |
             <!-- tag: 5c9b2f -->
+            <!-- playbridge-rollout-delay-hours: 24 -->
             **Phone:** v${{ steps.versions.outputs.phone }}
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/phone-v${{ steps.versions.outputs.phone }}/mobile/android/CHANGELOG.md)
@@ -387,6 +388,7 @@ jobs:
           name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
           body: |
             <!-- tag: 8d2a1c -->
+            <!-- playbridge-rollout-delay-hours: 24 -->
             **TV Player:** v${{ steps.versions.outputs.player }}
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-player-v${{ steps.versions.outputs.player }}/tv/android/CHANGELOG.md)
@@ -408,6 +410,7 @@ jobs:
           name: PlayBridge TV GeckoView Plugin v${{ steps.versions.outputs.browser }}
           body: |
             <!-- tag: 3e7f9a -->
+            <!-- playbridge-rollout-delay-hours: 24 -->
             **TV GeckoView Plugin:** v${{ steps.versions.outputs.browser }}
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}/tv/android/CHANGELOG.md)

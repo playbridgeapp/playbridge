@@ -144,6 +144,7 @@ jobs:
           name: PlayBridge Extension v${{ steps.version.outputs.version }}
           body: |
             <!-- tag: 9f2d8e -->
+            <!-- playbridge-rollout-delay-hours: 24 -->
             **PlayBridge Extension:** v${{ steps.version.outputs.version }}
 
             | Browser | File | Install |

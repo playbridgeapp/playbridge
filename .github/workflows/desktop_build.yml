@@ -337,6 +337,7 @@ jobs:
         name: PlayBridge Desktop v${{ steps.version.outputs.version }}
         body: |
           <!-- tag: 1a4b6c -->
+          <!-- playbridge-rollout-delay-hours: 24 -->
           **Desktop Receiver:** v${{ steps.version.outputs.version }}
 
           📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/desktop-v${{ steps.version.outputs.version }}/desktop/CHANGELOG.md)
