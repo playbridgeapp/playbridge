@@ -2,6 +2,11 @@ package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
 import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
+import com.playbridge.shared.protocol.createScreenMirrorCandidateCommandJson
+import com.playbridge.shared.protocol.createScreenMirrorOfferJson
+import com.playbridge.shared.protocol.createScreenMirrorReadyJson
+import com.playbridge.shared.protocol.createScreenMirrorStartJson
+import com.playbridge.shared.protocol.parseIncomingMessage
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -56,6 +61,48 @@ class ProtocolJsonTest {
             listOf("webview", "gecko"),
             o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content }
         )
+    }
+
+    @Test
+    fun authResponseAdvertisesScreenMirrorCapability() {
+        val o = obj(createAuthResponseJson(success = true, screenMirrorWebRtc = true))
+        assertEquals(true, o["screenMirrorWebRtc"]?.jsonPrimitive?.content?.toBoolean())
+    }
+
+    @Test
+    fun parsesScreenMirrorOfferAndCandidateCommands() {
+        val sessionId = "a271abbb-8a9c-4947-a776-8af9c6fe7fd0"
+        val offer = parseIncomingMessage(createScreenMirrorOfferJson(sessionId, "v=0\\r\\n"))
+        assertTrue(offer is com.playbridge.shared.protocol.IncomingMessage.ScreenMirrorOffer)
+
+        val candidate = parseIncomingMessage(createScreenMirrorCandidateCommandJson(
+            sessionId, "0", 0, "candidate:1 1 UDP 1 192.168.1.20 5000 typ host",
+        ))
+        assertTrue(candidate is com.playbridge.shared.protocol.IncomingMessage.ScreenMirrorCandidate)
+    }
+
+    @Test
+    fun screenMirrorStartRequiresProtocolVersionOne() {
+        val sessionId = "a271abbb-8a9c-4947-a776-8af9c6fe7fd0"
+        assertTrue(
+            parseIncomingMessage(createScreenMirrorStartJson(sessionId)) is
+                com.playbridge.shared.protocol.IncomingMessage.ScreenMirrorStart,
+        )
+
+        val missingVersion =
+            """{"type":"command","action":"screen_mirror_start","payload":{"sessionId":"$sessionId"}}"""
+        val unsupportedVersion =
+            """{"type":"command","action":"screen_mirror_start","payload":{"sessionId":"$sessionId","protocolVersion":2}}"""
+        assertTrue(parseIncomingMessage(missingVersion) is com.playbridge.shared.protocol.IncomingMessage.Unknown)
+        assertTrue(parseIncomingMessage(unsupportedVersion) is com.playbridge.shared.protocol.IncomingMessage.Unknown)
+    }
+
+    @Test
+    fun screenMirrorReadyRoundTripsThroughTheParser() {
+        val sessionId = "6ea051d8-d6d6-4513-aad4-7c72852420d5"
+        val parsed = parseIncomingMessage(createScreenMirrorReadyJson(sessionId))
+        assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.ScreenMirrorReady)
+        assertEquals(sessionId, (parsed as com.playbridge.shared.protocol.IncomingMessage.ScreenMirrorReady).sessionId)
     }
 
     @Test

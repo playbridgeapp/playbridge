@@ -9,9 +9,11 @@ import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import java.util.UUID
 import playbridge.AuthMessage
 import playbridge.BrowserControlPayload
 import playbridge.BrowserPayload
@@ -50,6 +52,18 @@ sealed class IncomingMessage {
     data class Mouse(val payload: playbridge.MousePayload) : IncomingMessage()
     data class Browser(val payload: playbridge.BrowserPayload) : IncomingMessage()
     data class BrowserControl(val payload: playbridge.BrowserControlPayload) : IncomingMessage()
+    data class ScreenMirrorStart(val sessionId: String) : IncomingMessage()
+    data class ScreenMirrorOffer(val sessionId: String, val sdp: String) : IncomingMessage()
+    data class ScreenMirrorAnswer(val sessionId: String, val sdp: String) : IncomingMessage()
+    data class ScreenMirrorCandidate(
+        val sessionId: String,
+        val sdpMid: String?,
+        val sdpMLineIndex: Int,
+        val candidate: String,
+    ) : IncomingMessage()
+    data class ScreenMirrorStop(val sessionId: String, val reason: String?) : IncomingMessage()
+    data class ScreenMirrorReady(val sessionId: String) : IncomingMessage()
+    data class ScreenMirrorEvent(val sessionId: String, val state: String, val reason: String?) : IncomingMessage()
     data object ContextQuery : IncomingMessage()
     /**
      * User-supplied browser script the phone installs onto the TV (e.g. an ad-skipper we
@@ -184,6 +198,55 @@ fun createMouseCommandJson(event: String, dx: Float = 0f, dy: Float = 0f): Strin
 fun createBrowserControlCommandJson(action: String): String =
     envelope("browser_control", browserControlAdapter.toJson(BrowserControlPayload(action = action)))
 
+private fun screenMirrorPayload(sessionId: String, block: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit): String =
+    buildJsonObject {
+        put("sessionId", sessionId)
+        block()
+    }.toString()
+
+fun createScreenMirrorStartJson(sessionId: String): String =
+    envelope("screen_mirror_start", screenMirrorPayload(sessionId) { put("protocolVersion", 1) })
+
+fun createScreenMirrorOfferJson(sessionId: String, sdp: String): String =
+    envelope("screen_mirror_offer", screenMirrorPayload(sessionId) { put("sdp", sdp) })
+
+fun createScreenMirrorCandidateCommandJson(
+    sessionId: String,
+    sdpMid: String?,
+    sdpMLineIndex: Int,
+    candidate: String,
+): String = envelope("screen_mirror_candidate", screenMirrorPayload(sessionId) {
+    if (sdpMid != null) put("sdpMid", sdpMid)
+    put("sdpMLineIndex", sdpMLineIndex)
+    put("candidate", candidate)
+})
+
+fun createScreenMirrorStopJson(sessionId: String, reason: String? = null): String =
+    envelope("screen_mirror_stop", screenMirrorPayload(sessionId) { if (reason != null) put("reason", reason) })
+
+fun createScreenMirrorReadyJson(sessionId: String): String =
+    buildJsonObject { put("type", "screen_mirror_ready"); put("sessionId", sessionId) }.toString()
+
+fun createScreenMirrorAnswerJson(sessionId: String, sdp: String): String =
+    buildJsonObject { put("type", "screen_mirror_answer"); put("sessionId", sessionId); put("sdp", sdp) }.toString()
+
+fun createScreenMirrorCandidateJson(sessionId: String, sdpMid: String?, sdpMLineIndex: Int, candidate: String): String =
+    buildJsonObject {
+        put("type", "screen_mirror_candidate")
+        put("sessionId", sessionId)
+        if (sdpMid != null) put("sdpMid", sdpMid)
+        put("sdpMLineIndex", sdpMLineIndex)
+        put("candidate", candidate)
+    }.toString()
+
+fun createScreenMirrorEventJson(sessionId: String, state: String, reason: String? = null): String =
+    buildJsonObject {
+        put("type", "screen_mirror_event")
+        put("sessionId", sessionId)
+        put("state", state)
+        if (reason != null) put("reason", reason)
+    }.toString()
+
 /**
  * Install (or, with blank [content], uninstall) a user-supplied browser script on the TV.
  * Standalone message (not a Wire command) so it needs no proto change.
@@ -288,6 +351,7 @@ fun createAuthResponseJson(
     certFingerprint: String? = null,
     players: List<String> = emptyList(),
     browsers: List<String> = emptyList(),
+    screenMirrorWebRtc: Boolean = false,
 ): String =
     buildJsonObject {
         put("type", "auth_response")
@@ -295,6 +359,7 @@ fun createAuthResponseJson(
         if (certFingerprint != null) put("certFingerprint", certFingerprint)
         if (players.isNotEmpty()) put("players", buildJsonArray { players.forEach { add(it) } })
         if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })
+        if (screenMirrorWebRtc) put("screenMirrorWebRtc", true)
     }.toString()
 
 fun createContextJson(active: String): String =
@@ -386,6 +451,22 @@ fun parseIncomingMessage(text: String): IncomingMessage {
                 save = root["save"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
             )
             "user_agent_query" -> IncomingMessage.UserAgentQuery
+            "screen_mirror_ready" -> screenMirrorSession(root)?.let(IncomingMessage::ScreenMirrorReady)
+                ?: IncomingMessage.Unknown("screen_mirror_ready_parse_error", text)
+            "screen_mirror_answer" -> screenMirrorSdp(root)?.let { (sessionId, sdp) ->
+                IncomingMessage.ScreenMirrorAnswer(sessionId, sdp)
+            } ?: IncomingMessage.Unknown("screen_mirror_answer_parse_error", text)
+            "screen_mirror_candidate" -> screenMirrorCandidate(root)?.let { candidate ->
+                IncomingMessage.ScreenMirrorCandidate(
+                    candidate.sessionId, candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate,
+                )
+            } ?: IncomingMessage.Unknown("screen_mirror_candidate_parse_error", text)
+            "screen_mirror_event" -> screenMirrorSession(root)?.let { sessionId ->
+                val state = root["state"]?.jsonPrimitive?.contentOrNull
+                if (state in setOf("connected", "stopped", "failed")) {
+                    IncomingMessage.ScreenMirrorEvent(sessionId, state!!, root["reason"]?.jsonPrimitive?.contentOrNull)
+                } else null
+            } ?: IncomingMessage.Unknown("screen_mirror_event_parse_error", text)
             else -> IncomingMessage.Unknown(type, text)
         }
     } catch (e: Exception) {
@@ -405,6 +486,59 @@ private fun parseCommandAction(action: String, payloadJson: String?, raw: String
         "mouse" -> mouseAdapter.fromJson(payloadJson)?.let { IncomingMessage.Mouse(it) }
         "browser" -> browserAdapter.fromJson(payloadJson)?.let { IncomingMessage.Browser(it) }
         "browser_control" -> browserControlAdapter.fromJson(payloadJson)?.let { IncomingMessage.BrowserControl(it) }
+        "screen_mirror_start" -> screenMirrorStartPayload(payloadJson)?.let(IncomingMessage::ScreenMirrorStart)
+        "screen_mirror_offer" -> screenMirrorSdpPayload(payloadJson)?.let { (sessionId, sdp) ->
+            IncomingMessage.ScreenMirrorOffer(sessionId, sdp)
+        }
+        "screen_mirror_candidate" -> screenMirrorCandidatePayload(payloadJson)?.let { candidate ->
+            IncomingMessage.ScreenMirrorCandidate(
+                candidate.sessionId, candidate.sdpMid, candidate.sdpMLineIndex, candidate.candidate,
+            )
+        }
+        "screen_mirror_stop" -> screenMirrorSessionPayload(payloadJson)?.let { sessionId ->
+            val reason = runCatching { envelopeJson.parseToJsonElement(payloadJson).jsonObject["reason"]?.jsonPrimitive?.contentOrNull }.getOrNull()
+            IncomingMessage.ScreenMirrorStop(sessionId, reason)
+        }
         else -> IncomingMessage.Unknown(action, raw)
     } ?: IncomingMessage.Unknown("${action}_parse_error", raw)
 }
+
+private data class MirrorCandidate(
+    val sessionId: String,
+    val sdpMid: String?,
+    val sdpMLineIndex: Int,
+    val candidate: String,
+)
+
+private fun screenMirrorSession(root: JsonObject): String? =
+    root["sessionId"]?.jsonPrimitive?.contentOrNull?.takeIf(::isMirrorSessionId)
+
+private fun screenMirrorSessionPayload(payloadJson: String): String? =
+    runCatching { screenMirrorSession(envelopeJson.parseToJsonElement(payloadJson).jsonObject) }.getOrNull()
+
+private fun screenMirrorStartPayload(payloadJson: String): String? = runCatching {
+    val root = envelopeJson.parseToJsonElement(payloadJson).jsonObject
+    if (root["protocolVersion"]?.jsonPrimitive?.intOrNull != 1) return@runCatching null
+    screenMirrorSession(root)
+}.getOrNull()
+
+private fun screenMirrorSdp(root: JsonObject): Pair<String, String>? {
+    val sessionId = screenMirrorSession(root) ?: return null
+    val sdp = root["sdp"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() && it.length <= 131_072 } ?: return null
+    return sessionId to sdp
+}
+
+private fun screenMirrorSdpPayload(payloadJson: String): Pair<String, String>? =
+    runCatching { screenMirrorSdp(envelopeJson.parseToJsonElement(payloadJson).jsonObject) }.getOrNull()
+
+private fun screenMirrorCandidate(root: JsonObject): MirrorCandidate? {
+    val sessionId = screenMirrorSession(root) ?: return null
+    val candidate = root["candidate"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() && it.length <= 8_192 } ?: return null
+    val mLine = root["sdpMLineIndex"]?.jsonPrimitive?.intOrNull?.takeIf { it >= 0 } ?: return null
+    return MirrorCandidate(sessionId, root["sdpMid"]?.jsonPrimitive?.contentOrNull, mLine, candidate)
+}
+
+private fun screenMirrorCandidatePayload(payloadJson: String): MirrorCandidate? =
+    runCatching { screenMirrorCandidate(envelopeJson.parseToJsonElement(payloadJson).jsonObject) }.getOrNull()
+
+private fun isMirrorSessionId(value: String): Boolean = runCatching { UUID.fromString(value) }.isSuccess

@@ -68,6 +68,8 @@ pub enum ReceiverFrame {
         players: Vec<String>,
         #[serde(default)]
         browsers: Vec<String>,
+        #[serde(default)]
+        screen_mirror_web_rtc: bool,
     },
     #[serde(rename = "status")]
     Status {
@@ -94,6 +96,8 @@ pub struct CredentialBundle {
     pub players: Vec<String>,
     #[serde(default)]
     pub browsers: Vec<String>,
+    #[serde(default)]
+    pub screen_mirror_web_rtc: bool,
 }
 
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -452,12 +456,16 @@ mod tests {
     #[test]
     fn receiver_parser_tolerates_unknown_fields_and_types() {
         let response = decode_receiver_text(
-            r#"{"type":"auth_response","success":true,"players":["mpv"],"future":1}"#,
+            r#"{"type":"auth_response","success":true,"players":["mpv"],"screenMirrorWebRtc":true,"future":1}"#,
         )
         .unwrap();
         assert!(matches!(
             response,
-            ReceiverFrame::AuthResponse { success: true, .. }
+            ReceiverFrame::AuthResponse {
+                success: true,
+                screen_mirror_web_rtc: true,
+                ..
+            }
         ));
         assert_eq!(
             decode_receiver_text(r#"{"type":"future_event","value":1}"#).unwrap(),
@@ -567,6 +575,7 @@ mod tests {
             cert_fingerprint: Some("sha256/test".into()),
             players: vec!["mpv".into()],
             browsers: vec![],
+            screen_mirror_web_rtc: true,
         };
         let ReceiverFrame::PairingApproved { nonce, ciphertext } =
             receiver.approve(&mac, &credentials).unwrap()

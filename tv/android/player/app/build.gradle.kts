@@ -108,6 +108,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":webrtc-runtime"))
     implementation(libs.androidx.compose.ui.text.google.fonts)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)

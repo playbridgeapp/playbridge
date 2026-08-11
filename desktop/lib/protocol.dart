@@ -89,6 +89,40 @@ class ContextQueryCmd extends Command {
   const ContextQueryCmd();
 }
 
+class ScreenMirrorStartCmd extends Command {
+  const ScreenMirrorStartCmd(this.sessionId);
+
+  final String sessionId;
+}
+
+class ScreenMirrorOfferCmd extends Command {
+  const ScreenMirrorOfferCmd(this.sessionId, this.sdp);
+
+  final String sessionId;
+  final String sdp;
+}
+
+class ScreenMirrorCandidateCmd extends Command {
+  const ScreenMirrorCandidateCmd({
+    required this.sessionId,
+    required this.sdpMid,
+    required this.sdpMLineIndex,
+    required this.candidate,
+  });
+
+  final String sessionId;
+  final String? sdpMid;
+  final int sdpMLineIndex;
+  final String candidate;
+}
+
+class ScreenMirrorStopCmd extends Command {
+  const ScreenMirrorStopCmd(this.sessionId, this.reason);
+
+  final String sessionId;
+  final String? reason;
+}
+
 class PingCmd extends Command {
   const PingCmd();
 }
@@ -223,6 +257,45 @@ Command parseCommand(String json) {
               return QueueAddCmd(_parsePlayPayload(item));
             }
             return const UnknownCmd('queue_add_no_item');
+          case 'screen_mirror_start':
+            final sessionId = _screenMirrorSessionId(payload);
+            if (sessionId == null || payload?['protocolVersion'] != 1) {
+              return const UnknownCmd('screen_mirror_start_parse_error');
+            }
+            return ScreenMirrorStartCmd(sessionId);
+          case 'screen_mirror_offer':
+            final sessionId = _screenMirrorSessionId(payload);
+            final sdp = payload?['sdp'];
+            if (sessionId == null || sdp is! String || sdp.isEmpty) {
+              return const UnknownCmd('screen_mirror_offer_parse_error');
+            }
+            return ScreenMirrorOfferCmd(sessionId, sdp);
+          case 'screen_mirror_candidate':
+            final sessionId = _screenMirrorSessionId(payload);
+            final sdpMid = payload?['sdpMid'];
+            final sdpMLineIndex = payload?['sdpMLineIndex'];
+            final candidate = payload?['candidate'];
+            if (sessionId == null ||
+                (sdpMid != null && sdpMid is! String) ||
+                sdpMLineIndex is! int ||
+                sdpMLineIndex < 0 ||
+                candidate is! String ||
+                candidate.isEmpty) {
+              return const UnknownCmd('screen_mirror_candidate_parse_error');
+            }
+            return ScreenMirrorCandidateCmd(
+              sessionId: sessionId,
+              sdpMid: sdpMid as String?,
+              sdpMLineIndex: sdpMLineIndex,
+              candidate: candidate,
+            );
+          case 'screen_mirror_stop':
+            final sessionId = _screenMirrorSessionId(payload);
+            final reason = payload?['reason'];
+            if (sessionId == null || (reason != null && reason is! String)) {
+              return const UnknownCmd('screen_mirror_stop_parse_error');
+            }
+            return ScreenMirrorStopCmd(sessionId, reason as String?);
           default:
             return UnknownCmd(action ?? 'no_action');
         }
@@ -232,6 +305,20 @@ Command parseCommand(String json) {
   } catch (e) {
     return UnknownCmd('parse_error: $e');
   }
+}
+
+final RegExp _screenMirrorSessionPattern = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$',
+);
+
+String? _screenMirrorSessionId(dynamic payload) {
+  if (payload is! Map) return null;
+  final sessionId = payload['sessionId'];
+  if (sessionId is! String ||
+      !_screenMirrorSessionPattern.hasMatch(sessionId)) {
+    return null;
+  }
+  return sessionId;
 }
 
 // ==================== Outgoing message builders ====================

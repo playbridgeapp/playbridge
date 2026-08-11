@@ -42,6 +42,10 @@ jobs:
       - name: Validate CLI installer
         run: sh -n cli/install.sh
 
+      - name: Validate Windows CLI installer
+        shell: pwsh
+        run: '[scriptblock]::Create((Get-Content -Raw cli/install.ps1)) | Out-Null'
+
   cli-build:
     name: cli-${{ matrix.os }}
     strategy:
@@ -58,3 +62,8 @@ jobs:
 
       - name: Build CLI
         run: cargo build --release --locked -p playbridge-cast-cli
+
+      - name: Test Windows installer helpers
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ./cli/install.tests.ps1

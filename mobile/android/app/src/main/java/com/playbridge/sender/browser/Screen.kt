@@ -23,6 +23,7 @@ sealed class Screen {
     object AddonSettings : Screen()
     data class LibraryDetail(val id: String, val type: String, val source: String? = null) : Screen()
     object Dashboard : Screen()
+    object ScreenMirror : Screen()
     object PhoneFiles : Screen()
     object Iptv : Screen()
     data class IptvDetail(val playlistId: Long) : Screen()
@@ -55,6 +56,7 @@ sealed class Screen {
                         DebridLibrary -> "debridlibrary"
                         AddonSettings -> "addonsettings"
                         Dashboard -> "dashboard"
+                        ScreenMirror -> "screenmirror"
                         PhoneFiles -> "phonefiles"
                         Iptv -> "iptv"
                         Collections -> "collections"
@@ -82,6 +84,7 @@ sealed class Screen {
                             if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) DebridLibrary else Library
                         "addonsettings" -> AddonSettings
                         "dashboard" -> Dashboard
+                        "screenmirror" -> ScreenMirror
                         "phonefiles" -> PhoneFiles
                         "iptv" -> Iptv
                         "collections" -> Collections

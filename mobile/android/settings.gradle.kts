@@ -32,3 +32,5 @@ rootProject.name = "PlayBridgePhone"
 include(":app")
 include(":shared")
 project(":shared").projectDir = File("../../shared")
+include(":webrtc-runtime")
+project(":webrtc-runtime").projectDir = File("../../third_party/webrtc-runtime")

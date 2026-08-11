@@ -5,6 +5,8 @@ on:
     branches: [main]
     paths:
       - 'web/site/**'
+      - 'cli/install.sh'
+      - 'cli/install.ps1'
       - 'browser-receiver-rust/web/**'
       - '.github/workflows/web_deploy.yml'
   workflow_dispatch:
@@ -41,8 +43,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm build
+      - name: Test, check, and build
+        run: pnpm test && pnpm check && pnpm build
 
       - name: Deploy to Cloudflare Pages
         run: npx wrangler pages deploy build --project-name playbridge --branch main

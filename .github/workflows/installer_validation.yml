@@ -1,0 +1,54 @@
+name: CLI Installer Validation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cli/install.sh'
+      - 'cli/install.ps1'
+      - 'cli/install.tests.ps1'
+      - 'web/site/scripts/publish-cli-installers.mjs'
+      - 'web/site/scripts/publish-cli-installers.test.mjs'
+      - 'web/site/package.json'
+      - 'web/site/static/_headers'
+      - '.github/workflows/installer_validation.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cli/install.sh'
+      - 'cli/install.ps1'
+      - 'cli/install.tests.ps1'
+      - 'web/site/scripts/publish-cli-installers.mjs'
+      - 'web/site/scripts/publish-cli-installers.test.mjs'
+      - 'web/site/package.json'
+      - 'web/site/static/_headers'
+      - '.github/workflows/installer_validation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unix-installer:
+    name: unix installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate shell installer syntax
+        run: sh -n cli/install.sh
+
+      - name: Verify website publishes canonical installers
+        run: node --test web/site/scripts/publish-cli-installers.test.mjs
+
+  windows-installer:
+    name: windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse and test PowerShell installer
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw cli/install.ps1)) | Out-Null
+          ./cli/install.tests.ps1

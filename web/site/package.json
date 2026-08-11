@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "vite build && node scripts/publish-cli-installers.mjs",
     "preview": "vite preview",
+    "test": "node --test functions/_lib/releases.test.mjs scripts/publish-cli-installers.test.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "preinstall": "npx only-allow pnpm"
   },

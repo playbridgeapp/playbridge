@@ -118,6 +118,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":webrtc-runtime"))
     implementation(libs.androidx.palette.ktx)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

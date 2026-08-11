@@ -60,7 +60,7 @@ The PlayBridge senders and extensions are available on official store registries
   - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing (download from [TV Browser Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=3e7f9a&expanded=true)).
 - **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
 - **Desktop (receiver)**: download the build for your OS from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
-- **CLI (sender & receiver)**: on macOS or Linux, run `curl -fsSL https://raw.githubusercontent.com/playbridgeapp/playbridge/main/cli/install.sh | sh`. Windows and manual archives are on [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
+- **CLI (sender & receiver)**: on macOS or Linux, run `curl -fsSL https://playbridge.app/install.sh | sh`; on Windows PowerShell, run `irm https://playbridge.app/install.ps1 | iex`. Manual archives remain on [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
 - **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
 
@@ -84,11 +84,13 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 - 📱 **Phone App (Android / iOS)**: Browse video sites in the built-in ad-blocked browser, cast movies/episodes from your Stremio library and add-ons, load IPTV playlists, or stream local phone files.
 - 🖥️ **Desktop App (Receiver & Sender)**: Plays incoming casts from phone and extension senders. Also acts as a sender to cast local video files (with drag-and-drop) or stream URLs to TVs.
 - 🧩 **Browser Extension (Firefox & Chrome)**: Detects streams in active browser tabs and casts them to your TV via the Desktop app.
-- 💻 **Rust CLI (`playbridge`)**: Discover receivers and send local files or URLs directly from your terminal:
+- 💻 **Rust CLI (`playbridge`)**: Use a full-screen terminal dashboard to discover receivers, cast local files or URLs, host a browser receiver, or receive casts through `mpv`:
   ```bash
-  playbridge discover               # Discover local network receivers
-  playbridge send video.mp4         # Send a local file or stream URL to a receiver
-  playbridge receiver               # Receive casts using the installed mpv
+  playbridge                         # Open the dashboard
+  playbridge discover                # Open dashboard discovery
+  playbridge send video.mp4          # Open Cast with media preselected
+  playbridge browser video.mp4       # Host and pair a browser receiver
+  playbridge receiver                # Start the mpv receiver in the dashboard
   ```
 
 ## Screenshots

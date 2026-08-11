@@ -53,6 +53,7 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.settings.SettingsScreen
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.DashboardScreen
+import com.playbridge.sender.cast.mirror.ScreenMirrorScreen
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import kotlinx.coroutines.CoroutineScope
@@ -1478,6 +1479,10 @@ fun AppNavHost(
                             onScreenChange(Screen.Settings)
                         },
                     )
+                }
+                Screen.ScreenMirror -> {
+                    BackHandler { onScreenChange(Screen.Dashboard) }
+                    ScreenMirrorScreen(onBack = { onScreenChange(Screen.Dashboard) })
                 }
                 Screen.PhoneFiles -> {
                     BackHandler { onScreenChange(Screen.Dashboard) }
