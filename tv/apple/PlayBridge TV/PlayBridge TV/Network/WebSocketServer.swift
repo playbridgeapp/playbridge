@@ -1,6 +1,5 @@
 import Foundation
 import Network
-import CryptoKit
 import SwiftUI
 import UIKit
 import Combine
@@ -786,14 +785,7 @@ class WebSocketServer: ObservableObject {
             send(json: ["type": "auth_response", "success": false], to: connection)
             return
         }
-
-        let tokenData = msg.token.data(using: .utf8) ?? Data()
-        let isAuthorized = authorizedTokens.contains { storedToken in
-            let storedData = storedToken.data(using: .utf8) ?? Data()
-            return storedData.count == tokenData.count && zip(storedData, tokenData).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
-        }
-
-        if isAuthorized {
+        if authorizedTokens.contains(msg.token) {
             updateLastConnected(token: msg.token)
             completeAuth(from: connection, token: msg.token)
         } else {

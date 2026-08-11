@@ -21,8 +21,8 @@ class ProxySession {
     required this.id,
     required this.originalUrl,
     required this.headers,
-  }) : createdAt = DateTime.now(),
-       lastAccessedAt = DateTime.now();
+  })  : createdAt = DateTime.now(),
+        lastAccessedAt = DateTime.now();
 
   void touch() {
     lastAccessedAt = DateTime.now();
@@ -40,20 +40,18 @@ class StreamProxyServer {
   final _rng = Random.secure();
 
   StreamProxyServer({required String password})
-    : password = _validatePassword(password);
+      : password = _validatePassword(password);
 
   static String _validatePassword(String password) {
     if (password.trim().isEmpty) {
       throw ArgumentError(
-        'A non-empty API password is required. Provide one with '
-        '--password <password> or set PB_PROXY_PASSWORD=<password> in the '
-        'environment.',
-      );
+          'A non-empty API password is required. Provide one with '
+          '--password <password> or set PB_PROXY_PASSWORD=<password> in the '
+          'environment.');
     }
     if (password.trim() == defaultDockerComposePassword) {
       throw ArgumentError(
-        'The default Docker Compose password is not allowed; set a unique password',
-      );
+          'The default Docker Compose password is not allowed; set a unique password');
     }
     return password;
   }
@@ -107,15 +105,12 @@ class StreamProxyServer {
           return innerHandler(request);
         }
 
-        final token =
-            request.url.queryParameters['token'] ??
+        final token = request.url.queryParameters['token'] ??
             request.headers['Authorization']?.replaceAll('Bearer ', '').trim();
 
-        if (token == null ||
-            !_constantTimeEquals(utf8.encode(token), utf8.encode(password))) {
+        if (token != password) {
           return Response.forbidden(
-            'Unauthorized: Invalid or missing API password',
-          );
+              'Unauthorized: Invalid or missing API password');
         }
 
         return innerHandler(request);
@@ -143,8 +138,7 @@ class StreamProxyServer {
       headers: headers,
     );
     stdout.writeln(
-      '[stream-proxy] Registered session $id for host: ${Uri.parse(originalUrl).host}',
-    );
+        '[stream-proxy] Registered session $id for host: ${Uri.parse(originalUrl).host}');
     final authParam = '?token=$password';
     return 'http://127.0.0.1:$port/s/$id/manifest.m3u8$authParam';
   }
@@ -166,8 +160,8 @@ class StreamProxyServer {
         final bodyStr = await request.readAsString();
         final body = jsonDecode(bodyStr) as Map<String, dynamic>;
         final url = body['url'] as String;
-        final headersMap = (body['headers'] as Map? ?? {})
-            .cast<String, String>();
+        final headersMap =
+            (body['headers'] as Map? ?? {}).cast<String, String>();
 
         final proxyUrl = registerSession(url, headersMap);
         return Response.ok(
@@ -226,9 +220,8 @@ class StreamProxyServer {
       // Path format: /s/play/<uri_b64>/<headers_b64>/<filename>
       if (pathSegments.length < 5) {
         return Response.badRequest(
-          body:
-              'Invalid stateless path structure. Expected /s/play/<uri_b64>/<headers_b64>/<filename>',
-        );
+            body:
+                'Invalid stateless path structure. Expected /s/play/<uri_b64>/<headers_b64>/<filename>');
       }
       final uriParam = pathSegments[2];
       final String baseSpec;
@@ -239,11 +232,8 @@ class StreamProxyServer {
       }
 
       // Resolve relative path segments from index 4 onwards against the base URL
-      targetUrl = _resolveTargetUrl(
-        baseSpec,
-        pathSegments.sublist(4),
-        request.url,
-      );
+      targetUrl =
+          _resolveTargetUrl(baseSpec, pathSegments.sublist(4), request.url);
 
       final hB64 = pathSegments[3];
       statelessHeadersB64 = hB64;
@@ -253,8 +243,7 @@ class StreamProxyServer {
           sessionHeaders = (jsonDecode(decoded) as Map).cast<String, String>();
         } catch (e) {
           return Response.badRequest(
-            body: 'Invalid base64 headers segment: $e',
-          );
+              body: 'Invalid base64 headers segment: $e');
         }
       } else {
         sessionHeaders = {};
@@ -275,10 +264,7 @@ class StreamProxyServer {
       } else {
         // Resolve relative path segments from index 2 onwards against the original session URL
         targetUrl = _resolveTargetUrl(
-          session.originalUrl,
-          pathSegments.sublist(2),
-          request.url,
-        );
+            session.originalUrl, pathSegments.sublist(2), request.url);
       }
       sessionHeaders = session.headers;
     }
@@ -289,14 +275,9 @@ class StreamProxyServer {
     }
 
     final forwardHeaders = _filterUpstreamHeaders(
-      sessionHeaders,
-      request.headers,
-      targetUrl,
-      sessionId,
-    );
+        sessionHeaders, request.headers, targetUrl, sessionId);
 
-    final isHls =
-        targetUrl.toLowerCase().contains('.m3u8') ||
+    final isHls = targetUrl.toLowerCase().contains('.m3u8') ||
         request.url.path.toLowerCase().contains('.m3u8');
 
     if (isHls) {
@@ -324,9 +305,8 @@ class StreamProxyServer {
       final content = utf8.decode(bytes);
 
       final baseUri = Uri.parse(targetUrl);
-      final rewritten = HlsPlaylistRewriter.rewrite(content, baseUri, (
-        resolvedTarget,
-      ) {
+      final rewritten =
+          HlsPlaylistRewriter.rewrite(content, baseUri, (resolvedTarget) {
         final resolvedUri = Uri.parse(resolvedTarget);
         final filename = resolvedUri.pathSegments.isNotEmpty
             ? resolvedUri.pathSegments.last
@@ -338,7 +318,9 @@ class StreamProxyServer {
           final targetB64 = _b64UrlEncode(utf8.encode(resolvedTarget));
           final cleanHeadersB64 = headersB64 ?? 'empty';
           path = '/s/play/$targetB64/$cleanHeadersB64/$filename';
-          queryParams = <String, String>{'token': password};
+          queryParams = <String, String>{
+            'token': password,
+          };
         } else {
           path = '/s/$sessionId/$filename';
           queryParams = <String, String>{
@@ -364,8 +346,7 @@ class StreamProxyServer {
     } catch (e) {
       stderr.writeln('[stream-proxy] Error fetching/rewriting playlist: $e');
       return Response.internalServerError(
-        body: 'Failed to fetch/rewrite HLS playlist: $e',
-      );
+          body: 'Failed to fetch/rewrite HLS playlist: $e');
     }
   }
 
@@ -378,8 +359,7 @@ class StreamProxyServer {
 
       final contentType =
           upstream.headers[HttpHeaders.contentTypeHeader]?.toLowerCase() ?? '';
-      final isDash =
-          contentType.contains('dash+xml') ||
+      final isDash = contentType.contains('dash+xml') ||
           targetUrl.toLowerCase().contains('.mpd') ||
           targetUrl.toLowerCase().contains('manifest/dash');
 
@@ -436,9 +416,7 @@ class StreamProxyServer {
   }
 
   Future<Uint8List> _fetchUrlBytes(
-    String url,
-    Map<String, String> headers,
-  ) async {
+      String url, Map<String, String> headers) async {
     final upstream = await _connectUpstream(url, headers);
     final bytesBuilder = BytesBuilder();
     await for (final chunk in upstream.stream) {
@@ -448,9 +426,7 @@ class StreamProxyServer {
   }
 
   Future<UpstreamResponse> _connectUpstream(
-    String url,
-    Map<String, String> headers,
-  ) async {
+      String url, Map<String, String> headers) async {
     // 1. Try standard HttpClient first (works for Pornhub CDN, etc. bypasses fingerprint block)
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 4)
@@ -470,15 +446,14 @@ class StreamProxyServer {
             outHeaders[k] = values.join(', ');
           }
         });
-        final contentEncoding = resp.headers.value(
-          HttpHeaders.contentEncodingHeader,
-        );
+        final contentEncoding =
+            resp.headers.value(HttpHeaders.contentEncodingHeader);
         final isCompressed =
             contentEncoding != null && contentEncoding != 'identity';
 
         if (resp.contentLength != -1 && !isCompressed) {
-          outHeaders[HttpHeaders.contentLengthHeader] = resp.contentLength
-              .toString();
+          outHeaders[HttpHeaders.contentLengthHeader] =
+              resp.contentLength.toString();
         }
 
         final controller = StreamController<List<int>>();
@@ -586,13 +561,11 @@ class StreamProxyServer {
       _sessions.removeWhere((id, session) {
         final inactiveDuration = now.difference(session.lastAccessedAt);
         final age = now.difference(session.createdAt);
-        final shouldExpire =
-            inactiveDuration > const Duration(minutes: 10) ||
+        final shouldExpire = inactiveDuration > const Duration(minutes: 10) ||
             age > const Duration(hours: 2);
         if (shouldExpire) {
           stdout.writeln(
-            '[stream-proxy] Expired session $id (inactive: ${inactiveDuration.inMinutes}m, age: ${age.inMinutes}m)',
-          );
+              '[stream-proxy] Expired session $id (inactive: ${inactiveDuration.inMinutes}m, age: ${age.inMinutes}m)');
         }
         return shouldExpire;
       });
@@ -661,10 +634,7 @@ String _b64UrlEncode(List<int> bytes) {
 /// Resolves a list of relative URL path segments against a base URL specification.
 /// Merges query parameters from the base URL and the incoming request.
 String _resolveTargetUrl(
-  String baseSpec,
-  List<String> relativeSegments,
-  Uri requestUri,
-) {
+    String baseSpec, List<String> relativeSegments, Uri requestUri) {
   final baseUri = Uri.parse(baseSpec);
   if (relativeSegments.isEmpty) {
     return baseSpec;
@@ -674,11 +644,10 @@ String _resolveTargetUrl(
   if (relativeSegments.first == '_root_') {
     // Resolve relative to the origin root of baseSpec
     final originRoot = Uri(
-      scheme: baseUri.scheme,
-      userInfo: baseUri.userInfo,
-      host: baseUri.host,
-      port: baseUri.port,
-    );
+        scheme: baseUri.scheme,
+        userInfo: baseUri.userInfo,
+        host: baseUri.host,
+        port: baseUri.port);
     final relativePath = relativeSegments.sublist(1).join('/');
     resolvedUri = originRoot.resolve(relativePath);
   } else {
@@ -727,55 +696,38 @@ String _rewriteDashManifest(String content, String? token) {
   }
 
   // 1. Rewrite <BaseURL>...</BaseURL>
-  content = content.replaceAllMapped(
-    RegExp(r'<BaseURL([^>]*)>([^<]+)</BaseURL>'),
-    (match) {
-      final attrs = match.group(1)!;
-      final url = match.group(2)!.trim();
-      return '<BaseURL$attrs>${appendToken(url)}</BaseURL>';
-    },
-  );
+  content = content
+      .replaceAllMapped(RegExp(r'<BaseURL([^>]*)>([^<]+)</BaseURL>'), (match) {
+    final attrs = match.group(1)!;
+    final url = match.group(2)!.trim();
+    return '<BaseURL$attrs>${appendToken(url)}</BaseURL>';
+  });
 
   // 2. Rewrite <Location>...</Location>
   content = content.replaceAllMapped(
-    RegExp(r'<Location([^>]*)>([^<]+)</Location>'),
-    (match) {
-      final attrs = match.group(1)!;
-      final url = match.group(2)!.trim();
-      return '<Location$attrs>${appendToken(url)}</Location>';
-    },
-  );
+      RegExp(r'<Location([^>]*)>([^<]+)</Location>'), (match) {
+    final attrs = match.group(1)!;
+    final url = match.group(2)!.trim();
+    return '<Location$attrs>${appendToken(url)}</Location>';
+  });
 
   // 3. Rewrite attributes (media, initialization, location, baseUrl) in double quotes
   content = content.replaceAllMapped(
-    RegExp(r'\b(media|initialization|location|baseUrl)\s*=\s*"([^"]+)"'),
-    (match) {
-      final attrName = match.group(1)!;
-      final url = match.group(2)!;
-      return '$attrName="${appendToken(url)}"';
-    },
-  );
+      RegExp(r'\b(media|initialization|location|baseUrl)\s*=\s*"([^"]+)"'),
+      (match) {
+    final attrName = match.group(1)!;
+    final url = match.group(2)!;
+    return '$attrName="${appendToken(url)}"';
+  });
 
   // 4. Rewrite attributes (media, initialization, location, baseUrl) in single quotes
   content = content.replaceAllMapped(
-    RegExp(r"\b(media|initialization|location|baseUrl)\s*=\s*'([^']+)'"),
-    (match) {
-      final attrName = match.group(1)!;
-      final url = match.group(2)!;
-      return "$attrName='${appendToken(url)}'";
-    },
-  );
+      RegExp(r"\b(media|initialization|location|baseUrl)\s*=\s*'([^']+)'"),
+      (match) {
+    final attrName = match.group(1)!;
+    final url = match.group(2)!;
+    return "$attrName='${appendToken(url)}'";
+  });
 
   return content;
-}
-
-bool _constantTimeEquals(List<int> a, List<int> b) {
-  if (a.length != b.length) {
-    return false;
-  }
-  int result = 0;
-  for (int i = 0; i < a.length; i++) {
-    result |= a[i] ^ b[i];
-  }
-  return result == 0;
 }

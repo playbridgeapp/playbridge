@@ -281,15 +281,8 @@ async fn auth_middleware(
         }
     }
 
-    use subtle::ConstantTimeEq;
     match token {
-        Some(t) => {
-            if t.as_bytes().ct_eq(state.password.as_bytes()).into() {
-                Ok(next.run(req).await)
-            } else {
-                Err(StatusCode::FORBIDDEN)
-            }
-        }
+        Some(t) if t == state.password => Ok(next.run(req).await),
         _ => Err(StatusCode::FORBIDDEN),
     }
 }

@@ -17,7 +17,3 @@
 **Vulnerability:** The Android TV app's `SystemWebViewEngine` had `allowContentAccess` set to `true`. This is a critical security misconfiguration because it allows the arbitrary web content loaded into the system WebView to access and read local content provider data via `content://` URIs on the device, potentially exposing sensitive application data or internal processes (e.g. `PlayerProcessBridgeProvider`).
 **Learning:** Just as `allowFileAccess` is dangerous, `allowContentAccess` is equally risky when a WebView acts as a browser to navigate to untrusted arbitrary URLs. It unnecessarily expands the attack surface.
 **Prevention:** Explicitly configure `allowContentAccess = false` on all WebViews that handle remote, untrusted content to prevent access to the application's ContentProviders.
-## 2024-05-18 - [Token verification]
-**Vulnerability:** SEC-007: Bearer token comparison is not constant time across various platforms.
-**Learning:** Tokens are checked by directly looking up against `getAuthorizedTokenSet().contains(token)` or similar operations without using constant-time algorithms, opening a timing attack vector.
-**Prevention:** Implement constant-time string comparison for security token verification.
