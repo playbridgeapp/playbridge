@@ -11,5 +11,6 @@ data class PairedDevice(
     val name: String,
     val deviceUUID: String = "",
     val token: String = "",
+    val tokenVerifier: String = "",
     val lastConnected: Long = System.currentTimeMillis()
 )
