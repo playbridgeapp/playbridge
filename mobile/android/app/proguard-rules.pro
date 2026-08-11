@@ -12,6 +12,24 @@
 #   public *;
 #}
 
+# TabManager accesses this private field through getDeclaredField().
+-keepclassmembers class mozilla.components.browser.engine.gecko.GeckoEngineSession {
+    org.mozilla.geckoview.GeckoSession geckoSession;
+}
+
+# Mozilla Nimbus can report through the optional Glean telemetry runtime.
+# PlayBridge does not package or initialize Glean.
+-dontwarn mozilla.telemetry.glean.Glean
+-dontwarn mozilla.telemetry.glean.GleanInternalAPI
+-dontwarn mozilla.telemetry.glean.internal.CommonMetricData
+-dontwarn mozilla.telemetry.glean.internal.DynamicLabelType
+-dontwarn mozilla.telemetry.glean.internal.Lifetime
+-dontwarn mozilla.telemetry.glean.internal.TimeUnit
+-dontwarn mozilla.telemetry.glean.private.EventExtras
+-dontwarn mozilla.telemetry.glean.private.EventMetricType
+-dontwarn mozilla.telemetry.glean.private.PingType
+-dontwarn mozilla.telemetry.glean.private.TimingDistributionMetricType
+
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
 #-keepattributes SourceFile,LineNumberTable

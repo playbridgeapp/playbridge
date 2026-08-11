@@ -1,5 +1,19 @@
-import java.util.Properties
-import java.io.FileInputStream
+import com.android.build.api.artifact.ScopedArtifact
+import com.android.build.api.variant.ScopedArtifacts
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.Directory
+import org.gradle.api.file.RegularFile
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.tasks.CacheableTask
+import org.gradle.api.tasks.InputFiles
+import org.gradle.api.tasks.OutputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 
 plugins {
@@ -7,6 +21,76 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+@CacheableTask
+abstract class StripGeckoViewWebRtcClasses : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val inputJars: ListProperty<RegularFile>
+
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val inputDirectories: ListProperty<Directory>
+
+    @get:OutputFile
+    abstract val outputJar: RegularFileProperty
+
+    @TaskAction
+    fun transform() {
+        val writtenEntries = HashSet<String>()
+        val output = outputJar.get().asFile
+        output.parentFile.mkdirs()
+
+        ZipOutputStream(output.outputStream().buffered()).use { jarOutput ->
+            inputDirectories.get().forEach { directory ->
+                val root = directory.asFile
+                root.walkTopDown()
+                    .filter { it.isFile }
+                    .forEach { file ->
+                        val entryName = file.relativeTo(root).invariantSeparatorsPath
+                        writeEntry(entryName, writtenEntries, jarOutput) {
+                            file.inputStream().buffered().use { it.copyTo(jarOutput) }
+                        }
+                    }
+            }
+
+            inputJars.get().forEach { regularFile ->
+                val jar = regularFile.asFile
+                val isGeckoView = jar.name.contains("geckoview", ignoreCase = true)
+                ZipInputStream(jar.inputStream().buffered()).use { jarInput ->
+                    while (true) {
+                        val entry = jarInput.nextEntry ?: break
+                        if (entry.isDirectory ||
+                            (isGeckoView && entry.name.startsWith("org/webrtc/"))
+                        ) {
+                            continue
+                        }
+                        writeEntry(entry.name, writtenEntries, jarOutput) {
+                            jarInput.copyTo(jarOutput)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun writeEntry(
+        name: String,
+        writtenEntries: MutableSet<String>,
+        output: ZipOutputStream,
+        writeContents: () -> Unit,
+    ) {
+        if (!writtenEntries.add(name)) {
+            check(!name.endsWith(".class") || name.startsWith("META-INF/")) {
+                "Duplicate class remained after filtering GeckoView: $name"
+            }
+            return
+        }
+        output.putNextEntry(ZipEntry(name).apply { time = 0L })
+        writeContents()
+        output.closeEntry()
+    }
 }
 
 val googleCastApplicationId = providers.gradleProperty("PLAYBRIDGE_GOOGLE_CAST_APP_ID")
@@ -18,6 +102,10 @@ val googleCastApplicationId = providers.gradleProperty("PLAYBRIDGE_GOOGLE_CAST_A
         }
         applicationId
     }
+
+val buildingAppBundle = gradle.startParameter.taskNames.any { taskName ->
+    taskName.substringAfterLast(':').contains("bundle", ignoreCase = true)
+}
 
 android {
     namespace = "com.playbridge.sender"
@@ -71,7 +159,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -109,11 +198,29 @@ android {
 
     splits {
         abi {
-            isEnable = true
+            // AGP cannot combine optimized resource shrinking, APK splits, and bundles.
+            // Keep split APKs for FOSS assembly; Play bundles perform their own ABI splits.
+            isEnable = !buildingAppBundle
             reset()
             include("armeabi-v7a", "arm64-v8a")
             isUniversalApk = true
         }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        val taskName = "strip${variant.name.replaceFirstChar { it.uppercase() }}GeckoViewWebRtc"
+        val stripTask = tasks.register<StripGeckoViewWebRtcClasses>(taskName)
+        variant.artifacts
+            .forScope(ScopedArtifacts.Scope.ALL)
+            .use(stripTask)
+            .toTransform(
+                ScopedArtifact.CLASSES,
+                StripGeckoViewWebRtcClasses::inputJars,
+                StripGeckoViewWebRtcClasses::inputDirectories,
+                StripGeckoViewWebRtcClasses::outputJar,
+            )
     }
 }
 
@@ -186,7 +293,8 @@ dependencies {
     implementation(libs.moz.ui.widgets)
     implementation(libs.moz.ui.icons)
 
-    // GeckoView
+    // GeckoView also bundles upstream org.webrtc classes. The release scoped-artifact
+    // transform keeps PlayBridge's patched M150 runtime as the single packaged copy.
     implementation(libs.geckoview.omni)
 
     testImplementation(libs.junit)
