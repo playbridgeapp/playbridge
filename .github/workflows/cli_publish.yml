@@ -24,6 +24,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RAW_VERSION: ${{ inputs.version }}
+          REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
@@ -31,7 +32,7 @@ jobs:
           test -n "$VERSION"
           TAG="cli-v${VERSION}"
 
-          if ! gh release view "$TAG" --json isDraft,url,body >/tmp/cli-release.json; then
+          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url,body >/tmp/cli-release.json; then
             echo "No GitHub Release found for $TAG." >&2
             echo "Run CLI Release Build first (uprev or workflow_dispatch)." >&2
             exit 1
@@ -55,6 +56,6 @@ jobs:
             echo "Draft-only release note not present; preserving edited release notes"
           fi
 
-          gh release edit "$TAG" --notes "$body" --draft=false
+          gh release edit "$TAG" --repo "$REPOSITORY" --notes "$body" --draft=false
           echo "Published $TAG"
-          gh release view "$TAG" --json url,isDraft,tagName
+          gh release view "$TAG" --repo "$REPOSITORY" --json url,isDraft,tagName
