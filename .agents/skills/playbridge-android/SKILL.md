@@ -23,7 +23,8 @@ description: Work across PlayBridge's Android phone, Android TV, and shared Kotl
 5. Never log Debrid tokens, pairing credentials, signing material, or authenticated stream URLs.
 6. Preserve Google Cast's physical local-network binding around VPNs, application-ready handshake, fresh-session behavior after receiver exit, and distinction between stopping media and ending the receiver.
 7. For phone video detection / cast-sheet expectations (SPA soft-nav keeps rows, hard load clears, site patterns), see `docs/android-video-detection.md`.
-8. For phone `adb logcat` recipes (detection, cast, proxy, TV, downloads), see `mobile/android/docs/logging.md`.
+8. For device/emulator control (install, launch, input, screenshots, UI dump), load `android-adb`.
+9. For phone `adb logcat` recipes (detection, cast, proxy, TV, downloads), see `mobile/android/docs/logging.md`.
 
 ## Verify
 
