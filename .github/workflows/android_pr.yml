@@ -47,6 +47,7 @@ jobs:
             relevant:
               - 'mobile/android/**'
               - 'tv/android/**'
+              - 'third_party/webrtc-runtime/**'
               - 'shared/**'
               - 'protocol/**'
               - 'gradle/**'

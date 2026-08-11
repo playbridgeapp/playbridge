@@ -6,6 +6,7 @@ on:
     paths:
       - 'mobile/android/**'
       - 'tv/android/**'
+      - 'third_party/webrtc-runtime/**'
       - 'shared/**'
       - 'libs/**'
       - 'gradle/**'
