@@ -45,6 +45,7 @@ class DlnaCastTarget(
         Capability.SEEK,
         Capability.STOP,
         Capability.NOW_PLAYING,
+        Capability.SCREEN_MIRROR,
         ))
         if (renderingControl != null) add(Capability.VOLUME)
     }
@@ -56,11 +57,13 @@ class DlnaCastTarget(
     private val _status = MutableStateFlow(PlaybackStatus(PlaybackState.IDLE))
     private var pollJob: Job? = null
     @Volatile private var activeLoadEpoch: Long? = null
+    @Volatile private var activeIsLive = false
 
     override suspend fun load(media: MediaItem) {
         stopPolling()
         activeLoadEpoch = media.loadEpoch
         _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
+        activeIsLive = media.streamType.equals("LIVE", ignoreCase = true)
         cachedDurationMs = media.durationMs.coerceAtLeast(0L) // e.g. MediaStore for local files
         durationTries = 0
         val loadUrl = resolveLoadUrl(media)
@@ -69,7 +72,14 @@ class DlnaCastTarget(
         // SOAP/connection failures are control errors. Generic STOPPED is not enough to
         // distinguish an incompatible stream from normal renderer behavior.
         try {
-            avTransport.setAvTransportUri(loadUrl)
+            avTransport.setAvTransportUri(
+                loadUrl,
+                metadata = if (media.isScreenMirror) {
+                    screenMirrorDidl(loadUrl, media.title ?: "Screen mirror")
+                } else {
+                    ""
+                },
+            )
             avTransport.play()
         } catch (error: java.io.IOException) {
             _status.value = PlaybackStatus(
@@ -86,7 +96,7 @@ class DlnaCastTarget(
         // ignored by most renderers while still TRANSITIONING). Poll the transport state
         // instead of a blind delay — a fixed 2.5s missed slow renderers entirely and
         // over-waited on fast ones.
-        if (media.startPositionMs > 0 && !proxy.isLiveStream) {
+        if (media.startPositionMs > 0 && !activeIsLive && !proxy.isLiveStream) {
             scope.launch {
                 val deadline = System.currentTimeMillis() + RESUME_SEEK_TIMEOUT_MS
                 while (System.currentTimeMillis() < deadline) {
@@ -170,7 +180,7 @@ class DlnaCastTarget(
                 runCatching {
                     val pos = avTransport.getPositionInfo()
                     val state = mapState(avTransport.getTransportState())
-                    val live = proxy.isLiveStream
+                    val live = activeIsLive || proxy.isLiveStream
                     // Duration, renderer-first: TrackDuration, else GetMediaInfo (a few tries),
                     // else the proxy's HLS duration, then the probed/seeded duration.
                     var durationMs = if (live) 0L else parseTime(pos?.trackDuration)
@@ -225,6 +235,15 @@ class DlnaCastTarget(
                 runCatching { mmr.release() }
             }
         } ?: 0L
+    }
+
+    private fun screenMirrorDidl(url: String, title: String): String {
+        fun xml(value: String): String = value
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\"", "&quot;")
+        return """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="screen-mirror" parentID="0" restricted="1"><dc:title>${xml(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:video/mp2t:*">${xml(url)}</res></item></DIDL-Lite>"""
     }
 
     private fun mapState(s: String?): PlaybackState = when (s?.uppercase()) {

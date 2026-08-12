@@ -60,6 +60,24 @@ internal fun externalSessionPhase(
         if (mediaTitle == null) SessionPhase.SELECTED else SessionPhase.CONNECTED
 }
 
+internal fun externalScreenMirrorMedia(
+    targetKind: TargetKind,
+    urls: com.playbridge.sender.cast.mirror.ExternalScreenMirrorCoordinator.Urls,
+): MediaItem {
+    val googleCast = targetKind == TargetKind.GOOGLE_CAST
+    return MediaItem(
+        url = if (googleCast) urls.hls else urls.continuousTs,
+        mimeType = if (googleCast) "application/x-mpegURL" else "video/mp2t",
+        title = "Screen mirror",
+        durationMs = 0L,
+        effectiveRoute = StreamRouteMode.VIA_PHONE,
+        routeReason = "screen_mirror",
+        streamType = "LIVE",
+        hlsVideoSegmentFormat = if (googleCast) "mpeg2_ts" else null,
+        isScreenMirror = true,
+    )
+}
+
 /**
  * Process-wide owner of the active cast session — the single seam every screen sends
  * playback through, regardless of transport.
@@ -87,9 +105,24 @@ class CastSessionManager(
     private val discoveryRepository: ReceiverDiscoveryRepository,
     private val settingsRepository: SettingsRepository,
     private val screenMirrorCoordinator: com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator,
+    private val externalScreenMirrorCoordinator:
+        com.playbridge.sender.cast.mirror.ExternalScreenMirrorCoordinator,
 ) {
     private val TAG = "CastSessionManager"
-    val screenMirrorState = screenMirrorCoordinator.state
+    val screenMirrorState = combine(
+        screenMirrorCoordinator.state,
+        externalScreenMirrorCoordinator.state,
+    ) { native, external ->
+        if (external.phase != com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator.Phase.IDLE) {
+            external
+        } else {
+            native
+        }
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator.State(),
+    )
 
     // ------------------------------------------------------------------
     // Routing intent (authoritative)
@@ -137,6 +170,7 @@ class CastSessionManager(
 
     /** Route phone-local. Keeps an idle native link, but stops any external receiver session. */
     fun selectThisDevice() {
+        screenMirrorCoordinator.stop("target_changed")
         stopAndClearExternalTarget()
         _route.value = Route.ThisDevice
         persistBaseRoute("this")
@@ -161,6 +195,7 @@ class CastSessionManager(
 
     /** User picked the native TV receiver. Connecting is a separate concern (caller/Stage B). */
     fun selectNativeRoute() {
+        screenMirrorCoordinator.stop("target_changed")
         stopAndClearExternalTarget()
         _route.value = Route.NativeTv
         persistBaseRoute("native")
@@ -414,7 +449,7 @@ class CastSessionManager(
         ) { externalPhonePath, state, ctx, route, reconnecting ->
             arrayOf(externalPhonePath, state, ctx, route, reconnecting)
         },
-        screenMirrorCoordinator.state,
+        screenMirrorState,
     ) { inputs, mirror ->
         val externalPhonePath = inputs[0] as Boolean
         val state = inputs[1] as WebSocketClient.ConnectionState
@@ -459,7 +494,7 @@ class CastSessionManager(
     val isActivelyPlaying: StateFlow<Boolean> = combine(
         _externalMediaLoaded,
         connectionCoordinator.tvActiveContext,
-        screenMirrorCoordinator.state,
+        screenMirrorState,
     ) { externalMediaLoaded, ctx, mirror ->
         externalMediaLoaded || ctx == "player" || mirror.isActive
     }.stateIn(scope, SharingStarted.Eagerly, false)
@@ -471,7 +506,7 @@ class CastSessionManager(
     val needsCastWakeLock: StateFlow<Boolean> = combine(
         _phonePathActive,
         connectionCoordinator.tvActiveContext,
-        screenMirrorCoordinator.state,
+        screenMirrorState,
     ) { phonePath, ctx, mirror ->
         phonePath || ctx == "player" || mirror.isActive
     }.stateIn(scope, SharingStarted.Eagerly, false)
@@ -489,7 +524,7 @@ class CastSessionManager(
         ) { external, state, playback, externalTitle, ctx ->
             arrayOf(external, state, playback, externalTitle, ctx)
         },
-        screenMirrorCoordinator.state,
+        screenMirrorState,
     ) { inputs, mirror ->
         val external = inputs[0] as TvDevice?
         val state = inputs[1] as WebSocketClient.ConnectionState
@@ -939,6 +974,7 @@ class CastSessionManager(
     // ------------------------------------------------------------------
 
     private fun selectExternalTarget(device: TvDevice, target: CastTarget) {
+        screenMirrorCoordinator.stop("target_changed")
         if (_externalTarget.value != null) _externalInterrupts.tryEmit(Unit)
         detachExternalTarget(stopFirst = true)
         externalTargetSlot.replace(target)
@@ -971,6 +1007,16 @@ class CastSessionManager(
                     return@collect
                 }
                 _externalStatus.value = status
+                if (externalScreenMirrorCoordinator.state.value.isActive) {
+                    when (status.state) {
+                        PlaybackState.PLAYING -> externalScreenMirrorCoordinator.markMirroring()
+                        PlaybackState.ERROR ->
+                            externalScreenMirrorCoordinator.fail("Receiver could not play the screen stream")
+                        PlaybackState.STOPPED ->
+                            externalScreenMirrorCoordinator.stop("receiver_stopped")
+                        else -> Unit
+                    }
+                }
                 maybeClearTerminalExternalMedia(status)
             }
         }
@@ -983,6 +1029,7 @@ class CastSessionManager(
     fun stopAndClearExternalTarget() = detachExternalTarget(stopFirst = true)
 
     private fun detachExternalTarget(stopFirst: Boolean) {
+        externalScreenMirrorCoordinator.stop("target_changed")
         externalLoadGeneration++
         externalLoadJob?.cancel()
         externalLoadJob = null
@@ -1114,6 +1161,11 @@ class CastSessionManager(
                     Log.w(TAG, "${loadTarget.kind} load failed: ${error.message}")
                     if (loadTarget is BrowserCastTarget) {
                         _castNotices.tryEmit("TV browser couldn’t play this stream")
+                    }
+                    if (epochMedia.isScreenMirror) {
+                        externalScreenMirrorCoordinator.fail(
+                            error.message ?: "Receiver could not load the screen stream",
+                        )
                     }
                 }
             }
@@ -1309,8 +1361,8 @@ class CastSessionManager(
      * restorable linked-idle session.
      */
     fun endCastSession() {
-        if (screenMirrorCoordinator.state.value.isActive) {
-            screenMirrorCoordinator.stop("stopped_by_phone")
+        if (screenMirrorState.value.isActive) {
+            stopScreenMirror("stopped_by_phone")
             connectionCoordinator.markIdle()
             return
         }
@@ -1342,6 +1394,7 @@ class CastSessionManager(
     fun disconnectSession() {
         stopEpisodeQueues()
         screenMirrorCoordinator.stop("disconnect")
+        externalScreenMirrorCoordinator.stop("disconnect")
         connectionCoordinator.markIdle()
         val external = _externalTarget.value
         if (external != null) {
@@ -1365,6 +1418,7 @@ class CastSessionManager(
         backgroundStandDownJob = null
         stopEpisodeQueues()
         screenMirrorCoordinator.stop("app_exit")
+        externalScreenMirrorCoordinator.stop("app_exit")
         connectionCoordinator.markIdle()
         val external = _externalTarget.value
         if (external != null) {
@@ -1382,14 +1436,58 @@ class CastSessionManager(
         projectionPermission: android.content.Intent,
         options: com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator.Options,
     ): Boolean {
+        val route = _route.value
+        if (route is Route.External) {
+            val target = _externalTarget.value ?: return false
+            val device = _activeExternalDevice.value ?: return false
+            if (Capability.SCREEN_MIRROR !in target.capabilities) return false
+            externalScreenMirrorCoordinator.start(
+                projectionPermission = projectionPermission,
+                options = options.copy(deviceAudio = false),
+                receiverHost = device.ip,
+                waitForHlsSegment = target.kind == TargetKind.GOOGLE_CAST,
+            ) { urls ->
+                val media = externalScreenMirrorMedia(target.kind, urls)
+                if (!load(media, userInitiated = false)) {
+                    externalScreenMirrorCoordinator.fail("Receiver is no longer connected")
+                }
+            }
+            return true
+        }
         if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
             return false
         }
-        if (_route.value is Route.External) return false
         _route.value = Route.NativeTv
         persistBaseRoute("native")
         screenMirrorCoordinator.start(projectionPermission, options)
         return true
+    }
+
+    fun stopScreenMirror(reason: String = "stopped_by_phone") {
+        screenMirrorCoordinator.stop(reason)
+        val externalPhase = externalScreenMirrorCoordinator.state.value.phase
+        externalScreenMirrorCoordinator.stop(reason)
+        if (externalPhase !=
+            com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator.Phase.IDLE
+        ) {
+            externalLoadGeneration++
+            externalLoadJob?.cancel()
+            externalLoadJob = null
+            _externalTarget.value?.let { target ->
+                scope.launch {
+                    runCatching { target.stop() }
+                        .onFailure { Log.w(TAG, "${target.kind} mirror stop failed: ${it.message}") }
+                }
+            }
+            _externalMediaLoaded.value = false
+            _phonePathActive.value = false
+            _externalMediaTitle.value = null
+            _externalNowPlayingMeta.value = null
+            _externalStatus.value = PlaybackStatus(
+                PlaybackState.STOPPED,
+                loadEpoch = externalLoadGeneration,
+            )
+        }
     }
 
     /** Best-effort stop of phone-side series queues (native + external). Lazy Koin to avoid cycles. */

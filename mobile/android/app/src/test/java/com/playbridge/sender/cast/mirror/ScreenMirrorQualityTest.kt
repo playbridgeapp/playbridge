@@ -49,4 +49,32 @@ class ScreenMirrorQualityTest {
             screenMirrorCaptureSize(2_400, 1_080, ScreenMirrorCoordinator.Quality.DEFAULT),
         )
     }
+
+    @Test
+    fun `external encoder keeps a stable landscape canvas across rotation`() {
+        assertEquals(1_280 to 590, externalMirrorEncoderSize(590, 1_280))
+        assertEquals(1_280 to 590, externalMirrorEncoderSize(1_280, 590))
+    }
+
+    @Test
+    fun `external portrait frames fit inside the stable landscape canvas`() {
+        val (scaleX, scaleY) = mirrorFrameFitScale(
+            inputWidth = 590,
+            inputHeight = 1_280,
+            outputWidth = 1_280,
+            outputHeight = 590,
+        )
+
+        assertEquals(0.2124f, scaleX, 0.0001f)
+        assertEquals(1f, scaleY, 0.0001f)
+        assertEquals(
+            1f to 1f,
+            mirrorFrameFitScale(
+                inputWidth = 1_280,
+                inputHeight = 590,
+                outputWidth = 1_280,
+                outputHeight = 590,
+            ),
+        )
+    }
 }

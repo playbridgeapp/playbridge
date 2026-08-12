@@ -141,6 +141,13 @@ val appModule = module {
         )
     }
 
+    single {
+        com.playbridge.sender.cast.mirror.ExternalScreenMirrorCoordinator(
+            context = androidContext(),
+            appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        )
+    }
+
     // 5a. CastSessionManager — process-wide owner of the active cast target (native/DLNA)
     //     and the CastSessionService foreground lifecycle.
     //     Single-threaded scope: the reconnect-supervisor state (attempt counter, job,
@@ -156,6 +163,7 @@ val appModule = module {
             discoveryRepository = get(),
             settingsRepository = get(),
             screenMirrorCoordinator = get(),
+            externalScreenMirrorCoordinator = get(),
         )
     }
 
