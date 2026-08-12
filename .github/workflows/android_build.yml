@@ -384,9 +384,6 @@ jobs:
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/phone-v${{ steps.versions.outputs.phone }}/mobile/android/CHANGELOG.md)
 
-            This is a **draft** candidate. Publish with **Actions → Android Publish**
-            (after any configured Play Store upload succeeds).
-
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: |
             output/phone-release-apk/*.apk
@@ -406,9 +403,6 @@ jobs:
             **TV Player:** v${{ steps.versions.outputs.player }}
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-player-v${{ steps.versions.outputs.player }}/tv/android/CHANGELOG.md)
-
-            This is a **draft** candidate. Publish with **Actions → Android Publish**
-            (after any configured Play Store upload succeeds).
 
             > 💡 **Easy Install on TV**: Open the **Downloader** app on your Android TV / Fire TV and enter code **`9557748`** to download and install this release directly.
 
@@ -431,9 +425,6 @@ jobs:
             **TV GeckoView Plugin:** v${{ steps.versions.outputs.browser }}
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}/tv/android/CHANGELOG.md)
-
-            This is a **draft** candidate. Publish with **Actions → Android Publish**
-            (after any configured Play Store upload succeeds).
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: |
