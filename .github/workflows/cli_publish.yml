@@ -32,7 +32,7 @@ jobs:
           test -n "$VERSION"
           TAG="cli-v${VERSION}"
 
-          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url,body >/tmp/cli-release.json; then
+          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url >/tmp/cli-release.json; then
             echo "No GitHub Release found for $TAG." >&2
             echo "Run CLI Release Build first (uprev or workflow_dispatch)." >&2
             exit 1
@@ -46,16 +46,6 @@ jobs:
             exit 0
           fi
 
-          body=$(jq -r '.body // ""' /tmp/cli-release.json)
-          draft_notice=$'This is a **draft** candidate. Publish with **Actions → CLI Publish**\n(sets `draft=false`). Until then, `install.sh` will not pick it up as latest.'
-          published_notice='**Published release.** PlayBridge.app availability follows the configured rollout delay.'
-          if [[ "$body" == *"$draft_notice"* ]]; then
-            body="${body/$draft_notice/$published_notice}"
-            echo "Replaced draft-only release note"
-          else
-            echo "Draft-only release note not present; preserving edited release notes"
-          fi
-
-          gh release edit "$TAG" --repo "$REPOSITORY" --notes "$body" --draft=false
+          gh release edit "$TAG" --repo "$REPOSITORY" --draft=false
           echo "Published $TAG"
           gh release view "$TAG" --repo "$REPOSITORY" --json url,isDraft,tagName

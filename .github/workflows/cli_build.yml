@@ -200,16 +200,13 @@ jobs:
           body: |
             <!-- tag: 7b2c9a -->
             <!-- playbridge-rollout-delay-hours: 24 -->
-            **CLI:** v${{ needs.validate.outputs.version }} (draft)
+            **CLI:** v${{ needs.validate.outputs.version }}
 
             📋 [Changelog](https://github.com/playbridgeapp/playbridge/blob/main/cli/CHANGELOG.md)
 
             Cross-platform PlayBridge sender and receiver CLI.
 
-            This is a **draft** candidate. Publish with **Actions → CLI Publish**
-            (sets `draft=false`). Until then, `install.sh` will not pick it up as latest.
-
-            **Installation after publish and the configured rollout delay:**
+            **Installation after the configured rollout delay:**
 
             macOS & Linux:
             ```sh
