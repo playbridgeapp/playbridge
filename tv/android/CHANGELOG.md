@@ -3,6 +3,17 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.12.0] — 2026-08-11 (versionCode 227)
+
+### Added
+- **WebRTC screen mirroring**: Receive H.264 phone screen mirrors with lifecycle-safe rendering, orientation-aware video, capability advertisement, and validated signaling.
+
+### Changed
+- **Release optimization**: Enable R8 code and resource optimization for smaller, optimized FOSS and Play release builds.
+
+### Security
+- **Persisted pairing tokens**: Store paired-device credentials as SHA-256 digests, migrate compatible legacy records, and refresh active authentication state after pairing changes.
+
 ## Player [0.11.0] — 2026-07-30 (versionCode 226)
 
 ### Added
