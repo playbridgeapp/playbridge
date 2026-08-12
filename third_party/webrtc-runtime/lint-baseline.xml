@@ -1,0 +1,873 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 9.2.1" type="baseline" client="gradle" dependencies="false" name="AGP (9.2.1)" variant="all" version="9.2.1">
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by CameraManager.openCamera: android.permission.CAMERA"
+        errorLine1="      cameraManager.openCamera(cameraId, new CameraStateCallback(), cameraThreadHandler);"
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/Camera2Session.java"
+            line="357"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getActiveNetworkInfo: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      return getNetworkState(connectivityManager.getActiveNetworkInfo());"
+        errorLine2="                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="260"
+            column="30"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getNetworkInfo: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      NetworkInfo networkInfo = connectivityManager.getNetworkInfo(network);"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="272"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getNetworkCapabilities: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="            connectivityManager.getNetworkCapabilities(network);"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="296"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getActiveNetwork: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="            &amp;&amp; network.equals(connectivityManager.getActiveNetwork())) {"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="321"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getActiveNetworkInfo: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="          NetworkInfo underlyingActiveNetworkInfo = connectivityManager.getActiveNetworkInfo();"
+        errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="325"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getAllNetworks: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      return connectivityManager.getAllNetworks();"
+        errorLine2="             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="369"
+            column="14"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getActiveNetworkInfo: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      final NetworkInfo defaultNetworkInfo = connectivityManager.getActiveNetworkInfo();"
+        errorLine2="                                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="400"
+            column="46"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getNetworkInfo: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="        final NetworkInfo networkInfo = connectivityManager.getNetworkInfo(network);"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="410"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getLinkProperties: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      LinkProperties linkProperties = connectivityManager.getLinkProperties(network);"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="445"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getNetworkCapabilities: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      final NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="486"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.getNetworkCapabilities: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      final NetworkCapabilities capabilities = connectivityManager.getNetworkCapabilities(network);"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="509"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.registerNetworkCallback: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      connectivityManager.registerNetworkCallback(createNetworkRequest(), networkCallback);"
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="550"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by ConnectivityManager.registerNetworkCallback: android.permission.ACCESS_NETWORK_STATE"
+        errorLine1="      connectivityManager.registerNetworkCallback(request, networkCallback);"
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="554"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="        manager.requestGroupInfo("
+        errorLine2="        ^">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="646"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="    return new AudioRecord.Builder()"
+        errorLine2="           ^">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="441"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by Builder.build: android.permission.RECORD_AUDIO"
+        errorLine1="    return new AudioRecord.Builder()"
+        errorLine2="           ^">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="441"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Call requires permission which may be rejected by user: code should explicitly check to see if permission is available (with `checkPermission`) or explicitly handle a potential `SecurityException`"
+        errorLine1="    return new AudioRecord(audioSource, sampleRate, channelConfig, audioFormat, bufferSizeInBytes);"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="455"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="MissingPermission"
+        message="Missing permissions required by AudioRecord.AudioRecord: android.permission.RECORD_AUDIO"
+        errorLine1="    return new AudioRecord(audioSource, sampleRate, channelConfig, audioFormat, bufferSizeInBytes);"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="455"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#KEY_CROP_RIGHT`"
+        errorLine1="      newWidth = 1 + format.getInteger(MediaFormat.KEY_CROP_RIGHT)"
+        errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/AndroidVideoDecoder.java"
+            line="566"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#KEY_CROP_LEFT`"
+        errorLine1="          - format.getInteger(MediaFormat.KEY_CROP_LEFT);"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/AndroidVideoDecoder.java"
+            line="567"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#KEY_CROP_BOTTOM`"
+        errorLine1="      newHeight = 1 + format.getInteger(MediaFormat.KEY_CROP_BOTTOM)"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/AndroidVideoDecoder.java"
+            line="568"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#KEY_CROP_TOP`"
+        errorLine1="          - format.getInteger(MediaFormat.KEY_CROP_TOP);"
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/AndroidVideoDecoder.java"
+            line="569"
+            column="31"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#KEY_VIDEO_ENCODING_STATISTICS_LEVEL`"
+        errorLine1="        format.setInteger(MediaFormat.KEY_VIDEO_ENCODING_STATISTICS_LEVEL,"
+        errorLine2="                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoder.java"
+            line="276"
+            column="27"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#VIDEO_ENCODING_STATISTICS_LEVEL_1`"
+        errorLine1="            MediaFormat.VIDEO_ENCODING_STATISTICS_LEVEL_1);"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoder.java"
+            line="277"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaFormat#KEY_VIDEO_QP_AVERAGE`"
+        errorLine1="          qp = format.getInteger(MediaFormat.KEY_VIDEO_QP_AVERAGE);"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoder.java"
+            line="622"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 33 (current min is 26): `android.media.MediaCodecInfo.CodecCapabilities#FEATURE_EncodingStatistics`"
+        errorLine1="    return codecCaps.isFeatureSupported(CodecCapabilities.FEATURE_EncodingStatistics);"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoder.java"
+            line="764"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="Range"
+        message="Value must be ≥ 1 (was 0)"
+        errorLine1="        .setSessionId(AudioManager.AUDIO_SESSION_ID_GENERATE)"
+        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="459"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="WrongConstant"
+        message="Must be one or more of: AudioManager.GET_DEVICES_INPUTS, AudioManager.GET_DEVICES_OUTPUTS"
+        errorLine1="    final AudioDeviceInfo[] devices = audioManager.getDevices(AudioManager.GET_DEVICES_ALL);"
+        errorLine2="                                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioUtils.java"
+            line="255"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.annotation:annotation than 1.9.1 is available: 1.10.0"
+        errorLine1="    compileOnly(&quot;androidx.annotation:annotation:1.9.1&quot;)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="27"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(29) instead of `@TargetApi` to propagate the requirement to callers of `isHardwareAcceleratedQOrHigher`"
+        errorLine1="  @TargetApi(29)"
+        errorLine2="  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/MediaCodecUtils.java"
+            line="104"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(29) instead of `@TargetApi` to propagate the requirement to callers of `isSoftwareOnlyQOrHigher`"
+        errorLine1="  @TargetApi(29)"
+        errorLine2="  ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/MediaCodecUtils.java"
+            line="122"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.M) instead of `@TargetApi` to propagate the requirement to callers of `setPreferredDevice`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="379"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.M) instead of `@TargetApi` to propagate the requirement to callers of `createAudioRecordOnMOrHigher`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="437"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.M) instead of `@TargetApi` to propagate the requirement to callers of `logMainParametersExtended`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="466"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.N) instead of `@TargetApi` to propagate the requirement to callers of `logRecordingConfigurations`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="476"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.N) instead of `@TargetApi` to propagate the requirement to callers of `logActiveRecordingConfigs`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="636"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.N) instead of `@TargetApi` to propagate the requirement to callers of `verifyAudioConfig`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="704"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.N) instead of `@TargetApi` to propagate the requirement to callers of `checkDeviceMatch`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="737"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.O) instead of `@TargetApi` to propagate the requirement to callers of `createAudioTrackOnOreoOrHigher`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.O)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="442"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(Build.VERSION_CODES.Q) instead of `@TargetApi` to propagate the requirement to callers of `applyAttributesOnQOrHigher`"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.Q)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="463"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="UseRequiresApi"
+        message="Use `@RequiresApi(VERSION_CODES.N) instead of `@TargetApi` to propagate the requirement to callers of `audioEncodingToString`"
+        errorLine1="  @TargetApi(VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioUtils.java"
+            line="184"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is never &lt; 26"
+        errorLine1="    if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.LOLLIPOP_MR1"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/Camera2Enumerator.java"
+            line="137"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="        || (name.startsWith(EXYNOS_PREFIX) &amp;&amp; Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)"
+        errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoderFactory.java"
+            line="211"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="        &amp;&amp; Build.VERSION.SDK_INT >= Build.VERSION_CODES.N;"
+        errorLine2="           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoderFactory.java"
+            line="220"
+            column="12"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is never &lt; 26"
+        errorLine1="      if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.M) {"
+        errorLine2="          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoderFactory.java"
+            line="242"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is never &lt; 26"
+        errorLine1="      if (Build.VERSION.SDK_INT == Build.VERSION_CODES.M) {"
+        errorLine2="          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoderFactory.java"
+            line="245"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    return enableH264HighProfile &amp;&amp; Build.VERSION.SDK_INT > Build.VERSION_CODES.M"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/HardwareVideoEncoderFactory.java"
+            line="269"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="      if (useLowLatency &amp;&amp; Build.VERSION.SDK_INT >= MIN_LOW_LATENCY_SDK_VERSION) {"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/JavaAudioDeviceModule.java"
+            line="267"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 23"
+        errorLine1="  @RequiresApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/JavaAudioDeviceModule.java"
+            line="453"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= 26) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/LowLatencyAudioBufferManager.java"
+            line="42"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &amp;&amp; name.startsWith(EXYNOS_PREFIX)) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/MediaCodecVideoDecoderFactory.java"
+            line="129"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="320"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/NetworkMonitorAutoDetect.java"
+            line="996"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="      if (Build.VERSION.SDK_INT >= 24) {"
+        errorLine2="          ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="137"
+            column="11"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="            if (Build.VERSION.SDK_INT >= 24) {"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="152"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="      } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
+        errorLine2="                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="331"
+            column="18"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 23"
+        errorLine1="  @RequiresApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="378"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 23"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="379"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 23"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="437"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 23"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.M)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="466"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="468"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 24"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="476"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N` is never true here"
+        errorLine1="    if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="480"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is never &lt; 26"
+        errorLine1="    if (Build.VERSION.SDK_INT &lt; Build.VERSION_CODES.N) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="616"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 24"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="636"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 24"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="704"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 24"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioRecord.java"
+            line="737"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="      if (useLowLatency &amp;&amp; Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="230"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="257"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= 24) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="365"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="  @TargetApi(Build.VERSION_CODES.O)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="442"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="470"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="480"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="492"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioTrack.java"
+            line="512"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 24"
+        errorLine1="  @TargetApi(VERSION_CODES.N)"
+        errorLine2="  ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioUtils.java"
+            line="184"
+            column="3"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is always >= 26"
+        errorLine1="        if (Build.VERSION.SDK_INT >= VERSION_CODES.M) {"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioUtils.java"
+            line="243"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; `SDK_INT` is never &lt; 26"
+        errorLine1="    if (Build.VERSION.SDK_INT &lt; VERSION_CODES.M) {"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/org/webrtc/audio/WebRtcAudioUtils.java"
+            line="252"
+            column="9"/>
+    </issue>
+
+</issues>

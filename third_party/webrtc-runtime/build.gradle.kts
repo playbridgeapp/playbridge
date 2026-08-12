@@ -16,6 +16,11 @@ android {
 
     defaultConfig { minSdk = 26 }
 
+    lint {
+        // Keep the pinned upstream snapshot unchanged. Existing upstream findings are
+        // recorded by exact file and line so lint still fails on newly introduced issues.
+        baseline = file("lint-baseline.xml")
+    }
 }
 
 dependencies {
