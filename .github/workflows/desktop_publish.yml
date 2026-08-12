@@ -1,13 +1,13 @@
-name: CLI Publish
+name: Desktop Publish
 
-# Stage 3: promote an existing draft cli-v* GitHub Release (no rebuild).
-# Stage 2: .github/workflows/cli_build.yml
+# Stage 3: promote an existing draft desktop-v* GitHub Release (no rebuild).
+# Stage 2: .github/workflows/desktop_build.yml
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'CLI version to publish (e.g. 0.1.1 or cli-v0.1.1)'
+        description: 'Desktop version to publish (e.g. 1.2.3 or desktop-v1.2.3)'
         required: true
         type: string
 
@@ -18,7 +18,7 @@ jobs:
   publish:
     name: publish draft release
     runs-on: ubuntu-latest
-    # Optional: add environment: cli-release with required reviewers in repo settings.
+    # Optional: add environment: desktop-release with required reviewers in repo settings.
     steps:
       - name: Publish draft GitHub release
         env:
@@ -28,19 +28,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${RAW_VERSION#cli-v}"
+          VERSION="${RAW_VERSION#desktop-v}"
           test -n "$VERSION"
-          TAG="cli-v${VERSION}"
+          TAG="desktop-v${VERSION}"
 
-          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url >/tmp/cli-release.json; then
+          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url,body >/tmp/desktop-release.json; then
             echo "No GitHub Release found for $TAG." >&2
-            echo "Run CLI Release Build first (uprev or workflow_dispatch)." >&2
+            echo "Run Desktop Release Build first (uprev or workflow_dispatch)." >&2
             exit 1
           fi
 
-          is_draft=$(jq -r '.isDraft' /tmp/cli-release.json)
-          url=$(jq -r '.url' /tmp/cli-release.json)
-
+          is_draft=$(jq -r '.isDraft' /tmp/desktop-release.json)
+          url=$(jq -r '.url' /tmp/desktop-release.json)
           if [ "$is_draft" = "false" ]; then
             echo "⏭️ $TAG is already published: $url"
             exit 0

@@ -1,4 +1,7 @@
-name: Android Build
+name: Android Release Build
+
+# Stage 2: signed packages → draft GitHub Releases.
+# Stage 3: .github/workflows/android_publish.yml
 
 on:
   push:
@@ -324,15 +327,15 @@ jobs:
           s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-aab/ \
           --recursive --exclude "*" --include "*.aab"
 
-  release:
+  draft-release:
     needs: [build-phone, build-tv-player, build-tv-geckoview-plugin]
     if: |
       (success() || always()) &&
-      (needs.build-phone.outputs.skipped == 'false' || 
-       needs.build-tv-player.outputs.skipped == 'false' || 
+      (needs.build-phone.outputs.skipped == 'false' ||
+       needs.build-tv-player.outputs.skipped == 'false' ||
        needs.build-tv-geckoview-plugin.outputs.skipped == 'false') &&
-      (needs.build-phone.result != 'failure' && 
-       needs.build-tv-player.result != 'failure' && 
+      (needs.build-phone.result != 'failure' &&
+       needs.build-tv-player.result != 'failure' &&
        needs.build-tv-geckoview-plugin.result != 'failure')
     runs-on: ubuntu-latest
     permissions:
@@ -343,13 +346,19 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Download artifacts from R2
+      - name: Download build artifacts from R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
         run: |
-          aws s3 sync s3://${{ secrets.R2_BUCKET }}/ output/
+          mkdir -p output
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/phone-release-apk/ output/phone-release-apk/
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/phone-release-aab/ output/phone-release-aab/
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/tv-player-release-apk/ output/tv-player-release-apk/
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/tv-player-release-aab/ output/tv-player-release-aab/
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-apk/ output/tv-geckoview-plugin-release-apk/
+          aws s3 sync s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-aab/ output/tv-geckoview-plugin-release-aab/
 
       - name: Get versions
         id: versions
@@ -361,12 +370,13 @@ jobs:
           echo "player=$PLAYER" >> $GITHUB_OUTPUT
           echo "browser=$BROWSER" >> $GITHUB_OUTPUT
 
-      - name: Create Phone release
+      - name: Create Phone draft release
         if: needs.build-phone.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: phone-v${{ steps.versions.outputs.phone }}
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
+          draft: true
           body: |
             <!-- tag: 5c9b2f -->
             <!-- playbridge-rollout-delay-hours: 24 -->
@@ -376,17 +386,17 @@ jobs:
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: |
-            output/phone-release-*/*.apk
+            output/phone-release-apk/*.apk
             output/phone-release-aab/*.aab
           generate_release_notes: false
-          draft: false
 
-      - name: Create TV Player release
+      - name: Create TV Player draft release
         if: needs.build-tv-player.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: tv-player-v${{ steps.versions.outputs.player }}
           name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
+          draft: true
           body: |
             <!-- tag: 8d2a1c -->
             <!-- playbridge-rollout-delay-hours: 24 -->
@@ -398,17 +408,17 @@ jobs:
 
             Or download the `.apk` below (universal APK is recommended) and sideload it manually.
           files: |
-            output/tv-player-release-*/*.apk
+            output/tv-player-release-apk/*.apk
             output/tv-player-release-aab/*.aab
           generate_release_notes: false
-          draft: false
 
-      - name: Create TV GeckoView Plugin release
+      - name: Create TV GeckoView Plugin draft release
         if: needs.build-tv-geckoview-plugin.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}
           name: PlayBridge TV GeckoView Plugin v${{ steps.versions.outputs.browser }}
+          draft: true
           body: |
             <!-- tag: 3e7f9a -->
             <!-- playbridge-rollout-delay-hours: 24 -->
@@ -418,56 +428,20 @@ jobs:
 
             > Download the `.apk` for your device's architecture (`arm64-v8a` for most modern devices) and sideload it.
           files: |
-            output/tv-geckoview-plugin-release-*/*.apk
+            output/tv-geckoview-plugin-release-apk/*.apk
             output/tv-geckoview-plugin-release-aab/*.aab
           generate_release_notes: false
-          draft: false
 
-      # Play Store publishes are independent: one failing must not block the
-      # others (continue-on-error), but any failure is re-surfaced at the end.
-      - name: Publish Phone to Play Store (open testing)
-        id: play_phone
-        if: needs.build-phone.outputs.skipped == 'false'
-        continue-on-error: true
-        uses: r0adkll/upload-google-play@v1.1.5
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
-          packageName: com.playbridge.sender
-          releaseFiles: output/phone-release-aab/*.aab
-          # Play API: beta = Open testing (alpha = Closed testing).
-          tracks: beta
-          status: completed
-
-      - name: Publish TV Player to Play Store (alpha)
-        id: play_tv_player
-        if: needs.build-tv-player.outputs.skipped == 'false'
-        continue-on-error: true
-        uses: r0adkll/upload-google-play@v1.1.5
-        with:
-          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
-          packageName: com.playbridge.player
-          releaseFiles: output/tv-player-release-aab/*.aab
-          tracks: alpha
-          status: completed
-
-      - name: Check Play Store publish results
-        if: always()
-        run: |
-          failed=""
-          [ "${{ steps.play_phone.outcome }}" = "failure" ]      && failed="$failed phone"
-          [ "${{ steps.play_tv_player.outcome }}" = "failure" ]  && failed="$failed tv-player"
-          if [ -n "$failed" ]; then
-            echo "### ❌ Play Store publish failed for:$failed" >> "$GITHUB_STEP_SUMMARY"
-            echo "GitHub releases were still created; re-publish to Play manually or re-run after fixing." >> "$GITHUB_STEP_SUMMARY"
-            exit 1
-          fi
-          echo "✅ All attempted Play Store publishes succeeded" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Clean up R2 after release
+      - name: Clean up Android R2 staging
         if: always()
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
         run: |
-          aws s3 rm s3://${{ secrets.R2_BUCKET }}/ --recursive
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/phone-release-apk/ --recursive
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/phone-release-aab/ --recursive
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/tv-player-release-apk/ --recursive
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/tv-player-release-aab/ --recursive
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-apk/ --recursive
+          aws s3 rm s3://${{ secrets.R2_BUCKET }}/tv-geckoview-plugin-release-aab/ --recursive

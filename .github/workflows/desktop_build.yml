@@ -1,4 +1,7 @@
-name: Desktop Build
+name: Desktop Release Build
+
+# Stage 2: multi-platform packages → draft GitHub Release.
+# Stage 3: .github/workflows/desktop_publish.yml
 
 on:
   push:
@@ -295,7 +298,7 @@ jobs:
         aws s3 cp "playbridge-cli-macos-${{ steps.version.outputs.version }}.zip" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
-  release:
+  draft-release:
     needs: [build-windows, build-linux, build-macos]
     if: |
       (success() || always()) &&
@@ -330,11 +333,12 @@ jobs:
         mkdir -p output
         aws s3 sync s3://${{ secrets.R2_BUCKET }}/desktop-release/ output/
 
-    - name: Create GitHub release
-      uses: softprops/action-gh-release@v1
+    - name: Create draft GitHub release
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: desktop-v${{ steps.version.outputs.version }}
         name: PlayBridge Desktop v${{ steps.version.outputs.version }}
+        draft: true
         body: |
           <!-- tag: 1a4b6c -->
           <!-- playbridge-rollout-delay-hours: 24 -->
@@ -356,7 +360,7 @@ jobs:
         files: output/*
         generate_release_notes: false
 
-    - name: Clean up R2 after release
+    - name: Clean up R2 after draft creation
       if: always()
       env:
         AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}

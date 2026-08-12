@@ -23,8 +23,9 @@ project does not require shipping the others.
 2. **Uprev = intent to ship that project** — bump its version file and changelog.
 3. **No uprev → no release-build** — ordinary merges only run PR-style CI.
 4. **Draft is the handoff** — release-build attaches assets to a draft release;
-   publish promotes that same version (CLI: `draft=false`).
-5. **Stores are separate from GitHub** — undrafting does not submit to Play / AMO / CWS.
+   publish promotes that same version without rebuilding it.
+5. **Stores are separate steps from GitHub** — Android uploads to Play first and
+   only undrafts the GitHub release after the configured store upload succeeds.
 6. **Shared crates** (`cast/`, `protocol/`, `shared/`) rebuild consumer CI; only
    **upreved consumers** get release-build / publish.
 
@@ -39,6 +40,15 @@ stable releases after each release's rollout delay.
 | Project | Version source | Tag prefix | Changelog | PR CI | Release-build | Publish |
 | --- | --- | --- | --- | --- | --- | --- |
 | **CLI** | `cli/Cargo.toml` | `cli-v*` | `cli/CHANGELOG.md` | `rust_pr.yml` | `cli_build.yml` → **draft** | `cli_publish.yml` → undraft |
+| **Extension** | `extension/manifests/*.json` | `extension-v*` | `extension/CHANGELOG.md` | `extension_pr.yml` | `extension_build.yml` → draft | Publish workflow — *target* |
+| **Desktop** | `desktop/pubspec.yaml` | `desktop-v*` | `desktop/CHANGELOG.md` | `desktop_pr.yml` | `desktop_build.yml` → **draft** | `desktop_publish.yml` → undraft |
+| **Android phone** | `versionName` / `versionCode` | `phone-v*` | `mobile/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
+| **Android TV player** | TV `versionName` / `versionCode` | `tv-player-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
+| **Android TV GeckoView plugin** | TV `versionName` / `versionCode` | `tv-geckoview-plugin-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → undraft |
+| **Stream proxy** | crate / image version | image tags / optional git tag | project changelog | `stream_proxy_pr.yml` | `stream_proxy_build.yml` | Promote image tags — *target* |
+| **Web** | deploy-on-main | n/a | n/a | `web_pr.yml` | — | `web_deploy.yml` (Pages) |
+| **Protocol / Rust core** | n/a (library) | n/a | n/a | contract / rust PR checks | ships inside consumers | — |
+| **Apple apps** | Xcode marketing version | store / TestFlight | Apple changelogs | local / future CI | archive | App Store Connect |
 
 ### GitHub release search markers
 
@@ -55,16 +65,6 @@ deep-link to that product’s releases (`?q=<marker>&expanded=true`):
 | CLI | `7b2c9a` | [releases?q=7b2c9a](https://github.com/playbridgeapp/PlayBridge/releases?q=7b2c9a&expanded=true) |
 
 Keep the marker in every draft/publish body for that product. Do not reuse markers across products.
-| **Extension** | `extension/manifests/*.json` | `extension-v*` | `extension/CHANGELOG.md` | `extension_pr.yml` | `extension_build.yml` | GH undraft (+ optional store) — *target* |
-| **Desktop** | `desktop/pubspec.yaml` | `desktop-v*` | `desktop/CHANGELOG.md` | `desktop_pr.yml` | `desktop_build.yml` | GH undraft — *target* |
-| **Android phone** | `versionName` / `versionCode` | `phone-v*` | `mobile/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` | GH undraft + Play promote — *target* |
-| **Android TV** | TV `versionName` / `versionCode` | `tv-player-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` | GH undraft (+ Play if used) — *target* |
-| **Stream proxy** | crate / image version | image tags / optional git tag | project changelog | `stream_proxy_pr.yml` | `stream_proxy_build.yml` | promote image tags — *target* |
-| **Web** | deploy-on-main | n/a | n/a | `web_pr.yml` | — | `web_deploy.yml` (Pages) |
-| **Protocol / Rust core** | n/a (library) | n/a | n/a | contract / rust PR checks | ships inside consumers | — |
-| **Apple apps** | Xcode marketing version | store / TestFlight | Apple changelogs | local / future CI | archive | App Store connect |
-
-\* *target* = same three-stage model; some workflows still collapse build+publish today. **CLI is the reference implementation.**
 
 ---
 
@@ -152,6 +152,18 @@ Actions → CLI Release Build → Run workflow
 Actions → CLI Publish → Run workflow
   version: 0.1.1
 ```
+
+## Android and Desktop publish
+
+`Android Release Build` creates separate draft releases for Phone, TV Player,
+and the TV GeckoView plugin. Run `Android Publish` with the product and version
+after inspecting the draft assets. Phone and TV Player upload the attached AAB
+to their configured Play Store track first; the GitHub release is undrafted only
+after that upload succeeds. The GeckoView plugin has no Play Store step.
+
+`Desktop Release Build` creates a draft `desktop-v*` release containing all
+platform archives. Run `Desktop Publish` with the version to undraft the existing
+release without rebuilding its assets.
 
 ---
 
