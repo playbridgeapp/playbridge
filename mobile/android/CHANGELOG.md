@@ -3,6 +3,14 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.0] — 2026-08-11 (versionCode 223)
+
+### Added
+- **Screen mirroring**: Mirror the phone to compatible PlayBridge TV and Desktop receivers over WebRTC with H.264 video, optional playback audio, orientation-aware sizing, and selectable quality limits.
+
+### Changed
+- **Release optimization**: Enable R8 code and resource optimization for smaller, optimized FOSS and Play release builds.
+
 ## [0.12.0] — 2026-08-03 (versionCode 222)
 
 ### Added
