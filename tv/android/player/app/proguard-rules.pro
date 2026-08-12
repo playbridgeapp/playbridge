@@ -5,6 +5,11 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
+# Ktor probes these JVM-only management classes when detecting IntelliJ debug
+# mode. Android does not provide them; the probe falls back to "not attached."
+-dontwarn java.lang.management.ManagementFactory
+-dontwarn java.lang.management.RuntimeMXBean
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

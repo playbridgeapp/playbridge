@@ -7,6 +7,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+val buildingAppBundle = gradle.startParameter.taskNames.any { taskName ->
+    taskName.substringAfterLast(':').contains("bundle", ignoreCase = true)
+}
+
 android {
     namespace = "com.playbridge.player"
     compileSdk {
@@ -55,7 +59,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -99,7 +104,9 @@ android {
 
     splits {
         abi {
-            isEnable = true
+            // AGP cannot combine optimized resource shrinking, APK splits, and bundles.
+            // Keep split APKs for FOSS assembly; Play bundles perform their own ABI splits.
+            isEnable = !buildingAppBundle
             reset()
             include("armeabi-v7a", "arm64-v8a")
             isUniversalApk = true
