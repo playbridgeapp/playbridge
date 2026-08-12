@@ -13,6 +13,7 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 | `release-and-publish` | The user explicitly requests an uprev or release (see also `docs/release.md`) |
 | `commit-and-open-pr` | Commit, push, or create/update a pull request without an implicit uprev |
 | `code-review-graph-workflow` | Explore, debug, review, or refactor using the repository graph |
+| `android-adb` | Drive a phone/TV device or emulator over ADB (install, launch, input, screenshots, UI dump) |
 
 ### Project specialists
 

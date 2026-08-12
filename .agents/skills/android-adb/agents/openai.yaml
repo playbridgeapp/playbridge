@@ -1,0 +1,4 @@
+interface:
+  display_name: "Android ADB"
+  short_description: "Control Android devices and emulators with raw ADB"
+  default_prompt: "Use $android-adb to drive the connected Android device or emulator."

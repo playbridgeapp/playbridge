@@ -122,3 +122,7 @@ CLI versions are independent of other monorepo products. Shipping is **uprev-gat
 3. Run **Actions → CLI Publish** with that version to set `draft=false` (no rebuild).
 
 Full monorepo policy: [`docs/release.md`](../docs/release.md).
+
+## Docs
+
+- Code quality review: [`docs/code-quality-review.md`](docs/code-quality-review.md)
