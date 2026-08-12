@@ -153,22 +153,15 @@ fun ScreenMirrorScreen(
                 )
             }
             Switch(
-                checked = deviceAudioEnabled && !externalSelected,
-                enabled = !state.isActive && !externalSelected && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+                checked = deviceAudioEnabled,
+                enabled = !state.isActive && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
                 onCheckedChange = {
                     deviceAudioEnabled = it
                     audioNotice = null
                 },
             )
         }
-        if (externalSelected) {
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Google Cast and DLNA mirroring currently share video only.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else if (deviceAudioEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (deviceAudioEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             Spacer(Modifier.height(6.dp))
             Text(
                 "Android may label the required playback-capture permission as microphone access, " +
@@ -243,8 +236,7 @@ fun ScreenMirrorScreen(
                     audioNotice = null
                     val options = ScreenMirrorCoordinator.Options(
                         quality = selectedQuality,
-                        deviceAudio = !externalSelected &&
-                            deviceAudioEnabled &&
+                        deviceAudio = deviceAudioEnabled &&
                             Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
                     )
                     pendingOptions = options

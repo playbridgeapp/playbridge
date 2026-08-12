@@ -64,6 +64,39 @@ class MediaCodecMpegTsEncoderTest {
         assertEquals(listOf(0, 0x100), segment.bytes.packetPids().take(2))
         assertTrue(segment.bytes.asList().chunked(TS_PACKET_BYTES).all { it.size == TS_PACKET_BYTES && it[0] == 0x47.toByte() })
     }
+    @Test
+    fun `aac audio is advertised and packetized in the shared transport`() {
+        val output = ByteArrayOutputStream()
+        val muxer = H264MpegTsMuxer(output, includeAudio = true)
+
+        muxer.writeAccessUnit(decodableKeyframe(marker = 0x11), presentationTimeUs = 1_000_000, keyFrame = true)
+        muxer.writeAudioAccessUnit(
+            adtsFrame(byteArrayOf(0x21, 0x22), sampleRate = 48_000, channelCount = 2),
+            presentationTimeUs = 1_000_000,
+        )
+
+        val packets = output.toByteArray().asList().chunked(TS_PACKET_BYTES)
+        val pmt = packets.first { it.pid() == PMT_PID }
+        assertEquals(0x1b, pmt[17].toInt() and 0xff)
+        assertEquals(0x0f, pmt[22].toInt() and 0xff)
+        assertTrue(packets.any { it.pid() == AUDIO_PID })
+    }
+
+    @Test
+    fun `adts header describes aac lc stereo at 48 khz`() {
+        val frame = adtsFrame(byteArrayOf(0x11, 0x22, 0x33), sampleRate = 48_000, channelCount = 2)
+
+        assertEquals(10, frame.size)
+        assertEquals(0xff, frame[0].toInt() and 0xff)
+        assertEquals(0xf1, frame[1].toInt() and 0xff)
+        assertEquals(1, (frame[2].toInt() ushr 6) and 0x03)
+        assertEquals(3, (frame[2].toInt() ushr 2) and 0x0f)
+        assertEquals(2, ((frame[2].toInt() and 0x01) shl 2) or ((frame[3].toInt() ushr 6) and 0x03))
+        assertEquals(10, ((frame[3].toInt() and 0x03) shl 11) or
+            ((frame[4].toInt() and 0xff) shl 3) or
+            ((frame[5].toInt() ushr 5) and 0x07))
+    }
+
 
     private fun decodableKeyframe(marker: Int): ByteArray = byteArrayOf(
         0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1f,
@@ -79,8 +112,12 @@ class MediaCodecMpegTsEncoderTest {
         .chunked(TS_PACKET_BYTES)
         .filter { it.size == TS_PACKET_BYTES }
         .map { packet -> ((packet[1].toInt() and 0x1f) shl 8) or (packet[2].toInt() and 0xff) }
+    private fun List<Byte>.pid(): Int =
+        ((this[1].toInt() and 0x1f) shl 8) or (this[2].toInt() and 0xff)
 
     private companion object {
         private const val TS_PACKET_BYTES = 188
+        private const val PMT_PID = 0x0100
+        private const val AUDIO_PID = 0x0102
     }
 }

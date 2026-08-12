@@ -73,6 +73,7 @@ internal fun externalScreenMirrorMedia(
         effectiveRoute = StreamRouteMode.VIA_PHONE,
         routeReason = "screen_mirror",
         streamType = "LIVE",
+        hlsSegmentFormat = if (googleCast && urls.hasAudio) "ts_aac" else null,
         hlsVideoSegmentFormat = if (googleCast) "mpeg2_ts" else null,
         isScreenMirror = true,
     )
@@ -1443,7 +1444,7 @@ class CastSessionManager(
             if (Capability.SCREEN_MIRROR !in target.capabilities) return false
             externalScreenMirrorCoordinator.start(
                 projectionPermission = projectionPermission,
-                options = options.copy(deviceAudio = false),
+                options = options,
                 receiverHost = device.ip,
                 waitForHlsSegment = target.kind == TargetKind.GOOGLE_CAST,
             ) { urls ->

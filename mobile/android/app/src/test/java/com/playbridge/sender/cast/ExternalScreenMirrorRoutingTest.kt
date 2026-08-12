@@ -11,6 +11,7 @@ class ExternalScreenMirrorRoutingTest {
     private val urls = ExternalScreenMirrorCoordinator.Urls(
         hls = "http://192.168.1.4:1234/screen/token/index.m3u8",
         continuousTs = "http://192.168.1.4:1234/screen/token/stream.ts",
+        hasAudio = true,
     )
 
     @Test
@@ -21,6 +22,7 @@ class ExternalScreenMirrorRoutingTest {
         assertEquals("application/x-mpegURL", media.mimeType)
         assertEquals("LIVE", media.streamType)
         assertEquals("mpeg2_ts", media.hlsVideoSegmentFormat)
+        assertEquals("ts_aac", media.hlsSegmentFormat)
         assertEquals(StreamRouteMode.VIA_PHONE, media.effectiveRoute)
         assertTrue(media.isScreenMirror)
     }
@@ -33,6 +35,7 @@ class ExternalScreenMirrorRoutingTest {
         assertEquals("video/mp2t", media.mimeType)
         assertEquals("LIVE", media.streamType)
         assertNull(media.hlsVideoSegmentFormat)
+        assertNull(media.hlsSegmentFormat)
         assertEquals(StreamRouteMode.VIA_PHONE, media.effectiveRoute)
         assertTrue(media.isScreenMirror)
     }

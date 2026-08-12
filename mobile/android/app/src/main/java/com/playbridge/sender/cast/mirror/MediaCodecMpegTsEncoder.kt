@@ -18,20 +18,40 @@ internal class MediaCodecMpegTsEncoder(
     height: Int,
     bitrateBps: Int,
     framesPerSecond: Int,
+    projection: android.media.projection.MediaProjection,
+    deviceAudio: Boolean,
     private val output: OutputStream,
     private val onError: (Throwable) -> Unit,
+    onAudioActive: () -> Unit,
+    onAudioError: (Throwable) -> Unit,
 ) : Closeable {
     private val codec = MediaCodec.createEncoderByType(MIME_AVC)
     private val running = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
-    private val muxer = H264MpegTsMuxer(output)
+    private lateinit var muxer: H264MpegTsMuxer
+    private val audioEncoder: PlaybackAudioMpegTsEncoder?
     private val drainThread = Thread(::drain, "PlayBridgeMirrorEncoder").apply { isDaemon = true }
     private var codecConfig = ByteArray(0)
     private var lastSyncRequestNs = 0L
 
     val inputSurface: Surface
+    val hasAudio: Boolean get() = audioEncoder != null
 
     init {
+        val audio = if (deviceAudio) {
+            PlaybackAudioMpegTsEncoder.create(
+                projection = projection,
+                onFrame = { accessUnit, presentationTimeUs ->
+                    muxer.writeAudioAccessUnit(accessUnit, presentationTimeUs)
+                },
+                onActive = onAudioActive,
+                onError = onAudioError,
+            )
+        } else {
+            null
+        }
+        muxer = H264MpegTsMuxer(output, includeAudio = audio != null)
+        audioEncoder = audio
         require(width > 0 && height > 0)
         require(bitrateBps > 0 && framesPerSecond > 0)
         val format = MediaFormat.createVideoFormat(MIME_AVC, width, height).apply {
@@ -54,10 +74,12 @@ internal class MediaCodecMpegTsEncoder(
         codec.start()
         lastSyncRequestNs = System.nanoTime()
         drainThread.start()
+        audioEncoder?.start()
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        audioEncoder?.close()
         running.set(false)
         if (drainThread.isAlive && Thread.currentThread() !== drainThread) {
             drainThread.interrupt()
@@ -189,8 +211,11 @@ private fun ByteArray.hasParameterSets(): Boolean {
     return false
 }
 
-/** Minimal single-program MPEG-TS muxer: PAT + PMT + one H.264 PES stream. */
-internal class H264MpegTsMuxer(private val output: OutputStream) {
+/** Minimal single-program MPEG-TS muxer for H.264 video and optional AAC audio. */
+internal class H264MpegTsMuxer(
+    private val output: OutputStream,
+    private val includeAudio: Boolean = false,
+) {
     private val continuity = IntArray(MAX_PID + 1)
     private var wroteTables = false
 
@@ -204,7 +229,21 @@ internal class H264MpegTsMuxer(private val output: OutputStream) {
         }
         val pts90Khz = presentationTimeUs.coerceAtLeast(0L) * 90L / 1_000L
         val pes = pesHeader(pts90Khz) + accessUnit
-        writePes(pes, pts90Khz, keyFrame)
+        writePes(VIDEO_PID, pes, pts90Khz, keyFrame, writePcr = true)
+        output.flush()
+    }
+
+    @Synchronized
+    fun writeAudioAccessUnit(accessUnit: ByteArray, presentationTimeUs: Long) {
+        if (!includeAudio || accessUnit.isEmpty()) return
+        if (!wroteTables) {
+            writePsi(PAT_PID, patSection())
+            writePsi(PMT_PID, pmtSection())
+            wroteTables = true
+        }
+        val pts90Khz = presentationTimeUs.coerceAtLeast(0L) * 90L / 1_000L
+        val pes = pesHeader(pts90Khz, AUDIO_STREAM_ID, accessUnit.size) + accessUnit
+        writePes(AUDIO_PID, pes, pts90Khz, keyFrame = false, writePcr = false)
         output.flush()
     }
 
@@ -216,23 +255,29 @@ internal class H264MpegTsMuxer(private val output: OutputStream) {
         output.write(packet)
     }
 
-    private fun writePes(pes: ByteArray, pts90Khz: Long, keyFrame: Boolean) {
+    private fun writePes(
+        pid: Int,
+        pes: ByteArray,
+        pts90Khz: Long,
+        keyFrame: Boolean,
+        writePcr: Boolean,
+    ) {
         var offset = 0
         var first = true
         while (offset < pes.size) {
-            val packet = ByteArray(TS_PACKET_BYTES) { 0xff.toByte() }
-            val minimumAdaptationBytes = if (first) 8 else 0
+            val minimumAdaptationBytes = if (first && writePcr) 8 else 0
             val maximumPayload = TS_PAYLOAD_BYTES - minimumAdaptationBytes
-            val payloadBytes = minOf(pes.size - offset, maximumPayload)
-            val needsAdaptation = first || payloadBytes < TS_PAYLOAD_BYTES
-            writeHeader(packet, VIDEO_PID, payloadStart = first, adaptationControl = if (needsAdaptation) 3 else 1)
+            val payloadBytes = minOf(maximumPayload, pes.size - offset)
+            val packet = ByteArray(TS_PACKET_BYTES) { 0xff.toByte() }
+            val needsAdaptation = (first && writePcr) || payloadBytes < TS_PAYLOAD_BYTES
+            writeHeader(packet, pid, payloadStart = first, adaptationControl = if (needsAdaptation) 3 else 1)
             var payloadOffset = 4
             if (needsAdaptation) {
                 val adaptationLength = TS_PAYLOAD_BYTES - payloadBytes - 1
                 packet[4] = adaptationLength.toByte()
                 if (adaptationLength > 0) {
-                    packet[5] = if (first && keyFrame) 0x50 else if (first) 0x10 else 0
-                    if (first) writePcr(packet, 6, pts90Khz)
+                    packet[5] = if (first && keyFrame) 0x50 else if (first && writePcr) 0x10 else 0
+                    if (first && writePcr) writePcr(packet, 6, pts90Khz)
                 }
                 payloadOffset = 5 + adaptationLength
             }
@@ -261,15 +306,23 @@ internal class H264MpegTsMuxer(private val output: OutputStream) {
         packet[offset + 5] = 0
     }
 
-    private fun pesHeader(pts90Khz: Long): ByteArray = byteArrayOf(
-        0x00, 0x00, 0x01, 0xe0.toByte(), 0x00, 0x00,
-        0x80.toByte(), 0x80.toByte(), 0x05,
-        (0x21L or (((pts90Khz ushr 30) and 0x07) shl 1)).toByte(),
-        (pts90Khz ushr 22).toByte(),
-        (((pts90Khz ushr 14) and 0xfe) or 0x01).toByte(),
-        (pts90Khz ushr 7).toByte(),
-        (((pts90Khz shl 1) and 0xfe) or 0x01).toByte(),
-    )
+    private fun pesHeader(
+        pts90Khz: Long,
+        streamId: Int = VIDEO_STREAM_ID,
+        payloadSize: Int? = null,
+    ): ByteArray {
+        val packetLength = payloadSize?.plus(PES_OPTIONAL_HEADER_BYTES)?.coerceAtMost(0xffff) ?: 0
+        return byteArrayOf(
+            0x00, 0x00, 0x01, streamId.toByte(),
+            (packetLength ushr 8).toByte(), packetLength.toByte(),
+            0x80.toByte(), 0x80.toByte(), 0x05,
+            (0x21L or (((pts90Khz ushr 30) and 0x07) shl 1)).toByte(),
+            (pts90Khz ushr 22).toByte(),
+            (((pts90Khz ushr 14) and 0xfe) or 0x01).toByte(),
+            (pts90Khz ushr 7).toByte(),
+            (((pts90Khz shl 1) and 0xfe) or 0x01).toByte(),
+        )
+    }
 
     private fun patSection(): ByteArray = psiWithCrc(
         byteArrayOf(
@@ -279,15 +332,26 @@ internal class H264MpegTsMuxer(private val output: OutputStream) {
         ),
     )
 
-    private fun pmtSection(): ByteArray = psiWithCrc(
-        byteArrayOf(
-            0x02, 0xb0.toByte(), 0x12,
-            0x00, 0x01, 0xc1.toByte(), 0x00, 0x00,
-            (0xe0 or (VIDEO_PID ushr 8)).toByte(), VIDEO_PID.toByte(),
-            0xf0.toByte(), 0x00,
+    private fun pmtSection(): ByteArray {
+        val streams = byteArrayOf(
             0x1b, (0xe0 or (VIDEO_PID ushr 8)).toByte(), VIDEO_PID.toByte(), 0xf0.toByte(), 0x00,
-        ),
-    )
+        ) + if (includeAudio) {
+            byteArrayOf(
+                0x0f, (0xe0 or (AUDIO_PID ushr 8)).toByte(), AUDIO_PID.toByte(), 0xf0.toByte(), 0x00,
+            )
+        } else {
+            ByteArray(0)
+        }
+        val sectionLength = PMT_BASE_SECTION_LENGTH + streams.size
+        return psiWithCrc(
+            byteArrayOf(
+                0x02, (0xb0 or (sectionLength ushr 8)).toByte(), sectionLength.toByte(),
+                0x00, 0x01, 0xc1.toByte(), 0x00, 0x00,
+                (0xe0 or (VIDEO_PID ushr 8)).toByte(), VIDEO_PID.toByte(),
+                0xf0.toByte(), 0x00,
+            ) + streams,
+        )
+    }
 
     private fun psiWithCrc(section: ByteArray): ByteArray {
         val crc = mpegCrc32(section)
@@ -305,6 +369,11 @@ internal class H264MpegTsMuxer(private val output: OutputStream) {
         private const val PAT_PID = 0x0000
         private const val PMT_PID = 0x0100
         private const val VIDEO_PID = 0x0101
+        private const val AUDIO_PID = 0x0102
+        private const val VIDEO_STREAM_ID = 0xe0
+        private const val AUDIO_STREAM_ID = 0xc0
+        private const val PES_OPTIONAL_HEADER_BYTES = 8
+        private const val PMT_BASE_SECTION_LENGTH = 13
         private const val MAX_PID = 0x1fff
         private const val PTS_MASK = (1L shl 33) - 1
     }

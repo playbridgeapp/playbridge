@@ -48,6 +48,7 @@ class ExternalScreenMirrorCoordinator(
     data class Urls(
         val hls: String,
         val continuousTs: String,
+        val hasAudio: Boolean = false,
     )
 
     private val _state = MutableStateFlow(ScreenMirrorCoordinator.State())
@@ -67,6 +68,8 @@ class ExternalScreenMirrorCoordinator(
     private var generation = 0L
     private var projectionCallback: MediaProjection.Callback? = null
     private var sourceSize: Pair<Int, Int>? = null
+    @Volatile
+    private var transportHasAudio = false
 
     /** Called only after CastSessionService entered the mediaProjection FGS type. */
     fun start(
@@ -77,17 +80,17 @@ class ExternalScreenMirrorCoordinator(
         onReady: (Urls) -> Unit,
     ) {
         if (_state.value.isActive) return
+        transportHasAudio = false
         val currentGeneration = ++generation
         _state.value = ScreenMirrorCoordinator.State(
             phase = ScreenMirrorCoordinator.Phase.STARTING,
             sessionId = UUID.randomUUID().toString(),
             message = "Preparing screen capture…",
-            deviceAudioRequested = false,
-            audioStatus = ScreenMirrorCoordinator.AudioStatus.DISABLED,
-            audioMessage = if (options.deviceAudio) {
-                "Device audio is not yet available for Google Cast or DLNA mirroring."
+            deviceAudioRequested = options.deviceAudio,
+            audioStatus = if (options.deviceAudio) {
+                ScreenMirrorCoordinator.AudioStatus.STARTING
             } else {
-                null
+                ScreenMirrorCoordinator.AudioStatus.DISABLED
             },
         )
         startupTimeoutJob?.cancel()
@@ -179,6 +182,7 @@ class ExternalScreenMirrorCoordinator(
                         Urls(
                             hls = "$baseUrl/index.m3u8",
                             continuousTs = "$baseUrl/stream.ts",
+                            hasAudio = transportHasAudio,
                         ),
                     )
                 }
@@ -228,13 +232,43 @@ class ExternalScreenMirrorCoordinator(
             height = outputHeight,
             bitrateBps = options.quality.maxBitrateBps,
             framesPerSecond = FRAME_RATE,
+            projection = activeProjection,
+            deviceAudio = options.deviceAudio,
             output = ParcelFileDescriptor.AutoCloseOutputStream(pipes[1]),
             onError = { error ->
                 Log.e(TAG, "Screen encoder stopped unexpectedly", error)
                 mainHandler.post { fail("Screen encoder stopped unexpectedly") }
             },
+            onAudioActive = {
+                mainHandler.post {
+                    if (captureGeneration == generation && _state.value.isActive) {
+                        _state.value = _state.value.copy(
+                            audioStatus = ScreenMirrorCoordinator.AudioStatus.ACTIVE,
+                            audioMessage = null,
+                        )
+                    }
+                }
+            },
+            onAudioError = { error ->
+                Log.w(TAG, "Device audio capture unavailable; continuing video-only", error)
+                mainHandler.post {
+                    if (captureGeneration == generation && _state.value.isActive) {
+                        _state.value = _state.value.copy(
+                            audioStatus = ScreenMirrorCoordinator.AudioStatus.UNAVAILABLE,
+                            audioMessage = "Device audio is unavailable. Mirroring video only.",
+                        )
+                    }
+                }
+            },
         )
         encoder = localEncoder
+        transportHasAudio = localEncoder.hasAudio
+        if (options.deviceAudio && !localEncoder.hasAudio) {
+            _state.value = _state.value.copy(
+                audioStatus = ScreenMirrorCoordinator.AudioStatus.UNAVAILABLE,
+                audioMessage = "Device audio is unavailable. Mirroring video only.",
+            )
+        }
         val pacer = MirrorFramePacer(
             outputWidth = outputWidth,
             outputHeight = outputHeight,
@@ -300,6 +334,7 @@ class ExternalScreenMirrorCoordinator(
         framePacer?.close()
         framePacer = null
         sourceSize = null
+        transportHasAudio = false
         projectionCallback?.let { callback ->
             projection?.unregisterCallback(callback)
         }
