@@ -1,0 +1,133 @@
+name: Android Publish
+
+# Stage 3: publish an existing Android draft release; Play Store uploads happen before undrafting.
+# Stage 2: .github/workflows/android_build.yml
+
+on:
+  workflow_dispatch:
+    inputs:
+      product:
+        description: 'Android product to publish'
+        required: true
+        type: choice
+        options:
+          - phone
+          - tv-player
+          - tv-geckoview-plugin
+      version:
+        description: 'Version to publish (e.g. 1.2.3 or phone-v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: validate draft release
+    runs-on: ubuntu-latest
+    outputs:
+      is_draft: ${{ steps.release.outputs.is_draft }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Find draft GitHub release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRODUCT: ${{ inputs.product }}
+          RAW_VERSION: ${{ inputs.version }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PREFIX="$PRODUCT"
+          VERSION="${RAW_VERSION#${PREFIX}-v}"
+          test -n "$VERSION"
+          TAG="${PREFIX}-v${VERSION}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url >/tmp/android-release.json; then
+            echo "No GitHub Release found for $TAG." >&2
+            echo "Run Android Release Build first (uprev or workflow_dispatch)." >&2
+            exit 1
+          fi
+
+          is_draft=$(jq -r '.isDraft' /tmp/android-release.json)
+          url=$(jq -r '.url' /tmp/android-release.json)
+          echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
+          if [ "$is_draft" = "false" ]; then
+            echo "⏭️ $TAG is already published: $url"
+          else
+            echo "✅ Found draft $TAG: $url"
+          fi
+
+  publish-play-store:
+    name: publish to Play Store
+    needs: validate
+    if: needs.validate.outputs.is_draft == 'true' && inputs.product != 'tv-geckoview-plugin'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download app bundle from draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir dist
+          gh release download "$TAG" --repo "$REPOSITORY" --pattern '*.aab' --dir dist
+          test "$(find dist -maxdepth 1 -name '*.aab' -type f | wc -l)" -eq 1
+
+      - name: Publish Phone to Play Store (open testing)
+        if: inputs.product == 'phone'
+        uses: r0adkll/upload-google-play@v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: com.playbridge.sender
+          releaseFiles: dist/*.aab
+          tracks: beta
+          status: completed
+
+      - name: Publish TV Player to Play Store (alpha)
+        if: inputs.product == 'tv-player'
+        uses: r0adkll/upload-google-play@v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
+          packageName: com.playbridge.player
+          releaseFiles: dist/*.aab
+          tracks: alpha
+          status: completed
+
+  publish-github:
+    name: publish GitHub release
+    needs: [validate, publish-play-store]
+    if: |
+      always() &&
+      needs.validate.result == 'success' &&
+      needs.validate.outputs.is_draft == 'true' &&
+      (needs.publish-play-store.result == 'success' || needs.publish-play-store.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --repo "$REPOSITORY" --json body >/tmp/android-release.json
+          body=$(jq -r '.body // ""' /tmp/android-release.json)
+          draft_notice=$'This is a **draft** candidate. Publish with **Actions → Android Publish**\n(after any configured Play Store upload succeeds).'
+          published_notice='**Published release.** PlayBridge.app availability follows the configured rollout delay.'
+          if [[ "$body" == *"$draft_notice"* ]]; then
+            body="${body/$draft_notice/$published_notice}"
+            echo "Replaced draft-only release note"
+          else
+            echo "Draft-only release note not present; preserving edited release notes"
+          fi
+
+          gh release edit "$TAG" --repo "$REPOSITORY" --notes "$body" --draft=false
+          echo "Published $TAG"
+          gh release view "$TAG" --repo "$REPOSITORY" --json url,isDraft,tagName
