@@ -305,10 +305,14 @@ Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup a
 
 ## AI Policy
 
-This project is built with the help of AI-assisted tools. We welcome similar contributions, provided you take full ownership of the code you submit. Every pull request—regardless of the tools used—is subject to the same standard of review and testing.
+Building a casting suite from scratch across phones, TVs, desktops, and browsers is a large engineering effort. PlayBridge uses AI-assisted tools to help deliver and maintain that cross-platform scope while keeping the project open source and free.
 
-- **Responsibility**: You must fully understand, test, and be able to explain all parts of your changes.
-- **Reviewability**: Keep PRs focused and readable. Avoid large, undocumented dumps of generated code.
+AI is a development aid, not a substitute for engineering judgment. All contributions—AI-assisted or otherwise—must meet the same standards:
+
+- **Ownership**: Understand, test, and take responsibility for every change you submit.
+- **Reviewability**: Keep changes focused, readable, and reviewable.
+- **Maintainability**: Do not submit generated code you cannot explain or maintain.
+- **Quality**: Meet the project's security, compatibility, and testing requirements.
 
 ## Acknowledgments
 
