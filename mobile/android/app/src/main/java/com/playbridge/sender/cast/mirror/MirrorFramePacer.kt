@@ -226,6 +226,7 @@ internal class MirrorFramePacer(
         mvpMatrixLocation = GLES20.glGetUniformLocation(programId, "uMvpMatrix")
         textureMatrixLocation = GLES20.glGetUniformLocation(programId, "uTextureMatrix")
         GLES20.glViewport(0, 0, outputWidth, outputHeight)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
     }
 
     private fun updateMvpMatrix(inputWidth: Int, inputHeight: Int) {
@@ -240,6 +241,9 @@ internal class MirrorFramePacer(
     }
 
     private fun drawFrame() {
+        // Clear the fixed landscape encoder canvas before drawing a letterboxed
+        // portrait frame; otherwise pixels from the preceding landscape frame remain.
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
         GLES20.glUseProgram(programId)
         GLES20.glUniformMatrix4fv(mvpMatrixLocation, 1, false, mvpMatrix, 0)
         GLES20.glUniformMatrix4fv(textureMatrixLocation, 1, false, textureMatrix, 0)
@@ -379,6 +383,7 @@ internal fun mirrorFrameFitScale(
     outputHeight: Int,
 ): Pair<Float, Float> {
     val inputAspect = inputWidth.toFloat() / inputHeight
+
     val outputAspect = outputWidth.toFloat() / outputHeight
     return if (inputAspect > outputAspect) {
         1f to (outputAspect / inputAspect)

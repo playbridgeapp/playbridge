@@ -57,24 +57,25 @@ class ScreenMirrorQualityTest {
     }
 
     @Test
-    fun `external portrait frames fit inside the stable landscape canvas`() {
-        val (scaleX, scaleY) = mirrorFrameFitScale(
-            inputWidth = 590,
-            inputHeight = 1_280,
-            outputWidth = 1_280,
-            outputHeight = 590,
-        )
-
-        assertEquals(0.2124f, scaleX, 0.0001f)
-        assertEquals(1f, scaleY, 0.0001f)
+    fun `external frames fit across portrait landscape portrait sequence`() {
         assertEquals(
-            1f to 1f,
-            mirrorFrameFitScale(
-                inputWidth = 1_280,
-                inputHeight = 590,
-                outputWidth = 1_280,
-                outputHeight = 590,
-            ),
+            0.2125f to 1f,
+            mirrorFrameFitScale(590, 1_280, 1_280, 590).let { (x, y) ->
+                x.round(4) to y
+            },
+        )
+        assertEquals(1f to 1f, mirrorFrameFitScale(1_280, 590, 1_280, 590))
+        assertEquals(
+            0.2125f to 1f,
+            mirrorFrameFitScale(590, 1_280, 1_280, 590).let { (x, y) ->
+                x.round(4) to y
+            },
         )
     }
+
+}
+
+private fun Float.round(decimals: Int): Float {
+    val factor = Math.pow(10.0, decimals.toDouble()).toFloat()
+    return kotlin.math.round(this * factor) / factor
 }
