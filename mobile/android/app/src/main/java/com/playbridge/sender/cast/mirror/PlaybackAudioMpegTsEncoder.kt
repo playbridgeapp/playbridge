@@ -22,13 +22,16 @@ internal class PlaybackAudioMpegTsEncoder private constructor(
     private val onError: (Throwable) -> Unit,
 ) : Closeable {
     private val running = AtomicBoolean(false)
+    private val prepared = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
     private val thread = Thread(::capture, "PlayBridgeMirrorAudio").apply { isDaemon = true }
     private var submittedFrames = 0L
     private var firstPresentationTimeUs = 0L
 
-    fun start() {
-        if (!running.compareAndSet(false, true)) return
+    /** Starts the platform capture synchronously so callers can advertise audio accurately. */
+    fun prepare(): Boolean {
+        if (closed.get()) return false
+        if (prepared.get()) return true
         try {
             codec.start()
             audioRecord.startRecording()
@@ -36,18 +39,24 @@ internal class PlaybackAudioMpegTsEncoder private constructor(
                 throw IOException("Playback audio capture did not enter the recording state")
             }
             firstPresentationTimeUs = System.nanoTime() / 1_000L
+            prepared.set(true)
             onActive()
-            thread.start()
+            return true
         } catch (error: Throwable) {
-            running.set(false)
             onError(error)
+            return false
         }
+    }
+
+    fun start() {
+        if (!prepared.get() || !running.compareAndSet(false, true)) return
+        thread.start()
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         running.set(false)
-        runCatching { audioRecord.stop() }
+        if (prepared.get()) runCatching { audioRecord.stop() }
         if (thread.isAlive && Thread.currentThread() !== thread) {
             thread.interrupt()
             thread.join(STOP_TIMEOUT_MS)

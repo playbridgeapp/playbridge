@@ -237,7 +237,16 @@ class ExternalScreenMirrorCoordinator(
             output = ParcelFileDescriptor.AutoCloseOutputStream(pipes[1]),
             onError = { error ->
                 Log.e(TAG, "Screen encoder stopped unexpectedly", error)
-                mainHandler.post { fail("Screen encoder stopped unexpectedly") }
+                mainHandler.post {
+                    if (shouldHandleExternalMirrorCallback(
+                            captureGeneration,
+                            generation,
+                            _state.value.isActive,
+                        )
+                    ) {
+                        fail("Screen encoder stopped unexpectedly")
+                    }
+                }
             },
             onAudioActive = {
                 mainHandler.post {
@@ -278,7 +287,16 @@ class ExternalScreenMirrorCoordinator(
             outputSurface = localEncoder.inputSurface,
             onError = { error ->
                 Log.e(TAG, "Mirror frame renderer failed", error)
-                mainHandler.post { fail("Screen renderer stopped unexpectedly") }
+                mainHandler.post {
+                    if (shouldHandleExternalMirrorCallback(
+                            captureGeneration,
+                            generation,
+                            _state.value.isActive,
+                        )
+                    ) {
+                        fail("Screen renderer stopped unexpectedly")
+                    }
+                }
             },
         )
         framePacer = pacer
@@ -439,6 +457,12 @@ class ExternalScreenMirrorCoordinator(
         private const val REQUEST_TIMEOUT_MS = 5_000
     }
 }
+
+internal fun shouldHandleExternalMirrorCallback(
+    callbackGeneration: Long,
+    currentGeneration: Long,
+    isActive: Boolean,
+): Boolean = isActive && callbackGeneration == currentGeneration
 
 internal data class MirrorHlsSegment(
     val id: Long,

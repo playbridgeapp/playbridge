@@ -28,7 +28,7 @@ internal class MediaCodecMpegTsEncoder(
     private val codec = MediaCodec.createEncoderByType(MIME_AVC)
     private val running = AtomicBoolean(false)
     private val closed = AtomicBoolean(false)
-    private lateinit var muxer: H264MpegTsMuxer
+    private val muxer: H264MpegTsMuxer
     private val audioEncoder: PlaybackAudioMpegTsEncoder?
     private val drainThread = Thread(::drain, "PlayBridgeMirrorEncoder").apply { isDaemon = true }
     private var codecConfig = ByteArray(0)
@@ -38,20 +38,6 @@ internal class MediaCodecMpegTsEncoder(
     val hasAudio: Boolean get() = audioEncoder != null
 
     init {
-        val audio = if (deviceAudio) {
-            PlaybackAudioMpegTsEncoder.create(
-                projection = projection,
-                onFrame = { accessUnit, presentationTimeUs ->
-                    muxer.writeAudioAccessUnit(accessUnit, presentationTimeUs)
-                },
-                onActive = onAudioActive,
-                onError = onAudioError,
-            )
-        } else {
-            null
-        }
-        muxer = H264MpegTsMuxer(output, includeAudio = audio != null)
-        audioEncoder = audio
         require(width > 0 && height > 0)
         require(bitrateBps > 0 && framesPerSecond > 0)
         val format = MediaFormat.createVideoFormat(MIME_AVC, width, height).apply {
@@ -67,6 +53,22 @@ internal class MediaCodecMpegTsEncoder(
         }
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         inputSurface = codec.createInputSurface()
+        val audioCandidate = if (deviceAudio) {
+            PlaybackAudioMpegTsEncoder.create(
+                projection = projection,
+                onFrame = { accessUnit, presentationTimeUs ->
+                    muxer.writeAudioAccessUnit(accessUnit, presentationTimeUs)
+                },
+                onActive = onAudioActive,
+                onError = onAudioError,
+            )
+        } else {
+            null
+        }
+        val audio = audioCandidate?.takeIf { it.prepare() }
+        if (audio == null) audioCandidate?.close()
+        muxer = H264MpegTsMuxer(output, includeAudio = audio != null)
+        audioEncoder = audio
     }
 
     fun start() {

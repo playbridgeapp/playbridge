@@ -28,6 +28,17 @@ class ExternalScreenMirrorRoutingTest {
     }
 
     @Test
+    fun `google cast omits audio hint when playback capture did not start`() {
+        val media = externalScreenMirrorMedia(
+            TargetKind.GOOGLE_CAST,
+            urls.copy(hasAudio = false),
+        )
+
+        assertNull(media.hlsSegmentFormat)
+        assertEquals("mpeg2_ts", media.hlsVideoSegmentFormat)
+    }
+
+    @Test
     fun `dlna receives the same mpeg ts capture as a continuous stream`() {
         val media = externalScreenMirrorMedia(TargetKind.DLNA, urls)
 

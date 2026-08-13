@@ -9,6 +9,31 @@ import org.junit.Test
 
 class ExternalScreenMirrorTest {
     @Test
+    fun `late callback from stopped generation cannot fail replacement mirror`() {
+        assertFalse(
+            shouldHandleExternalMirrorCallback(
+                callbackGeneration = 4,
+                currentGeneration = 6,
+                isActive = true,
+            ),
+        )
+        assertFalse(
+            shouldHandleExternalMirrorCallback(
+                callbackGeneration = 6,
+                currentGeneration = 6,
+                isActive = false,
+            ),
+        )
+        assertTrue(
+            shouldHandleExternalMirrorCallback(
+                callbackGeneration = 6,
+                currentGeneration = 6,
+                isActive = true,
+            ),
+        )
+    }
+
+    @Test
     fun `completed hls segment is keyframe aligned and timed from pts`() {
         val pat = tsPacket(0, patPayload(0x100))
         val pmt = tsPacket(0x100, pmtPayload(0x101))
