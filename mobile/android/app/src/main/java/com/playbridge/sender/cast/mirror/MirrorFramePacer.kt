@@ -91,7 +91,7 @@ internal class MirrorFramePacer(
 
     /**
      * Updates the VirtualDisplay producer size while the recorder's encoded
-     * landscape canvas remains fixed. Keeping the coded resolution stable
+     * 16:9 landscape canvas remains fixed. Keeping the coded resolution stable
      * prevents Google Cast from stalling on a mid-stream orientation change.
      */
     fun resizeInput(width: Int, height: Int) {
@@ -373,8 +373,11 @@ internal class MirrorFramePacer(
     }
 }
 
-internal fun externalMirrorEncoderSize(width: Int, height: Int): Pair<Int, Int> =
-    maxOf(width, height) to minOf(width, height)
+internal fun externalMirrorEncoderSize(width: Int, height: Int): Pair<Int, Int> {
+    val outputWidth = maxOf(width, height).coerceAtLeast(2).let { it - (it % 2) }
+    val outputHeight = (outputWidth * 9 / 16).coerceAtLeast(2).let { it - (it % 2) }
+    return outputWidth to outputHeight
+}
 
 internal fun mirrorFrameFitScale(
     inputWidth: Int,
@@ -385,9 +388,13 @@ internal fun mirrorFrameFitScale(
     val inputAspect = inputWidth.toFloat() / inputHeight
 
     val outputAspect = outputWidth.toFloat() / outputHeight
-    return if (inputAspect > outputAspect) {
+    val fitScale = if (inputAspect > outputAspect) {
         1f to (outputAspect / inputAspect)
     } else {
         (inputAspect / outputAspect) to 1f
     }
+    val safeScale = 1f - (EXTERNAL_MIRROR_SAFE_INSET_FRACTION * 2f)
+    return (fitScale.first * safeScale) to (fitScale.second * safeScale)
 }
+
+private const val EXTERNAL_MIRROR_SAFE_INSET_FRACTION = 0.05f
