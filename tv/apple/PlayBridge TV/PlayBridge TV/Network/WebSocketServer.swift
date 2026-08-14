@@ -28,6 +28,12 @@ struct ConnectionHandshake {
 
 // MARK: - Server Logic
 class WebSocketServer: ObservableObject {
+    private func hashToken(_ token: String) -> String {
+        let data = token.data(using: .utf8) ?? Data()
+        let digest = SasCrypto.sha256(data)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     private var tlsListener: NWListener?
     private var connectedConnections: [NWConnection] = []
     private var historyStore: HistoryStore?
@@ -54,6 +60,7 @@ class WebSocketServer: ObservableObject {
 
     var deviceName: String { UIDevice.current.name }
     private let authorizedTokensKey = "pb_authorized_tokens"
+    private let authorizedTokenVerifiersKey = "pb_authorized_token_verifiers"
     private let deviceUUIDKey = "pb_device_uuid"
     private let pairedDevicesKey = "pb_paired_devices"
     private let receiverPortKey = "pb_receiver_port"
@@ -95,6 +102,11 @@ class WebSocketServer: ObservableObject {
     private var authorizedTokens: Set<String> {
         get { Set(UserDefaults.standard.stringArray(forKey: authorizedTokensKey) ?? []) }
         set { UserDefaults.standard.set(Array(newValue), forKey: authorizedTokensKey) }
+    }
+
+    private var authorizedTokenVerifiers: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: authorizedTokenVerifiersKey) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: authorizedTokenVerifiersKey) }
     }
 
     /// Re-broadcasts `playlist_status` whenever the queue changes — including index moves
@@ -644,14 +656,16 @@ class WebSocketServer: ObservableObject {
         autoTimeoutWork = nil
 
         let token = UUID().uuidString
-        var tokens = authorizedTokens
-        tokens.insert(token)
-        authorizedTokens = tokens
+        let tokenHash = hashToken(token)
+        var verifiers = authorizedTokenVerifiers
+        verifiers.insert(tokenHash)
+        authorizedTokenVerifiers = verifiers
 
         let device = PairedDevice(
             deviceUUID: handshake.deviceUUID,
             deviceName: handshake.deviceName,
-            token: token,
+            token: nil,
+            tokenVerifier: tokenHash,
             lastConnected: Date()
         )
         savePairedDevice(device)
@@ -785,7 +799,46 @@ class WebSocketServer: ObservableObject {
             send(json: ["type": "auth_response", "success": false], to: connection)
             return
         }
-        if authorizedTokens.contains(msg.token) {
+
+        let tokenHash = hashToken(msg.token)
+        var isAuthorized = false
+
+        if authorizedTokenVerifiers.contains(tokenHash) {
+            isAuthorized = true
+
+            // Just in case it's still in authorizedTokens during migration overlapping states
+            var legacyTokens = authorizedTokens
+            if legacyTokens.remove(msg.token) != nil {
+                authorizedTokens = legacyTokens
+
+                var devices = storedPairedDevices
+                if let idx = devices.firstIndex(where: { $0.token == msg.token }) {
+                    devices[idx].token = nil
+                    devices[idx].tokenVerifier = tokenHash
+                    storedPairedDevices = devices
+                }
+            }
+        } else if authorizedTokens.contains(msg.token) {
+            isAuthorized = true
+
+            // Migrate legacy token
+            var verifiers = authorizedTokenVerifiers
+            verifiers.insert(tokenHash)
+            authorizedTokenVerifiers = verifiers
+
+            var legacyTokens = authorizedTokens
+            legacyTokens.remove(msg.token)
+            authorizedTokens = legacyTokens
+
+            var devices = storedPairedDevices
+            if let idx = devices.firstIndex(where: { $0.token == msg.token }) {
+                devices[idx].token = nil
+                devices[idx].tokenVerifier = tokenHash
+                storedPairedDevices = devices
+            }
+        }
+
+        if isAuthorized {
             updateLastConnected(token: msg.token)
             completeAuth(from: connection, token: msg.token)
         } else {
@@ -836,24 +889,37 @@ class WebSocketServer: ObservableObject {
         var devices = storedPairedDevices
         devices.removeAll { $0.deviceUUID == device.deviceUUID }
         storedPairedDevices = devices
-        var tokens = authorizedTokens
-        tokens.remove(device.token)
-        authorizedTokens = tokens
+        if let t = device.token {
+            var tokens = authorizedTokens
+            tokens.remove(t)
+            authorizedTokens = tokens
+
+            var verifiers = authorizedTokenVerifiers
+            verifiers.remove(hashToken(t))
+            authorizedTokenVerifiers = verifiers
+        }
+        if let tv = device.tokenVerifier {
+            var verifiers = authorizedTokenVerifiers
+            verifiers.remove(tv)
+            authorizedTokenVerifiers = verifiers
+        }
     }
 
     func forgetAllDevices() {
         storedPairedDevices = []
         authorizedTokens = []
+        authorizedTokenVerifiers = []
         DispatchQueue.main.async { self.pairedDevicesList = [] }
     }
 
     private func updateLastConnected(token: String) {
         var devices = storedPairedDevices
-        if let idx = devices.firstIndex(where: { $0.token == token }) {
+        let tokenHash = hashToken(token)
+        if let idx = devices.firstIndex(where: { $0.tokenVerifier == tokenHash || $0.token == token }) {
             let d = devices[idx]
             devices[idx] = PairedDevice(
                 deviceUUID: d.deviceUUID, deviceName: d.deviceName,
-                token: token, lastConnected: Date()
+                token: d.token, tokenVerifier: d.tokenVerifier, lastConnected: Date()
             )
             storedPairedDevices = devices
         }

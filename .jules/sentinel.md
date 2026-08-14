@@ -17,3 +17,7 @@
 **Vulnerability:** The Android TV app's `SystemWebViewEngine` had `allowContentAccess` set to `true`. This is a critical security misconfiguration because it allows the arbitrary web content loaded into the system WebView to access and read local content provider data via `content://` URIs on the device, potentially exposing sensitive application data or internal processes (e.g. `PlayerProcessBridgeProvider`).
 **Learning:** Just as `allowFileAccess` is dangerous, `allowContentAccess` is equally risky when a WebView acts as a browser to navigate to untrusted arbitrary URLs. It unnecessarily expands the attack surface.
 **Prevention:** Explicitly configure `allowContentAccess = false` on all WebViews that handle remote, untrusted content to prevent access to the application's ContentProviders.
+## 2024-08-14 - SEC-004: Inconsistent Bearer Token Storage on Apple TV
+**Vulnerability:** Apple TV receiver stores bearer tokens in plaintext in UserDefaults (SEC-004 in docs/SECURITY_GAPS.md).
+**Learning:** Legacy paired device structures and Codable compatibility issues make migration of these structs challenging if not carefully done. The original plaintext tokens need to be removed as they authenticate, but old encoded devices must not crash parsing.
+**Prevention:** Always serialize sensitive authorization verifiers, not the raw tokens themselves, starting from v1. Handle migration using separate legacy/hash storage and optional struct properties for old fields.
