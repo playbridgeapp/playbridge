@@ -59,6 +59,7 @@ class GoogleCastTarget(
         Capability.STOP,
         Capability.VOLUME,
         Capability.NOW_PLAYING,
+        Capability.SCREEN_MIRROR,
     )
 
     private val connectionMutex = Mutex()
@@ -285,9 +286,14 @@ class GoogleCastTarget(
         // LOAD metadata so receivers accept MPEG-TS bytes behind misleading
         // segment suffixes (e.g. .jpg on some anime CDNs). Mirrors Desktop.
         val hlsContainer = HlsSegmentHints.formatFromUrl(proxyUrl)
-        val streamType = HlsSegmentHints.streamTypeFromUrl(proxyUrl)
-        val audioFormat = HlsSegmentHints.googleCastAudioFormat(hlsContainer)
-        val videoFormat = HlsSegmentHints.googleCastVideoFormat(hlsContainer)
+        val streamType = googleCastStreamType(
+            explicit = media.streamType,
+            inferred = HlsSegmentHints.streamTypeFromUrl(proxyUrl),
+        )
+        val audioFormat = media.hlsSegmentFormat
+            ?: HlsSegmentHints.googleCastAudioFormat(hlsContainer)
+        val videoFormat = media.hlsVideoSegmentFormat
+            ?: HlsSegmentHints.googleCastVideoFormat(hlsContainer)
         if (BuildConfig.DEBUG) {
             val source = if (media.effectiveRoute?.prefsValue == "direct") "direct" else "phone_proxy"
             Log.d(
@@ -664,3 +670,7 @@ internal fun googleCastNeedsExplicitNetworkBinding(
     activeNetworkHandle: Long?,
     selectedNetworkHandle: Long,
 ): Boolean = selectedNetworkHandle != 0L && activeNetworkHandle != selectedNetworkHandle
+
+
+internal fun googleCastStreamType(explicit: String?, inferred: String?): String? =
+    explicit?.uppercase() ?: inferred

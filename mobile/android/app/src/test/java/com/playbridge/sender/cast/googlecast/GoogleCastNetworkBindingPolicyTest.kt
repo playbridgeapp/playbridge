@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast.googlecast
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -43,5 +44,11 @@ class GoogleCastNetworkBindingPolicyTest {
                 selectedNetworkHandle = 0L,
             ),
         )
+    }
+
+    @Test
+    fun `explicit live stream type is normalized for Cast Core`() {
+        assertEquals("LIVE", googleCastStreamType(explicit = "live", inferred = "BUFFERED"))
+        assertEquals("BUFFERED", googleCastStreamType(explicit = null, inferred = "BUFFERED"))
     }
 }

@@ -180,6 +180,10 @@ Most actions use `{"type":"command","action":"...","payload":{...}}`:
 | `browser` | Open a URL on a receiver with browser capability | Activates browser context |
 | `browser_control` | Refresh or toggle receiver ad blocking | Controls active browser |
 | `context_query` | Immediately after auth/reconnect or UI refresh | Receiver sends current context and state |
+| `screen_mirror_start` | Phone starts a WebRTC screen mirror after `auth_response.screenMirrorWebRtc=true` | Receiver creates a receive-only peer and replies `screen_mirror_ready` before the offer. Payload is `sessionId` (UUID) plus `protocolVersion: 1`. |
+| `screen_mirror_offer` | Phone sends the H.264 (optional Opus) SDP offer | Receiver sets remote SDP, flushes queued ICE, and replies `screen_mirror_answer` |
+| `screen_mirror_candidate` | Phone trickle-ICE (host UDP only) | Receiver adds the candidate or queues it until remote SDP is set |
+| `screen_mirror_stop` | Phone ends the session | Receiver tears down the peer and does not echo stop |
 
 Android receiver browser administration also uses standalone `user_script`, `user_script_query`,
 `user_agent`, and `user_agent_query` frames. Other receivers may ignore unsupported, well-formed
@@ -202,6 +206,10 @@ is not part of the canonical sender contract.
 | `player_settings` | Speed, adaptive quality ceiling, scaling, boost, subtitle offset, engine, and live capability changes |
 | `user_scripts` / `user_agents` | Response to Android browser administration queries |
 | `pong` | Response to application-level `ping` |
+| `screen_mirror_ready` | Peer + renderer/pipe created; sent before the phone offers |
+| `screen_mirror_answer` | Local SDP set after `screen_mirror_offer` |
+| `screen_mirror_candidate` | Local host UDP ICE for the answerer |
+| `screen_mirror_event` | `connected`, or `failed`/`stopped` plus a stable `reason` |
 
 Receivers must tolerate unknown JSON object properties for forward compatibility. Unknown
 message types/actions should be ignored or surfaced diagnostically, not treated as authenticated
@@ -226,6 +234,7 @@ advertised capabilities.
 | `context`, `status`, `playlist_status` | Receives | Receives | Receives | Sends | Sends | Sends |
 | `tracks` | Receives | Receives | Receives | Sends | Sends | Sends |
 | `player_settings` | Receives | Receives | Receives | Sends | Not currently sent | Not currently sent |
+| WebRTC screen mirror (`screenMirrorWebRtc` + v1 `protocolVersion`) | Sends | No | No | Handles | No | Handles |
 
 The Firefox/Chromium extension is not a WSS endpoint. It sends a restricted native-messaging
 request to PlayBridge Desktop; Desktop owns discovery, pairing, pinning, receiver selection, and

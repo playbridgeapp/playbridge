@@ -43,19 +43,19 @@ import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.connection.WebSocketClient
 import org.koin.compose.koinInject
 
-/** Hub destination for the Android-native, paired-receiver-only mirror flow. */
+/** Hub destination for WebRTC and external-receiver screen mirroring. */
 @Composable
 fun ScreenMirrorScreen(
     onBack: () -> Unit,
-    coordinator: ScreenMirrorCoordinator = koinInject(),
     webSocketClient: WebSocketClient = koinInject(),
     castSessionManager: CastSessionManager = koinInject(),
 ) {
     val context = LocalContext.current
-    val state by coordinator.state.collectAsState()
+    val state by castSessionManager.screenMirrorState.collectAsState()
     val connection by webSocketClient.connectionState.collectAsState()
     val capabilities by webSocketClient.tvCapabilitiesState.collectAsState()
     val route by castSessionManager.route.collectAsState()
+    val session by castSessionManager.sessionState.collectAsState()
     var qualityId by rememberSaveable { mutableStateOf(ScreenMirrorCoordinator.Quality.DEFAULT.id) }
     var deviceAudioEnabled by rememberSaveable {
         mutableStateOf(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
@@ -85,9 +85,16 @@ fun ScreenMirrorScreen(
         projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
     val connected = connection is WebSocketClient.ConnectionState.Connected
-    val supported = capabilities.screenMirrorWebRtc
-    val nativeReceiverSelected = route !is CastSessionManager.Route.External
-    val canStart = connected && supported && nativeReceiverSelected && !state.isActive
+    val nativeSupported = capabilities.screenMirrorWebRtc
+    val externalSelected = route is CastSessionManager.Route.External
+    val externalSupported = externalSelected &&
+        session.targetKind in setOf(
+            com.playbridge.sender.cast.TargetKind.GOOGLE_CAST,
+            com.playbridge.sender.cast.TargetKind.DLNA,
+        ) &&
+        com.playbridge.sender.cast.Capability.SCREEN_MIRROR in session.capabilities
+    val canStart = (if (externalSelected) externalSupported else connected && nativeSupported) &&
+        !state.isActive
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
@@ -103,12 +110,21 @@ fun ScreenMirrorScreen(
         Text("Screen Mirror", style = MaterialTheme.typography.headlineMedium)
         Spacer(Modifier.height(8.dp))
         val description = when {
-            state.phase == ScreenMirrorCoordinator.Phase.MIRRORING -> "Mirroring to your PlayBridge TV"
+            state.phase == ScreenMirrorCoordinator.Phase.MIRRORING && externalSelected ->
+                "Mirroring to ${(route as CastSessionManager.Route.External).name}"
+            state.phase == ScreenMirrorCoordinator.Phase.MIRRORING ->
+                "Mirroring to your PlayBridge TV"
             state.isActive -> state.message ?: "Connecting to TV…"
+            state.phase == ScreenMirrorCoordinator.Phase.FAILED ->
+                state.message ?: "Could not start mirroring."
+            externalSelected && !externalSupported ->
+                "This external receiver does not support screen mirroring."
+            externalSelected && session.targetKind == com.playbridge.sender.cast.TargetKind.DLNA ->
+                "Share this phone’s screen using live MPEG-TS. DLNA support varies by TV."
+            externalSelected ->
+                "Share this phone’s screen using live HLS."
             !connected -> "Connect to a PlayBridge TV to start mirroring."
-            !nativeReceiverSelected -> "Select your PlayBridge TV instead of an external receiver to mirror."
-            !supported -> "This TV needs an update before it can receive WebRTC screen mirroring."
-            state.phase == ScreenMirrorCoordinator.Phase.FAILED -> state.message ?: "Could not start mirroring."
+            !nativeSupported -> "This TV needs an update before it can receive WebRTC screen mirroring."
             else -> "Share this phone’s screen directly with your PlayBridge TV."
         }
         Text(description, style = MaterialTheme.typography.bodyLarge)
@@ -209,7 +225,10 @@ fun ScreenMirrorScreen(
         )
         Spacer(Modifier.height(28.dp))
         if (state.isActive) {
-            Button(onClick = { coordinator.stop() }, modifier = Modifier.fillMaxWidth()) { Text("Stop mirroring") }
+            Button(
+                onClick = { castSessionManager.stopScreenMirror() },
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Stop mirroring") }
         } else {
             Button(
                 enabled = canStart,
@@ -217,7 +236,8 @@ fun ScreenMirrorScreen(
                     audioNotice = null
                     val options = ScreenMirrorCoordinator.Options(
                         quality = selectedQuality,
-                        deviceAudio = deviceAudioEnabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
+                        deviceAudio = deviceAudioEnabled &&
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q,
                     )
                     pendingOptions = options
                     if (options.deviceAudio && ContextCompat.checkSelfPermission(

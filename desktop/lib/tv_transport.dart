@@ -716,18 +716,15 @@ class RustCastTransport extends TvTransport {
 }
 
 class DlnaTransport extends RustCastTransport {
-  DlnaTransport({rust.CastCoreLibrary? core})
-      : super(TvProtocol.dlna, core: core);
+  DlnaTransport({super.core}) : super(TvProtocol.dlna);
 }
 
 class RokuTransport extends RustCastTransport {
-  RokuTransport({rust.CastCoreLibrary? core})
-      : super(TvProtocol.roku, core: core);
+  RokuTransport({super.core}) : super(TvProtocol.roku);
 }
 
 class GoogleCastTransport extends RustCastTransport {
-  GoogleCastTransport({rust.CastCoreLibrary? core})
-      : super(TvProtocol.googleCast, core: core);
+  GoogleCastTransport({super.core}) : super(TvProtocol.googleCast);
 }
 
 /// Transport for a browser page connected to Desktop's on-demand Rust host.

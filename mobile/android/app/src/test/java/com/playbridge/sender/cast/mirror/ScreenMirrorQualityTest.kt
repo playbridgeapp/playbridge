@@ -49,4 +49,39 @@ class ScreenMirrorQualityTest {
             screenMirrorCaptureSize(2_400, 1_080, ScreenMirrorCoordinator.Quality.DEFAULT),
         )
     }
+
+    @Test
+    fun `external encoder keeps a stable standard canvas across rotation`() {
+        assertEquals(1_280 to 720, externalMirrorEncoderSize(590, 1_280))
+        assertEquals(1_280 to 720, externalMirrorEncoderSize(1_280, 590))
+        assertEquals(1_920 to 1_080, externalMirrorEncoderSize(886, 1_920))
+    }
+
+    @Test
+    fun `external frames fit inside the receiver safe area across rotation`() {
+        assertEquals(
+            0.2333f to 0.9f,
+            mirrorFrameFitScale(590, 1_280, 1_280, 720).let { (x, y) ->
+                x.round(4) to y.round(4)
+            },
+        )
+        assertEquals(
+            0.9f to 0.7375f,
+            mirrorFrameFitScale(1_280, 590, 1_280, 720).let { (x, y) ->
+                x.round(4) to y.round(4)
+            },
+        )
+        assertEquals(
+            0.2333f to 0.9f,
+            mirrorFrameFitScale(590, 1_280, 1_280, 720).let { (x, y) ->
+                x.round(4) to y.round(4)
+            },
+        )
+    }
+
+}
+
+private fun Float.round(decimals: Int): Float {
+    val factor = Math.pow(10.0, decimals.toDouble()).toFloat()
+    return kotlin.math.round(this * factor) / factor
 }

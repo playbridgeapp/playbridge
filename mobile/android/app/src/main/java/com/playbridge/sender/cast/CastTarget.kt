@@ -78,6 +78,9 @@ enum class Capability {
     QUEUE,
 
     SUBTITLES,
+
+    /** Capture and stream the phone screen to this receiver. */
+    SCREEN_MIRROR,
 }
 
 /**
@@ -108,6 +111,13 @@ data class MediaItem(
     val routeReason: String? = null,
     /** Manager-assigned identity for one external load; never serialized or sent to receivers. */
     val loadEpoch: Long? = null,
+    /** Receiver-specific live-stream hint. Never serialized into the PlayBridge wire protocol. */
+    val streamType: String? = null,
+    /** Google Cast HLS container hints; null for non-HLS media and DLNA. */
+    val hlsSegmentFormat: String? = null,
+    val hlsVideoSegmentFormat: String? = null,
+    /** Marks a manager-owned external screen-mirror load for lifecycle cleanup. */
+    val isScreenMirror: Boolean = false,
 )
 
 data class SubtitleRef(

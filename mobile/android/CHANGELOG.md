@@ -6,10 +6,11 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [0.13.0] — 2026-08-11 (versionCode 223)
 
 ### Added
-- **Screen mirroring**: Mirror the phone to compatible PlayBridge TV and Desktop receivers over WebRTC with H.264 video, optional playback audio, orientation-aware sizing, and selectable quality limits.
+- **Screen mirroring**: Mirror the phone to compatible PlayBridge TV and Desktop receivers over WebRTC with H.264 video, optional playback audio, orientation-aware sizing, and selectable quality limits. Google Cast and DLNA receivers can receive the same capture as a video-only H.264/MPEG-TS live stream.
 
 ### Changed
 - **Release optimization**: Enable R8 code and resource optimization for smaller, optimized FOSS and Play release builds.
+- **External screen mirroring**: Keep Google Cast playback active across phone orientation changes by using a stable encoded canvas and resizing only the captured display source.
 
 ## [0.12.0] — 2026-08-03 (versionCode 222)
 
