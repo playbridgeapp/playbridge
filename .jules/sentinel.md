@@ -17,3 +17,13 @@
 **Vulnerability:** The Android TV app's `SystemWebViewEngine` had `allowContentAccess` set to `true`. This is a critical security misconfiguration because it allows the arbitrary web content loaded into the system WebView to access and read local content provider data via `content://` URIs on the device, potentially exposing sensitive application data or internal processes (e.g. `PlayerProcessBridgeProvider`).
 **Learning:** Just as `allowFileAccess` is dangerous, `allowContentAccess` is equally risky when a WebView acts as a browser to navigate to untrusted arbitrary URLs. It unnecessarily expands the attack surface.
 **Prevention:** Explicitly configure `allowContentAccess = false` on all WebViews that handle remote, untrusted content to prevent access to the application's ContentProviders.
+
+## 2025-02-09 - Plaintext Token Storage in Apple TV App
+**Vulnerability:** The Apple TV app's `WebSocketServer` stored plaintext bearer tokens for paired devices in `UserDefaults` and authorized connections using exact matches. These stored tokens could be extracted from preferences or device backups and reused to gain unauthorized sender privileges.
+**Learning:** Ordinary application preferences like `UserDefaults` are not a secure secret store, and retaining a plaintext copy of tokens after issuance introduces persistent credentials that are highly portable.
+**Prevention:** Always convert newly generated and incoming secrets to hashed token verifiers (e.g. SHA-256) before saving them to `UserDefaults` and using them in server state lookups. The plaintext token should only ever exist ephemerally during issuance and initial client transmission.
+
+## 2025-02-09 - Missed Verifier Argument in Apple TV App Token Migration
+**Vulnerability:** While mitigating SEC-004 (hashed token storage), `approvePairing` correctly hashed the token but called `completeAuth` with the plaintext `token` instead of `tokenVerifier`. The subsequent `handleAuth` exchange attempts to double-hash.
+**Learning:** During token migrations or generation where multiple versions (plaintext and hash) exist in scope, functions down the execution path can inadvertently re-bind to the original value, breaking state alignment across the system.
+**Prevention:** Follow through all state updates within the function block that consume the token and assert they strictly receive the hashed `tokenVerifier` when representing server-side storage identity.

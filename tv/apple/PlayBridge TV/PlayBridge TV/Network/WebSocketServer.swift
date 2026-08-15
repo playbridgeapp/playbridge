@@ -644,14 +644,16 @@ class WebSocketServer: ObservableObject {
         autoTimeoutWork = nil
 
         let token = UUID().uuidString
+        let tokenVerifier = computeTokenVerifier(token: token)
+
         var tokens = authorizedTokens
-        tokens.insert(token)
+        tokens.insert(tokenVerifier)
         authorizedTokens = tokens
 
         let device = PairedDevice(
             deviceUUID: handshake.deviceUUID,
             deviceName: handshake.deviceName,
-            token: token,
+            token: tokenVerifier,
             lastConnected: Date()
         )
         savePairedDevice(device)
@@ -709,7 +711,7 @@ class WebSocketServer: ObservableObject {
         lockoutUntil.removeValue(forKey: ip)
         
         inProgressHandshakes.removeValue(forKey: ObjectIdentifier(connection))
-        completeAuth(from: connection, token: token, sendAuthResponse: false)
+        completeAuth(from: connection, token: tokenVerifier, sendAuthResponse: false)
         pendingPairingRequest = nil
     }
 
@@ -785,9 +787,17 @@ class WebSocketServer: ObservableObject {
             send(json: ["type": "auth_response", "success": false], to: connection)
             return
         }
-        if authorizedTokens.contains(msg.token) {
-            updateLastConnected(token: msg.token)
-            completeAuth(from: connection, token: msg.token)
+
+        let tokenVerifier = computeTokenVerifier(token: msg.token)
+
+        if authorizedTokens.contains(tokenVerifier) {
+            updateLastConnected(token: tokenVerifier)
+            completeAuth(from: connection, token: tokenVerifier)
+        } else if authorizedTokens.contains(msg.token) {
+            // Found a legacy plaintext token; update it to the hashed verifier.
+            migrateLegacyToken(token: msg.token)
+            updateLastConnected(token: tokenVerifier)
+            completeAuth(from: connection, token: tokenVerifier)
         } else {
             send(json: ["type": "auth_response", "success": false], to: connection)
         }
@@ -817,6 +827,35 @@ class WebSocketServer: ObservableObject {
                 self.broadcastPlaylistStatus()
             }
             NotificationCenter.default.post(name: Self.resyncRequest, object: nil)
+        }
+    }
+
+    // MARK: - Token Security
+
+    private func computeTokenVerifier(token: String) -> String {
+        let data = Data(token.utf8)
+        let hash = SasCrypto.sha256(data)
+        return hash.base64EncodedString()
+    }
+
+    private func migrateLegacyToken(token: String) {
+        let verifier = computeTokenVerifier(token: token)
+
+        var tokens = authorizedTokens
+        tokens.remove(token)
+        tokens.insert(verifier)
+        authorizedTokens = tokens
+
+        var devices = storedPairedDevices
+        if let idx = devices.firstIndex(where: { $0.token == token }) {
+            let d = devices[idx]
+            devices[idx] = PairedDevice(
+                deviceUUID: d.deviceUUID,
+                deviceName: d.deviceName,
+                token: verifier,
+                lastConnected: d.lastConnected
+            )
+            storedPairedDevices = devices
         }
     }
 
