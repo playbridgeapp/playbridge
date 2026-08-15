@@ -97,6 +97,17 @@
     <button onclick="castSingle()">Cast single</button>
   </div>
 
+  <h2>Linked/lazy playlist</h2>
+
+  <div class="card">
+    <h3>Website-managed HLS queue</h3>
+    <p>Creates ten HLS items, starts with items 1–2, then supplies items 3–10 only when
+       PlayBridge emits <code>needitems</code>. The phone Remote retains playback controls.</p>
+    <button onclick="startLinkedCast()">Start linked cast</button>
+    <button class="secondary" onclick="jumpLinked()">Jump to first</button>
+    <button class="secondary" onclick="unlinkLinked()">Unlink</button>
+  </div>
+
   <div class="card">
     <h3>HLS stream</h3>
     <p>Casts an HLS master playlist URL — exercises receiver-side manifest handling.</p>
@@ -160,7 +171,8 @@
   (function checkBridge() {
     if (window.playbridge && typeof window.playbridge.cast === 'function') {
       banner.className = 'banner ok';
-      banner.textContent = '✓ PlayBridge bridge detected — cast buttons are live.';
+      var linked = window.playbridge.capabilities && window.playbridge.capabilities.linkedCast;
+      banner.textContent = '✓ PlayBridge bridge detected' + (linked ? ' — direct and linked casting are live.' : ' — direct casting is live.');
       log('Bridge detected (window.playbridge)', 'ok');
     } else if (++checks < 20) {
       setTimeout(checkBridge, 250);
@@ -188,6 +200,63 @@
 
   // ── Payloads ────────────────────────────────────────────────────────────
   var GTV = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/';
+  var linkedSession = null;
+  var linkedRemaining = [];
+
+  function linkedHlsItem(index) {
+    return {
+      id: 'hls-' + index,
+      url: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8',
+      title: 'Linked HLS item ' + index + ' of 10',
+      contentType: 'application/vnd.apple.mpegurl'
+    };
+  }
+
+  async function startLinkedCast() {
+    if (!window.playbridge || typeof window.playbridge.linkCast !== 'function') {
+      log('Linked cast API is not available in this browser');
+      return;
+    }
+    var linkedItems = Array.from({ length: 10 }, function (_, index) {
+      return linkedHlsItem(index + 1);
+    });
+    linkedRemaining = linkedItems.slice(2);
+    try {
+      linkedSession = await window.playbridge.linkCast({
+        items: linkedItems.slice(0, 2),
+        startIndex: 0,
+        metadata: { title: 'Ten-item linked HLS demo' }
+      });
+      log('Linked cast opened: ' + linkedSession.sessionId, 'ok');
+      linkedSession.addEventListener('statechange', function (event) {
+        var state = event.detail || {};
+        log('state: ' + state.state + ' · item ' + state.currentIndex + '/' + state.totalCount);
+      });
+      linkedSession.addEventListener('needitems', async function (event) {
+        var need = event.detail;
+        var items = linkedRemaining.splice(0, need.count);
+        log('needitems(' + need.count + ') → supplying ' + items.length);
+        await linkedSession.provideItems(need.requestId, {
+          items: items,
+          endOfList: linkedRemaining.length === 0
+        });
+      });
+      linkedSession.addEventListener('ended', function (event) {
+        log('linked session ended: ' + event.detail.reason);
+        linkedSession = null;
+      });
+    } catch (error) {
+      log('linked cast failed: ' + (error.code || error.message));
+    }
+  }
+
+  function jumpLinked() {
+    if (linkedSession) linkedSession.jump(0).catch(function (error) { log('jump failed: ' + error.message); });
+  }
+
+  function unlinkLinked() {
+    if (linkedSession) linkedSession.unlink().catch(function (error) { log('unlink failed: ' + error.message); });
+  }
 
   function castSingle() {
     cast({
