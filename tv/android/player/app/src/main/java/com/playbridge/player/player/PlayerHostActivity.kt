@@ -578,6 +578,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     ) {
         val url = currentExternalSubtitleUrl ?: return
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
+        val subtitleHeaders = item.headersForSubtitle(url)
         subtitleStageJob?.cancel()
         subtitleStageJob = null
         clearPendingNativeSubtitle()
@@ -598,7 +599,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when (renderingMode) {
             SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> {
                 externalSubtitleOverlayActive = true
-                controlsViewModel.loadExternalSubtitle(url, item.headers)
+                controlsViewModel.loadExternalSubtitle(url, subtitleHeaders)
             }
             SubtitleRenderingMode.AUTO,
             SubtitleRenderingMode.BUILT_IN,
@@ -607,7 +608,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val requestedMode = renderingMode
                 subtitleStageJob = lifecycleScope.launch {
                     try {
-                        val file = externalSubtitleStager.stage(url, item.headers)
+                        val file = externalSubtitleStager.stage(
+                            url,
+                            subtitleHeaders,
+                            enforcePageNetworkPolicy = item.isPageControlledMedia(),
+                            allowPrivateNetwork = item.allow_private_network == true,
+                        )
                         if (session?.sessionId != sessionId || currentExternalSubtitleUrl != url) {
                             externalSubtitleStager.delete(file)
                             return@launch
@@ -632,7 +638,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             currentExternalSubtitleUrl == url
                         ) {
                             externalSubtitleOverlayActive = true
-                            controlsViewModel.loadExternalSubtitle(url, item.headers)
+                            controlsViewModel.loadExternalSubtitle(url, subtitleHeaders)
                         } else if (requestedMode == SubtitleRenderingMode.BUILT_IN) {
                             Toast.makeText(
                                 this@PlayerHostActivity,
@@ -648,6 +654,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun switchRenderer(target: RendererKind) {
         if (target == rendererKind || target !in setOf(RendererKind.MPV, RendererKind.EXO)) return
+        val pageControlled = playbackCoordinator.playlist
+            .getOrNull(playbackCoordinator.index)
+            ?.isPageControlledMedia() == true
+        if (!rendererAllowedForPageMedia(pageControlled, target)) {
+            FileLogger.w(TAG, "Rejected renderer switch to $target for page-controlled media")
+            return
+        }
         FileLogger.i(TAG, "Switching renderer from $rendererKind to $target")
         showTransition(R.string.player_switching, force = true)
         cancelStartupWatchdog()
@@ -959,7 +972,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         subtitleStageJob?.cancel()
         subtitleStageJob = lifecycleScope.launch {
             try {
-                val file = externalSubtitleStager.stage(initialExternalUrl, payload.headers)
+                val file = externalSubtitleStager.stage(
+                    initialExternalUrl,
+                    payload.headersForSubtitle(initialExternalUrl),
+                    enforcePageNetworkPolicy = payload.isPageControlledMedia(),
+                    allowPrivateNetwork = payload.allow_private_network == true,
+                )
                 if (session?.sessionId != currentSession.sessionId ||
                     currentExternalSubtitleUrl != initialExternalUrl ||
                     rendererKind != RendererKind.EXO ||
@@ -993,7 +1011,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     currentExternalSubtitleUrl == initialExternalUrl
                 ) {
                     externalSubtitleOverlayActive = true
-                    controlsViewModel.loadExternalSubtitle(initialExternalUrl, payload.headers)
+                    controlsViewModel.loadExternalSubtitle(
+                        initialExternalUrl,
+                        payload.headersForSubtitle(initialExternalUrl),
+                    )
                 } else if (renderingMode == SubtitleRenderingMode.BUILT_IN) {
                     Toast.makeText(
                         this@PlayerHostActivity,
@@ -1456,7 +1477,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun updateControlsForCurrentItem(showPrePlay: Boolean = false) {
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
         controlsViewModel.setTitle(item.title ?: "")
-        controlsViewModel.subtitleRequestHeaders = item.headers
+        val pageControlled = item.isPageControlledMedia()
+        controlsViewModel.setPlayerSwitchAllowed(!pageControlled)
+        controlsViewModel.subtitleRequestHeaders = if (pageControlled) null else item.headers
+        controlsViewModel.subtitleRequestHeadersByUrl = item.subtitleHeadersByUrl()
+        controlsViewModel.enforcePageSubtitleNetworkPolicy = pageControlled
+        controlsViewModel.allowPrivateSubtitleNetwork = item.allow_private_network == true
         val shouldShowPrePlay = showPrePlay && item.visual_metadata != null
         controlsViewModel.setPrePlay(
             item.visual_metadata,
@@ -1474,7 +1500,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 "restoreSavedExternal=$restoreSavedExternalForCurrentItem, " +
                 "savedExternalPresent=${savedExternal != null}",
         )
-        externalSubtitleUrls = (item.subtitles + listOfNotNull(savedExternal))
+        externalSubtitleUrls = (item.externalSubtitleUrls() + listOfNotNull(savedExternal))
             .filter(String::isNotBlank)
             .distinct()
         currentExternalSubtitleUrl = when {
@@ -1491,7 +1517,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             SubtitleRenderingMode.read(this) == SubtitleRenderingMode.PLAYBRIDGE_OVERLAY
         ) {
             externalSubtitleOverlayActive = true
-            controlsViewModel.loadExternalSubtitle(externalUrl, item.headers)
+            controlsViewModel.loadExternalSubtitle(externalUrl, item.headersForSubtitle(externalUrl))
         } else {
             externalSubtitleOverlayActive = false
             controlsViewModel.clearSubtitle()
@@ -1876,7 +1902,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 externalSubtitleOverlayActive = true
                 subtitleView.setCues(emptyList())
                 runCatching { rendererService?.setSubtitleTrack("off", sessionId) }
-                controlsViewModel.loadExternalSubtitle(url, item.headers)
+                controlsViewModel.loadExternalSubtitle(url, item.headersForSubtitle(url))
             }
             SubtitleRenderingMode.BUILT_IN -> Toast.makeText(
                 this,
@@ -2004,11 +2030,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         rotateRendererSurface()
         terminateRendererProcess(failedKind)
 
-        val fallback = when (failedKind) {
-            RendererKind.MPV -> RendererKind.EXO
-            RendererKind.EXO -> RendererKind.MPV
-            else -> null
-        }
+        val pageControlled = playbackCoordinator.playlist
+            .getOrNull(playbackCoordinator.index)
+            ?.isPageControlledMedia() == true
+        val fallback = fallbackRenderer(failedKind, pageControlled)
         if (!allowEngineFailover || fallback == null || fallback in attemptedRenderers) {
             showTransition(R.string.player_failed, force = true)
             finishingSession = true

@@ -41,6 +41,12 @@ class PlayerControlsStateTest {
         assertFalse(PlayerControlsState().isPlaybackObscured())
     }
 
+    @Test
+    fun `player switch defaults on and can be disabled for page media`() {
+        assertTrue(PlayerControlsState().canSwitchPlayer)
+        assertFalse(PlayerControlsState(canSwitchPlayer = false).canSwitchPlayer)
+    }
+
     private fun videoTrack(id: String) = UnifiedTrack(
         id = id,
         name = id,

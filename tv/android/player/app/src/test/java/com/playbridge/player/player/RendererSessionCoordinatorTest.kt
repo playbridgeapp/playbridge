@@ -7,6 +7,20 @@ import org.junit.Test
 
 class RendererSessionCoordinatorTest {
     @Test
+    fun pageControlledMediaCanOnlyUsePolicyEnforcingRenderer() {
+        assertTrue(rendererAllowedForPageMedia(pageControlled = true, RendererKind.EXO))
+        assertFalse(rendererAllowedForPageMedia(pageControlled = true, RendererKind.MPV))
+        assertTrue(rendererAllowedForPageMedia(pageControlled = false, RendererKind.MPV))
+    }
+
+    @Test
+    fun pageControlledExoFailureDoesNotFallBackToMpv() {
+        assertEquals(null, fallbackRenderer(RendererKind.EXO, pageControlled = true))
+        assertEquals(RendererKind.MPV, fallbackRenderer(RendererKind.EXO, pageControlled = false))
+        assertEquals(RendererKind.EXO, fallbackRenderer(RendererKind.MPV, pageControlled = true))
+    }
+
+    @Test
     fun sessionIdsRemainMonotonicAcrossHostRecreation() {
         val firstHostSession = RendererSessionCoordinator().begin(RendererKind.EXO)
         val recreatedHostSession = RendererSessionCoordinator().begin(RendererKind.EXO)

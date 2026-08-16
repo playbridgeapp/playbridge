@@ -2,13 +2,18 @@ package com.playbridge.player.player
 
 import android.content.Context
 import android.net.Uri
+import com.playbridge.shared.network.MediaNetworkPolicy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import okhttp3.Dns
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
+import java.net.InetAddress
+import java.net.Proxy
+import java.net.UnknownHostException
 
 internal data class DownloadedSubtitle(
     val bytes: ByteArray,
@@ -28,12 +33,68 @@ internal object ExternalSubtitleLoader {
     fun download(
         url: String,
         headers: Map<String, String>? = null,
+        enforcePageNetworkPolicy: Boolean = false,
+        allowPrivateNetwork: Boolean = false,
     ): DownloadedSubtitle {
         val requestUrl = url.substringBefore('#')
         val sniffer = ContentSniffer()
-        val client = sniffer.getOkHttpClient(
-            allowLocalSelfSigned = sniffer.isLocalUrl(requestUrl),
-        )
+        val client = if (enforcePageNetworkPolicy) {
+            require(MediaNetworkPolicy.isAllowedUrlSyntax(requestUrl, allowPrivateNetwork)) {
+                "Page-cast subtitle destination is not allowed"
+            }
+            val originBoundNames = headers.orEmpty().keys.toSet()
+            sniffer.getOkHttpClient(allowLocalSelfSigned = false).newBuilder()
+                .proxy(Proxy.NO_PROXY)
+                .dns(
+                    object : Dns {
+                        override fun lookup(hostname: String): List<InetAddress> {
+                            val addresses = InetAddress.getAllByName(hostname).toList()
+                            if (!MediaNetworkPolicy.areAllowedAddresses(
+                                    hostname,
+                                    addresses,
+                                    allowPrivateNetwork,
+                                )
+                            ) {
+                                throw UnknownHostException(
+                                    "Page-cast subtitle destination is not allowed",
+                                )
+                            }
+                            return addresses
+                        }
+                    },
+                )
+                .addNetworkInterceptor { chain ->
+                    val targetUrl = chain.request().url.toString()
+                    val targetHost = chain.request().url.host
+                    val peerAddress = chain.connection()?.route()?.socketAddress?.address
+                    if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowPrivateNetwork) ||
+                        peerAddress == null ||
+                        !MediaNetworkPolicy.areAllowedAddresses(
+                            targetHost,
+                            listOf(peerAddress),
+                            allowPrivateNetwork,
+                        )
+                    ) throw IOException("Page-cast subtitle destination is not allowed")
+                    val request = if (MediaNetworkPolicy.sameOrigin(requestUrl, targetUrl)) {
+                        chain.request()
+                    } else {
+                        chain.request().newBuilder().apply {
+                            originBoundNames.forEach(::removeHeader)
+                            removeHeader("Authorization")
+                            removeHeader("Cookie")
+                            removeHeader("Origin")
+                            removeHeader("Referer")
+                            header("User-Agent", "Mozilla/5.0")
+                        }.build()
+                    }
+                    chain.proceed(request)
+                }
+                .build()
+        } else {
+            sniffer.getOkHttpClient(
+                allowLocalSelfSigned = sniffer.isLocalUrl(requestUrl),
+            )
+        }
         val requestBuilder = Request.Builder()
             .url(requestUrl)
             .header("User-Agent", "Mozilla/5.0")
@@ -66,10 +127,17 @@ internal class ExternalSubtitleStager(context: Context) {
     suspend fun stage(
         url: String,
         headers: Map<String, String>? = null,
+        enforcePageNetworkPolicy: Boolean = false,
+        allowPrivateNetwork: Boolean = false,
     ): File = withContext(Dispatchers.IO) {
         var stagedFile: File? = null
         try {
-            val downloaded = ExternalSubtitleLoader.download(url, headers)
+            val downloaded = ExternalSubtitleLoader.download(
+                url,
+                headers,
+                enforcePageNetworkPolicy,
+                allowPrivateNetwork,
+            )
             currentCoroutineContext().ensureActive()
             if (!directory.exists() && !directory.mkdirs()) {
                 throw IOException("Unable to create subtitle cache")

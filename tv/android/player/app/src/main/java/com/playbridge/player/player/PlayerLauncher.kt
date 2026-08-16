@@ -61,8 +61,10 @@ object PlayerLauncher {
         PlaylistStore.currentPlaylist = payload.items
 
         val firstItem = payload.items.getOrNull(payload.start_index) ?: payload.items.firstOrNull()
+        val pageControlled = firstItem?.detected_by in setOf("page_cast", "linked_page")
 
         val mode = when {
+            pageControlled -> "exo"
             tvPlayerMode == "mpv" || tvPlayerMode == "exo" -> tvPlayerMode
             firstItem?.player_mode == "mpv" -> "mpv"
             else -> "exo"
@@ -85,8 +87,9 @@ object PlayerLauncher {
                 putExtra(ServerService.EXTRA_TITLE, item.title)
                 putExtra(ServerService.EXTRA_CONTENT_TYPE, item.content_type)
                 item.detected_by?.let { putExtra(ServerService.EXTRA_DETECTED_BY, it) }
-                if (item.subtitles.isNotEmpty()) {
-                    putStringArrayListExtra(ServerService.EXTRA_SUBTITLES, ArrayList(item.subtitles))
+                val subtitleUrls = item.externalSubtitleUrls()
+                if (subtitleUrls.isNotEmpty()) {
+                    putStringArrayListExtra(ServerService.EXTRA_SUBTITLES, ArrayList(subtitleUrls))
                 }
                 if (item.headers.isNotEmpty()) {
                     putExtra(ServerService.EXTRA_HEADERS, HashMap(item.headers))

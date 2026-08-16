@@ -216,6 +216,7 @@ fun PlayerControlsOverlay(
                                 isLooping = state.isLooping,
                                 hasPlaylist = state.hasPlaylist,
                                 hasMultipleStreams = false,
+                                canSwitchPlayer = state.canSwitchPlayer,
                                 onTogglePlay = onTogglePlay,
                                 onTrackSelection = onTrackSelection,
                                 onSubtitles = onSubtitles,

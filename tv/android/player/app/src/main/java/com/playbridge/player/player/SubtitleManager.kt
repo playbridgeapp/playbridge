@@ -36,7 +36,12 @@ class SubtitleManager(
         this.offsetMs = offsetMs
     }
 
-    fun loadSubtitle(url: String, headers: Map<String, String>? = null) {
+    fun loadSubtitle(
+        url: String,
+        headers: Map<String, String>? = null,
+        enforcePageNetworkPolicy: Boolean = false,
+        allowPrivateNetwork: Boolean = false,
+    ) {
         Log.i(TAG, "Loading subtitle from: ${redactUrlForLog(url)}")
         subtitleJob?.cancel()
         syncJob?.cancel()
@@ -46,7 +51,12 @@ class SubtitleManager(
 
         subtitleJob = coroutineScope.launch(Dispatchers.IO) {
             try {
-                val downloaded = ExternalSubtitleLoader.download(url, headers)
+                val downloaded = ExternalSubtitleLoader.download(
+                    url,
+                    headers,
+                    enforcePageNetworkPolicy,
+                    allowPrivateNetwork,
+                )
                 val content = SubtitleParser.decode(downloaded.bytes)
                 val isVtt = downloaded.format == ExternalSubtitleFormat.WEBVTT
                 val parsed = SubtitleParser.parse(content, isVtt)
