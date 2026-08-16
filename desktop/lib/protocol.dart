@@ -20,6 +20,10 @@ extension PlayPayloadX on PlayPayload {
   int? get startPositionMsOrNull =>
       hasStartPositionMs() ? startPositionMs.toInt() : null;
   String? get bingeGroupOrNull => hasBingeGroup() ? bingeGroup : null;
+  String? get contentTypeOrNull => hasContentType() ? contentType : null;
+  String? get detectedByOrNull => hasDetectedBy() ? detectedBy : null;
+  bool? get allowPrivateNetworkOrNull =>
+      hasAllowPrivateNetwork() ? allowPrivateNetwork : null;
   int? get seasonOrNull => hasVisualMetadata() && visualMetadata.hasSeason()
       ? visualMetadata.season
       : null;

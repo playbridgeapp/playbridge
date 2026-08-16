@@ -17,6 +17,7 @@ import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
 import com.squareup.wire.`internal`.immutableCopyOf
+import com.squareup.wire.`internal`.redactElements
 import com.squareup.wire.`internal`.sanitize
 import kotlin.Any
 import kotlin.AssertionError
@@ -34,9 +35,6 @@ import kotlin.collections.Map
 import kotlin.lazy
 import okio.ByteString
 
-/**
- * ==================== Command Payloads (Phone → TV) ====================
- */
 public class PlayPayload(
   @field:WireField(
     tag = 1,
@@ -132,6 +130,18 @@ public class PlayPayload(
     schemaIndex = 13,
   )
   public val start_position_ms: Long? = null,
+  /**
+   * Sender authorization for page-initiated media to reach private/LAN destinations.
+   * Receivers must still validate every resolved address, redirect, and derived resource.
+   */
+  @field:WireField(
+    tag = 15,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "allowPrivateNetwork",
+    schemaIndex = 14,
+  )
+  public val allow_private_network: Boolean? = null,
+  subtitle_resources: List<SubtitleResource> = emptyList(),
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlayPayload, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -149,6 +159,20 @@ public class PlayPayload(
     schemaIndex = 4,
   )
   public val subtitles: List<String> = immutableCopyOf("subtitles", subtitles)
+
+  /**
+   * Additive replacement for credentialed sidecars. Legacy `subtitles` remains
+   * supported for senders that only provide URLs.
+   */
+  @field:WireField(
+    tag = 16,
+    adapter = "playbridge.SubtitleResource#ADAPTER",
+    label = WireField.Label.REPEATED,
+    jsonName = "subtitleResources",
+    schemaIndex = 15,
+  )
+  public val subtitle_resources: List<SubtitleResource> = immutableCopyOf("subtitle_resources",
+      subtitle_resources)
 
   @Deprecated(
     message = "Shouldn't be used in Kotlin",
@@ -175,6 +199,8 @@ public class PlayPayload(
     if (visual_metadata != other.visual_metadata) return false
     if (binge_group != other.binge_group) return false
     if (start_position_ms != other.start_position_ms) return false
+    if (allow_private_network != other.allow_private_network) return false
+    if (subtitle_resources != other.subtitle_resources) return false
     return true
   }
 
@@ -196,6 +222,8 @@ public class PlayPayload(
       result = result * 37 + (visual_metadata?.hashCode() ?: 0)
       result = result * 37 + (binge_group?.hashCode() ?: 0)
       result = result * 37 + (start_position_ms?.hashCode() ?: 0)
+      result = result * 37 + (allow_private_network?.hashCode() ?: 0)
+      result = result * 37 + subtitle_resources.hashCode()
       super.hashCode = result
     }
     return result
@@ -220,6 +248,8 @@ public class PlayPayload(
     if (visual_metadata != null) result += """visual_metadata=$visual_metadata"""
     if (binge_group != null) result += """binge_group=${sanitize(binge_group)}"""
     if (start_position_ms != null) result += """start_position_ms=$start_position_ms"""
+    if (allow_private_network != null) result += """allow_private_network=$allow_private_network"""
+    if (subtitle_resources.isNotEmpty()) result += """subtitle_resources=$subtitle_resources"""
     return result.joinToString(prefix = "PlayPayload{", separator = ", ", postfix = "}")
   }
 
@@ -238,10 +268,13 @@ public class PlayPayload(
     visual_metadata: VisualMetadata? = this.visual_metadata,
     binge_group: String? = this.binge_group,
     start_position_ms: Long? = this.start_position_ms,
+    allow_private_network: Boolean? = this.allow_private_network,
+    subtitle_resources: List<SubtitleResource> = this.subtitle_resources,
     unknownFields: ByteString = this.unknownFields,
   ): PlayPayload = PlayPayload(url, title, headers, content_type, subtitles, detected_by,
       player_mode, preferred_audio_language, preferred_subtitle_language, default_video_quality,
-      max_bitrate_cap_mbps, visual_metadata, binge_group, start_position_ms, unknownFields)
+      max_bitrate_cap_mbps, visual_metadata, binge_group, start_position_ms, allow_private_network,
+      subtitle_resources, unknownFields)
 
   public companion object {
     @JvmField
@@ -274,6 +307,9 @@ public class PlayPayload(
         size += VisualMetadata.ADAPTER.encodedSizeWithTag(12, value.visual_metadata)
         size += ProtoAdapter.STRING.encodedSizeWithTag(13, value.binge_group)
         size += ProtoAdapter.INT64.encodedSizeWithTag(14, value.start_position_ms)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(15, value.allow_private_network)
+        size += SubtitleResource.ADAPTER.asRepeated().encodedSizeWithTag(16,
+            value.subtitle_resources)
         return size
       }
 
@@ -294,11 +330,15 @@ public class PlayPayload(
         VisualMetadata.ADAPTER.encodeWithTag(writer, 12, value.visual_metadata)
         ProtoAdapter.STRING.encodeWithTag(writer, 13, value.binge_group)
         ProtoAdapter.INT64.encodeWithTag(writer, 14, value.start_position_ms)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 15, value.allow_private_network)
+        SubtitleResource.ADAPTER.asRepeated().encodeWithTag(writer, 16, value.subtitle_resources)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlayPayload) {
         writer.writeBytes(value.unknownFields)
+        SubtitleResource.ADAPTER.asRepeated().encodeWithTag(writer, 16, value.subtitle_resources)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 15, value.allow_private_network)
         ProtoAdapter.INT64.encodeWithTag(writer, 14, value.start_position_ms)
         ProtoAdapter.STRING.encodeWithTag(writer, 13, value.binge_group)
         VisualMetadata.ADAPTER.encodeWithTag(writer, 12, value.visual_metadata)
@@ -332,6 +372,8 @@ public class PlayPayload(
         var visual_metadata: VisualMetadata? = null
         var binge_group: String? = null
         var start_position_ms: Long? = null
+        var allow_private_network: Boolean? = null
+        val subtitle_resources = mutableListOf<SubtitleResource>()
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> url = ProtoAdapter.STRING.decode(reader)
@@ -348,6 +390,8 @@ public class PlayPayload(
             12 -> visual_metadata = VisualMetadata.ADAPTER.decode(reader)
             13 -> binge_group = ProtoAdapter.STRING.decode(reader)
             14 -> start_position_ms = ProtoAdapter.INT64.decode(reader)
+            15 -> allow_private_network = ProtoAdapter.BOOL.decode(reader)
+            16 -> subtitle_resources.add(SubtitleResource.ADAPTER.decode(reader))
             else -> reader.readUnknownField(tag)
           }
         }
@@ -366,12 +410,15 @@ public class PlayPayload(
           visual_metadata = visual_metadata,
           binge_group = binge_group,
           start_position_ms = start_position_ms,
+          allow_private_network = allow_private_network,
+          subtitle_resources = subtitle_resources,
           unknownFields = unknownFields
         )
       }
 
       override fun redact(`value`: PlayPayload): PlayPayload = value.copy(
         visual_metadata = value.visual_metadata?.let(VisualMetadata.ADAPTER::redact),
+        subtitle_resources = value.subtitle_resources.redactElements(SubtitleResource.ADAPTER),
         unknownFields = ByteString.EMPTY
       )
     }

@@ -258,6 +258,9 @@ components:
         posterUrl: { type: [string, 'null'] }
         subtitleUrl: { type: [string, 'null'] }
         startPositionMs: { type: [integer, 'null'], minimum: 0 }
+        allowPrivateNetwork:
+          type: [boolean, 'null']
+          description: Sender authorization for page-initiated media to reach private/LAN destinations. Receivers still validate every destination.
       additionalProperties: false
     BrowserCapabilities:
       type: object
@@ -632,6 +635,11 @@ components:
           type: array
           items: { type: string, format: uri }
           default: []
+        subtitleResources:
+          type: array
+          maxItems: 16
+          items: { $ref: '#/components/schemas/SubtitleResource' }
+          default: []
         detectedBy: { type: [string, 'null'] }
         playerMode: { type: [string, 'null'] }
         preferredAudioLanguage: { type: [string, 'null'] }
@@ -644,6 +652,20 @@ components:
             - type: 'null'
         bingeGroup: { type: [string, 'null'] }
         startPositionMs: { type: [integer, 'null'], minimum: 0 }
+        allowPrivateNetwork: { type: [boolean, 'null'], default: false }
+      additionalProperties: false
+    SubtitleResource:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri }
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          default: {}
+          writeOnly: true
+        label: { type: [string, 'null'], maxLength: 256 }
+        language: { type: [string, 'null'], maxLength: 64 }
       additionalProperties: false
     PlaylistPayload:
       type: object

@@ -300,6 +300,43 @@ nonisolated struct Playbridge_VisualMetadata: Sendable {
   fileprivate var _tmdbID: String? = nil
 }
 
+/// A sidecar subtitle is an independent network resource. Its headers are scoped
+/// to this URL's origin and must never be inherited from an unrelated media URL.
+nonisolated struct Playbridge_SubtitleResource: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var url: String = String()
+
+  var headers: Dictionary<String,String> = [:]
+
+  var label: String {
+    get {_label ?? String()}
+    set {_label = newValue}
+  }
+  /// Returns true if `label` has been explicitly set.
+  var hasLabel: Bool {self._label != nil}
+  /// Clears the value of `label`. Subsequent reads from it will return its default value.
+  mutating func clearLabel() {self._label = nil}
+
+  var language: String {
+    get {_language ?? String()}
+    set {_language = newValue}
+  }
+  /// Returns true if `language` has been explicitly set.
+  var hasLanguage: Bool {self._language != nil}
+  /// Clears the value of `language`. Subsequent reads from it will return its default value.
+  mutating func clearLanguage() {self._language = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _label: String? = nil
+  fileprivate var _language: String? = nil
+}
+
 nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -423,6 +460,24 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   var hasStartPositionMs: Bool {_storage._startPositionMs != nil}
   /// Clears the value of `startPositionMs`. Subsequent reads from it will return its default value.
   mutating func clearStartPositionMs() {_uniqueStorage()._startPositionMs = nil}
+
+  /// Sender authorization for page-initiated media to reach private/LAN destinations.
+  /// Receivers must still validate every resolved address, redirect, and derived resource.
+  var allowPrivateNetwork: Bool {
+    get {_storage._allowPrivateNetwork ?? false}
+    set {_uniqueStorage()._allowPrivateNetwork = newValue}
+  }
+  /// Returns true if `allowPrivateNetwork` has been explicitly set.
+  var hasAllowPrivateNetwork: Bool {_storage._allowPrivateNetwork != nil}
+  /// Clears the value of `allowPrivateNetwork`. Subsequent reads from it will return its default value.
+  mutating func clearAllowPrivateNetwork() {_uniqueStorage()._allowPrivateNetwork = nil}
+
+  /// Additive replacement for credentialed sidecars. Legacy `subtitles` remains
+  /// supported for senders that only provide URLs.
+  var subtitleResources: [Playbridge_SubtitleResource] {
+    get {_storage._subtitleResources}
+    set {_uniqueStorage()._subtitleResources = newValue}
+  }
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1093,9 +1148,58 @@ nonisolated extension Playbridge_VisualMetadata: SwiftProtobuf.Message, SwiftPro
   }
 }
 
+nonisolated extension Playbridge_SubtitleResource: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SubtitleResource"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}headers\0\u{1}label\0\u{1}language\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.url) }()
+      case 2: try { try decoder.decodeMapField(fieldType: SwiftProtobuf._ProtobufMap<SwiftProtobuf.ProtobufString,SwiftProtobuf.ProtobufString>.self, value: &self.headers) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._label) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._language) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.url.isEmpty {
+      try visitor.visitSingularStringField(value: self.url, fieldNumber: 1)
+    }
+    if !self.headers.isEmpty {
+      try visitor.visitMapField(fieldType: SwiftProtobuf._ProtobufMap<SwiftProtobuf.ProtobufString,SwiftProtobuf.ProtobufString>.self, value: self.headers, fieldNumber: 2)
+    }
+    try { if let v = self._label {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._language {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_SubtitleResource, rhs: Playbridge_SubtitleResource) -> Bool {
+    if lhs.url != rhs.url {return false}
+    if lhs.headers != rhs.headers {return false}
+    if lhs._label != rhs._label {return false}
+    if lhs._language != rhs._language {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allow_private_network\0\u{3}subtitle_resources\0")
 
   fileprivate class _StorageClass {
     var _url: String = String()
@@ -1112,6 +1216,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
     var _visualMetadata: Playbridge_VisualMetadata? = nil
     var _bingeGroup: String? = nil
     var _startPositionMs: Int64? = nil
+    var _allowPrivateNetwork: Bool? = nil
+    var _subtitleResources: [Playbridge_SubtitleResource] = []
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1136,6 +1242,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       _visualMetadata = source._visualMetadata
       _bingeGroup = source._bingeGroup
       _startPositionMs = source._startPositionMs
+      _allowPrivateNetwork = source._allowPrivateNetwork
+      _subtitleResources = source._subtitleResources
     }
   }
 
@@ -1168,6 +1276,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         case 12: try { try decoder.decodeSingularMessageField(value: &_storage._visualMetadata) }()
         case 13: try { try decoder.decodeSingularStringField(value: &_storage._bingeGroup) }()
         case 14: try { try decoder.decodeSingularInt64Field(value: &_storage._startPositionMs) }()
+        case 15: try { try decoder.decodeSingularBoolField(value: &_storage._allowPrivateNetwork) }()
+        case 16: try { try decoder.decodeRepeatedMessageField(value: &_storage._subtitleResources) }()
         default: break
         }
       }
@@ -1222,6 +1332,12 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       try { if let v = _storage._startPositionMs {
         try visitor.visitSingularInt64Field(value: v, fieldNumber: 14)
       } }()
+      try { if let v = _storage._allowPrivateNetwork {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 15)
+      } }()
+      if !_storage._subtitleResources.isEmpty {
+        try visitor.visitRepeatedMessageField(value: _storage._subtitleResources, fieldNumber: 16)
+      }
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1245,6 +1361,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         if _storage._visualMetadata != rhs_storage._visualMetadata {return false}
         if _storage._bingeGroup != rhs_storage._bingeGroup {return false}
         if _storage._startPositionMs != rhs_storage._startPositionMs {return false}
+        if _storage._allowPrivateNetwork != rhs_storage._allowPrivateNetwork {return false}
+        if _storage._subtitleResources != rhs_storage._subtitleResources {return false}
         return true
       }
       if !storagesAreEqual {return false}

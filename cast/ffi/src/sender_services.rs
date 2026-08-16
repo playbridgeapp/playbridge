@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::{CStr, CString, c_char},
     sync::{
         Arc, Mutex,
@@ -33,6 +33,7 @@ enum ServicesCommand {
         #[serde(default)]
         headers: HashMap<String, String>,
         content_type: Option<String>,
+        allow_private_network: Option<bool>,
     },
     ProxyRegisterFile {
         request_id: Value,
@@ -273,9 +274,18 @@ async fn process_command(
             url,
             headers,
             content_type,
+            allow_private_network,
             ..
-        } => proxy
-            .register_remote_with_content_type(&host, url, headers, content_type.as_deref())
+        } => validate_page_headers(headers, allow_private_network.is_some())
+            .and_then(|headers| {
+                proxy.register_remote_with_policy(
+                    &host,
+                    url,
+                    headers,
+                    content_type.as_deref(),
+                    allow_private_network.unwrap_or(true),
+                )
+            })
             .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
         ServicesCommand::ProxyRegisterFile {
             host,
@@ -394,6 +404,47 @@ async fn process_command(
     false
 }
 
+fn validate_page_headers(
+    headers: HashMap<String, String>,
+    page_controlled: bool,
+) -> Result<HashMap<String, String>, String> {
+    if !page_controlled {
+        return Ok(headers);
+    }
+    const ALLOWED: &[&str] = &[
+        "authorization",
+        "cookie",
+        "referer",
+        "origin",
+        "user-agent",
+        "accept",
+        "accept-language",
+    ];
+    if headers.len() > 16 {
+        return Err("too many webpage media headers".into());
+    }
+    let mut bytes = 0usize;
+    let mut normalized_names = HashSet::new();
+    for (name, value) in &headers {
+        let lower = name.to_ascii_lowercase();
+        if name.trim() != name
+            || !ALLOWED.contains(&lower.as_str())
+            || !normalized_names.insert(lower)
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+            || value.bytes().any(|byte| byte < 0x20 || byte == 0x7f)
+        {
+            return Err("invalid webpage media header".into());
+        }
+        bytes = bytes.saturating_add(name.len()).saturating_add(value.len());
+        if bytes > 16 * 1024 {
+            return Err("webpage media headers are too large".into());
+        }
+    }
+    Ok(headers)
+}
+
 fn send_browser_event(events: &SyncSender<Value>, event: BrowserReceiverEvent) {
     if let Ok(value) = serde_json::to_value(event) {
         send_event(events, value);
@@ -483,7 +534,12 @@ pub unsafe extern "C" fn pb_sender_services_free(services: *const SenderServices
 
 #[cfg(test)]
 mod tests {
-    use super::{SENDER_SERVICES_ABI_VERSION, ServicesCommand, pb_sender_services_abi_version};
+    use std::collections::HashMap;
+
+    use super::{
+        SENDER_SERVICES_ABI_VERSION, ServicesCommand, pb_sender_services_abi_version,
+        validate_page_headers,
+    };
 
     #[test]
     fn sender_services_abi_is_stable() {
@@ -514,5 +570,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(browser.operation(), "browser_control");
+    }
+
+    #[test]
+    fn webpage_proxy_headers_are_bounded_and_case_unique() {
+        assert!(
+            validate_page_headers(
+                HashMap::from([("Authorization".into(), "Bearer token".into())]),
+                true,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_page_headers(
+                HashMap::from([
+                    ("Authorization".into(), "one".into()),
+                    ("authorization".into(), "two".into()),
+                ]),
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_page_headers(
+                HashMap::from([("Cookie".into(), "good\r\nX-Evil: yes".into())]),
+                true,
+            )
+            .is_err()
+        );
     }
 }

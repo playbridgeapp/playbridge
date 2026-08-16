@@ -111,12 +111,17 @@ final class SenderServices implements Finalizable {
     required String host,
     required String url,
     Map<String, String> headers = const {},
+    String? contentType,
+    bool? allowPrivateNetwork,
   }) async =>
       RegisteredMedia.fromJson(
         await _submitData('proxy_register_url', {
           'host': host,
           'url': url,
           'headers': headers,
+          if (contentType != null) 'content_type': contentType,
+          if (allowPrivateNetwork != null)
+            'allow_private_network': allowPrivateNetwork,
         }),
       );
 
