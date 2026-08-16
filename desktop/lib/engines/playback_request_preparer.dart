@@ -177,8 +177,11 @@ class PlaybackRequestPreparer {
   static bool _sameOrigin(String first, String second) {
     final a = Uri.tryParse(first);
     final b = Uri.tryParse(second);
-    if (a == null || b == null || !a.hasAuthority || !b.hasAuthority) return false;
-    int port(Uri value) => value.hasPort ? value.port : (value.scheme == 'https' ? 443 : 80);
+    if (a == null || b == null || !a.hasAuthority || !b.hasAuthority) {
+      return false;
+    }
+    int port(Uri value) =>
+        value.hasPort ? value.port : (value.scheme == 'https' ? 443 : 80);
     return a.scheme.toLowerCase() == b.scheme.toLowerCase() &&
         a.host.toLowerCase() == b.host.toLowerCase() &&
         port(a) == port(b);

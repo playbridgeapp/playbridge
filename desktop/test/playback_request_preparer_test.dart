@@ -52,7 +52,8 @@ void main() {
     expect(prepared.allowPrivateNetwork, isFalse);
   });
 
-  test('credentialed cross-origin subtitles are registered independently', () async {
+  test('credentialed cross-origin subtitles are registered independently',
+      () async {
     await StreamProxyServer.instance.start();
     final port = StreamProxyServer.instance.port;
     final item = QueueItem(
