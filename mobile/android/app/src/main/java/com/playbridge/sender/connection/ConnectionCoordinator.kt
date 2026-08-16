@@ -94,7 +94,11 @@ class ConnectionCoordinator(
                                 totalCount = json.optInt("totalCount", 0),
                                 items = episodes
                             )
-                            Log.d(TAG, "TV Playlist status updated with ${episodes.size} items")
+                            Log.d(
+                                TAG,
+                                "TV playlist_status index=${json.optInt("currentIndex", 0)} " +
+                                    "total=${json.optInt("totalCount", 0)} items=${episodes.size}",
+                            )
                         }
                         "status" -> {
                             tvPlayback.value = TvPlaybackStatus(

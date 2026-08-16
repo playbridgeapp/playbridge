@@ -23,6 +23,10 @@ import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import com.playbridge.shared.network.IPv4FirstDns
+import com.playbridge.shared.network.MediaNetworkPolicy
+import java.io.IOException
+import java.net.Proxy
+import java.net.UnknownHostException
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import java.util.concurrent.TimeUnit
@@ -182,6 +186,15 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
     }
 
     private fun buildPerItemSource(payload: PlayPayload): PerItemSource {
+        val isPageCastStream = payload.detected_by == "page_cast" || payload.detected_by == "linked_page"
+        val allowPrivateNetwork = payload.allow_private_network == true
+        if (isPageCastStream && !MediaNetworkPolicy.isAllowedUrlSyntax(
+                payload.url,
+                allowPrivateNetwork,
+            )
+        ) {
+            throw IllegalArgumentException("Page-cast media destination is not allowed")
+        }
         // 1. Extract credentials and prepare Headers
         var finalUrl = payload.url
         val requestProperties = HashMap<String, String>()
@@ -228,15 +241,16 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
             }
         }
 
-        val userAgent = payload.headers["User-Agent"]
-            ?: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, ignoreCase = true) Chrome/120.0.0.0 Safari/537.36"
+        val defaultUserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        val userAgent = payload.headers["User-Agent"] ?: defaultUserAgent
         requestProperties["User-Agent"] = userAgent
 
         logger.i(TAG, "Prepared ${requestProperties.size} request header(s)")
 
         // Browser-captured/live streams use the legacy source for compatibility. Library,
         // history, Stremio, and Debrid resolver URLs are direct sources and use OkHttp.
-        val isBrowserStream = shouldUseLegacyHttpDataSource(payload.detected_by)
+        val isBrowserStream = !isPageCastStream && shouldUseLegacyHttpDataSource(payload.detected_by)
 
         val httpDataSourceFactory = if (isBrowserStream) {
             logger.i(TAG, "Using Legacy Network Stack (DefaultHttpDataSource) for browser-captured stream: ${payload.detected_by}")
@@ -248,13 +262,67 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 .setReadTimeoutMs(20_000)
         } else {
             logger.i(TAG, "Using Modern Network Stack (OkHttp) with IPv4-First DNS")
+            val ipv4FirstDns = IPv4FirstDns()
             val okHttpClient = OkHttpClient.Builder()
-                .dns(IPv4FirstDns())
+                .dns(object : okhttp3.Dns {
+                    override fun lookup(hostname: String): List<java.net.InetAddress> {
+                        val addresses = ipv4FirstDns.lookup(hostname)
+                        if (isPageCastStream && !MediaNetworkPolicy.areAllowedAddresses(
+                                hostname,
+                                addresses,
+                                allowPrivateNetwork,
+                            )
+                        ) {
+                            throw UnknownHostException("Page-cast media destination is not allowed")
+                        }
+                        return addresses
+                    }
+                })
                 .connectTimeout(20, TimeUnit.SECONDS)
                 .readTimeout(20, TimeUnit.SECONDS)
                 .followRedirects(true)
                 .followSslRedirects(true)
                 .retryOnConnectionFailure(true)
+                .apply {
+                    if (isPageCastStream) {
+                        proxy(Proxy.NO_PROXY)
+                        val originalUrl = payload.url
+                        val originBoundNames = requestProperties.keys.toSet()
+                        addNetworkInterceptor { chain ->
+                            val targetUrl = chain.request().url.toString()
+                            val targetHost = chain.request().url.host
+                            val peerAddress = chain.connection()?.route()?.socketAddress?.address
+                            if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowPrivateNetwork) ||
+                                peerAddress == null ||
+                                !MediaNetworkPolicy.areAllowedAddresses(
+                                    targetHost,
+                                    listOf(peerAddress),
+                                    allowPrivateNetwork,
+                                )
+                            ) {
+                                throw IOException("Page-cast media destination is not allowed")
+                            }
+                            val request = if (MediaNetworkPolicy.sameOrigin(originalUrl, targetUrl)) {
+                                chain.request()
+                            } else {
+                                chain.request().newBuilder().apply {
+                                    originBoundNames.forEach(::removeHeader)
+                                    removeHeader("Authorization")
+                                    removeHeader("Cookie")
+                                    removeHeader("Origin")
+                                    removeHeader("Referer")
+                                    header("User-Agent", defaultUserAgent)
+                                    header(
+                                        "Accept",
+                                        "application/vnd.apple.mpegurl, application/x-mpegURL, " +
+                                            "application/dash+xml, */*;q=0.8",
+                                    )
+                                }.build()
+                            }
+                            chain.proceed(request)
+                        }
+                    }
+                }
                 .build()
 
             OkHttpDataSource.Factory(okHttpClient)
@@ -309,7 +377,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
         val builder = MediaItem.Builder().setUri(finalUrl)
         if (payload.title != null) {
-            builder.setMediaId(payload.title!!)
+            builder.setMediaId(payload.title)
         }
         if (isHls) {
             builder.setMimeType(MimeTypes.APPLICATION_M3U8)

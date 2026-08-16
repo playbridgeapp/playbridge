@@ -158,8 +158,8 @@ val appModule = module {
             context = androidContext(),
             webSocketClient = get(),
             connectionCoordinator = get(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
             connectionStore = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
             discoveryRepository = get(),
             settingsRepository = get(),
             screenMirrorCoordinator = get(),
@@ -187,6 +187,19 @@ val appModule = module {
             addonRepository = get(),
             castSessionManager = get(),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        )
+    }
+
+    // Website-linked lazy queue authority for the built-in GeckoView browser.
+    single {
+        com.playbridge.sender.browser.LinkedPageCastCoordinator(
+            webSocketClient = get(),
+            connectionCoordinator = get(),
+            connectionStore = get(),
+            settingsRepository = get(),
+            tvQueueCoordinator = get(),
+            externalQueueCoordinator = get(),
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Default.limitedParallelism(1)),
         )
     }
 

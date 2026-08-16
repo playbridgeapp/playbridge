@@ -4,6 +4,7 @@ import com.playbridge.sender.library.DebridSettingsScreen
 import com.playbridge.sender.library.LibrarySettingsScreen
 import com.playbridge.sender.cast.proxy.StreamProxySettingsScreen
 import com.playbridge.sender.browser.PopupBlockerSettingsScreen
+import com.playbridge.sender.browser.PageCastConsentSettingsScreen
 import com.playbridge.sender.cast.StreamingSettingsScreen
 import com.playbridge.sender.cast.TVSettingsScreen
 import com.playbridge.sender.diagnostics.LogsScreen
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -63,6 +65,7 @@ private sealed class SettingsSection {
     data object TV : SettingsSection()
     data object ImportExport : SettingsSection()
     data object PopupBlocker : SettingsSection()
+    data object PageCastConsent : SettingsSection()
     data object Logs : SettingsSection()
 }
 
@@ -101,6 +104,7 @@ fun SettingsScreen(
             onTV = { section = SettingsSection.TV },
             onImportExport = { section = SettingsSection.ImportExport },
             onPopupBlocker = { section = SettingsSection.PopupBlocker },
+            onPageCastConsent = { section = SettingsSection.PageCastConsent },
             onLogs = { section = SettingsSection.Logs },
             showBack = showBack,
         )
@@ -109,6 +113,9 @@ fun SettingsScreen(
         )
         SettingsSection.PopupBlocker -> PopupBlockerSettingsScreen(
             onBack = { section = SettingsSection.Hub }
+        )
+        SettingsSection.PageCastConsent -> PageCastConsentSettingsScreen(
+            onBack = { section = SettingsSection.Hub },
         )
         SettingsSection.Library -> LibrarySettingsScreen(
             onBack = { section = SettingsSection.Hub }
@@ -150,6 +157,7 @@ private fun SettingsHubContent(
     onTV: () -> Unit,
     onImportExport: () -> Unit,
     onPopupBlocker: () -> Unit,
+    onPageCastConsent: () -> Unit,
     onLogs: () -> Unit,
     showBack: Boolean = true,
 ) {
@@ -211,6 +219,14 @@ private fun SettingsHubContent(
                             title = "Popup Blocker",
                             subtitle = "Block popups with per-site exceptions",
                             onClick = onPopupBlocker,
+                        )
+                    )
+                    add(
+                        SettingsHubRow.Item(
+                            icon = Icons.Default.Cast,
+                            title = "Website casting permissions",
+                            subtitle = "Review or reset websites allowed to start a cast",
+                            onClick = onPageCastConsent,
                         )
                     )
 

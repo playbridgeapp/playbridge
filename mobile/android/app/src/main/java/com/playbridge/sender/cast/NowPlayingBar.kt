@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -74,6 +75,7 @@ fun NowPlayingBar(
     progress: Float? = null,
     showTvIcon: Boolean = false,
     onTvIconClick: (() -> Unit)? = null,
+    onUnlinkClick: (() -> Unit)? = null,
     accentColor: Color? = null,
 ) {
     val container = accentColor ?: MaterialTheme.colorScheme.primaryContainer
@@ -156,7 +158,16 @@ fun NowPlayingBar(
                         )
                     }
                 }
-                if (showTvIcon && onTvIconClick != null) {
+                if (onUnlinkClick != null) {
+                    IconButton(onClick = onUnlinkClick) {
+                        Icon(
+                            imageVector = Icons.Default.LinkOff,
+                            contentDescription = "Unlink website",
+                            tint = content,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                } else if (showTvIcon && onTvIconClick != null) {
                     IconButton(onClick = onTvIconClick) {
                         Box(
                             modifier = Modifier

@@ -181,6 +181,8 @@ fun AppNavHost(
     val tmdbRepository: com.playbridge.sender.data.library.TmdbRepository = koinInject()
     val addonDao: AddonDao = koinInject()
     val settingsRepository: SettingsRepository = koinInject()
+    val linkedPageCastCoordinator: LinkedPageCastCoordinator = koinInject()
+    val linkedPageCastState by linkedPageCastCoordinator.uiState.collectAsState()
 
     // 2. Collect Live Flows / Collected states locally
     val connectionState by connectionViewModel.connectionState.collectAsState()
@@ -324,6 +326,17 @@ fun AppNavHost(
     // Device picker opened from the idle cast bar (rendered once at the host level so
     // it survives screen transitions in the AnimatedContent below).
     var showDevicePicker by remember { mutableStateOf(false) }
+    val linkedDevicePickerRequest by Components.linkedDevicePickerRequests.collectAsState()
+    var handledLinkedDevicePickerRequest by rememberSaveable { mutableLongStateOf(0L) }
+    var linkedPickerVisible by remember { mutableStateOf(false) }
+    var linkedPickerCompleted by remember { mutableStateOf(false) }
+    LaunchedEffect(linkedDevicePickerRequest) {
+        if (linkedDevicePickerRequest > handledLinkedDevicePickerRequest) {
+            handledLinkedDevicePickerRequest = linkedDevicePickerRequest
+            linkedPickerCompleted = false
+            linkedPickerVisible = true
+        }
+    }
     // "Find more devices" from host-level pickers must expand Other devices even when
     // the parent left connectionInitialTab at 0 (BrowserActivity only sets tab=1 on some paths).
     var expandOtherDevices by remember { mutableStateOf(false) }
@@ -342,6 +355,27 @@ fun AppNavHost(
                 openAllDevicesExpanded()
             },
             showThisDevice = true,
+        )
+    }
+    if (linkedPickerVisible) {
+        DeviceConnectionDialog(
+            onDismiss = {
+                linkedPickerVisible = false
+                if (!linkedPickerCompleted) Components.onLinkedDevicePickerDismissed?.invoke()
+                linkedPickerCompleted = false
+            },
+            onOpenAllDevices = {
+                linkedPickerVisible = false
+                Components.onLinkedDevicePickerDismissed?.invoke()
+                openAllDevicesExpanded()
+            },
+            showThisDevice = false,
+            playBridgeOnly = true,
+            onPickedDevice = { device ->
+                linkedPickerCompleted = true
+                linkedPickerVisible = false
+                Components.onLinkedDevicePicked?.invoke(device)
+            },
         )
     }
 
@@ -1117,6 +1151,7 @@ fun AppNavHost(
                                         max_bitrate_cap_mbps = maxBitrateCapMbps,
                                     )
                                 )
+                                linkedPageCastCoordinator.supersedeIfActive()
                                 if (connectionViewModel.webSocketClient.send(cmd)) {
                                     // Record identity (movies too; season stays null) and clear the
                                     // previous session's stale playback snapshots in one step.
@@ -1194,6 +1229,7 @@ fun AppNavHost(
 
                                 // Send the current episode as a one-item playlist, then let the
                                 // coordinator resolve & queue_add the rest (it appends after this).
+                                linkedPageCastCoordinator.supersedeIfActive()
                                 if (connectionViewModel.webSocketClient.send(createSingleVideoCommandJson(currentCmd))) {
                                     connectionCoordinator.startLocalPlaybackSession(
                                         tmdbId = current.visual_metadata?.tmdb_id?.toIntOrNull(),
@@ -1283,6 +1319,7 @@ fun AppNavHost(
                                         max_bitrate_cap_mbps = maxBitrateCapMbps,
                                     )
                                 )
+                                linkedPageCastCoordinator.supersedeIfActive()
                                 if (connectionViewModel.webSocketClient.send(cmd)) {
                                     connectionCoordinator.tvActiveContext.value = "player"
                                     if (autoSwitchToRemote) {
@@ -1372,6 +1409,7 @@ fun AppNavHost(
                                     )
                                 }
                                 val finalPlaylist = playlist.copy(items = itemsWithPrefs)
+                                linkedPageCastCoordinator.supersedeIfActive()
                                 if (connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createPlaylistCommandJson(finalPlaylist))) {
                                     connectionCoordinator.startLocalPlaybackSession(
                                         tmdbId = screenNumericId,
@@ -1573,13 +1611,15 @@ fun AppNavHost(
             //    play/pause; tap → Remote.
             //  • Idle (nothing playing): shows the current destination (connected TV /
             //    renderer, or "This Device" when nothing is connected); tap → device picker.
-            // Hidden on Browser (bottom toolbar), Remote (redundant), and full-bleed screens.
+            // Hidden on Browser except while a website-linked session needs a visible owner/unlink
+            // affordance; hidden on Remote (redundant) and full-bleed screens.
             // Note: excluded on Dashboard (overlays the "Exit" button) and on Connection
             // (the device picker lives there already).
             // Hide on Library Addons tab so the bar doesn't overlay addon management.
             val libSelectedTab by libraryViewModel.selectedTab.collectAsState()
             val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
-            val showNowPlayingBar = (targetScreen == Screen.Library ||
+            val showNowPlayingBar = ((targetScreen == Screen.Browser && linkedPageCastState.active) ||
+                targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail ||
@@ -1627,7 +1667,9 @@ fun AppNavHost(
                 when {
                     playing -> {
                         primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
-                        secondaryText = "on ${deviceName ?: "TV"}" +
+                        secondaryText = linkedPageCastState.controllerName?.let {
+                            "Controlled by $it · on ${deviceName ?: "TV"}"
+                        } ?: "on ${deviceName ?: "TV"}" +
                             protocolName?.let { " · $it" }.orEmpty()
                     }
                     externalActive || (nativeSelected && wsConnected) -> {
@@ -1663,6 +1705,11 @@ fun AppNavHost(
                     showTvIcon = playing,
                     onTvIconClick = {
                         showDevicePicker = true
+                    },
+                    onUnlinkClick = if (linkedPageCastState.active) {
+                        { linkedPageCastCoordinator.unlink("unlinked") }
+                    } else {
+                        null
                     },
                     // Poster-matched accent on the library detail screen (the old FAB's
                     // dynamic styling); FAB-like primaryContainer elsewhere.

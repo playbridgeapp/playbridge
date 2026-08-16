@@ -13,6 +13,7 @@ import coil.memory.MemoryCache
 import com.playbridge.sender.BuildConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import com.playbridge.shared.network.MediaNetworkPolicy
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonPrimitive
@@ -38,6 +39,22 @@ import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.WebExtension as GeckoWebExtension
 import org.mozilla.geckoview.WebExtensionController
 
+internal class OwnedCallbackGate {
+    private var owner: Any? = null
+
+    @Synchronized
+    fun claim(newOwner: Any) {
+        owner = newOwner
+    }
+
+    @Synchronized
+    fun release(releasingOwner: Any): Boolean {
+        if (owner !== releasingOwner) return false
+        owner = null
+        return true
+    }
+}
+
 /**
  * Central dependency container for browser components.
  * Provides singletons for GeckoEngine, BrowserStore, and AddonManager.
@@ -59,7 +76,54 @@ object Components {
      * from scratch — which previously lost history and produced blank tabs.
      */
     val tabManager: TabManager = TabManager()
-    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?) -> Unit)? = null
+    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?, origin: String, tabId: Int, navigationGeneration: Long, requestsLocalNetwork: Boolean) -> Unit)? = null
+    var onLinkedCastRequest: ((JSONObject) -> Unit)? = null
+    var onPageNavigation: ((tabId: Int, navigationGeneration: Long) -> Unit)? = null
+    var onLinkedNativePortDisconnected: (() -> Unit)? = null
+    var onLinkedDevicePickerDismissed: (() -> Unit)? = null
+    var onLinkedDevicePicked: ((com.playbridge.sender.model.TvDevice) -> Unit)? = null
+    private val pageCastCallbackGate = OwnedCallbackGate()
+    private val pageNavigationGenerations = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+    val linkedDevicePickerRequests = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    private var linkedNativePort: GeckoWebExtension.Port? = null
+
+    fun claimPageCastCallbacks(owner: Any) {
+        pageCastCallbackGate.claim(owner)
+        clearPageCastCallbackValues()
+    }
+
+    fun clearPageCastCallbacks(owner: Any) {
+        if (!pageCastCallbackGate.release(owner)) return
+        clearPageCastCallbackValues()
+    }
+
+    private fun clearPageCastCallbackValues() {
+        onBridgeCastRequest = null
+        onLinkedCastRequest = null
+        onPageNavigation = null
+        onLinkedNativePortDisconnected = null
+        onLinkedDevicePickerDismissed = null
+        onLinkedDevicePicked = null
+    }
+
+    fun isCurrentPageNavigation(tabId: Int, navigationGeneration: Long): Boolean =
+        pageNavigationGenerations[tabId] == navigationGeneration
+
+    fun postLinkedMessage(message: JSONObject) {
+        Handler(Looper.getMainLooper()).post {
+            val port = linkedNativePort
+            if (port == null) {
+                Log.w(TAG, "Dropping linked-cast native message because the extension port is disconnected")
+                return@post
+            }
+            runCatching { port.postMessage(message) }
+                .onFailure { Log.w(TAG, "Could not post linked-cast native event: ${it.message}") }
+        }
+    }
+
+    fun requestLinkedDevicePicker() {
+        linkedDevicePickerRequests.value += 1L
+    }
 
     /**
      * Hooks for the engine-level [requestInterceptor] (set by SessionObserverSetup).
@@ -368,6 +432,7 @@ object Components {
         val globalMessageDelegate = object : GeckoWebExtension.MessageDelegate {
             override fun onConnect(port: GeckoWebExtension.Port) {
                 debugDetectorLog("PORT CONNECTED: ${port.name}")
+                linkedNativePort = port
                 
                 port.setDelegate(object : GeckoWebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: GeckoWebExtension.Port) {
@@ -388,6 +453,10 @@ object Components {
                     
                     override fun onDisconnect(port: GeckoWebExtension.Port) {
                         debugDetectorLog("Port disconnected: ${port.name}")
+                        if (linkedNativePort === port) {
+                            linkedNativePort = null
+                            Handler(Looper.getMainLooper()).post { onLinkedNativePortDisconnected?.invoke() }
+                        }
                     }
                 })
             }
@@ -554,7 +623,20 @@ object Components {
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
                 val type = jsonObject["type"]?.jsonPrimitive?.content
-                if (type == "detector_hello") {
+                if (type?.startsWith("linked_") == true) {
+                    if (jsonString.toByteArray().size > PAGE_CAST_REQUEST_BYTES) return
+                    if (type == "linked_open") {
+                        val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
+                        val generation =
+                            jsonObject["navigationGeneration"]?.jsonPrimitive?.longOrNull
+                        if (detectorTabId != null && generation != null) {
+                            pageNavigationGenerations.putIfAbsent(detectorTabId, generation)
+                        }
+                    }
+                    Handler(Looper.getMainLooper()).post {
+                        onLinkedCastRequest?.invoke(JSONObject(jsonString))
+                    }
+                } else if (type == "detector_hello") {
                     debugDetectorLog(
                         "Video detector native channel ready " +
                             "epoch=${jsonObject["detectorEpoch"]?.jsonPrimitive?.longOrNull ?: "legacy"}",
@@ -564,6 +646,10 @@ object Components {
                     val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
                     if (detectorEpoch != null && detectorTabId != null) {
                         detectorTabBindingTracker.forgetDetectorTab(detectorEpoch, detectorTabId)
+                        pageNavigationGenerations[detectorTabId] = Long.MAX_VALUE
+                        Handler(Looper.getMainLooper()).post {
+                            onPageNavigation?.invoke(detectorTabId, Long.MAX_VALUE)
+                        }
                     }
                 } else if (type == "http_error") {
                     val statusCode = jsonObject["statusCode"]?.jsonPrimitive?.content ?: "unknown"
@@ -587,36 +673,129 @@ object Components {
                         sessionToLoad?.loadUrl(ErrorPageUtils.generateErrorPage(url, statusCode))
                     }
                 } else if (type == "cast") {
+                    if (jsonString.toByteArray().size > PAGE_CAST_REQUEST_BYTES) return
+                    val origin = PageCastConsentStore.normalizeOrigin(
+                        jsonObject["origin"]?.jsonPrimitive?.contentOrNull,
+                    )
+                    if (origin == null) {
+                        Log.w(TAG, "Ignoring page cast request without a valid origin")
+                        return
+                    }
+                    val tabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull ?: return
+                    val navigationGeneration =
+                        jsonObject["navigationGeneration"]?.jsonPrimitive?.longOrNull ?: return
+                    pageNavigationGenerations.putIfAbsent(tabId, navigationGeneration)
+                    if (!isCurrentPageNavigation(tabId, navigationGeneration)) return
                     val itemsJson = jsonObject["items"]?.jsonArray
+                    if (itemsJson != null && itemsJson.size !in 1..PAGE_CAST_MAX_ITEMS) return
                     val startIndex = jsonObject["startIndex"]?.jsonPrimitive?.int ?: 0
-                    val playlistMetadata = jsonObject["metadata"]?.let { decodeVisualMetadataJson(it.toString()) }
+                    val playlistMetadata = jsonObject["metadata"]?.let {
+                        if (it.toString().toByteArray().size > PAGE_CAST_METADATA_BYTES) return
+                        decodeVisualMetadataJson(it.toString())
+                    }
                     if (itemsJson != null) {
                         val items = itemsJson.mapNotNull { item ->
                             val obj = item as? JsonObject ?: return@mapNotNull null
                             val url = obj["url"]?.jsonPrimitive?.content ?: return@mapNotNull null
+                            if (!MediaNetworkPolicy.isHttpUrl(url)) return@mapNotNull null
                             val title = obj["title"]?.jsonPrimitive?.content
+                            if (title != null && title.length > 4_096) return@mapNotNull null
+                            val contentType = obj["contentType"]?.jsonPrimitive?.contentOrNull
+                            if (contentType != null && contentType.length > 256) return@mapNotNull null
+                            val headers = parsePageCastHeaders(obj["headers"] as? JsonObject)
+                                ?: return@mapNotNull null
+                            val subtitles = obj["subtitles"]?.jsonArray?.mapNotNull { value ->
+                                value.jsonPrimitive.contentOrNull
+                            }.orEmpty()
+                            if (subtitles.size > PAGE_CAST_MAX_SUBTITLES ||
+                                subtitles.any { !MediaNetworkPolicy.isHttpUrl(it) }
+                            ) return@mapNotNull null
+                            val subtitleResourcesJson = obj["subtitleResources"]?.jsonArray
+                            if ((subtitleResourcesJson?.size ?: 0) > PAGE_CAST_MAX_SUBTITLES) {
+                                return@mapNotNull null
+                            }
+                            val subtitleResources = subtitleResourcesJson?.mapNotNull { value ->
+                                val resource = value as? JsonObject ?: return@mapNotNull null
+                                val subtitleUrl = resource["url"]?.jsonPrimitive?.contentOrNull
+                                    ?: return@mapNotNull null
+                                if (!MediaNetworkPolicy.isHttpUrl(subtitleUrl)) return@mapNotNull null
+                                val resourceHeaders = parsePageCastHeaders(resource["headers"] as? JsonObject)
+                                    ?: return@mapNotNull null
+                                val label = resource["label"]?.jsonPrimitive?.contentOrNull
+                                val language = resource["language"]?.jsonPrimitive?.contentOrNull
+                                if ((label?.length ?: 0) > 256 || (language?.length ?: 0) > 64) {
+                                    return@mapNotNull null
+                                }
+                                playbridge.SubtitleResource(subtitleUrl, resourceHeaders, label, language)
+                            }.orEmpty()
+                            if (subtitleResources.size != (subtitleResourcesJson?.size ?: 0)) {
+                                return@mapNotNull null
+                            }
+                            if (subtitles.size + subtitleResources.size > PAGE_CAST_MAX_SUBTITLES) {
+                                return@mapNotNull null
+                            }
 
-                            val metadata = obj["metadata"]?.let { decodeVisualMetadataJson(it.toString()) }
+                            val metadata = obj["metadata"]?.let {
+                                if (it.toString().toByteArray().size > PAGE_CAST_METADATA_BYTES) {
+                                    return@mapNotNull null
+                                }
+                                decodeVisualMetadataJson(it.toString())
+                            }
 
-                            PlayPayload(url = url, title = title, visual_metadata = metadata)
+                            PlayPayload(
+                                url = url,
+                                title = title,
+                                headers = headers,
+                                content_type = contentType,
+                                subtitles = subtitles,
+                                subtitle_resources = subtitleResources,
+                                detected_by = "page_cast",
+                                visual_metadata = metadata,
+                                allow_private_network = false,
+                            )
                         }
-                        if (items.isNotEmpty()) {
+                        if (items.isNotEmpty() && items.size == itemsJson.size && startIndex in items.indices) {
                             debugDetectorLog(
                                 "CAST MESSAGE received via extension: ${items.size} items, " +
                                     "startIndex: $startIndex",
                             )
-                            onBridgeCastRequest?.invoke(items, startIndex, playlistMetadata)
+                            onBridgeCastRequest?.invoke(
+                                items,
+                                startIndex,
+                                playlistMetadata,
+                                origin,
+                                tabId,
+                                navigationGeneration,
+                                jsonObject["localNetwork"]?.jsonPrimitive?.contentOrNull == "true",
+                            )
                         }
                     } else {
                         // Fallback for legacy single item
                         val url = jsonObject["url"]?.jsonPrimitive?.content
                         val title = jsonObject["title"]?.jsonPrimitive?.content
-                        if (url != null) {
+                        if (url != null && MediaNetworkPolicy.isHttpUrl(url)) {
                             debugDetectorLog("CAST MESSAGE received via extension (legacy): $url")
-                            onBridgeCastRequest?.invoke(listOf(PlayPayload(url = url, title = title)), 0, null)
+                            onBridgeCastRequest?.invoke(
+                                listOf(PlayPayload(url = url, title = title, detected_by = "page_cast")),
+                                0,
+                                null,
+                                origin,
+                                tabId,
+                                navigationGeneration,
+                                false,
+                            )
                         }
                     }
                 } else if (type == "navigation") {
+                    val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
+                    val navigationGeneration =
+                        jsonObject["navigationGeneration"]?.jsonPrimitive?.longOrNull
+                    if (detectorTabId != null && navigationGeneration != null) {
+                        pageNavigationGenerations[detectorTabId] = navigationGeneration
+                        Handler(Looper.getMainLooper()).post {
+                            onPageNavigation?.invoke(detectorTabId, navigationGeneration)
+                        }
+                    }
                     val kotlinTabId = resolveKotlinTabId(jsonObject)
                     if (kotlinTabId == null) {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
@@ -686,6 +865,35 @@ object Components {
             message["navigationGeneration"]?.jsonPrimitive?.longOrNull ?: return null
         return DetectorPageVersion(detectorEpoch, navigationGeneration)
     }
+
+    private fun parsePageCastHeaders(value: JsonObject?): Map<String, String>? {
+        if (value == null) return emptyMap()
+        if (value.size > 16) return null
+        val allowed = setOf(
+            "authorization", "cookie", "referer", "origin", "user-agent", "accept", "accept-language",
+        )
+        val names = mutableSetOf<String>()
+        val result = linkedMapOf<String, String>()
+        var bytes = 0
+        for ((name, element) in value) {
+            val lowerName = name.lowercase()
+            val headerValue = element.jsonPrimitive.contentOrNull ?: return null
+            if (name != name.trim() || !HEADER_NAME.matches(name) || lowerName !in allowed ||
+                !names.add(lowerName) || headerValue.any { it.code in 0..31 || it.code == 127 }
+            ) return null
+            if (lowerName in setOf("origin", "referer") && !MediaNetworkPolicy.isHttpUrl(headerValue)) return null
+            bytes += name.toByteArray().size + headerValue.toByteArray().size
+            if (bytes > 16 * 1024) return null
+            result[name] = headerValue
+        }
+        return result
+    }
+
+    private const val PAGE_CAST_MAX_SUBTITLES = 16
+    private const val PAGE_CAST_MAX_ITEMS = 50
+    private const val PAGE_CAST_METADATA_BYTES = 16 * 1024
+    private const val PAGE_CAST_REQUEST_BYTES = 64 * 1024
+    private val HEADER_NAME = Regex("^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
     
     /**
      * Resolve the WebExtension tab to a Kotlin tab using an existing binding or
