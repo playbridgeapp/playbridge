@@ -922,6 +922,18 @@ class ReceiverServer extends ChangeNotifier {
         title: p.titleOrNull ?? p.url,
         headers: p.headersOrNull,
         subtitles: p.subtitlesOrNull,
+        subtitleResources: p.subtitleResources
+            .map((resource) => SubtitleRequest(
+                  url: resource.url,
+                  headers: Map.unmodifiable(resource.headers),
+                  label: resource.hasLabel() ? resource.label : null,
+                  language: resource.hasLanguage() ? resource.language : null,
+                ))
+            .toList(growable: false),
+        contentType: p.contentTypeOrNull,
+        enforcePageNetworkPolicy: p.detectedByOrNull == 'page_cast' ||
+            p.detectedByOrNull == 'linked_page',
+        allowPrivateNetwork: p.allowPrivateNetworkOrNull == true,
         startPositionMs: p.startPositionMsOrNull,
         bingeGroup: p.bingeGroupOrNull,
         season: p.seasonOrNull,

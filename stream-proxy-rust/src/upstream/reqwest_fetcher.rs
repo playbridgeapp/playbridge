@@ -1,34 +1,112 @@
 //! Reqwest (+ optional FFmpeg AVIO) origin fetch — Docker / Desktop / CLI default.
 
-use super::{UpstreamConnectFuture, UpstreamFetcher, UpstreamResponse};
+use super::{
+    validate_http_destination, with_default_upstream_headers, UpstreamConnectFuture,
+    UpstreamFetcher, UpstreamResponse,
+};
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use reqwest::Client;
 use std::collections::HashMap;
+use std::io;
 use std::str::FromStr;
+use std::sync::Arc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::warn;
 
 pub struct ReqwestUpstreamFetcher {
     client: Client,
+    public_only_client: Option<Client>,
+    local_network_client: Option<Client>,
     ffmpeg_path: Option<String>,
+}
+
+#[derive(Debug)]
+struct PolicyDns {
+    allow_private_network: bool,
+}
+
+impl reqwest::dns::Resolve for PolicyDns {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_owned();
+        let allow_private_network = self.allow_private_network;
+        Box::pin(async move {
+            let lower = host.to_ascii_lowercase();
+            if lower == "localhost"
+                || lower.ends_with(".localhost")
+                || (!allow_private_network && lower.ends_with(".local"))
+            {
+                return Err(dns_policy_error());
+            }
+            let addresses: Vec<_> = tokio::net::lookup_host((host.as_str(), 0))
+                .await
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)?
+                .collect();
+            if addresses.is_empty()
+                || addresses
+                    .iter()
+                    .any(|address| !super::is_allowed_address(address.ip(), allow_private_network))
+            {
+                return Err(dns_policy_error());
+            }
+            Ok(Box::new(addresses.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+fn dns_policy_error() -> Box<dyn std::error::Error + Send + Sync> {
+    Box::new(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        "local-network media permission is required",
+    ))
 }
 
 impl ReqwestUpstreamFetcher {
     pub fn new(ffmpeg_path: Option<String>) -> Self {
         // Live HLS masters and multi-hop CDNs routinely exceed a few seconds.
         // The previous 6s budget caused flaky 500s on Via phone (no AVIO fallback).
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .connect_timeout(std::time::Duration::from_secs(15))
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .danger_accept_invalid_certs(true)
+        let client = Self::client_builder()
             .build()
             .unwrap_or_else(|_| Client::new());
+        let public_only_client = Self::client_builder()
+            .dns_resolver(Arc::new(PolicyDns {
+                allow_private_network: false,
+            }))
+            .build()
+            .ok();
+        let local_network_client = Self::client_builder()
+            .dns_resolver(Arc::new(PolicyDns {
+                allow_private_network: true,
+            }))
+            .build()
+            .ok();
 
         Self {
             client,
+            public_only_client,
+            local_network_client,
             ffmpeg_path,
+        }
+    }
+
+    fn client_builder() -> reqwest::ClientBuilder {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+    }
+
+    fn client_for_policy(&self, network_policy: Option<bool>) -> Result<&Client, String> {
+        match network_policy {
+            None => Ok(&self.client),
+            Some(false) => self
+                .public_only_client
+                .as_ref()
+                .ok_or_else(|| "public-only HTTP client is unavailable".to_string()),
+            Some(true) => self
+                .local_network_client
+                .as_ref()
+                .ok_or_else(|| "local-network HTTP client is unavailable".to_string()),
         }
     }
 
@@ -84,56 +162,90 @@ impl ReqwestUpstreamFetcher {
         &self,
         url: &str,
         headers: &HashMap<String, String>,
+        network_policy: Option<bool>,
     ) -> Result<UpstreamResponse, String> {
-        let mut req = self.client.get(url);
-        for (k, v) in headers {
-            if let (Ok(h_name), Ok(h_val)) = (HeaderName::from_str(k), HeaderValue::from_str(v)) {
-                req = req.header(h_name, h_val);
-            }
-        }
-
-        match req.send().await {
-            Ok(resp) if resp.status().is_success() => {
-                return Self::response_to_upstream(resp).await;
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                let content_type = resp
-                    .headers()
-                    .get(reqwest::header::CONTENT_TYPE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                // Some origins return playable playlist bodies with odd status codes;
-                // accept them when Content-Type looks like HLS before AVIO.
-                if content_type.contains("mpegurl")
-                    || content_type.contains("m3u8")
-                    || content_type.contains("apple")
+        let initial = reqwest::Url::parse(url).map_err(|_| "invalid upstream URL".to_string())?;
+        let credential_origin = origin(&initial);
+        let mut current = initial;
+        for redirect_count in 0..=10 {
+            validate_http_destination(current.as_str(), network_policy).await?;
+            // The constrained client validates the same DNS answer that its connector uses,
+            // preventing a hostname from rebinding to a local address after this preflight.
+            let mut req = self.client_for_policy(network_policy)?.get(current.clone());
+            let request_headers =
+                scoped_redirect_headers(headers, origin(&current) == credential_origin);
+            for (k, v) in &request_headers {
+                if let (Ok(h_name), Ok(h_val)) = (HeaderName::from_str(k), HeaderValue::from_str(v))
                 {
-                    warn!(
-                        "[stream-proxy] accepting HLS Content-Type despite HTTP {} for {}",
-                        status, url
-                    );
-                    if let Ok(upstream) = Self::response_to_upstream(resp).await {
-                        return Ok(upstream);
-                    }
-                } else {
-                    warn!(
-                        "[stream-proxy] reqwest returned HTTP {} (ct={}), attempting FFmpeg AVIO fallback for {}",
-                        status, content_type, url
-                    );
-                    drop(resp);
+                    req = req.header(h_name, h_val);
                 }
             }
-            Err(e) => {
-                warn!(
-                    "[stream-proxy] reqwest error: {}, attempting FFmpeg AVIO fallback for {}",
-                    e, url
-                );
+
+            match req.send().await {
+                Ok(resp) if resp.status().is_redirection() => {
+                    if redirect_count == 10 {
+                        return Err("upstream redirect limit exceeded".into());
+                    }
+                    let location = resp
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or_else(|| "upstream redirect omitted Location".to_string())?;
+                    current = current
+                        .join(location)
+                        .map_err(|_| "invalid upstream redirect URL".to_string())?;
+                    continue;
+                }
+                Ok(resp) if resp.status().is_success() => {
+                    return Self::response_to_upstream(resp).await;
+                }
+                Ok(resp) => {
+                    let status = resp.status();
+                    let content_type = resp
+                        .headers()
+                        .get(reqwest::header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_ascii_lowercase();
+                    // Some origins return playable playlist bodies with odd status codes;
+                    // accept them when Content-Type looks like HLS before AVIO.
+                    if content_type.contains("mpegurl")
+                        || content_type.contains("m3u8")
+                        || content_type.contains("apple")
+                    {
+                        warn!(
+                            "[stream-proxy] accepting HLS Content-Type despite HTTP {}",
+                            status
+                        );
+                        if let Ok(upstream) = Self::response_to_upstream(resp).await {
+                            return Ok(upstream);
+                        }
+                    } else {
+                        warn!(
+                            "[stream-proxy] reqwest returned HTTP {} (ct={})",
+                            status, content_type
+                        );
+                        drop(resp);
+                    }
+                }
+                Err(e) => {
+                    // reqwest's Display output can include the full authenticated URL.
+                    warn!(
+                        "[stream-proxy] upstream request failed (timeout={}, connect={}, status={})",
+                        e.is_timeout(),
+                        e.is_connect(),
+                        e.is_status(),
+                    );
+                }
             }
+            break;
         }
 
-        self.try_avio(url, headers).await
+        if network_policy != Some(false) {
+            self.try_avio(current.as_str(), headers).await
+        } else {
+            Err("failed to fetch policy-constrained upstream".into())
+        }
     }
 
     async fn try_avio(
@@ -188,11 +300,67 @@ impl ReqwestUpstreamFetcher {
 }
 
 impl UpstreamFetcher for ReqwestUpstreamFetcher {
-    fn connect<'a>(
+    fn connect_with_policy<'a>(
         &'a self,
         url: &'a str,
         headers: &'a HashMap<String, String>,
+        network_policy: Option<bool>,
     ) -> UpstreamConnectFuture<'a> {
-        Box::pin(async move { self.connect_inner(url, headers).await })
+        Box::pin(async move { self.connect_inner(url, headers, network_policy).await })
+    }
+}
+
+fn origin(url: &reqwest::Url) -> (String, String, Option<u16>) {
+    (
+        url.scheme().to_owned(),
+        url.host_str().unwrap_or_default().to_ascii_lowercase(),
+        url.port_or_known_default(),
+    )
+}
+
+fn scoped_redirect_headers(
+    headers: &HashMap<String, String>,
+    same_origin: bool,
+) -> HashMap<String, String> {
+    if same_origin {
+        return headers.clone();
+    }
+    let range_only = headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("range"))
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    with_default_upstream_headers(&range_only)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use reqwest::dns::Resolve;
+
+    #[test]
+    fn cross_origin_redirects_drop_page_headers() {
+        let headers = HashMap::from([
+            ("Authorization".into(), "Bearer secret".into()),
+            ("Cookie".into(), "session=secret".into()),
+            ("User-Agent".into(), "Page agent".into()),
+            ("Range".into(), "bytes=0-10".into()),
+        ]);
+        let scoped = scoped_redirect_headers(&headers, false);
+        assert!(!scoped.contains_key("Authorization"));
+        assert!(!scoped.contains_key("Cookie"));
+        assert_ne!(scoped.get("User-Agent"), Some(&"Page agent".to_string()));
+        assert_eq!(scoped.get("Range"), Some(&"bytes=0-10".to_string()));
+    }
+
+    #[tokio::test]
+    async fn public_only_dns_rejects_local_names() {
+        let name = "localhost".parse().expect("valid DNS name");
+        assert!(PolicyDns {
+            allow_private_network: false
+        }
+        .resolve(name)
+        .await
+        .is_err());
     }
 }

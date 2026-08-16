@@ -43,15 +43,22 @@ class PlaybackRequestPreparer {
       if (proxy.ownsUrl(url) && path.startsWith('/s/')) {
         manifestUrl = url;
       } else {
-        manifestUrl = await proxy.registerSession(url, headers);
+        manifestUrl = await proxy.registerSession(
+          url,
+          headers,
+          contentType: item.contentType,
+          allowPrivateNetwork:
+              item.enforcePageNetworkPolicy ? item.allowPrivateNetwork : null,
+        );
       }
       final edlUrl = proxy.mpvDashUrl(manifestUrl);
       stdout.writeln(
           '[request-preparer] Routing DASH through mpv-compatible proxy EDL');
-      return _proxiedCopy(item, edlUrl, url, headers);
+      final subtitles = await _preparePageSubtitles(item, headers);
+      return _proxiedCopy(item, edlUrl, url, headers, subtitles: subtitles);
     }
 
-    if (mode == StreamProxyMode.off) {
+    if (mode == StreamProxyMode.off && !item.enforcePageNetworkPolicy) {
       return item;
     }
 
@@ -60,7 +67,7 @@ class PlaybackRequestPreparer {
       return item;
     }
 
-    bool shouldProxy = false;
+    bool shouldProxy = item.enforcePageNetworkPolicy;
     if (mode == StreamProxyMode.always) {
       shouldProxy = true;
     } else if (mode == StreamProxyMode.auto) {
@@ -69,15 +76,27 @@ class PlaybackRequestPreparer {
 
     if (shouldProxy) {
       final headers = item.headers ?? {};
-      final loopbackUrl =
-          await StreamProxyServer.instance.registerSession(url, headers);
+      final loopbackUrl = await StreamProxyServer.instance.registerSession(
+        url,
+        headers,
+        contentType: item.contentType,
+        allowPrivateNetwork:
+            item.enforcePageNetworkPolicy ? item.allowPrivateNetwork : null,
+      );
+      final subtitles = await _preparePageSubtitles(item, headers);
 
       stdout.writeln(
           '[request-preparer] Routing stream through proxy: ${uri.host} -> loopback');
 
       // Return a new QueueItem with the loopback URL and empty headers
       // so the media player doesn't forward browser headers to localhost.
-      return _proxiedCopy(item, loopbackUrl, url, headers);
+      return _proxiedCopy(
+        item,
+        loopbackUrl,
+        url,
+        headers,
+        subtitles: subtitles,
+      );
     }
 
     return item;
@@ -96,23 +115,23 @@ class PlaybackRequestPreparer {
   static bool proxyLocalHost(String host) =>
       host == '127.0.0.1' || host == 'localhost';
 
-  static QueueItem _proxiedCopy(
-    QueueItem item,
-    String proxyUrl,
-    String originalUrl,
-    Map<String, String> originalHeaders,
-  ) =>
+  static QueueItem _proxiedCopy(QueueItem item, String proxyUrl,
+          String originalUrl, Map<String, String> originalHeaders,
+          {List<String>? subtitles}) =>
       QueueItem(
         url: proxyUrl,
         title: item.title,
         headers: null,
-        subtitles: item.subtitles,
+        subtitles: subtitles ?? item.subtitles,
+        subtitleResources: null,
         startPositionMs: item.startPositionMs,
         originalUrl: item.originalUrl ?? originalUrl,
         originalHeaders: item.originalHeaders ?? originalHeaders,
         contentType: item.contentType,
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
+        enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
+        allowPrivateNetwork: item.allowPrivateNetwork,
         bingeGroup: item.bingeGroup,
         season: item.season,
         episode: item.episode,
@@ -126,4 +145,42 @@ class PlaybackRequestPreparer {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
       );
+
+  static Future<List<String>?> _preparePageSubtitles(
+    QueueItem item,
+    Map<String, String> headers,
+  ) async {
+    final subtitles = item.subtitles ?? const <String>[];
+    final resources = item.subtitleResources ?? const <SubtitleRequest>[];
+    if (!item.enforcePageNetworkPolicy) {
+      return [...subtitles, ...resources.map((resource) => resource.url)];
+    }
+    final proxy = StreamProxyServer.instance;
+    final result = <String>[];
+    for (final subtitle in subtitles.take(16)) {
+      result.add(await proxy.registerSession(
+        subtitle,
+        _sameOrigin(item.url, subtitle) ? headers : const <String, String>{},
+        allowPrivateNetwork: item.allowPrivateNetwork,
+      ));
+    }
+    for (final resource in resources.take(16 - result.length)) {
+      result.add(await proxy.registerSession(
+        resource.url,
+        resource.headers,
+        allowPrivateNetwork: item.allowPrivateNetwork,
+      ));
+    }
+    return result;
+  }
+
+  static bool _sameOrigin(String first, String second) {
+    final a = Uri.tryParse(first);
+    final b = Uri.tryParse(second);
+    if (a == null || b == null || !a.hasAuthority || !b.hasAuthority) return false;
+    int port(Uri value) => value.hasPort ? value.port : (value.scheme == 'https' ? 443 : 80);
+    return a.scheme.toLowerCase() == b.scheme.toLowerCase() &&
+        a.host.toLowerCase() == b.host.toLowerCase() &&
+        port(a) == port(b);
+  }
 }

@@ -10,6 +10,7 @@ class QueueItem {
     required this.title,
     this.headers,
     this.subtitles,
+    this.subtitleResources,
     this.startPositionMs,
     this.bingeGroup,
     this.season,
@@ -28,12 +29,15 @@ class QueueItem {
     this.contentType,
     this.playlistBody,
     this.audioUrl,
+    this.enforcePageNetworkPolicy = false,
+    this.allowPrivateNetwork = false,
   });
 
   final String url;
   final String title;
   final Map<String, String>? headers;
   final List<String>? subtitles;
+  final List<SubtitleRequest>? subtitleResources;
 
   /// The pre-proxy URL and headers, set by [PlaybackRequestPreparer] when
   /// routing through the loopback proxy so the toggle can reverse the rewrite.
@@ -47,6 +51,11 @@ class QueueItem {
 
   /// Companion demuxed audio media playlist URL (same live session), if any.
   final String? audioUrl;
+
+  /// Untrusted webpage media must remain behind the receiver-side proxy so
+  /// every manifest, segment, subtitle, and redirect uses its network policy.
+  final bool enforcePageNetworkPolicy;
+  final bool allowPrivateNetwork;
 
   /// Resume point (ms) seeded from the phone's resume store. Mutable because
   /// it is consumed (nulled) after the first seek, so re-playing this item
@@ -72,6 +81,21 @@ class QueueItem {
 
   /// True when there's enough metadata to render a pre-play screen.
   bool get hasPrePlayMetadata => backdropUrl != null || posterUrl != null;
+}
+
+/// An independently authenticated subtitle resource supplied by a sender.
+class SubtitleRequest {
+  const SubtitleRequest({
+    required this.url,
+    this.headers = const <String, String>{},
+    this.label,
+    this.language,
+  });
+
+  final String url;
+  final Map<String, String> headers;
+  final String? label;
+  final String? language;
 }
 
 enum EngineType {

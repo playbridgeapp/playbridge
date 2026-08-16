@@ -11,7 +11,7 @@
 //!
 //! ABI version: see [`UPSTREAM_JNI_ABI_VERSION`].
 
-use super::{UpstreamConnectFuture, UpstreamFetcher, UpstreamResponse};
+use super::{validate_http_destination, UpstreamConnectFuture, UpstreamFetcher, UpstreamResponse};
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use bytes::Bytes;
@@ -212,14 +212,18 @@ struct OpenedUpstream {
 }
 
 impl UpstreamFetcher for JniUpstreamFetcher {
-    fn connect<'a>(
+    fn connect_with_policy<'a>(
         &'a self,
         url: &'a str,
         headers: &'a HashMap<String, String>,
+        network_policy: Option<bool>,
     ) -> UpstreamConnectFuture<'a> {
         let url = url.to_owned();
         let headers = headers.clone();
-        Box::pin(async move { connect_via_host(url, headers).await })
+        Box::pin(async move {
+            validate_http_destination(&url, network_policy).await?;
+            connect_via_host(url, headers).await
+        })
     }
 }
 

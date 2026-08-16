@@ -507,6 +507,11 @@ class PlayerController extends ChangeNotifier {
 
   Future<bool> _toggleProxyInternal() async {
     final item = _queue[_currentIndex];
+    if (item.enforcePageNetworkPolicy) {
+      debugPrint(
+          '[player] proxy cannot be disabled for webpage-controlled media');
+      return false;
+    }
     final itemIndex = _currentIndex;
     final currentPos = _engine.positionMs;
     final wasPlaying = state == 'playing' || state == 'buffering';
@@ -525,6 +530,7 @@ class PlayerController extends ChangeNotifier {
         title: item.title,
         headers: item.originalHeaders,
         subtitles: item.subtitles,
+        subtitleResources: item.subtitleResources,
         startPositionMs: currentPos > 0 ? currentPos : null,
         bingeGroup: item.bingeGroup,
         season: item.season,
@@ -542,6 +548,8 @@ class PlayerController extends ChangeNotifier {
         // Keep demuxed LL-HLS handoff across proxy toggles.
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
+        enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
+        allowPrivateNetwork: item.allowPrivateNetwork,
       );
       debugPrint('[player] toggling to direct playback at ${currentPos}ms');
     } else {
@@ -572,6 +580,7 @@ class PlayerController extends ChangeNotifier {
         title: item.title,
         headers: null,
         subtitles: item.subtitles,
+        subtitleResources: item.subtitleResources,
         startPositionMs: currentPos > 0 ? currentPos : null,
         originalUrl: item.url,
         originalHeaders: headers,
@@ -590,6 +599,8 @@ class PlayerController extends ChangeNotifier {
         contentType: item.contentType,
         playlistBody: item.playlistBody,
         audioUrl: proxiedAudio,
+        enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
+        allowPrivateNetwork: item.allowPrivateNetwork,
       );
       debugPrint('[player] toggling to proxied playback at ${currentPos}ms');
     }

@@ -3,7 +3,7 @@ use base64::Engine;
 use dashmap::DashMap;
 use rand::Rng;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::time::interval;
 use tracing::info;
@@ -13,17 +13,26 @@ pub struct ProxySession {
     pub id: String,
     pub original_url: String,
     pub headers: HashMap<String, String>,
+    /// None is trusted application traffic. Some(false) is webpage/public-only;
+    /// Some(true) is webpage traffic with the separate LAN permission.
+    pub network_policy: Option<bool>,
     pub created_at: Instant,
     pub last_accessed_at: Instant,
 }
 
 impl ProxySession {
-    pub fn new(id: String, original_url: String, headers: HashMap<String, String>) -> Self {
+    pub fn new(
+        id: String,
+        original_url: String,
+        headers: HashMap<String, String>,
+        network_policy: Option<bool>,
+    ) -> Self {
         let now = Instant::now();
         Self {
             id,
             original_url,
             headers,
+            network_policy,
             created_at: now,
             last_accessed_at: now,
         }
@@ -33,6 +42,7 @@ impl ProxySession {
 #[derive(Clone)]
 pub struct SessionManager {
     sessions: Arc<DashMap<String, ProxySession>>,
+    registration_lock: Arc<Mutex<()>>,
 }
 
 impl Default for SessionManager {
@@ -45,16 +55,29 @@ impl SessionManager {
     pub fn new() -> Self {
         let manager = Self {
             sessions: Arc::new(DashMap::new()),
+            registration_lock: Arc::new(Mutex::new(())),
         };
         manager.start_cleanup_task();
         manager
     }
 
-    pub fn register(&self, original_url: String, headers: HashMap<String, String>) -> ProxySession {
+    pub fn register(
+        &self,
+        original_url: String,
+        headers: HashMap<String, String>,
+        network_policy: Option<bool>,
+    ) -> Result<ProxySession, String> {
+        let _guard = self
+            .registration_lock
+            .lock()
+            .map_err(|_| "proxy session registry is unavailable".to_string())?;
+        if self.sessions.len() >= MAX_ACTIVE_SESSIONS {
+            return Err("proxy session limit reached".into());
+        }
         let id = Self::generate_id();
-        let session = ProxySession::new(id.clone(), original_url, headers);
+        let session = ProxySession::new(id.clone(), original_url, headers, network_policy);
         self.sessions.insert(id, session.clone());
-        session
+        Ok(session)
     }
 
     pub fn get(&self, id: &str) -> Option<ProxySession> {
@@ -107,5 +130,43 @@ impl SessionManager {
                 });
             }
         });
+    }
+}
+
+const MAX_ACTIVE_SESSIONS: usize = 4_096;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn active_session_count_is_bounded() {
+        let manager = SessionManager::new();
+        let mut first_id = None;
+        for index in 0..MAX_ACTIVE_SESSIONS {
+            let session = manager
+                .register(
+                    format!("https://cdn.example/{index}.mp4"),
+                    HashMap::new(),
+                    None,
+                )
+                .unwrap();
+            first_id.get_or_insert(session.id);
+        }
+        assert!(manager
+            .register(
+                "https://cdn.example/overflow.mp4".into(),
+                HashMap::new(),
+                None,
+            )
+            .is_err());
+        assert!(manager.revoke(first_id.as_deref().unwrap()));
+        assert!(manager
+            .register(
+                "https://cdn.example/replacement.mp4".into(),
+                HashMap::new(),
+                None,
+            )
+            .is_ok());
     }
 }
