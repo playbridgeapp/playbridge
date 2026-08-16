@@ -263,9 +263,18 @@ Comprehensive project documentation is available:
 
 ### Cast demo page
 
-Sites can cast directly into PlayBridge via the injected `window.playbridge.cast()` page bridge.
-A live demo that exercises all payload shapes (single video, HLS, playlist with `startIndex`,
-bare array) plus the browser's video detection paths is hosted at
+Sites can cast directly via `window.playbridge.cast()` or open a page-lifetime,
+website-managed lazy queue via `window.playbridge.linkCast()`. Linked sessions can replace,
+append, and jump within the TV playlist and answer bounded `needitems` events; playback controls
+remain in the PlayBridge Remote. The user approves each exact website origin and can revoke that
+permission under **Settings → Browser → Website casting permissions**.
+Websites that intentionally reference a LAN media server set `localNetwork: true`; PlayBridge
+asks for a separate per-origin grant, keeps webpage headers on the initial media URL's exact
+origin, and revalidates manifest children and redirects on the receiver. The local-network grant
+can be reset without removing the site's basic casting permission. Website-controlled casts use
+a PlayBridge receiver so these checks cannot be bypassed by an external receiver protocol.
+
+A live demo that exercises direct payloads, linked lazy queueing, and browser detection is hosted at
 **[playbridge.app/cast-demo](https://playbridge.app/cast-demo/)** — open it in the PlayBridge
 phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/index.html).
 
