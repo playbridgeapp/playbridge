@@ -202,6 +202,8 @@
   var GTV = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/';
   var linkedSession = null;
   var linkedRemaining = [];
+  var linkedSupplyInFlight = new Set();
+  var linkedSupplyCompleted = new Set();
 
   function linkedHlsItem(index) {
     return {
@@ -221,6 +223,8 @@
       return linkedHlsItem(index + 1);
     });
     linkedRemaining = linkedItems.slice(2);
+    linkedSupplyInFlight.clear();
+    linkedSupplyCompleted.clear();
     try {
       linkedSession = await window.playbridge.linkCast({
         items: linkedItems.slice(0, 2),
@@ -234,16 +238,30 @@
       });
       linkedSession.addEventListener('needitems', async function (event) {
         var need = event.detail;
+        if (linkedSupplyInFlight.has(need.requestId) || linkedSupplyCompleted.has(need.requestId)) {
+          return;
+        }
+        linkedSupplyInFlight.add(need.requestId);
         var items = linkedRemaining.splice(0, need.count);
         log('needitems(' + need.count + ') → supplying ' + items.length);
-        await linkedSession.provideItems(need.requestId, {
-          items: items,
-          endOfList: linkedRemaining.length === 0
-        });
+        try {
+          await linkedSession.provideItems(need.requestId, {
+            items: items,
+            endOfList: linkedRemaining.length === 0
+          });
+          linkedSupplyCompleted.add(need.requestId);
+        } catch (error) {
+          linkedRemaining.unshift.apply(linkedRemaining, items);
+          log('provideItems failed: ' + (error.code || error.message));
+        } finally {
+          linkedSupplyInFlight.delete(need.requestId);
+        }
       });
       linkedSession.addEventListener('ended', function (event) {
         log('linked session ended: ' + event.detail.reason);
         linkedSession = null;
+        linkedSupplyInFlight.clear();
+        linkedSupplyCompleted.clear();
       });
     } catch (error) {
       log('linked cast failed: ' + (error.code || error.message));

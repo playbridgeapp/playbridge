@@ -8,6 +8,14 @@
 
 import browser from "./browser";
 import {
+  normalizeLinkedAppendPayload,
+  normalizeLinkedJumpPayload,
+  normalizeLinkedPageCastPayload,
+  normalizeLinkedSupplyPayload,
+  normalizePageCastPayload,
+  pageCastRequestWithinLimit,
+} from "./page-cast";
+import {
   advanceNavigationGeneration,
   currentNavigationGeneration,
   isCurrentNavigationGeneration,
@@ -177,6 +185,242 @@ function sendToNative(message: Record<string, unknown>): void {
       void replayCachedState();
     }
   });
+}
+
+type LinkedBinding = {
+  sessionId: string;
+  tabId: number;
+  origin: string;
+  navigationGeneration: number;
+};
+
+const linkedBindings = new Map<string, LinkedBinding>();
+type PendingLinkedOpen = LinkedBinding & { bridgeRequestId: string };
+const pendingLinkedOpens = new Map<string, PendingLinkedOpen>();
+const linkedNativePending = new Map<string, {
+  resolve: (value: Record<string, unknown>) => void;
+  reject: (reason: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+let linkedNativePort: any;
+const MAX_LINKED_NATIVE_PENDING = 32;
+const LINKED_HEARTBEAT_INTERVAL_MS = 60_000;
+
+function randomId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+function deliverLinkedEvent(binding: LinkedBinding, event: string, detail: Record<string, unknown>): void {
+  void browser.tabs.sendMessage(binding.tabId, {
+    type: "linked_cast_event",
+    event: { sessionId: binding.sessionId, event, detail },
+  }).catch(() => {});
+}
+
+function closeLinkedBinding(binding: LinkedBinding, reason: string, notifyNative = true): void {
+  if (linkedBindings.get(binding.sessionId) !== binding) return;
+  linkedBindings.delete(binding.sessionId);
+  deliverLinkedEvent(binding, "ended", { reason });
+  if (notifyNative) {
+    void sendLinkedNative({
+      type: "linked_unlink",
+      sessionId: binding.sessionId,
+      origin: binding.origin,
+      tabId: binding.tabId,
+      navigationGeneration: binding.navigationGeneration,
+      reason,
+    }, 10_000).catch(() => {});
+  }
+}
+
+function ensureLinkedNativePort(): any {
+  if (linkedNativePort) return linkedNativePort;
+  const port = browser.runtime.connectNative(NATIVE_APP_ID);
+  linkedNativePort = port;
+  port.onMessage.addListener((raw: unknown) => {
+    const message = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    const type = message.type;
+    if (type === "linked_result" && typeof message.bridgeRequestId === "string") {
+      const pending = linkedNativePending.get(message.bridgeRequestId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      linkedNativePending.delete(message.bridgeRequestId);
+      pending.resolve(message);
+      return;
+    }
+    if (type === "linked_event" && typeof message.sessionId === "string") {
+      const binding = linkedBindings.get(message.sessionId);
+      const event = typeof message.event === "string" ? message.event : "statechange";
+      if (!binding) {
+        return;
+      }
+      const detail = message.detail && typeof message.detail === "object"
+        ? message.detail as Record<string, unknown>
+        : {};
+      deliverLinkedEvent(binding, event, detail);
+      if (event === "ended") linkedBindings.delete(binding.sessionId);
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    if (linkedNativePort !== port) return;
+    linkedNativePort = undefined;
+    for (const pending of linkedNativePending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error("Android native channel disconnected"));
+    }
+    linkedNativePending.clear();
+    pendingLinkedOpens.clear();
+    for (const binding of [...linkedBindings.values()]) {
+      closeLinkedBinding(binding, "native_port_lost", false);
+    }
+  });
+  return port;
+}
+
+function sendLinkedNative(
+  message: Record<string, unknown>,
+  timeoutMs = 120_000,
+  requestId = randomId(),
+): Promise<Record<string, unknown>> {
+  const bridgeRequestId = requestId;
+  return new Promise((resolve, reject) => {
+    if (linkedNativePending.size >= MAX_LINKED_NATIVE_PENDING) {
+      reject(new Error("Too many linked cast requests are pending"));
+      return;
+    }
+    let port: any;
+    try {
+      port = ensureLinkedNativePort();
+    } catch (error) {
+      reject(error as Error);
+      return;
+    }
+    const timer = setTimeout(() => {
+      linkedNativePending.delete(bridgeRequestId);
+      reject(new Error("Android did not answer the linked cast request"));
+    }, timeoutMs);
+    linkedNativePending.set(bridgeRequestId, { resolve, reject, timer });
+    try {
+      port.postMessage({ ...message, bridgeRequestId });
+    } catch (error) {
+      clearTimeout(timer);
+      linkedNativePending.delete(bridgeRequestId);
+      reject(error as Error);
+    }
+  });
+}
+
+function cancelPendingLinkedOpens(tabId: number, reason: string): void {
+  for (const pending of [...pendingLinkedOpens.values()]) {
+    if (pending.tabId !== tabId) continue;
+    pendingLinkedOpens.delete(pending.sessionId);
+    const nativePending = linkedNativePending.get(pending.bridgeRequestId);
+    if (nativePending) {
+      clearTimeout(nativePending.timer);
+      linkedNativePending.delete(pending.bridgeRequestId);
+      nativePending.resolve({ ok: false, error: "session_ended" });
+    }
+    try {
+      ensureLinkedNativePort().postMessage({
+        type: "linked_cancel_open",
+        bridgeRequestId: randomId(),
+        targetBridgeRequestId: pending.bridgeRequestId,
+        sessionId: pending.sessionId,
+        reason,
+      });
+    } catch {
+      // The local promise is already resolved as ended; native disconnect cleanup is enough.
+    }
+  }
+}
+
+function linkedError(error: string, message?: string): Record<string, unknown> {
+  return { ok: false, error, ...(message ? { message } : {}) };
+}
+
+async function handleLinkedPageRequest(
+  message: { operation?: string; sessionId?: string; payload?: unknown },
+  sender: { tab?: { id?: number; url?: string }; frameId?: number },
+): Promise<Record<string, unknown>> {
+  const tabId = sender.tab?.id;
+  const origin = pageOrigin(sender.tab?.url);
+  if (tabId == null || sender.frameId !== 0 || !origin) return linkedError("invalid_request");
+  if (!pageCastRequestWithinLimit(message.payload ?? {})) return linkedError("resource_limit");
+  const operation = message.operation;
+  let payload: unknown;
+  if (operation === "open" || operation === "replace") payload = normalizeLinkedPageCastPayload(message.payload);
+  else if (operation === "append") payload = normalizeLinkedAppendPayload(message.payload);
+  else if (operation === "jump") payload = normalizeLinkedJumpPayload(message.payload);
+  else if (operation === "supply") payload = normalizeLinkedSupplyPayload(message.payload);
+  else if (operation === "unlink") payload = {};
+  if (!payload || !operation) return linkedError("invalid_request");
+  const generation = currentNavigationGeneration(tabNavigationGenerations, tabId);
+  let sessionId = message.sessionId;
+  if (operation === "open") sessionId = randomId();
+  if (!sessionId) return linkedError("session_ended");
+  if (linkedNativePending.size >= MAX_LINKED_NATIVE_PENDING) {
+    return linkedError("resource_limit");
+  }
+
+  if (operation !== "open") {
+    const binding = linkedBindings.get(sessionId);
+    if (!binding || binding.tabId !== tabId || binding.origin !== origin || binding.navigationGeneration !== generation) {
+      return linkedError("session_ended");
+    }
+  }
+
+  try {
+    const bridgeRequestId = randomId();
+    if (operation === "open") {
+      pendingLinkedOpens.set(sessionId, {
+        sessionId,
+        tabId,
+        origin,
+        navigationGeneration: generation,
+        bridgeRequestId,
+      });
+    }
+    const response = await sendLinkedNative({
+      type: `linked_${operation}`,
+      sessionId,
+      origin,
+      tabId,
+      navigationGeneration: generation,
+      payload,
+    }, operation === "open" ? 600_000 : 30_000, bridgeRequestId);
+    if (operation === "open") pendingLinkedOpens.delete(sessionId);
+    if (response.ok !== true) {
+      return linkedError(
+        typeof response.error === "string" ? response.error : "linked_cast_failed",
+        typeof response.message === "string" ? response.message : undefined,
+      );
+    }
+    if (operation === "open") {
+      const currentOrigin = pageOrigin(tabLastUrl.get(tabId));
+      if (
+        !isCurrentNavigationGeneration(tabNavigationGenerations, tabId, generation) ||
+        currentOrigin !== origin
+      ) {
+        void sendLinkedNative({
+          type: "linked_unlink",
+          sessionId,
+          origin,
+          tabId,
+          navigationGeneration: generation,
+          reason: "navigation",
+        }, 10_000)
+          .catch(() => {});
+        return linkedError("session_ended");
+      }
+      linkedBindings.set(sessionId, { sessionId, tabId, origin, navigationGeneration: generation });
+    } else if (operation === "unlink") {
+      linkedBindings.delete(sessionId);
+    }
+    return { ok: true, sessionId };
+  } catch (error) {
+    if (operation === "open") pendingLinkedOpens.delete(sessionId);
+    return linkedError("native_unavailable", (error as Error)?.message);
+  }
 }
 
 function getTabVideos(tabId: number): VideoData[] {
@@ -819,7 +1063,30 @@ setInterval(() => {
   }
 }, 30_000);
 
+setInterval(() => {
+  for (const binding of [...linkedBindings.values()]) {
+    void sendLinkedNative({
+      type: "linked_ping",
+      sessionId: binding.sessionId,
+      origin: binding.origin,
+      tabId: binding.tabId,
+      navigationGeneration: binding.navigationGeneration,
+    }, 10_000).then((response) => {
+      if (response.ok !== true && linkedBindings.get(binding.sessionId) === binding) {
+        closeLinkedBinding(binding, "session_ended", false);
+      }
+    }).catch(() => {
+      // Port disconnect handling owns teardown. A single delayed response should not
+      // end otherwise healthy playback.
+    });
+  }
+}, LINKED_HEARTBEAT_INTERVAL_MS);
+
 browser.tabs.onRemoved.addListener((tabId: number) => {
+  cancelPendingLinkedOpens(tabId, "tab_closed");
+  for (const binding of [...linkedBindings.values()]) {
+    if (binding.tabId === tabId) closeLinkedBinding(binding, "navigation");
+  }
   cleanupTab(tabId);
   sendToNative({
     type: "detector_tab_closed",
@@ -834,6 +1101,10 @@ function handleNavigation(
   url: string,
   transitionType = "",
 ): void {
+  cancelPendingLinkedOpens(tabId, "navigation");
+  for (const binding of [...linkedBindings.values()]) {
+    if (binding.tabId === tabId) closeLinkedBinding(binding, "navigation");
+  }
   const previousUrl = tabLastUrl.get(tabId);
   const navigationGeneration = advanceNavigationGeneration(
     tabNavigationGenerations,
@@ -1195,6 +1466,18 @@ browser.webRequest.onHeadersReceived.addListener(
   ["responseHeaders", "blocking"],
 );
 
+function pageOrigin(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.origin
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // DOM / player messages from content script
 browser.runtime.onMessage.addListener(
   (
@@ -1205,9 +1488,36 @@ browser.runtime.onMessage.addListener(
       contentType?: string;
       width?: number;
       height?: number;
+      payload?: unknown;
+      operation?: string;
+      sessionId?: string;
     },
-    sender: { tab?: { id?: number }; frameId?: number },
+    sender: { tab?: { id?: number; url?: string }; frameId?: number },
   ) => {
+    if (message?.action === "page_linked_cast") {
+      return handleLinkedPageRequest(message, sender);
+    }
+    if (message?.action === "page_cast_requested") {
+      if (sender.frameId !== 0) return false;
+      if (!pageCastRequestWithinLimit(message.payload ?? {})) return false;
+      const request = normalizePageCastPayload(message.payload);
+      const origin = pageOrigin(sender.tab?.url);
+      const tabId = sender.tab?.id;
+      if (request && origin && tabId != null) {
+        // Use the browser-supplied tab URL, not the page-provided message field,
+        // as Android's persisted-consent identity.
+        sendToNative({
+          type: "cast",
+          origin,
+          tabId,
+          navigationGeneration: currentNavigationGeneration(tabNavigationGenerations, tabId),
+          ...request,
+        });
+      } else {
+        plog("Ignoring invalid page cast request from", sender.tab?.id);
+      }
+      return false;
+    }
     if (
       message?.action !== "dom_video_found" &&
       message?.action !== "player_video_found" &&
