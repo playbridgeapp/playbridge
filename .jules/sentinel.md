@@ -17,3 +17,8 @@
 **Vulnerability:** The Android TV app's `SystemWebViewEngine` had `allowContentAccess` set to `true`. This is a critical security misconfiguration because it allows the arbitrary web content loaded into the system WebView to access and read local content provider data via `content://` URIs on the device, potentially exposing sensitive application data or internal processes (e.g. `PlayerProcessBridgeProvider`).
 **Learning:** Just as `allowFileAccess` is dangerous, `allowContentAccess` is equally risky when a WebView acts as a browser to navigate to untrusted arbitrary URLs. It unnecessarily expands the attack surface.
 **Prevention:** Explicitly configure `allowContentAccess = false` on all WebViews that handle remote, untrusted content to prevent access to the application's ContentProviders.
+
+## 2026-07-22 - Insecure storage of pairing tokens in UserDefaults (Apple TV)
+**Vulnerability:** The Apple TV app previously stored bearer tokens in plaintext within `UserDefaults`. Since `UserDefaults` data is not encrypted at rest and is included in device backups, this could expose the tokens.
+**Learning:** Always compute a secure hash (e.g., using SHA256) of bearer tokens and store only the resulting `tokenVerifier` instead of the plaintext token, when using standard OS preferences storage.
+**Prevention:** When saving authentication tokens to `UserDefaults` (or equivalent plain storage), store only a cryptographically secure hash of the token to mitigate credential theft.
