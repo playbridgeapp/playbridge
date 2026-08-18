@@ -46,10 +46,8 @@ The PlayBridge senders and extensions are available on official store registries
 * **Browser Extension (Sender — Firefox & Chrome)**:
   * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
   * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
-* **Android TV (Player) — Closed Testing**:
-  * **Group invite**: [pbtvclosedtesters Google Group](https://groups.google.com/g/pbtvclosedtesters)
-  * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.player)
-  * **Download app**: [Google Play Store](https://play.google.com/store/apps/details?id=com.playbridge.player)
+* **Android TV (Player) — Open Testing**:
+  * <a href="https://play.google.com/store/apps/details?id=com.playbridge.player"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge for Android TV on Google Play" height="80"></a>
 
 ### Receiver & Manual Installation
 
@@ -226,10 +224,8 @@ The PlayBridge senders and extensions are available on official store registries
 * **Browser Extension (Sender — Firefox & Chrome)**:
   * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
   * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
-* **Android TV (Player) — closed testing**
-  * **Group invite**: [pbtvclosedtesters Google Group](https://groups.google.com/g/pbtvclosedtesters)
-  * **Apply to be a tester**: [Google Play Opt-in](https://play.google.com/apps/testing/com.playbridge.player)
-  * **Download app**: [Google Play Store](https://play.google.com/store/apps/details?id=com.playbridge.player)
+* **Android TV (Player) — open testing**
+  * <a href="https://play.google.com/store/apps/details?id=com.playbridge.player"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge for Android TV on Google Play" height="80"></a>
 
 ## How to connect & cast
 
