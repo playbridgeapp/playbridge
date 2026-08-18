@@ -199,6 +199,7 @@ export type InstallDetail = {
   steps: Array<[string, string]>;
   cmd: string;
   downloadUrl?: string;
+  playStoreUrl?: string;
   /** Honest metadata only (role, platform, marker, status). No fake sizes/hashes. */
   meta: Array<[string, string]>;
   notice?: { badge: string; text: string };
@@ -322,14 +323,16 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     sender: {
       title: 'Android phone (sender)',
       steps: [
-        ['Download', `Latest APK from GitHub Releases (marker ${RELEASE_MARKERS.phone}).`],
-        ['Allow install', 'Permit installs from unknown sources.'],
+        ['Google Play', 'Install PlayBridge Sender from the Google Play Store.'],
+        ['Or GitHub Releases', `Download APK from GitHub Releases (marker ${RELEASE_MARKERS.phone}) for direct sideloading.`],
         ['Open & cast', 'Discover a receiver on your Wi‑Fi and send media to it.']
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.phone),
+      playStoreUrl: 'https://play.google.com/store/apps/details?id=com.playbridge.sender',
       downloadUrl: '/download/android',
       meta: [
         ['role', 'sender'],
+        ['store', 'Google Play Store'],
         ['marker', RELEASE_MARKERS.phone],
         ['min', 'Android 8']
       ]
@@ -451,17 +454,19 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
     receiver: {
       title: 'Android TV (receiver)',
       steps: [
+        ['Google Play', 'Install PlayBridge for Android TV from Google Play (Open Testing).'],
         [
-          'Download',
+          'Or Downloader / Releases',
           `Sideload with Downloader code 9557748, or GitHub Releases (marker ${RELEASE_MARKERS.tvPlayer}).`
         ],
-        ['Install', 'adb install or follow Downloader prompts.'],
         ['Approve senders', 'Allow the first phone or CLI that connects.']
       ],
       cmd: releaseSearchUrl(RELEASE_MARKERS.tvPlayer),
+      playStoreUrl: 'https://play.google.com/store/apps/details?id=com.playbridge.player',
       downloadUrl: '/download/tv-player',
       meta: [
         ['role', 'receiver'],
+        ['store', 'Google Play (Open Testing)'],
         ['marker', RELEASE_MARKERS.tvPlayer],
         ['min', 'Android TV 8']
       ],

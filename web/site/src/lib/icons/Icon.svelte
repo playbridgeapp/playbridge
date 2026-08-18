@@ -1,7 +1,7 @@
 <script lang="ts">
   type IconName =
     | 'phone' | 'tv' | 'cast' | 'desktop' | 'firefox' | 'apple' | 'android'
-    | 'windows' | 'linux' | 'terminal'
+    | 'windows' | 'linux' | 'terminal' | 'googleplay'
     | 'github' | 'link' | 'plus' | 'arrow' | 'download'
     | 'menu' | 'x';
 
@@ -51,6 +51,9 @@
     <path d="M9 7L7 5M15 7l2-2" />
     <circle cx="9" cy="13" r=".5" fill="currentColor" />
     <circle cx="15" cy="13" r=".5" fill="currentColor" />
+  {:else if name === 'googleplay'}
+    <path d="M4.5 3.5l10.2 10.2M4.5 20.5l10.2-10.2M4.5 3.5v17l11.5-8.5z" />
+    <path d="M16 12l3.2 2.2c.8.5.8 1.5 0 2l-3.2 2.2" />
   {:else if name === 'windows'}
     <path d="M3 5.5L11 4v7.5H3zM12 3.8L21 2.5V11.5H12zM3 12.5h8V20l-8-1.2zM12 12.5h9V21.5L12 20.2z" fill="currentColor" stroke="none" />
   {:else if name === 'linux'}

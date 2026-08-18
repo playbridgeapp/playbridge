@@ -111,6 +111,7 @@
   const downloadUrl = $derived(
     isDesktop ? desktopTab.downloadUrl : isExtension ? browserTab.downloadUrl : detail?.downloadUrl
   );
+  const playStoreUrl = $derived(detail?.playStoreUrl);
   const meta = $derived(
     isDesktop ? desktopTab.meta : isExtension ? browserTab.meta : (detail?.meta ?? [])
   );
@@ -338,15 +339,28 @@
               <Icon name="github" size={13} /> View tvOS source
             </a>
           {:else}
+            {#if playStoreUrl}
+              <a
+                href={playStoreUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="btn btn--primary"
+              >
+                <Icon name="googleplay" size={13} /> Get on Google Play
+              </a>
+            {/if}
             {#if downloadUrl}
               <a
                 href={downloadUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                class="btn btn--primary"
+                class="btn"
+                class:btn--primary={!playStoreUrl && !downloadUrl.startsWith('https://')}
               >
                 {#if downloadUrl.startsWith('https://')}
                   <Icon name="link" size={13} stroke={2.0} /> Get extension
+                {:else if playStoreUrl}
+                  <Icon name="download" size={13} stroke={2.0} /> Download APK
                 {:else}
                   <Icon name="download" size={13} stroke={2.0} /> Download
                 {/if}
@@ -358,7 +372,7 @@
                 target="_blank"
                 rel="noopener noreferrer"
                 class="btn"
-                class:btn--primary={!downloadUrl}
+                class:btn--primary={!playStoreUrl && !downloadUrl}
               >
                 {#if cmd.includes('github.com')}
                   <Icon name="github" size={13} /> View on GitHub
