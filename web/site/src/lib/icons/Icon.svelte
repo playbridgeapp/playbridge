@@ -3,7 +3,7 @@
     | 'phone' | 'tv' | 'cast' | 'desktop' | 'firefox' | 'apple' | 'android'
     | 'windows' | 'linux' | 'terminal' | 'googleplay'
     | 'github' | 'link' | 'plus' | 'arrow' | 'download'
-    | 'menu' | 'x' | 'sun' | 'moon';
+    | 'menu' | 'x' | 'sun' | 'moon' | 'theme-auto';
 
   interface Props {
     name: IconName;
@@ -88,5 +88,8 @@
     <path d="M12 3v2M12 19v2M5 12H3M21 12h-2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M6.3 17.7l1.4-1.4M16.3 7.7l1.4-1.4" />
   {:else if name === 'moon'}
     <path d="M20 14.5A8 8 0 1 1 9.5 4 6.5 6.5 0 0 0 20 14.5z" />
+  {:else if name === 'theme-auto'}
+    <circle cx="12" cy="12" r="8" />
+    <path d="M12 4a8 8 0 0 0 0 16Z" fill="currentColor" />
   {/if}
 </svg>

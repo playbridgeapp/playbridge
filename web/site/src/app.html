@@ -9,13 +9,16 @@
       (function () {
         try {
           var stored = localStorage.getItem('pb-theme');
+          var pref =
+            stored === 'light' || stored === 'dark' || stored === 'auto' ? stored : 'auto';
           var theme =
-            stored === 'light' || stored === 'dark'
-              ? stored
-              : window.matchMedia('(prefers-color-scheme: light)').matches
+            pref === 'auto'
+              ? window.matchMedia('(prefers-color-scheme: light)').matches
                 ? 'light'
-                : 'dark';
+                : 'dark'
+              : pref;
           document.documentElement.dataset.theme = theme;
+          document.documentElement.dataset.themePref = pref;
           document.documentElement.style.colorScheme = theme;
           var meta = document.querySelector('meta[name="theme-color"]');
           if (meta) meta.setAttribute('content', theme === 'light' ? '#f6f3ec' : '#06091e');

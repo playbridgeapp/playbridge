@@ -94,7 +94,7 @@ Lock the marketing tokens already in `src/app.css`. Do not silently switch back 
 | `--on-accent` | `#06091e` | Text on accent fills (dark theme) |
 
 Light theme (`html[data-theme=light]`): paper `#f6f3ec`, ink `#1b1914`, accent `#1f4e8c`, `--on-accent` `#f6f3ec`. No grain, no color washes, flat buttons (no candy-blue hover).
-Default follows `prefers-color-scheme`; the nav toggle persists `pb-theme` in `localStorage`.
+Theme toggle cycles **Auto → Dark → Light**. Auto follows `prefers-color-scheme` and updates live. Preference is `pb-theme` in `localStorage` (`auto` | `dark` | `light`).
 Hero phone/TV mocks are a **fixed dark device kit** in both themes (charcoal shell, black screen, `#4a90e2` on-device accent). Do not theme the hardware.
 
 ### Color rules
@@ -103,7 +103,7 @@ Hero phone/TV mocks are a **fixed dark device kit** in both themes (charcoal she
 - No second brand color. No rainbow hover.
 - No purple/indigo wash. That belongs to the apps, not this site.
 - Selection: accent fill, `--bg` text.
-- Atmosphere is static: faint grid + grain on dark; paper only on light. No drifting blobs, no animated grid.
+- Atmosphere is static: faint square grid + grain on dark; paper only on light. No drifting blobs, no animated grid.
 
 ---
 
