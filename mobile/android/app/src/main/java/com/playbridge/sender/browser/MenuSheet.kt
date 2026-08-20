@@ -27,11 +27,20 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
+private const val MENU_COLUMNS = 5
+private const val MENU_ROWS_PER_PAGE = 2
+internal const val MENU_PAGE_SIZE = MENU_COLUMNS * MENU_ROWS_PER_PAGE
+
+internal fun menuPageCount(itemCount: Int, pageSize: Int = MENU_PAGE_SIZE): Int {
+    if (itemCount <= 0) return 1
+    return (itemCount + pageSize - 1) / pageSize
+}
+
 /**
  * Hamburger menu as a horizontally paged bottom sheet (Firefox-style).
- * Page 1: everyday browsing actions. Page 2: app-level tools and the
- * destructive Clear Data action, kept off the first page so it can't be
- * fat-fingered. Swipe between pages; dots below indicate position.
+ * Items fill page 1 left-to-right, then overflow onto later pages once a
+ * page hits [MENU_PAGE_SIZE] (2 rows of 5). Page dots only appear when
+ * there is more than one page.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -53,11 +62,68 @@ fun MenuSheet(
     onUserAgentClick: () -> Unit = {},
     onClearDataClick: () -> Unit = {}
 ) {
-    val pagerState = rememberPagerState(pageCount = { 2 })
-    // Page 1's measured height, applied as a min height to page 2 so the sheet
-    // keeps a stable size when swiping (page 2 has fewer rows). Page 1 is always
-    // composed first (the sheet opens on it), so the height is known by the time
-    // page 2 becomes visible.
+    val items = listOf(
+        MenuAction(
+            icon = Icons.Default.Bookmarks,
+            label = "Bookmarks",
+            onClick = onBookmarksClick
+        ),
+        MenuAction(
+            icon = Icons.Default.Star,
+            label = "Add Bookmark",
+            onClick = onAddBookmarkClick
+        ),
+        MenuAction(
+            icon = Icons.Default.History,
+            label = "History",
+            onClick = onHistoryClick
+        ),
+        MenuAction(
+            icon = Icons.Default.Download,
+            label = "Downloads",
+            onClick = onDownloadsClick
+        ),
+        MenuAction(
+            icon = Icons.Default.Search,
+            label = "Find in Page",
+            onClick = onFindInPageClick
+        ),
+        MenuAction(
+            icon = Icons.Default.Devices,
+            label = "Desktop Site",
+            selected = isDesktopMode,
+            onClick = onToggleDesktopMode
+        ),
+        MenuAction(
+            icon = Icons.Default.PlayCircle,
+            label = "Video Detect",
+            selected = detectVideosEnabled,
+            onClick = onToggleVideoDetect
+        ),
+        MenuAction(
+            icon = Icons.Default.Language,
+            label = "User Agent",
+            selected = userAgentActive,
+            onClick = onUserAgentClick
+        ),
+        MenuAction(
+            icon = Icons.Default.Extension,
+            label = "Extensions",
+            onClick = onExtensionsClick
+        ),
+        // Settings lives on Dashboard (top-right gear) only.
+        MenuAction(
+            icon = Icons.Default.DeleteSweep,
+            label = "Clear Data",
+            tint = MaterialTheme.colorScheme.error,
+            onClick = onClearDataClick
+        )
+    )
+    val pages = items.chunked(MENU_PAGE_SIZE)
+    val pageCount = menuPageCount(items.size)
+    val pagerState = rememberPagerState(pageCount = { pageCount })
+    // First page's measured height, applied as a min height to later pages so
+    // the sheet stays the same size when swiping to a less-full overflow page.
     var firstPageHeightPx by remember { mutableIntStateOf(0) }
     val density = LocalDensity.current
 
@@ -76,124 +142,75 @@ fun MenuSheet(
             HorizontalPager(
                 state = pagerState,
                 verticalAlignment = Alignment.Top,
+                userScrollEnabled = pageCount > 1,
                 modifier = Modifier.fillMaxWidth()
             ) { page ->
-                when (page) {
-                    0 -> Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .onSizeChanged { firstPageHeightPx = it.height }
-                    ) {
-                        // Row 1: bookmark pair first, then the other destinations
+                val pageItems = pages.getOrElse(page) { emptyList() }
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(
+                            if (page == 0) {
+                                Modifier.onSizeChanged { firstPageHeightPx = it.height }
+                            } else {
+                                Modifier.heightIn(min = with(density) { firstPageHeightPx.toDp() })
+                            }
+                        )
+                ) {
+                    pageItems.chunked(MENU_COLUMNS).forEach { rowItems ->
                         Row(modifier = Modifier.fillMaxWidth()) {
-                            MenuGridItem(
-                                icon = Icons.Default.Bookmarks,
-                                label = "Bookmarks",
-                                modifier = Modifier.weight(1f),
-                                onClick = onBookmarksClick
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.Star,
-                                label = "Add Bookmark",
-                                modifier = Modifier.weight(1f),
-                                onClick = onAddBookmarkClick
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.History,
-                                label = "History",
-                                modifier = Modifier.weight(1f),
-                                onClick = onHistoryClick
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.Download,
-                                label = "Downloads",
-                                modifier = Modifier.weight(1f),
-                                onClick = onDownloadsClick
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.Search,
-                                label = "Find in Page",
-                                modifier = Modifier.weight(1f),
-                                onClick = onFindInPageClick
-                            )
-                        }
-                        // Row 2: per-page toggles together, then app destinations
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            MenuGridItem(
-                                icon = Icons.Default.Devices,
-                                label = "Desktop Site",
-                                selected = isDesktopMode,
-                                modifier = Modifier.weight(1f),
-                                onClick = onToggleDesktopMode
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.PlayCircle,
-                                label = "Video Detect",
-                                selected = detectVideosEnabled,
-                                modifier = Modifier.weight(1f),
-                                onClick = onToggleVideoDetect
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.Language,
-                                label = "User Agent",
-                                selected = userAgentActive,
-                                modifier = Modifier.weight(1f),
-                                onClick = onUserAgentClick
-                            )
-                            MenuGridItem(
-                                icon = Icons.Default.Extension,
-                                label = "Extensions",
-                                modifier = Modifier.weight(1f),
-                                onClick = onExtensionsClick
-                            )
-                            // Settings lives on Dashboard (top-right gear) only.
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                    1 -> Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = with(density) { firstPageHeightPx.toDp() })
-                    ) {
-                        Row(modifier = Modifier.fillMaxWidth()) {
-                            MenuGridItem(
-                                icon = Icons.Default.DeleteSweep,
-                                label = "Clear Data",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.weight(1f),
-                                onClick = onClearDataClick
-                            )
-                            Spacer(modifier = Modifier.weight(4f))
+                            rowItems.forEach { item ->
+                                MenuGridItem(
+                                    icon = item.icon,
+                                    label = item.label,
+                                    selected = item.selected,
+                                    tint = item.tint ?: MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                    onClick = item.onClick
+                                )
+                            }
+                            repeat(MENU_COLUMNS - rowItems.size) {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
                         }
                     }
                 }
             }
 
-            // Page indicator dots
-            Row(
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-            ) {
-                repeat(2) { index ->
-                    Box(
-                        modifier = Modifier
-                            .padding(horizontal = 4.dp)
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (pagerState.currentPage == index)
-                                    MaterialTheme.colorScheme.primary
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                            )
-                    )
+            if (pageCount > 1) {
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                ) {
+                    repeat(pageCount) { index ->
+                        Box(
+                            modifier = Modifier
+                                .padding(horizontal = 4.dp)
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (pagerState.currentPage == index)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                )
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+private data class MenuAction(
+    val icon: ImageVector,
+    val label: String,
+    val selected: Boolean = false,
+    val tint: Color? = null,
+    val onClick: () -> Unit
+)
 
 @Composable
 private fun MenuGridItem(
