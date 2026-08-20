@@ -150,8 +150,9 @@ validator with identical allow/reject results.
 
 ### SEC-004: Bearer-token storage is inconsistent
 
-**Affected:** Desktop sender, Android TV receiver, Apple TV receiver. Desktop
-receiver is partially compliant because it stores SHA-256 token verifiers.
+**Affected:** Desktop sender and Android TV receiver. Desktop receiver is
+partially compliant because it stores SHA-256 token verifiers. Apple TV stores
+only verifier-backed receiver credentials and eagerly migrates legacy records.
 
 **Risk:** Theft of an original token permits authentication as the paired sender
 when the attacker can reach the receiver. Ordinary preferences are not a secret
@@ -163,8 +164,9 @@ store and may be exposed through local access or backups.
   `SharedPreferences`.
 - Android TV `PairingStore.kt` stores authorized plaintext token sets and paired
   device records in Preferences DataStore.
-- Apple TV `WebSocketServer.swift` stores authorized tokens and paired device
-  records, including tokens, in `UserDefaults`.
+- Apple TV `WebSocketServer.swift` stores SHA-256 token verifiers, rewrites
+  legacy paired-device records without their plaintext token, and removes the
+  legacy authorized-token preference during startup.
 - Android phone uses Keystore-backed protection and Apple phone uses Keychain;
   these are the model for their respective sender platforms.
 
