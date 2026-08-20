@@ -34,12 +34,12 @@ internal object ExternalSubtitleLoader {
         url: String,
         headers: Map<String, String>? = null,
         enforcePageNetworkPolicy: Boolean = false,
-        allowPrivateNetwork: Boolean = false,
+        allowedPrivateOrigins: List<String> = emptyList(),
     ): DownloadedSubtitle {
         val requestUrl = url.substringBefore('#')
         val sniffer = ContentSniffer()
         val client = if (enforcePageNetworkPolicy) {
-            require(MediaNetworkPolicy.isAllowedUrlSyntax(requestUrl, allowPrivateNetwork)) {
+            require(MediaNetworkPolicy.isAllowedUrlSyntax(requestUrl, allowedPrivateOrigins)) {
                 "Page-cast subtitle destination is not allowed"
             }
             val originBoundNames = headers.orEmpty().keys.toSet()
@@ -49,10 +49,10 @@ internal object ExternalSubtitleLoader {
                     object : Dns {
                         override fun lookup(hostname: String): List<InetAddress> {
                             val addresses = InetAddress.getAllByName(hostname).toList()
-                            if (!MediaNetworkPolicy.areAllowedAddresses(
+                            if (!MediaNetworkPolicy.areAllowedAddressesForHost(
                                     hostname,
                                     addresses,
-                                    allowPrivateNetwork,
+                                    allowedPrivateOrigins,
                                 )
                             ) {
                                 throw UnknownHostException(
@@ -67,12 +67,12 @@ internal object ExternalSubtitleLoader {
                     val targetUrl = chain.request().url.toString()
                     val targetHost = chain.request().url.host
                     val peerAddress = chain.connection()?.route()?.socketAddress?.address
-                    if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowPrivateNetwork) ||
+                    if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowedPrivateOrigins) ||
                         peerAddress == null ||
                         !MediaNetworkPolicy.areAllowedAddresses(
-                            targetHost,
+                            targetUrl,
                             listOf(peerAddress),
-                            allowPrivateNetwork,
+                            allowedPrivateOrigins,
                         )
                     ) throw IOException("Page-cast subtitle destination is not allowed")
                     val request = if (MediaNetworkPolicy.sameOrigin(requestUrl, targetUrl)) {
@@ -128,7 +128,7 @@ internal class ExternalSubtitleStager(context: Context) {
         url: String,
         headers: Map<String, String>? = null,
         enforcePageNetworkPolicy: Boolean = false,
-        allowPrivateNetwork: Boolean = false,
+        allowedPrivateOrigins: List<String> = emptyList(),
     ): File = withContext(Dispatchers.IO) {
         var stagedFile: File? = null
         try {
@@ -136,7 +136,7 @@ internal class ExternalSubtitleStager(context: Context) {
                 url,
                 headers,
                 enforcePageNetworkPolicy,
-                allowPrivateNetwork,
+                allowedPrivateOrigins,
             )
             currentCoroutineContext().ensureActive()
             if (!directory.exists() && !directory.mkdirs()) {

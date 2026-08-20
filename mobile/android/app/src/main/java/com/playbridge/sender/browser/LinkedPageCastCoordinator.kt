@@ -48,11 +48,11 @@ data class LinkedPageCastOpenRequest(
     val items: List<LinkedPageCastItem>,
     val startIndex: Int,
     val playlistMetadata: playbridge.VisualMetadata?,
-    val requestsLocalNetwork: Boolean,
+    val requestedPrivateOrigins: Set<String>,
 ) {
-    fun withLocalNetworkPermission(): LinkedPageCastOpenRequest = copy(
+    fun withPrivateOriginPermission(origins: Collection<String>): LinkedPageCastOpenRequest = copy(
         items = items.map { item ->
-            item.copy(payload = item.payload.copy(allow_private_network = true))
+            item.copy(payload = item.payload.copy(allowed_private_origins = origins.toList()))
         },
     )
 }
@@ -129,7 +129,7 @@ class LinkedPageCastCoordinator(
         val ids: MutableList<String>,
         val createdAtMillis: Long = System.currentTimeMillis(),
         var lastPageActivityAtMillis: Long = System.currentTimeMillis(),
-        var allowPrivateNetwork: Boolean = false,
+        val allowedPrivateOrigins: MutableSet<String> = linkedSetOf(),
         var pendingNeed: PendingNeed? = null,
         var lastAcceptedNeedId: String? = null,
         var endOfList: Boolean = false,
@@ -210,7 +210,7 @@ class LinkedPageCastCoordinator(
         if (tabId < 0 || navigationGeneration < 0) return null
         val payload = message.optJSONObject("payload") ?: return null
         if (payload.toString().toByteArray().size > MAX_REQUEST_BYTES) return null
-        val items = parseItems(payload.optJSONArray("items"), false) ?: return null
+        val items = parseItems(payload.optJSONArray("items"), emptySet()) ?: return null
         val startIndex = payload.optInt("startIndex", 0)
         if (startIndex !in items.indices) return null
         val metadata = payload.optJSONObject("metadata")?.let {
@@ -226,43 +226,29 @@ class LinkedPageCastCoordinator(
             items,
             startIndex,
             metadata,
-            payload.optBoolean("localNetwork", false),
+            parseRequestedPrivateOrigins(payload) ?: return null,
         )
     }.getOrNull()
 
-    suspend fun requiresLocalNetwork(request: LinkedPageCastOpenRequest): Boolean =
+    suspend fun requestedPrivateOrigins(request: LinkedPageCastOpenRequest): Set<String>? =
         withContext(Dispatchers.IO) {
-            request.requestsLocalNetwork || request.items.any { itemRequiresLocalNetwork(it) }
+            collectRequestedPrivateOrigins(request.items, request.requestedPrivateOrigins)
         }
 
-    suspend fun messageRequiresLocalNetwork(message: JSONObject): Boolean = withContext(Dispatchers.IO) {
-        val payload = message.optJSONObject("payload") ?: return@withContext false
-        if (payload.optBoolean("localNetwork", false)) return@withContext true
-        val array = payload.optJSONArray("items") ?: return@withContext false
-        for (index in 0 until array.length()) {
-            val obj = array.optJSONObject(index) ?: continue
-            if (MediaNetworkPolicy.targetsPrivateNetwork(obj.optString("url"))) return@withContext true
-            obj.optJSONArray("subtitles")?.let { subtitles ->
-                for (subtitleIndex in 0 until subtitles.length()) {
-                    if (MediaNetworkPolicy.targetsPrivateNetwork(subtitles.optString(subtitleIndex))) {
-                        return@withContext true
-                    }
-                }
-            }
-            obj.optJSONArray("subtitleResources")?.let { resources ->
-                for (resourceIndex in 0 until resources.length()) {
-                    if (MediaNetworkPolicy.targetsPrivateNetwork(
-                            resources.optJSONObject(resourceIndex)?.optString("url").orEmpty(),
-                        )
-                    ) return@withContext true
-                }
-            }
-        }
-        false
+    suspend fun messageRequestedPrivateOrigins(message: JSONObject): Set<String>? = withContext(Dispatchers.IO) {
+        val payload = message.optJSONObject("payload") ?: return@withContext emptySet()
+        val declared = parseRequestedPrivateOrigins(payload) ?: return@withContext null
+        val items = parseItems(payload.optJSONArray("items"), emptySet()).orEmpty()
+        collectRequestedPrivateOrigins(items, declared)
     }
 
-    fun allowLocalNetworkForActive(origin: String) {
-        active?.takeIf { it.origin == origin }?.allowPrivateNetwork = true
+    fun allowPrivateOriginsForActive(origin: String, origins: Collection<String>): Boolean {
+        val session = active?.takeIf { it.origin == origin } ?: return false
+        val combined = session.allowedPrivateOrigins + origins
+        val normalized = MediaNetworkPolicy.normalizePrivateOrigins(combined) ?: return false
+        session.allowedPrivateOrigins.clear()
+        session.allowedPrivateOrigins.addAll(normalized)
+        return true
     }
 
     fun isMessageForActiveSession(message: JSONObject, origin: String): Boolean {
@@ -302,7 +288,7 @@ class LinkedPageCastCoordinator(
                     origin = request.origin,
                     receiver = receiver,
                     ids = request.items.mapTo(mutableListOf()) { it.id },
-                    allowPrivateNetwork = request.items.any { it.payload.allow_private_network == true },
+                    allowedPrivateOrigins = request.items.flatMapTo(linkedSetOf()) { it.payload.allowed_private_origins },
                     hasSeenPlayer = connectionCoordinator.tvActiveContext.value == "player",
                 )
                 active = next
@@ -387,7 +373,7 @@ class LinkedPageCastCoordinator(
     fun activeOrigin(): String? = active?.origin
 
     private suspend fun replace(session: Active, bridgeRequestId: String, payload: JSONObject?) {
-        val items = parseItems(payload?.optJSONArray("items"), session.allowPrivateNetwork)
+        val items = parseItems(payload?.optJSONArray("items"), session.allowedPrivateOrigins)
         val startIndex = payload?.optInt("startIndex", 0) ?: 0
         if (items == null || startIndex !in items.indices) {
             result(bridgeRequestId, false, "invalid_request")
@@ -415,7 +401,7 @@ class LinkedPageCastCoordinator(
     }
 
     private suspend fun append(session: Active, bridgeRequestId: String, payload: JSONObject?) {
-        val items = parseItems(payload?.optJSONArray("items"), session.allowPrivateNetwork)
+        val items = parseItems(payload?.optJSONArray("items"), session.allowedPrivateOrigins)
         if (items == null || items.any { it.id in session.ids }) {
             result(bridgeRequestId, false, "invalid_request")
             return
@@ -463,7 +449,7 @@ class LinkedPageCastCoordinator(
             result(bridgeRequestId, true)
             return
         }
-        val items = parseItems(array, session.allowPrivateNetwork)
+        val items = parseItems(array, session.allowedPrivateOrigins)
         if (items == null || items.size > acceptedPending.count || items.any { it.id in session.ids }) {
             result(bridgeRequestId, false, "invalid_request")
             return
@@ -542,10 +528,21 @@ class LinkedPageCastCoordinator(
         return linkedSessionExpired(now, session.lastPageActivityAtMillis, session.createdAtMillis)
     }
 
-    private fun itemRequiresLocalNetwork(item: LinkedPageCastItem): Boolean =
-        MediaNetworkPolicy.targetsPrivateNetwork(item.payload.url) ||
-            item.payload.subtitles.any(MediaNetworkPolicy::targetsPrivateNetwork) ||
-            item.payload.subtitle_resources.any { MediaNetworkPolicy.targetsPrivateNetwork(it.url) }
+    private fun collectRequestedPrivateOrigins(
+        items: List<LinkedPageCastItem>,
+        declared: Collection<String>,
+    ): Set<String>? {
+        MediaNetworkPolicy.normalizePrivateOrigins(declared) ?: return null
+        val origins = declared.mapNotNullTo(linkedSetOf(), MediaNetworkPolicy::privateOrigin)
+        items.forEach { item ->
+            sequenceOf(item.payload.url)
+                .plus(item.payload.subtitles.asSequence())
+                .plus(item.payload.subtitle_resources.asSequence().map(SubtitleResource::url))
+                .mapNotNull(MediaNetworkPolicy::privateOrigin)
+                .forEach(origins::add)
+        }
+        return MediaNetworkPolicy.normalizePrivateOrigins(origins)
+    }
 
     private fun emitState(
         session: Active,
@@ -632,9 +629,21 @@ class LinkedPageCastCoordinator(
             "authorization", "cookie", "referer", "origin", "user-agent", "accept", "accept-language",
         )
 
+        private fun parseRequestedPrivateOrigins(payload: JSONObject): Set<String>? {
+            val values = payload.optJSONArray("privateNetworkOrigins") ?: return emptySet()
+            if (values.length() > MediaNetworkPolicy.MAX_PRIVATE_ORIGINS) return null
+            val origins = buildList {
+                for (index in 0 until values.length()) {
+                    val value = values.opt(index) as? String ?: return null
+                    add(value)
+                }
+            }
+            return MediaNetworkPolicy.normalizePrivateOrigins(origins)
+        }
+
         private fun parseItems(
             array: JSONArray?,
-            allowPrivateNetwork: Boolean,
+            allowedPrivateOrigins: Collection<String>,
         ): List<LinkedPageCastItem>? {
             if (array == null || array.length() !in 1..MAX_ITEMS) return null
             val items = buildList {
@@ -689,7 +698,7 @@ class LinkedPageCastCoordinator(
                                 subtitle_resources = subtitleResources,
                                 detected_by = "linked_page",
                                 visual_metadata = metadata,
-                                allow_private_network = allowPrivateNetwork,
+                                allowed_private_origins = allowedPrivateOrigins.toList(),
                             ),
                         ),
                     )

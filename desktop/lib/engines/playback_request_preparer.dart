@@ -47,8 +47,8 @@ class PlaybackRequestPreparer {
           url,
           headers,
           contentType: item.contentType,
-          allowPrivateNetwork:
-              item.enforcePageNetworkPolicy ? item.allowPrivateNetwork : null,
+          allowedPrivateOrigins:
+              item.enforcePageNetworkPolicy ? item.allowedPrivateOrigins : null,
         );
       }
       final edlUrl = proxy.mpvDashUrl(manifestUrl);
@@ -62,17 +62,15 @@ class PlaybackRequestPreparer {
       return item;
     }
 
-    // Skip loopback or local server URLs already rewritten.
-    if (proxyLocalHost(uri.host)) {
+    // Skip only URLs already registered by this proxy. An untrusted page-supplied
+    // loopback URL must still reach Rust policy validation and fail closed.
+    if (proxyLocalHost(uri.host) && StreamProxyServer.instance.ownsUrl(url)) {
       return item;
     }
 
-    bool shouldProxy = item.enforcePageNetworkPolicy;
-    if (mode == StreamProxyMode.always) {
-      shouldProxy = true;
-    } else if (mode == StreamProxyMode.auto) {
-      shouldProxy = _autoProxyHosts.contains(uri.host);
-    }
+    final shouldProxy = item.enforcePageNetworkPolicy ||
+        mode == StreamProxyMode.always ||
+        (mode == StreamProxyMode.auto && _autoProxyHosts.contains(uri.host));
 
     if (shouldProxy) {
       final headers = item.headers ?? {};
@@ -80,8 +78,8 @@ class PlaybackRequestPreparer {
         url,
         headers,
         contentType: item.contentType,
-        allowPrivateNetwork:
-            item.enforcePageNetworkPolicy ? item.allowPrivateNetwork : null,
+        allowedPrivateOrigins:
+            item.enforcePageNetworkPolicy ? item.allowedPrivateOrigins : null,
       );
       final subtitles = await _preparePageSubtitles(item, headers);
 
@@ -131,7 +129,7 @@ class PlaybackRequestPreparer {
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
-        allowPrivateNetwork: item.allowPrivateNetwork,
+        allowedPrivateOrigins: item.allowedPrivateOrigins,
         bingeGroup: item.bingeGroup,
         season: item.season,
         episode: item.episode,
@@ -161,14 +159,14 @@ class PlaybackRequestPreparer {
       result.add(await proxy.registerSession(
         subtitle,
         _sameOrigin(item.url, subtitle) ? headers : const <String, String>{},
-        allowPrivateNetwork: item.allowPrivateNetwork,
+        allowedPrivateOrigins: item.allowedPrivateOrigins,
       ));
     }
     for (final resource in resources.take(16 - result.length)) {
       result.add(await proxy.registerSession(
         resource.url,
         resource.headers,
-        allowPrivateNetwork: item.allowPrivateNetwork,
+        allowedPrivateOrigins: item.allowedPrivateOrigins,
       ));
     }
     return result;

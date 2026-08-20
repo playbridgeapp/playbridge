@@ -9,20 +9,38 @@ import java.util.Locale
 
 /** Network and origin checks for untrusted media requests supplied by webpages. */
 object MediaNetworkPolicy {
+    const val MAX_PRIVATE_ORIGINS = 16
+
     fun isHttpUrl(value: String): Boolean = parseHttpUri(value) != null
+
+    /** Returns an exact, normalized HTTP origin (scheme, host and effective port). */
+    fun normalizeOrigin(value: String): String? = parseHttpUri(value)?.let(::normalizedOrigin)
+
+    /** Validates and normalizes a bounded sender-approved private-origin grant. */
+    fun normalizePrivateOrigins(values: Collection<String>): Set<String>? {
+        if (values.size > MAX_PRIVATE_ORIGINS) return null
+        val normalized = values.mapTo(linkedSetOf()) { value ->
+            val uri = parseHttpUri(value) ?: return null
+            if (uri.path !in listOf("", "/") || uri.query != null || uri.fragment != null) return null
+            val host = uri.host ?: return null
+            if (isLoopbackHostname(host)) return null
+            normalizedOrigin(uri)
+        }
+        return normalized.takeIf { it.size <= MAX_PRIVATE_ORIGINS }
+    }
 
     /**
      * Performs the DNS-free part of destination validation.
      *
      * Callers that open a connection must also validate the DNS answers (and,
-     * where available, the connected peer) with [areAllowedAddresses]. Keeping
-     * DNS out of this check avoids doing network I/O on Android's main thread.
+     * where available, the connected peer) with [areAllowedAddresses].
      */
-    fun isAllowedUrlSyntax(value: String, allowPrivateNetwork: Boolean): Boolean {
+    fun isAllowedUrlSyntax(value: String, allowedPrivateOrigins: Collection<String>): Boolean {
         val uri = parseHttpUri(value) ?: return false
         val host = uri.host ?: return false
         if (isLoopbackHostname(host)) return false
-        return allowPrivateNetwork || !isLanHostname(host)
+        val grants = normalizePrivateOrigins(allowedPrivateOrigins) ?: return false
+        return !isLanHostname(host) || normalizedOrigin(uri) in grants
     }
 
     fun sameOrigin(first: String, second: String): Boolean {
@@ -32,22 +50,56 @@ object MediaNetworkPolicy {
     }
 
     /** Resolves immediately before use so DNS changes cannot bypass the page-cast grant. */
-    fun isAllowedDestination(value: String, allowPrivateNetwork: Boolean): Boolean {
+    fun isAllowedDestination(value: String, allowedPrivateOrigins: Collection<String>): Boolean {
         val uri = parseHttpUri(value) ?: return false
         val host = uri.host ?: return false
-        if (isLoopbackHostname(host) || (!allowPrivateNetwork && isLanHostname(host))) return false
         val addresses = runCatching { InetAddress.getAllByName(host).toList() }.getOrNull() ?: return false
-        return areAllowedAddresses(host, addresses, allowPrivateNetwork)
+        return areAllowedAddresses(value, addresses, allowedPrivateOrigins)
+    }
+
+    /**
+     * DNS hooks receive only a hostname. This permits private answers when at least one approved
+     * origin names that host; the connected-request check below still enforces scheme and port.
+     */
+    fun areAllowedAddressesForHost(
+        host: String,
+        addresses: List<InetAddress>,
+        allowedPrivateOrigins: Collection<String>,
+    ): Boolean {
+        if (isLoopbackHostname(host)) return false
+        val grants = normalizePrivateOrigins(allowedPrivateOrigins) ?: return false
+        val privateHostApproved = grants.any { origin ->
+            parseHttpUri(origin)?.host?.equals(host, ignoreCase = true) == true
+        }
+        if (isLanHostname(host) && !privateHostApproved) return false
+        return addresses.isNotEmpty() && addresses.all {
+            when (classifyAddress(it)) {
+                AddressClass.PUBLIC -> true
+                AddressClass.PRIVATE_LAN -> privateHostApproved
+                AddressClass.FORBIDDEN -> false
+            }
+        }
     }
 
     /** Validates the exact DNS answer an HTTP client will use, closing DNS-rebinding gaps. */
     fun areAllowedAddresses(
-        host: String,
+        value: String,
         addresses: List<InetAddress>,
-        allowPrivateNetwork: Boolean,
+        allowedPrivateOrigins: Collection<String>,
     ): Boolean {
-        if (isLoopbackHostname(host) || (!allowPrivateNetwork && isLanHostname(host))) return false
-        return addresses.isNotEmpty() && addresses.all { isAllowedAddress(it, allowPrivateNetwork) }
+        val uri = parseHttpUri(value) ?: return false
+        val host = uri.host ?: return false
+        if (isLoopbackHostname(host)) return false
+        val grants = normalizePrivateOrigins(allowedPrivateOrigins) ?: return false
+        val privateOriginApproved = normalizedOrigin(uri) in grants
+        if (isLanHostname(host) && !privateOriginApproved) return false
+        return addresses.isNotEmpty() && addresses.all {
+            when (classifyAddress(it)) {
+                AddressClass.PUBLIC -> true
+                AddressClass.PRIVATE_LAN -> privateOriginApproved
+                AddressClass.FORBIDDEN -> false
+            }
+        }
     }
 
     fun targetsPrivateNetwork(value: String): Boolean {
@@ -57,6 +109,19 @@ object MediaNetworkPolicy {
         return runCatching {
             InetAddress.getAllByName(host).any { classifyAddress(it) != AddressClass.PUBLIC }
         }.getOrDefault(false)
+    }
+
+    /** Returns an exact origin only for grantable private-LAN destinations. */
+    fun privateOrigin(value: String): String? {
+        val uri = parseHttpUri(value) ?: return null
+        val host = uri.host ?: return null
+        if (isLoopbackHostname(host)) return null
+        if (isLanHostname(host)) return normalizedOrigin(uri)
+        val addresses = runCatching { InetAddress.getAllByName(host).toList() }.getOrNull() ?: return null
+        if (addresses.isEmpty() || addresses.any { classifyAddress(it) == AddressClass.FORBIDDEN }) return null
+        return normalizedOrigin(uri).takeIf {
+            addresses.any { address -> classifyAddress(address) == AddressClass.PRIVATE_LAN }
+        }
     }
 
     private fun parseHttpUri(value: String): URI? = runCatching {
@@ -85,13 +150,6 @@ object MediaNetworkPolicy {
 
     private fun isLanHostname(host: String): Boolean =
         isLoopbackHostname(host) || host.endsWith(".local", ignoreCase = true)
-
-    private fun isAllowedAddress(address: InetAddress, allowPrivateNetwork: Boolean): Boolean =
-        when (classifyAddress(address)) {
-            AddressClass.PUBLIC -> true
-            AddressClass.PRIVATE_LAN -> allowPrivateNetwork
-            AddressClass.FORBIDDEN -> false
-        }
 
     private fun classifyAddress(address: InetAddress): AddressClass {
         if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress ||

@@ -30,7 +30,7 @@ class QueueItem {
     this.playlistBody,
     this.audioUrl,
     this.enforcePageNetworkPolicy = false,
-    this.allowPrivateNetwork = false,
+    this.allowedPrivateOrigins = const [],
   });
 
   final String url;
@@ -55,7 +55,7 @@ class QueueItem {
   /// Untrusted webpage media must remain behind the receiver-side proxy so
   /// every manifest, segment, subtitle, and redirect uses its network policy.
   final bool enforcePageNetworkPolicy;
-  final bool allowPrivateNetwork;
+  final List<String> allowedPrivateOrigins;
 
   /// Resume point (ms) seeded from the phone's resume store. Mutable because
   /// it is consumed (nulled) after the first seek, so re-playing this item

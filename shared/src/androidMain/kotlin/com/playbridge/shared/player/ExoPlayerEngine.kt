@@ -187,10 +187,10 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
 
     private fun buildPerItemSource(payload: PlayPayload): PerItemSource {
         val isPageCastStream = payload.detected_by == "page_cast" || payload.detected_by == "linked_page"
-        val allowPrivateNetwork = payload.allow_private_network == true
+        val allowedPrivateOrigins = payload.allowed_private_origins
         if (isPageCastStream && !MediaNetworkPolicy.isAllowedUrlSyntax(
                 payload.url,
-                allowPrivateNetwork,
+                allowedPrivateOrigins,
             )
         ) {
             throw IllegalArgumentException("Page-cast media destination is not allowed")
@@ -267,10 +267,10 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 .dns(object : okhttp3.Dns {
                     override fun lookup(hostname: String): List<java.net.InetAddress> {
                         val addresses = ipv4FirstDns.lookup(hostname)
-                        if (isPageCastStream && !MediaNetworkPolicy.areAllowedAddresses(
+                        if (isPageCastStream && !MediaNetworkPolicy.areAllowedAddressesForHost(
                                 hostname,
                                 addresses,
-                                allowPrivateNetwork,
+                                allowedPrivateOrigins,
                             )
                         ) {
                             throw UnknownHostException("Page-cast media destination is not allowed")
@@ -292,12 +292,12 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                             val targetUrl = chain.request().url.toString()
                             val targetHost = chain.request().url.host
                             val peerAddress = chain.connection()?.route()?.socketAddress?.address
-                            if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowPrivateNetwork) ||
+                            if (!MediaNetworkPolicy.isAllowedUrlSyntax(targetUrl, allowedPrivateOrigins) ||
                                 peerAddress == null ||
                                 !MediaNetworkPolicy.areAllowedAddresses(
-                                    targetHost,
+                                    targetUrl,
                                     listOf(peerAddress),
-                                    allowPrivateNetwork,
+                                    allowedPrivateOrigins,
                                 )
                             ) {
                                 throw IOException("Page-cast media destination is not allowed")

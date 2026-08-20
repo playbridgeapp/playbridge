@@ -612,7 +612,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             url,
                             subtitleHeaders,
                             enforcePageNetworkPolicy = item.isPageControlledMedia(),
-                            allowPrivateNetwork = item.allow_private_network == true,
+                            allowedPrivateOrigins = item.allowed_private_origins,
                         )
                         if (session?.sessionId != sessionId || currentExternalSubtitleUrl != url) {
                             externalSubtitleStager.delete(file)
@@ -976,7 +976,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     initialExternalUrl,
                     payload.headersForSubtitle(initialExternalUrl),
                     enforcePageNetworkPolicy = payload.isPageControlledMedia(),
-                    allowPrivateNetwork = payload.allow_private_network == true,
+                    allowedPrivateOrigins = payload.allowed_private_origins,
                 )
                 if (session?.sessionId != currentSession.sessionId ||
                     currentExternalSubtitleUrl != initialExternalUrl ||
@@ -1482,7 +1482,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.subtitleRequestHeaders = if (pageControlled) null else item.headers
         controlsViewModel.subtitleRequestHeadersByUrl = item.subtitleHeadersByUrl()
         controlsViewModel.enforcePageSubtitleNetworkPolicy = pageControlled
-        controlsViewModel.allowPrivateSubtitleNetwork = item.allow_private_network == true
+        controlsViewModel.allowedPrivateSubtitleOrigins = item.allowed_private_origins
         val shouldShowPrePlay = showPrePlay && item.visual_metadata != null
         controlsViewModel.setPrePlay(
             item.visual_metadata,

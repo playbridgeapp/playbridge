@@ -461,16 +461,12 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   /// Clears the value of `startPositionMs`. Subsequent reads from it will return its default value.
   mutating func clearStartPositionMs() {_uniqueStorage()._startPositionMs = nil}
 
-  /// Sender authorization for page-initiated media to reach private/LAN destinations.
+  /// Exact private/LAN origins approved by the sender for page-initiated media.
   /// Receivers must still validate every resolved address, redirect, and derived resource.
-  var allowPrivateNetwork: Bool {
-    get {_storage._allowPrivateNetwork ?? false}
-    set {_uniqueStorage()._allowPrivateNetwork = newValue}
+  var allowedPrivateOrigins: [String] {
+    get {_storage._allowedPrivateOrigins}
+    set {_uniqueStorage()._allowedPrivateOrigins = newValue}
   }
-  /// Returns true if `allowPrivateNetwork` has been explicitly set.
-  var hasAllowPrivateNetwork: Bool {_storage._allowPrivateNetwork != nil}
-  /// Clears the value of `allowPrivateNetwork`. Subsequent reads from it will return its default value.
-  mutating func clearAllowPrivateNetwork() {_uniqueStorage()._allowPrivateNetwork = nil}
 
   /// Additive replacement for credentialed sidecars. Legacy `subtitles` remains
   /// supported for senders that only provide URLs.
@@ -1199,7 +1195,7 @@ nonisolated extension Playbridge_SubtitleResource: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allow_private_network\0\u{3}subtitle_resources\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0")
 
   fileprivate class _StorageClass {
     var _url: String = String()
@@ -1216,7 +1212,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
     var _visualMetadata: Playbridge_VisualMetadata? = nil
     var _bingeGroup: String? = nil
     var _startPositionMs: Int64? = nil
-    var _allowPrivateNetwork: Bool? = nil
+    var _allowedPrivateOrigins: [String] = []
     var _subtitleResources: [Playbridge_SubtitleResource] = []
 
       // This property is used as the initial default value for new instances of the type.
@@ -1242,7 +1238,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       _visualMetadata = source._visualMetadata
       _bingeGroup = source._bingeGroup
       _startPositionMs = source._startPositionMs
-      _allowPrivateNetwork = source._allowPrivateNetwork
+      _allowedPrivateOrigins = source._allowedPrivateOrigins
       _subtitleResources = source._subtitleResources
     }
   }
@@ -1276,7 +1272,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         case 12: try { try decoder.decodeSingularMessageField(value: &_storage._visualMetadata) }()
         case 13: try { try decoder.decodeSingularStringField(value: &_storage._bingeGroup) }()
         case 14: try { try decoder.decodeSingularInt64Field(value: &_storage._startPositionMs) }()
-        case 15: try { try decoder.decodeSingularBoolField(value: &_storage._allowPrivateNetwork) }()
+        case 15: try { try decoder.decodeRepeatedStringField(value: &_storage._allowedPrivateOrigins) }()
         case 16: try { try decoder.decodeRepeatedMessageField(value: &_storage._subtitleResources) }()
         default: break
         }
@@ -1332,9 +1328,9 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       try { if let v = _storage._startPositionMs {
         try visitor.visitSingularInt64Field(value: v, fieldNumber: 14)
       } }()
-      try { if let v = _storage._allowPrivateNetwork {
-        try visitor.visitSingularBoolField(value: v, fieldNumber: 15)
-      } }()
+      if !_storage._allowedPrivateOrigins.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._allowedPrivateOrigins, fieldNumber: 15)
+      }
       if !_storage._subtitleResources.isEmpty {
         try visitor.visitRepeatedMessageField(value: _storage._subtitleResources, fieldNumber: 16)
       }
@@ -1361,7 +1357,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         if _storage._visualMetadata != rhs_storage._visualMetadata {return false}
         if _storage._bingeGroup != rhs_storage._bingeGroup {return false}
         if _storage._startPositionMs != rhs_storage._startPositionMs {return false}
-        if _storage._allowPrivateNetwork != rhs_storage._allowPrivateNetwork {return false}
+        if _storage._allowedPrivateOrigins != rhs_storage._allowedPrivateOrigins {return false}
         if _storage._subtitleResources != rhs_storage._subtitleResources {return false}
         return true
       }

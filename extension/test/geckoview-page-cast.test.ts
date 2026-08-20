@@ -35,17 +35,28 @@ test("normalizes a page bridge playlist and clamps its start index", () => {
   assert.equal(request?.startIndex, 1);
 });
 
-test("preserves an explicit local-network permission request", () => {
+test("normalizes bounded exact private-origin requests", () => {
   const direct = normalizePageCastPayload({
     url: "http://media-box.local/video.mp4",
-    localNetwork: true,
+    privateNetworkOrigins: ["http://media-box.local", "http://192.168.1.10:8080/"],
   });
-  assert.equal(direct?.localNetwork, true);
+  assert.deepEqual(direct?.privateNetworkOrigins, [
+    "http://media-box.local",
+    "http://192.168.1.10:8080",
+  ]);
   const linked = normalizeLinkedPageCastPayload({
     items: [{ id: "local-1", url: "http://192.168.1.10/live.m3u8" }],
-    localNetwork: true,
+    privateNetworkOrigins: ["http://192.168.1.10"],
   });
-  assert.equal(linked?.localNetwork, true);
+  assert.deepEqual(linked?.privateNetworkOrigins, ["http://192.168.1.10"]);
+  assert.equal(normalizePageCastPayload({
+    url: "https://media.example/video.mp4",
+    privateNetworkOrigins: ["http://*.local"],
+  }), undefined);
+  assert.equal(normalizePageCastPayload({
+    url: "https://media.example/video.mp4",
+    privateNetworkOrigins: Array.from({ length: 17 }, (_, index) => `http://192.168.1.${index + 1}`),
+  }), undefined);
 });
 
 test("rejects unsupported page bridge URLs", () => {

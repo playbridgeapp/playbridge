@@ -5,7 +5,7 @@ use crate::epg::EpgCache;
 use crate::hls::{HlsPlaylistRewriter, HlsResourceKind};
 use crate::local_file::FileGrantManager;
 use crate::session::SessionManager;
-use crate::upstream::{filter_upstream_headers, ConnectionEngine, UpstreamResponse};
+use crate::upstream::{filter_upstream_headers, ConnectionEngine, NetworkPolicy, UpstreamResponse};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
@@ -153,14 +153,14 @@ impl ProxyService {
         original_url: String,
         headers: HashMap<String, String>,
         content_type: Option<&str>,
-        allow_private_network: bool,
+        allowed_private_origins: Vec<String>,
     ) -> Result<RegisteredMedia, String> {
         self.register_remote_with_network_policy(
             base_url,
             original_url,
             headers,
             content_type,
-            Some(allow_private_network),
+            Some(NetworkPolicy::new(allowed_private_origins)?),
         )
     }
 
@@ -170,7 +170,7 @@ impl ProxyService {
         original_url: String,
         headers: HashMap<String, String>,
         content_type: Option<&str>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> Result<RegisteredMedia, String> {
         let parsed = Url::parse(&original_url).map_err(|error| error.to_string())?;
         if original_url.len() > 8_192
@@ -601,11 +601,11 @@ async fn handle_stateful_hls_playlist(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
-    network_policy: Option<bool>,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     match state
         .engine
-        .fetch_url_bytes_with_policy(target_url, headers, network_policy)
+        .fetch_url_bytes_with_policy(target_url, headers, network_policy.clone())
         .await
     {
         Ok(bytes) => rewrite_stateful_hls(
@@ -632,7 +632,7 @@ fn rewrite_stateful_hls(
     headers: &HashMap<String, String>,
     public_base_url: &str,
     bytes: &[u8],
-    network_policy: Option<bool>,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let content = String::from_utf8_lossy(bytes);
     // Guard against serving HTML/error pages as playlists (Brave demuxer parse errors).
@@ -737,11 +737,11 @@ async fn handle_stateful_unknown_or_segment(
     headers: &HashMap<String, String>,
     public_base_url: &str,
     hls_segment_mime: Option<&'static str>,
-    network_policy: Option<bool>,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let upstream = state
         .engine
-        .connect_upstream_with_policy(target_url, headers, network_policy)
+        .connect_upstream_with_policy(target_url, headers, network_policy.clone())
         .await
         .map_err(|error| {
             (
@@ -794,11 +794,11 @@ async fn handle_stateful_dash_manifest(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
-    network_policy: Option<bool>,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let bytes = state
         .engine
-        .fetch_url_bytes_with_policy(target_url, headers, network_policy)
+        .fetch_url_bytes_with_policy(target_url, headers, network_policy.clone())
         .await
         .map_err(|error| {
             (
@@ -838,11 +838,11 @@ async fn handle_stateful_dash_edl(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
-    network_policy: Option<bool>,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let bytes = state
         .engine
-        .fetch_url_bytes_with_policy(target_url, headers, network_policy)
+        .fetch_url_bytes_with_policy(target_url, headers, network_policy.clone())
         .await
         .map_err(|error| {
             (

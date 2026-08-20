@@ -76,7 +76,7 @@ object Components {
      * from scratch — which previously lost history and produced blank tabs.
      */
     val tabManager: TabManager = TabManager()
-    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?, origin: String, tabId: Int, navigationGeneration: Long, requestsLocalNetwork: Boolean) -> Unit)? = null
+    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?, origin: String, tabId: Int, navigationGeneration: Long, requestedPrivateOrigins: List<String>) -> Unit)? = null
     var onLinkedCastRequest: ((JSONObject) -> Unit)? = null
     var onPageNavigation: ((tabId: Int, navigationGeneration: Long) -> Unit)? = null
     var onLinkedNativePortDisconnected: (() -> Unit)? = null
@@ -751,7 +751,6 @@ object Components {
                                 subtitle_resources = subtitleResources,
                                 detected_by = "page_cast",
                                 visual_metadata = metadata,
-                                allow_private_network = false,
                             )
                         }
                         if (items.isNotEmpty() && items.size == itemsJson.size && startIndex in items.indices) {
@@ -759,6 +758,12 @@ object Components {
                                 "CAST MESSAGE received via extension: ${items.size} items, " +
                                     "startIndex: $startIndex",
                             )
+                            val requestedPrivateOrigins = jsonObject["privateNetworkOrigins"]?.jsonArray
+                                ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+                                .orEmpty()
+                            val normalizedPrivateOrigins =
+                                MediaNetworkPolicy.normalizePrivateOrigins(requestedPrivateOrigins)
+                                    ?: return
                             onBridgeCastRequest?.invoke(
                                 items,
                                 startIndex,
@@ -766,7 +771,7 @@ object Components {
                                 origin,
                                 tabId,
                                 navigationGeneration,
-                                jsonObject["localNetwork"]?.jsonPrimitive?.contentOrNull == "true",
+                                normalizedPrivateOrigins.toList(),
                             )
                         }
                     } else {
@@ -782,7 +787,7 @@ object Components {
                                 origin,
                                 tabId,
                                 navigationGeneration,
-                                false,
+                                emptyList(),
                             )
                         }
                     }

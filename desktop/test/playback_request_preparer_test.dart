@@ -39,7 +39,7 @@ void main() {
       headers: {'Authorization': 'Bearer token'},
       subtitles: ['https://cdn.example/captions.vtt'],
       enforcePageNetworkPolicy: true,
-      allowPrivateNetwork: false,
+      allowedPrivateOrigins: const ['http://192.168.1.20:8080'],
     );
 
     final prepared =
@@ -49,7 +49,26 @@ void main() {
     expect(prepared.subtitles?.single, startsWith('http://127.0.0.1:$port/s/'));
     expect(prepared.headers, isNull);
     expect(prepared.enforcePageNetworkPolicy, isTrue);
-    expect(prepared.allowPrivateNetwork, isFalse);
+    expect(
+      prepared.allowedPrivateOrigins,
+      const ['http://192.168.1.20:8080'],
+    );
+  });
+
+  test('webpage media remains policy-proxied in auto mode', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+    final item = QueueItem(
+      url: 'https://new-page-host.example/movie.mp4',
+      title: 'Page movie',
+      enforcePageNetworkPolicy: true,
+    );
+
+    final prepared =
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.headers, isNull);
   });
 
   test('credentialed cross-origin subtitles are registered independently',

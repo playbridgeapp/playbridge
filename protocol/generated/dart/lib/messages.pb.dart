@@ -498,7 +498,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     VisualMetadata? visualMetadata,
     $core.String? bingeGroup,
     $fixnum.Int64? startPositionMs,
-    $core.bool? allowPrivateNetwork,
+    $core.Iterable<$core.String>? allowedPrivateOrigins,
     $core.Iterable<SubtitleResource>? subtitleResources,
   }) {
     final result = create();
@@ -516,7 +516,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     if (visualMetadata != null) result.visualMetadata = visualMetadata;
     if (bingeGroup != null) result.bingeGroup = bingeGroup;
     if (startPositionMs != null) result.startPositionMs = startPositionMs;
-    if (allowPrivateNetwork != null) result.allowPrivateNetwork = allowPrivateNetwork;
+    if (allowedPrivateOrigins != null) result.allowedPrivateOrigins.addAll(allowedPrivateOrigins);
     if (subtitleResources != null) result.subtitleResources.addAll(subtitleResources);
     return result;
   }
@@ -541,7 +541,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     ..aOM<VisualMetadata>(12, _omitFieldNames ? '' : 'visualMetadata', subBuilder: VisualMetadata.create)
     ..aOS(13, _omitFieldNames ? '' : 'bingeGroup')
     ..aInt64(14, _omitFieldNames ? '' : 'startPositionMs')
-    ..aOB(15, _omitFieldNames ? '' : 'allowPrivateNetwork')
+    ..pPS(15, _omitFieldNames ? '' : 'allowedPrivateOrigins')
     ..pc<SubtitleResource>(16, _omitFieldNames ? '' : 'subtitleResources', $pb.PbFieldType.PM, subBuilder: SubtitleResource.create)
     ..hasRequiredFields = false
   ;
@@ -684,16 +684,10 @@ class PlayPayload extends $pb.GeneratedMessage {
   @$pb.TagNumber(14)
   void clearStartPositionMs() => $_clearField(14);
 
-  /// Sender authorization for page-initiated media to reach private/LAN destinations.
+  /// Exact private/LAN origins approved by the sender for page-initiated media.
   /// Receivers must still validate every resolved address, redirect, and derived resource.
   @$pb.TagNumber(15)
-  $core.bool get allowPrivateNetwork => $_getBF(14);
-  @$pb.TagNumber(15)
-  set allowPrivateNetwork($core.bool value) => $_setBool(14, value);
-  @$pb.TagNumber(15)
-  $core.bool hasAllowPrivateNetwork() => $_has(14);
-  @$pb.TagNumber(15)
-  void clearAllowPrivateNetwork() => $_clearField(15);
+  $pb.PbList<$core.String> get allowedPrivateOrigins => $_getList(14);
 
   /// Additive replacement for credentialed sidecars. Legacy `subtitles` remains
   /// supported for senders that only provide URLs.

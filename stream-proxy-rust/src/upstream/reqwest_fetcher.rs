@@ -1,7 +1,7 @@
 //! Reqwest (+ optional FFmpeg AVIO) origin fetch — Docker / Desktop / CLI default.
 
 use super::{
-    validate_http_destination, with_default_upstream_headers, UpstreamConnectFuture,
+    validate_http_destination, with_default_upstream_headers, NetworkPolicy, UpstreamConnectFuture,
     UpstreamFetcher, UpstreamResponse,
 };
 use axum::body::Body;
@@ -96,17 +96,21 @@ impl ReqwestUpstreamFetcher {
             .redirect(reqwest::redirect::Policy::none())
     }
 
-    fn client_for_policy(&self, network_policy: Option<bool>) -> Result<&Client, String> {
+    fn client_for_policy(
+        &self,
+        network_policy: Option<&NetworkPolicy>,
+        url: &reqwest::Url,
+    ) -> Result<&Client, String> {
         match network_policy {
             None => Ok(&self.client),
-            Some(false) => self
-                .public_only_client
-                .as_ref()
-                .ok_or_else(|| "public-only HTTP client is unavailable".to_string()),
-            Some(true) => self
+            Some(policy) if policy.allows_private_url(url) => self
                 .local_network_client
                 .as_ref()
                 .ok_or_else(|| "local-network HTTP client is unavailable".to_string()),
+            Some(_) => self
+                .public_only_client
+                .as_ref()
+                .ok_or_else(|| "public-only HTTP client is unavailable".to_string()),
         }
     }
 
@@ -162,16 +166,18 @@ impl ReqwestUpstreamFetcher {
         &self,
         url: &str,
         headers: &HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> Result<UpstreamResponse, String> {
         let initial = reqwest::Url::parse(url).map_err(|_| "invalid upstream URL".to_string())?;
         let credential_origin = origin(&initial);
         let mut current = initial;
         for redirect_count in 0..=10 {
-            validate_http_destination(current.as_str(), network_policy).await?;
+            validate_http_destination(current.as_str(), network_policy.as_ref()).await?;
             // The constrained client validates the same DNS answer that its connector uses,
             // preventing a hostname from rebinding to a local address after this preflight.
-            let mut req = self.client_for_policy(network_policy)?.get(current.clone());
+            let mut req = self
+                .client_for_policy(network_policy.as_ref(), &current)?
+                .get(current.clone());
             let request_headers =
                 scoped_redirect_headers(headers, origin(&current) == credential_origin);
             for (k, v) in &request_headers {
@@ -241,7 +247,7 @@ impl ReqwestUpstreamFetcher {
             break;
         }
 
-        if network_policy != Some(false) {
+        if avio_allowed(network_policy.as_ref()) {
             self.try_avio(current.as_str(), headers).await
         } else {
             Err("failed to fetch policy-constrained upstream".into())
@@ -304,10 +310,14 @@ impl UpstreamFetcher for ReqwestUpstreamFetcher {
         &'a self,
         url: &'a str,
         headers: &'a HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> UpstreamConnectFuture<'a> {
         Box::pin(async move { self.connect_inner(url, headers, network_policy).await })
     }
+}
+
+fn avio_allowed(network_policy: Option<&NetworkPolicy>) -> bool {
+    network_policy.is_none()
 }
 
 fn origin(url: &reqwest::Url) -> (String, String, Option<u16>) {
@@ -351,6 +361,13 @@ mod tests {
         assert!(!scoped.contains_key("Cookie"));
         assert_ne!(scoped.get("User-Agent"), Some(&"Page agent".to_string()));
         assert_eq!(scoped.get("Range"), Some(&"bytes=0-10".to_string()));
+    }
+
+    #[test]
+    fn avio_is_available_only_to_trusted_traffic() {
+        let page_policy = NetworkPolicy::new(vec![]).unwrap();
+        assert!(avio_allowed(None));
+        assert!(!avio_allowed(Some(&page_policy)));
     }
 
     #[tokio::test]

@@ -85,7 +85,10 @@ fun PageCastConsentSettingsScreen(onBack: () -> Unit) {
                         Text(
                             buildString {
                                 append(PageCastConsentStore.connectionLabel(origin))
-                                if (origin in localNetworkOrigins) append(" · Local-network media allowed")
+                                if (origin in localNetworkOrigins) {
+                                    val count = PageCastConsentStore.approvedPrivateOrigins(context, origin).size
+                                    append(" · $count local media server${if (count == 1) "" else "s"} allowed")
+                                }
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -99,7 +102,7 @@ fun PageCastConsentSettingsScreen(onBack: () -> Unit) {
                 Button(
                     onClick = { showClearLocalConfirmation = true },
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                ) { Text("Reset local-network access") }
+                ) { Text("Reset local media server access") }
             }
             if (origins.isNotEmpty()) {
                 Spacer(Modifier.height(12.dp))

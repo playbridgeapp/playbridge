@@ -446,7 +446,7 @@ class ReceiverServer extends ChangeNotifier {
       contentType: payload.contentTypeOrNull,
       enforcePageNetworkPolicy: payload.detectedByOrNull == 'page_cast' ||
           payload.detectedByOrNull == 'linked_page',
-      allowPrivateNetwork: payload.allowPrivateNetworkOrNull == true,
+      allowedPrivateOrigins: payload.allowedPrivateOrigins,
       startPositionMs: payload.startPositionMsOrNull,
       bingeGroup: payload.bingeGroupOrNull,
       season: payload.seasonOrNull,

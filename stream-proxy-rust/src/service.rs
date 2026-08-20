@@ -165,14 +165,14 @@ impl ProxyServer {
         url: impl Into<String>,
         headers: HashMap<String, String>,
         content_type: Option<&str>,
-        allow_private_network: bool,
+        allowed_private_origins: Vec<String>,
     ) -> Result<RegisteredMedia, String> {
         self.service.register_remote_with_policy(
             &self.base_url(host),
             url.into(),
             headers,
             content_type,
-            allow_private_network,
+            allowed_private_origins,
         )
     }
 

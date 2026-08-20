@@ -241,6 +241,16 @@ request to PlayBridge Desktop; Desktop owns discovery, pairing, pinning, receive
 the WSS session. DLNA/UPnP casting is also outside this contract and uses SSDP, AVTransport SOAP,
 and a phone-hosted HTTP media proxy instead.
 
+## Page-controlled media network policy
+
+Items marked `page_cast` or `linked_page` are untrusted webpage input. The sender owns consent and
+may attach at most 16 exact `allowedPrivateOrigins` entries (HTTP(S) scheme, host, and effective
+port; no paths, wildcards, or subnet grants). An empty list means public destinations only.
+Receivers that support page-controlled media must enforce the grant on the initial
+URL, DNS answers, connected peer, every redirect and derived manifest/subtitle resource, while
+keeping credentials on their declared origin. A sender must not route page-controlled media to a
+receiver or transport that cannot enforce these rules.
+
 ## Heartbeats and closing
 
 `ping` / `pong` are application-level JSON heartbeats and are separate from RFC 6455 control

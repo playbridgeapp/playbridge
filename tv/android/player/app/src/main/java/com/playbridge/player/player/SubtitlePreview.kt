@@ -127,7 +127,7 @@ object SubtitleCueLoader {
         url: String,
         headers: Map<String, String>?,
         enforcePageNetworkPolicy: Boolean = false,
-        allowPrivateNetwork: Boolean = false,
+        allowedPrivateOrigins: List<String> = emptyList(),
     ): List<SubtitleCue>? {
         cache[url]?.let { return it }
         if (!inFlight.add(url)) return cache[url]
@@ -137,7 +137,7 @@ object SubtitleCueLoader {
                     url,
                     headers,
                     enforcePageNetworkPolicy,
-                    allowPrivateNetwork,
+                    allowedPrivateOrigins,
                 )
                 val content = SubtitleParser.decode(downloaded.bytes)
                 val isVtt = downloaded.format == ExternalSubtitleFormat.WEBVTT

@@ -159,13 +159,13 @@ private data class PendingPageCast(
     val tabId: Int,
     val navigationGeneration: Long,
     val stage: PageCastConsentStage,
-    val requiresLocalNetwork: Boolean,
+    val requestedPrivateOrigins: Set<String>,
 )
 
 private data class PendingLinkedPageCast(
     val request: LinkedPageCastOpenRequest,
     val stage: PageCastConsentStage,
-    val requiresLocalNetwork: Boolean,
+    val requestedPrivateOrigins: Set<String>,
 )
 
 private data class PendingLinkedOperation(
@@ -173,9 +173,10 @@ private data class PendingLinkedOperation(
     val origin: String,
     val tabId: Int,
     val navigationGeneration: Long,
+    val requestedPrivateOrigins: Set<String>,
 )
 
-private enum class PageCastConsentStage { WEBSITE, LOCAL_NETWORK }
+private enum class PageCastConsentStage { WEBSITE, PRIVATE_ORIGINS }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -1115,27 +1116,33 @@ class BrowserActivity : ComponentActivity() {
                         origin,
                         tabId,
                         navigationGeneration,
-                        requestsLocalNetwork,
+                        declaredPrivateOrigins,
                     ->
                     if (startIndex !in items.indices) return@bridgeRequest
                     lifecycleScope.launch {
-                        val requiresLocalNetwork = requestsLocalNetwork || withContext(Dispatchers.IO) {
-                            items.any { item ->
-                                MediaNetworkPolicy.targetsPrivateNetwork(item.url) ||
-                                    item.subtitles.any(MediaNetworkPolicy::targetsPrivateNetwork) ||
-                                    item.subtitle_resources.any {
-                                        MediaNetworkPolicy.targetsPrivateNetwork(it.url)
-                                    }
+                        val requestedPrivateOrigins = withContext(Dispatchers.IO) {
+                            val origins = declaredPrivateOrigins
+                                .mapNotNullTo(linkedSetOf(), MediaNetworkPolicy::privateOrigin)
+                            items.forEach { item ->
+                                sequenceOf(item.url)
+                                    .plus(item.subtitles.asSequence())
+                                    .plus(item.subtitle_resources.asSequence().map { it.url })
+                                    .mapNotNull(MediaNetworkPolicy::privateOrigin)
+                                    .forEach(origins::add)
                             }
-                        }
+                            MediaNetworkPolicy.normalizePrivateOrigins(origins)
+                        } ?: return@launch
                         if (!Components.isCurrentPageNavigation(tabId, navigationGeneration)) {
                             return@launch
                         }
                         val websiteApproved = PageCastConsentStore.isApproved(this@BrowserActivity, origin)
-                        val localNetworkApproved =
-                            PageCastConsentStore.isLocalNetworkApproved(this@BrowserActivity, origin)
+                        val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
+                            this@BrowserActivity,
+                            origin,
+                            requestedPrivateOrigins,
+                        )
                         val authorizedItems = items.map {
-                            it.copy(allow_private_network = localNetworkApproved)
+                            it.copy(allowed_private_origins = requestedPrivateOrigins.toList())
                         }
                         when {
                             !websiteApproved -> pendingPageCast = PendingPageCast(
@@ -1146,17 +1153,17 @@ class BrowserActivity : ComponentActivity() {
                                 tabId,
                                 navigationGeneration,
                                 PageCastConsentStage.WEBSITE,
-                                requiresLocalNetwork,
+                                requestedPrivateOrigins,
                             )
-                            requiresLocalNetwork && !localNetworkApproved -> pendingPageCast = PendingPageCast(
+                            unapprovedPrivateOrigins.isNotEmpty() -> pendingPageCast = PendingPageCast(
                                 items,
                                 startIndex,
                                 playlistMetadata,
                                 origin,
                                 tabId,
                                 navigationGeneration,
-                                PageCastConsentStage.LOCAL_NETWORK,
-                                true,
+                                PageCastConsentStage.PRIVATE_ORIGINS,
+                                requestedPrivateOrigins,
                             )
                             else -> dispatchBridgeCast(
                                 authorizedItems,
@@ -1212,8 +1219,12 @@ class BrowserActivity : ComponentActivity() {
                             return@linkedRequest
                         }
                         lifecycleScope.launch {
-                            val requiresLocalNetwork =
-                                linkedPageCastCoordinator.messageRequiresLocalNetwork(message)
+                            val requestedPrivateOrigins =
+                                linkedPageCastCoordinator.messageRequestedPrivateOrigins(message)
+                                    ?: run {
+                                        linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), "invalid_request")
+                                        return@launch
+                                    }
                             if (!Components.isCurrentPageNavigation(tabId, navigationGeneration) ||
                                 !linkedPageCastCoordinator.isMessageForActiveSession(message, origin)
                             ) {
@@ -1223,9 +1234,10 @@ class BrowserActivity : ComponentActivity() {
                                 )
                                 return@launch
                             }
-                            if (requiresLocalNetwork &&
-                                !PageCastConsentStore.isLocalNetworkApproved(this@BrowserActivity, origin)
-                            ) {
+                            val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
+                                this@BrowserActivity, origin, requestedPrivateOrigins,
+                            )
+                            if (unapprovedPrivateOrigins.isNotEmpty()) {
                                 pendingLinkedOperation?.let {
                                     linkedPageCastCoordinator.reject(
                                         it.message.optString("bridgeRequestId"),
@@ -1237,12 +1249,19 @@ class BrowserActivity : ComponentActivity() {
                                     origin,
                                     tabId,
                                     navigationGeneration,
+                                    requestedPrivateOrigins,
                                 )
                             } else {
-                                if (PageCastConsentStore.isLocalNetworkApproved(this@BrowserActivity, origin)) {
-                                    linkedPageCastCoordinator.allowLocalNetworkForActive(origin)
+                                if (linkedPageCastCoordinator.allowPrivateOriginsForActive(
+                                        origin, requestedPrivateOrigins,
+                                    )
+                                ) {
+                                    linkedPageCastCoordinator.handle(message)
+                                } else {
+                                    linkedPageCastCoordinator.reject(
+                                        message.optString("bridgeRequestId"), "resource_limit",
+                                    )
                                 }
-                                linkedPageCastCoordinator.handle(message)
                             }
                         }
                         return@linkedRequest
@@ -1268,7 +1287,11 @@ class BrowserActivity : ComponentActivity() {
                     }
                     pendingLinkedDeviceRequest = null
                     lifecycleScope.launch {
-                        val requiresLocalNetwork = linkedPageCastCoordinator.requiresLocalNetwork(request)
+                        val requestedPrivateOrigins = linkedPageCastCoordinator.requestedPrivateOrigins(request)
+                            ?: run {
+                                linkedPageCastCoordinator.reject(request.bridgeRequestId, "invalid_request")
+                                return@launch
+                            }
                         if (!Components.isCurrentPageNavigation(
                                 request.tabId,
                                 request.navigationGeneration,
@@ -1279,24 +1302,23 @@ class BrowserActivity : ComponentActivity() {
                         }
                         val websiteApproved =
                             PageCastConsentStore.isApproved(this@BrowserActivity, request.origin)
-                        val localNetworkApproved = PageCastConsentStore.isLocalNetworkApproved(
-                            this@BrowserActivity,
-                            request.origin,
+                        val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
+                            this@BrowserActivity, request.origin, requestedPrivateOrigins,
                         )
                         when {
                             !websiteApproved -> pendingLinkedPageCast = PendingLinkedPageCast(
                                 request,
                                 PageCastConsentStage.WEBSITE,
-                                requiresLocalNetwork,
+                                requestedPrivateOrigins,
                             )
-                            requiresLocalNetwork && !localNetworkApproved ->
+                            unapprovedPrivateOrigins.isNotEmpty() ->
                                 pendingLinkedPageCast = PendingLinkedPageCast(
                                     request,
-                                    PageCastConsentStage.LOCAL_NETWORK,
-                                    true,
+                                    PageCastConsentStage.PRIVATE_ORIGINS,
+                                    requestedPrivateOrigins,
                                 )
                             else -> dispatchLinkedOpen(
-                                if (localNetworkApproved) request.withLocalNetworkPermission() else request,
+                                request.withPrivateOriginPermission(requestedPrivateOrigins),
                             )
                         }
                     }
@@ -1351,7 +1373,12 @@ class BrowserActivity : ComponentActivity() {
 
             pendingPageCast?.let { request ->
                 val websiteName = PageCastConsentStore.displayName(request.origin)
-                val localNetworkPrompt = request.stage == PageCastConsentStage.LOCAL_NETWORK
+                val localNetworkPrompt = request.stage == PageCastConsentStage.PRIVATE_ORIGINS
+                val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
+                    this@BrowserActivity, request.origin, request.requestedPrivateOrigins,
+                ).joinToString("\n") {
+                    "• ${PageCastConsentStore.displayName(it)}"
+                }
                 AlertDialog(
                     onDismissRequest = { pendingPageCast = null },
                     title = {
@@ -1363,9 +1390,9 @@ class BrowserActivity : ComponentActivity() {
                     text = {
                         Text(
                             if (localNetworkPrompt) {
-                                "$websiteName wants the selected receiver to load media from a device or server " +
-                                    "on your local network. Only allow this for a site you trust.\n\n" +
-                                    "You can reset this separately in Settings > Browser > Website casting permissions."
+                                "$websiteName wants the selected receiver to load media from:\n\n" +
+                                    "$privateOriginList\n\nOnly allow servers you recognize. " +
+                                    "You can reset these grants separately in Settings > Browser > Website casting permissions."
                             } else {
                                 "$websiteName can start one-off direct casts and future linked casts. " +
                                     "A linked cast keeps a session open so the website can manage its playlist on your selected device.\n\n" +
@@ -1377,13 +1404,12 @@ class BrowserActivity : ComponentActivity() {
                     confirmButton = {
                         TextButton(onClick = {
                             if (localNetworkPrompt) {
-                                PageCastConsentStore.approveLocalNetwork(
-                                    this@BrowserActivity,
-                                    request.origin,
+                                PageCastConsentStore.approvePrivateOrigins(
+                                    this@BrowserActivity, request.origin, request.requestedPrivateOrigins,
                                 )
                                 pendingPageCast = null
                                 dispatchBridgeCast(
-                                    request.items.map { it.copy(allow_private_network = true) },
+                                    request.items.map { it.copy(allowed_private_origins = request.requestedPrivateOrigins.toList()) },
                                     request.startIndex,
                                     request.playlistMetadata,
                                     request.tabId,
@@ -1391,22 +1417,16 @@ class BrowserActivity : ComponentActivity() {
                                 )
                             } else {
                                 PageCastConsentStore.approve(this@BrowserActivity, request.origin)
-                                if (request.requiresLocalNetwork &&
-                                    !PageCastConsentStore.isLocalNetworkApproved(
-                                        this@BrowserActivity,
-                                        request.origin,
-                                    )
+                                if (PageCastConsentStore.unapprovedPrivateOrigins(
+                                        this@BrowserActivity, request.origin, request.requestedPrivateOrigins,
+                                    ).isNotEmpty()
                                 ) {
-                                    pendingPageCast = request.copy(stage = PageCastConsentStage.LOCAL_NETWORK)
+                                    pendingPageCast = request.copy(stage = PageCastConsentStage.PRIVATE_ORIGINS)
                                 } else {
-                                    val allowLocal = PageCastConsentStore.isLocalNetworkApproved(
-                                        this@BrowserActivity,
-                                        request.origin,
-                                    )
                                     pendingPageCast = null
                                     dispatchBridgeCast(
                                         request.items.map {
-                                            it.copy(allow_private_network = allowLocal)
+                                            it.copy(allowed_private_origins = request.requestedPrivateOrigins.toList())
                                         },
                                         request.startIndex,
                                         request.playlistMetadata,
@@ -1426,7 +1446,12 @@ class BrowserActivity : ComponentActivity() {
             pendingLinkedPageCast?.let { pending ->
                 val request = pending.request
                 val websiteName = PageCastConsentStore.displayName(request.origin)
-                val localNetworkPrompt = pending.stage == PageCastConsentStage.LOCAL_NETWORK
+                val localNetworkPrompt = pending.stage == PageCastConsentStage.PRIVATE_ORIGINS
+                val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
+                    this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
+                ).joinToString("\n") {
+                    "• ${PageCastConsentStore.displayName(it)}"
+                }
                 AlertDialog(
                     onDismissRequest = {
                         linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
@@ -1441,9 +1466,9 @@ class BrowserActivity : ComponentActivity() {
                     text = {
                         Text(
                             if (localNetworkPrompt) {
-                                "$websiteName wants the selected receiver to load playlist media from a device or server " +
-                                    "on your local network. Future linked playlist items may use this access. Only allow this " +
-                                    "for a site you trust.\n\nYou can reset this separately in Settings > Browser > Website casting permissions."
+                                "$websiteName wants the selected receiver to load playlist media from:\n\n" +
+                                    "$privateOriginList\n\nOnly allow servers you recognize. Future linked items " +
+                                    "must request any additional server separately."
                             } else {
                                 "$websiteName can start casts and stay linked while this page is open so it can manage the TV playlist. " +
                                     "Playback controls remain available in PlayBridge. This does not allow access to local-network media.\n\n" +
@@ -1454,31 +1479,24 @@ class BrowserActivity : ComponentActivity() {
                     confirmButton = {
                         TextButton(onClick = {
                             if (localNetworkPrompt) {
-                                PageCastConsentStore.approveLocalNetwork(
-                                    this@BrowserActivity,
-                                    request.origin,
+                                PageCastConsentStore.approvePrivateOrigins(
+                                    this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
                                 )
                                 pendingLinkedPageCast = null
-                                dispatchLinkedOpen(request.withLocalNetworkPermission())
+                                dispatchLinkedOpen(request.withPrivateOriginPermission(pending.requestedPrivateOrigins))
                             } else {
                                 PageCastConsentStore.approve(this@BrowserActivity, request.origin)
-                                if (pending.requiresLocalNetwork &&
-                                    !PageCastConsentStore.isLocalNetworkApproved(
-                                        this@BrowserActivity,
-                                        request.origin,
-                                    )
+                                if (PageCastConsentStore.unapprovedPrivateOrigins(
+                                        this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
+                                    ).isNotEmpty()
                                 ) {
                                     pendingLinkedPageCast = pending.copy(
-                                        stage = PageCastConsentStage.LOCAL_NETWORK,
+                                        stage = PageCastConsentStage.PRIVATE_ORIGINS,
                                     )
                                 } else {
-                                    val allowLocal = PageCastConsentStore.isLocalNetworkApproved(
-                                        this@BrowserActivity,
-                                        request.origin,
-                                    )
                                     pendingLinkedPageCast = null
                                     dispatchLinkedOpen(
-                                        if (allowLocal) request.withLocalNetworkPermission() else request,
+                                        request.withPrivateOriginPermission(pending.requestedPrivateOrigins),
                                     )
                                 }
                             }
@@ -1495,6 +1513,11 @@ class BrowserActivity : ComponentActivity() {
 
             pendingLinkedOperation?.let { pending ->
                 val websiteName = PageCastConsentStore.displayName(pending.origin)
+                val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
+                    this@BrowserActivity, pending.origin, pending.requestedPrivateOrigins,
+                ).joinToString("\n") {
+                    "• ${PageCastConsentStore.displayName(it)}"
+                }
                 AlertDialog(
                     onDismissRequest = {
                         linkedPageCastCoordinator.reject(
@@ -1506,20 +1529,26 @@ class BrowserActivity : ComponentActivity() {
                     title = { Text("Allow local-network media?") },
                     text = {
                         Text(
-                            "$websiteName wants to add playlist media from a device or server on your local network. " +
-                                "Future linked playlist items may also use this access. Only allow this for a site you trust.\n\n" +
-                                "You can reset this separately in Settings > Browser > Website casting permissions.",
+                            "$websiteName wants to add playlist media from:\n\n$privateOriginList\n\n" +
+                                "Only allow servers you recognize. Future linked items must request additional servers separately.",
                         )
                     },
                     confirmButton = {
                         TextButton(onClick = {
-                            PageCastConsentStore.approveLocalNetwork(
-                                this@BrowserActivity,
-                                pending.origin,
+                            PageCastConsentStore.approvePrivateOrigins(
+                                this@BrowserActivity, pending.origin, pending.requestedPrivateOrigins,
                             )
-                            linkedPageCastCoordinator.allowLocalNetworkForActive(pending.origin)
+                            val allowed = linkedPageCastCoordinator.allowPrivateOriginsForActive(
+                                pending.origin, pending.requestedPrivateOrigins,
+                            )
                             pendingLinkedOperation = null
-                            linkedPageCastCoordinator.handle(pending.message)
+                            if (allowed) {
+                                linkedPageCastCoordinator.handle(pending.message)
+                            } else {
+                                linkedPageCastCoordinator.reject(
+                                    pending.message.optString("bridgeRequestId"), "resource_limit",
+                                )
+                            }
                         }) { Text("Allow") }
                     },
                     dismissButton = {

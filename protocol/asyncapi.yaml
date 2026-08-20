@@ -258,9 +258,6 @@ components:
         posterUrl: { type: [string, 'null'] }
         subtitleUrl: { type: [string, 'null'] }
         startPositionMs: { type: [integer, 'null'], minimum: 0 }
-        allowPrivateNetwork:
-          type: [boolean, 'null']
-          description: Sender authorization for page-initiated media to reach private/LAN destinations. Receivers still validate every destination.
       additionalProperties: false
     BrowserCapabilities:
       type: object
@@ -652,7 +649,12 @@ components:
             - type: 'null'
         bingeGroup: { type: [string, 'null'] }
         startPositionMs: { type: [integer, 'null'], minimum: 0 }
-        allowPrivateNetwork: { type: [boolean, 'null'], default: false }
+        allowedPrivateOrigins:
+          type: array
+          maxItems: 16
+          items: { type: string, format: uri }
+          default: []
+          description: Exact private media origins approved by the sender; wildcards and subnet grants are forbidden.
       additionalProperties: false
     SubtitleResource:
       type: object

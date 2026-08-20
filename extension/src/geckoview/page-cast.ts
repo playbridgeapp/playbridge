@@ -29,25 +29,26 @@ export type LinkedPageCastRequest = {
   items: LinkedPageCastItem[];
   startIndex: number;
   metadata?: Record<string, unknown>;
-  localNetwork?: boolean;
+  privateNetworkOrigins?: string[];
 };
 
 export type LinkedPageCastSupply = {
   requestId: string;
   items: LinkedPageCastItem[];
   endOfList: boolean;
-  localNetwork?: boolean;
+  privateNetworkOrigins?: string[];
 };
 
 export type PageCastRequest = {
   items: PageCastItem[];
   startIndex: number;
   metadata?: Record<string, unknown>;
-  localNetwork?: boolean;
+  privateNetworkOrigins?: string[];
 };
 
 const MAX_ITEMS = 50;
 const MAX_SUBTITLES = 16;
+const MAX_PRIVATE_ORIGINS = 16;
 const MAX_HEADERS = 16;
 const MAX_HEADER_BYTES = 16 * 1024;
 const MAX_METADATA_BYTES = 16 * 1024;
@@ -78,6 +79,27 @@ function isHttpUrl(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+function privateNetworkOrigins(value: unknown): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_PRIVATE_ORIGINS) return undefined;
+  const normalized = new Set<string>();
+  for (const entry of value) {
+    if (typeof entry !== "string") return undefined;
+    try {
+      const url = new URL(entry);
+      if ((url.protocol !== "http:" && url.protocol !== "https:") ||
+          url.username || url.password ||
+          (url.pathname !== "/" && url.pathname !== "") || url.search || url.hash) return undefined;
+      const hostname = url.hostname.toLowerCase();
+      if (hostname.includes("*") || hostname === "localhost" || hostname.endsWith(".localhost")) return undefined;
+      normalized.add(url.origin.toLowerCase());
+    } catch {
+      return undefined;
+    }
+  }
+  return [...normalized];
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -234,11 +256,13 @@ export function normalizePageCastPayload(payload: unknown): PageCastRequest | un
       : 0;
   const visualMetadata = source.metadata === undefined ? undefined : metadata(source.metadata);
   if (source.metadata !== undefined && !visualMetadata) return undefined;
+  const privateOrigins = privateNetworkOrigins(source.privateNetworkOrigins);
+  if (source.privateNetworkOrigins !== undefined && !privateOrigins) return undefined;
   return {
     items: typedItems,
     startIndex: Math.max(0, Math.min(requestedIndex, typedItems.length - 1)),
     ...(visualMetadata ? { metadata: visualMetadata } : {}),
-    ...(source.localNetwork === true ? { localNetwork: true } : {}),
+    ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),
   };
 }
 
@@ -272,21 +296,25 @@ export function normalizeLinkedPageCastPayload(payload: unknown): LinkedPageCast
   if (requestedIndex < 0 || requestedIndex >= items.length) return undefined;
   const visualMetadata = payload.metadata === undefined ? undefined : metadata(payload.metadata);
   if (payload.metadata !== undefined && !visualMetadata) return undefined;
+  const privateOrigins = privateNetworkOrigins(payload.privateNetworkOrigins);
+  if (payload.privateNetworkOrigins !== undefined && !privateOrigins) return undefined;
   return {
     items,
     startIndex: requestedIndex,
     ...(visualMetadata ? { metadata: visualMetadata } : {}),
-    ...(payload.localNetwork === true ? { localNetwork: true } : {}),
+    ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),
   };
 }
 
-export function normalizeLinkedAppendPayload(payload: unknown): { items: LinkedPageCastItem[]; localNetwork?: boolean } | undefined {
+export function normalizeLinkedAppendPayload(payload: unknown): { items: LinkedPageCastItem[]; privateNetworkOrigins?: string[] } | undefined {
   if (!isRecord(payload)) return undefined;
   const items = linkedItems(payload.items);
-  return items ? {
+  const privateOrigins = privateNetworkOrigins(payload.privateNetworkOrigins);
+  if (!items || (payload.privateNetworkOrigins !== undefined && !privateOrigins)) return undefined;
+  return {
     items,
-    ...(payload.localNetwork === true ? { localNetwork: true } : {}),
-  } : undefined;
+    ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),
+  };
 }
 
 export function normalizeLinkedJumpPayload(payload: unknown): { index: number } | undefined {
@@ -301,12 +329,14 @@ export function normalizeLinkedSupplyPayload(payload: unknown): LinkedPageCastSu
   const requestId = shortString(payload.requestId, 128);
   const endOfList = payload.endOfList === true;
   const items = linkedItems(payload.items, endOfList);
-  if (!requestId || !items || (items.length === 0 && !endOfList)) return undefined;
+  const privateOrigins = privateNetworkOrigins(payload.privateNetworkOrigins);
+  if (!requestId || !items || (items.length === 0 && !endOfList) ||
+      (payload.privateNetworkOrigins !== undefined && !privateOrigins)) return undefined;
   return {
     requestId,
     items,
     endOfList,
-    ...(payload.localNetwork === true ? { localNetwork: true } : {}),
+    ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),
   };
 }
 

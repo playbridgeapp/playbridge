@@ -257,7 +257,7 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
         target.append = function(items, options) {
           return request('append', sessionId, {
             items: items,
-            localNetwork: !!(options && options.localNetwork)
+            privateNetworkOrigins: (options && options.privateNetworkOrigins) || []
           });
         };
         target.jump = function(index) { return request('jump', sessionId, { index: index }); };
@@ -266,7 +266,7 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
             requestId: requestId,
             items: (result && result.items) || [],
             endOfList: !!(result && result.endOfList),
-            localNetwork: !!(result && result.localNetwork)
+            privateNetworkOrigins: (result && result.privateNetworkOrigins) || []
           });
         };
         target.unlink = function() { return request('unlink', sessionId, {}); };
@@ -279,7 +279,7 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
       window.playbridge.capabilities = Object.assign({}, window.playbridge.capabilities, {
         linkedCast: 1,
         explicitHeaders: 1,
-        localNetworkPermission: 1
+        privateNetworkOriginPermission: 1
       });
       window.playbridge.linkCast = function(payload) {
         return request('open', null, payload).then(function(response) {

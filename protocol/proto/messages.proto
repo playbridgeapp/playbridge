@@ -74,9 +74,9 @@ message PlayPayload {
   // Resume point: start playback at this position (ms). The phone seeds it from its
   // content-keyed resume store; the receiver maps it onto the player's start position.
   optional int64 start_position_ms = 14       [json_name = "startPositionMs"];
-  // Sender authorization for page-initiated media to reach private/LAN destinations.
+  // Exact private/LAN origins approved by the sender for page-initiated media.
   // Receivers must still validate every resolved address, redirect, and derived resource.
-  optional bool allow_private_network = 15    [json_name = "allowPrivateNetwork"];
+  repeated string allowed_private_origins = 15 [json_name = "allowedPrivateOrigins"];
   // Additive replacement for credentialed sidecars. Legacy `subtitles` remains
   // supported for senders that only provide URLs.
   repeated SubtitleResource subtitle_resources = 16 [json_name = "subtitleResources"];

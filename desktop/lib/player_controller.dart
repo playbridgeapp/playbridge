@@ -549,7 +549,7 @@ class PlayerController extends ChangeNotifier {
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
-        allowPrivateNetwork: item.allowPrivateNetwork,
+        allowedPrivateOrigins: item.allowedPrivateOrigins,
       );
       debugPrint('[player] toggling to direct playback at ${currentPos}ms');
     } else {
@@ -600,7 +600,7 @@ class PlayerController extends ChangeNotifier {
         playlistBody: item.playlistBody,
         audioUrl: proxiedAudio,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
-        allowPrivateNetwork: item.allowPrivateNetwork,
+        allowedPrivateOrigins: item.allowedPrivateOrigins,
       );
       debugPrint('[player] toggling to proxied playback at ${currentPos}ms');
     }

@@ -22,8 +22,8 @@ extension PlayPayloadX on PlayPayload {
   String? get bingeGroupOrNull => hasBingeGroup() ? bingeGroup : null;
   String? get contentTypeOrNull => hasContentType() ? contentType : null;
   String? get detectedByOrNull => hasDetectedBy() ? detectedBy : null;
-  bool? get allowPrivateNetworkOrNull =>
-      hasAllowPrivateNetwork() ? allowPrivateNetwork : null;
+  List<String> get approvedPrivateOrigins =>
+      List.unmodifiable(allowedPrivateOrigins);
   int? get seasonOrNull => hasVisualMetadata() && visualMetadata.hasSeason()
       ? visualMetadata.season
       : null;

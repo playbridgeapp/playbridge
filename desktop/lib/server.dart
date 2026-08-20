@@ -933,7 +933,7 @@ class ReceiverServer extends ChangeNotifier {
         contentType: p.contentTypeOrNull,
         enforcePageNetworkPolicy: p.detectedByOrNull == 'page_cast' ||
             p.detectedByOrNull == 'linked_page',
-        allowPrivateNetwork: p.allowPrivateNetworkOrNull == true,
+        allowedPrivateOrigins: p.allowedPrivateOrigins,
         startPositionMs: p.startPositionMsOrNull,
         bingeGroup: p.bingeGroupOrNull,
         season: p.seasonOrNull,

@@ -268,10 +268,11 @@ website-managed lazy queue via `window.playbridge.linkCast()`. Linked sessions c
 append, and jump within the TV playlist and answer bounded `needitems` events; playback controls
 remain in the PlayBridge Remote. The user approves each exact website origin and can revoke that
 permission under **Settings → Browser → Website casting permissions**.
-Websites that intentionally reference a LAN media server set `localNetwork: true`; PlayBridge
-asks for a separate per-origin grant, keeps webpage headers on the initial media URL's exact
-origin, and revalidates manifest children and redirects on the receiver. The local-network grant
-can be reset without removing the site's basic casting permission. Website-controlled casts use
+Websites that intentionally reference LAN media servers declare up to 16 exact
+`privateNetworkOrigins` (scheme, host, and port; no wildcards or subnets). PlayBridge asks for
+separate website-to-media-origin grants, keeps webpage headers on each resource's exact origin,
+and revalidates manifest children and redirects on the receiver. Private-origin grants can be
+reset without removing the site's basic casting permission. Website-controlled casts use
 a PlayBridge receiver so these checks cannot be bypassed by an external receiver protocol.
 
 A live demo that exercises direct payloads, linked lazy queueing, and browser detection is hosted at

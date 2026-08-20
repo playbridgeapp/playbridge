@@ -44,7 +44,7 @@ class PlayerControlsViewModel : ViewModel() {
     var subtitleRequestHeaders: Map<String, String>? = null
     var subtitleRequestHeadersByUrl: Map<String, Map<String, String>> = emptyMap()
     var enforcePageSubtitleNetworkPolicy: Boolean = false
-    var allowPrivateSubtitleNetwork: Boolean = false
+    var allowedPrivateSubtitleOrigins: List<String> = emptyList()
 
     /**
      * Lazily download + parse the given subtitle URLs (for the live preview in the overlay).
@@ -59,7 +59,7 @@ class PlayerControlsViewModel : ViewModel() {
                     url,
                     subtitleRequestHeadersByUrl[url] ?: subtitleRequestHeaders,
                     enforcePageSubtitleNetworkPolicy,
-                    allowPrivateSubtitleNetwork,
+                    allowedPrivateSubtitleOrigins,
                 )
                 _controlsState.update { it.copy(subtitleCuesVersion = it.subtitleCuesVersion + 1) }
             }
@@ -609,7 +609,7 @@ class PlayerControlsViewModel : ViewModel() {
             url,
             headers,
             enforcePageSubtitleNetworkPolicy,
-            allowPrivateSubtitleNetwork,
+            allowedPrivateSubtitleOrigins,
         )
     }
 

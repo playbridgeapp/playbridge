@@ -40,7 +40,7 @@ class SubtitleManager(
         url: String,
         headers: Map<String, String>? = null,
         enforcePageNetworkPolicy: Boolean = false,
-        allowPrivateNetwork: Boolean = false,
+        allowedPrivateOrigins: List<String> = emptyList(),
     ) {
         Log.i(TAG, "Loading subtitle from: ${redactUrlForLog(url)}")
         subtitleJob?.cancel()
@@ -55,7 +55,7 @@ class SubtitleManager(
                     url,
                     headers,
                     enforcePageNetworkPolicy,
-                    allowPrivateNetwork,
+                    allowedPrivateOrigins,
                 )
                 val content = SubtitleParser.decode(downloaded.bytes)
                 val isVtt = downloaded.format == ExternalSubtitleFormat.WEBVTT

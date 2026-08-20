@@ -61,14 +61,14 @@ class StreamProxyServer {
     Map<String, String> headers, {
     String host = '127.0.0.1',
     String? contentType,
-    bool? allowPrivateNetwork,
+    List<String>? allowedPrivateOrigins,
   }) =>
       services.registerUrl(
         host: host,
         url: originalUrl,
         headers: headers,
         contentType: contentType,
-        allowPrivateNetwork: allowPrivateNetwork,
+        allowedPrivateOrigins: allowedPrivateOrigins,
       );
 
   /// Compatibility helper for local playback callers.
@@ -76,13 +76,13 @@ class StreamProxyServer {
     String originalUrl,
     Map<String, String> headers, {
     String? contentType,
-    bool? allowPrivateNetwork,
+    List<String>? allowedPrivateOrigins,
   }) async =>
       (await registerRemote(
         originalUrl,
         headers,
         contentType: contentType,
-        allowPrivateNetwork: allowPrivateNetwork,
+        allowedPrivateOrigins: allowedPrivateOrigins,
       ))
           .url;
 

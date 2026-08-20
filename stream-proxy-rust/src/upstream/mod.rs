@@ -8,7 +8,7 @@
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use bytes::Bytes;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
@@ -24,6 +24,65 @@ pub mod jni_fetcher;
 pub mod segment_cache;
 
 pub use segment_cache::{hls_media_segment_urls, PrefetchTarget, SegmentCache};
+
+/// Presence marks untrusted page-controlled traffic; the set contains exact private origins.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkPolicy {
+    allowed_private_origins: Arc<HashSet<String>>,
+}
+
+impl NetworkPolicy {
+    pub const MAX_PRIVATE_ORIGINS: usize = 16;
+
+    pub fn new(origins: Vec<String>) -> Result<Self, String> {
+        if origins.len() > Self::MAX_PRIVATE_ORIGINS {
+            return Err("too many private media origins".into());
+        }
+        let mut normalized = HashSet::new();
+        for value in origins {
+            let url = url::Url::parse(&value).map_err(|_| "invalid private media origin")?;
+            if !matches!(url.scheme(), "http" | "https")
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || !matches!(url.path(), "" | "/")
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err("invalid private media origin".into());
+            }
+            let host = url.host_str().ok_or("private media origin has no host")?;
+            let lower = host.to_ascii_lowercase();
+            if lower.contains('*') || lower == "localhost" || lower.ends_with(".localhost") {
+                return Err("private media origin is forbidden".into());
+            }
+            normalized.insert(normalized_origin(&url)?);
+        }
+        Ok(Self {
+            allowed_private_origins: Arc::new(normalized),
+        })
+    }
+
+    fn allows_private_url(&self, url: &url::Url) -> bool {
+        normalized_origin(url)
+            .map(|origin| self.allowed_private_origins.contains(&origin))
+            .unwrap_or(false)
+    }
+}
+
+fn normalized_origin(url: &url::Url) -> Result<String, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "media URL has no host".to_string())?;
+    let port = url
+        .port_or_known_default()
+        .ok_or_else(|| "media URL has no port".to_string())?;
+    Ok(format!(
+        "{}://{}:{}",
+        url.scheme().to_ascii_lowercase(),
+        host.to_ascii_lowercase(),
+        port
+    ))
+}
 
 pub struct UpstreamResponse {
     pub status: StatusCode,
@@ -49,7 +108,7 @@ pub trait UpstreamFetcher: Send + Sync {
         &'a self,
         url: &'a str,
         headers: &'a HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> UpstreamConnectFuture<'a>;
 }
 
@@ -113,11 +172,11 @@ impl ConnectionEngine {
         &self,
         url: &str,
         headers: &HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> Result<UpstreamResponse, String> {
         let headers = with_default_upstream_headers(headers);
         let fetcher = Arc::clone(&self.fetcher);
-        if network_policy == Some(false) {
+        if network_policy.is_some() {
             return fetcher
                 .connect_with_policy(url, &headers, network_policy)
                 .await;
@@ -154,7 +213,7 @@ impl ConnectionEngine {
         &self,
         url: &str,
         headers: &HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> Result<Bytes, String> {
         let resp = self
             .connect_upstream_with_policy(url, headers, network_policy)
@@ -178,9 +237,9 @@ impl ConnectionEngine {
         &self,
         targets: Vec<PrefetchTarget>,
         headers: &HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) {
-        if targets.is_empty() {
+        if targets.is_empty() || network_policy.is_some() {
             return;
         }
         let fetcher = Arc::clone(&self.fetcher);
@@ -200,30 +259,19 @@ impl ConnectionEngine {
                 let headers_for_key = headers.clone();
                 let headers_for_fetch = headers.clone();
                 let url_for_fetch = target.url.clone();
-                // Drain the tee fully so the producer can store the segment.
-                let result = if network_policy != Some(false) {
-                    cache
-                        .fetch_and_store(&target.url, &headers_for_key, move || {
-                            let fetcher = fetcher;
-                            let url_for_fetch = url_for_fetch;
-                            let headers_for_fetch = headers_for_fetch;
-                            async move {
-                                fetcher
-                                    .connect_with_policy(
-                                        &url_for_fetch,
-                                        &headers_for_fetch,
-                                        network_policy,
-                                    )
-                                    .await
-                            }
-                        })
-                        .await
-                } else {
-                    fetcher
-                        .connect_with_policy(&url_for_fetch, &headers_for_fetch, network_policy)
-                        .await
-                        .map(|_| ())
-                };
+                // Page-controlled traffic returned above; trusted prefetch may populate the cache.
+                let result = cache
+                    .fetch_and_store(&target.url, &headers_for_key, move || {
+                        let fetcher = fetcher;
+                        let url_for_fetch = url_for_fetch;
+                        let headers_for_fetch = headers_for_fetch;
+                        async move {
+                            fetcher
+                                .connect_with_policy(&url_for_fetch, &headers_for_fetch, None)
+                                .await
+                        }
+                    })
+                    .await;
                 if result.is_ok() {
                     debug!("[stream-proxy] prefetched segment into cache (url omitted)");
                 }
@@ -234,7 +282,7 @@ impl ConnectionEngine {
 
 pub async fn validate_http_destination(
     value: &str,
-    network_policy: Option<bool>,
+    network_policy: Option<&NetworkPolicy>,
 ) -> Result<(), String> {
     let url = url::Url::parse(value).map_err(|_| "invalid media URL".to_string())?;
     if !matches!(url.scheme(), "http" | "https")
@@ -246,7 +294,8 @@ pub async fn validate_http_destination(
     if network_policy.is_none() {
         return Ok(());
     }
-    let allow_private_network = network_policy == Some(true);
+    let allow_private_network =
+        network_policy.is_some_and(|policy| policy.allows_private_url(&url));
     let host = url
         .host_str()
         .ok_or_else(|| "media URL has no host".to_string())?;
@@ -450,6 +499,27 @@ fn should_skip_header(lower_key: &str) -> bool {
 #[cfg(test)]
 mod policy_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct CountingFetcher(AtomicUsize);
+
+    impl UpstreamFetcher for CountingFetcher {
+        fn connect_with_policy<'a>(
+            &'a self,
+            _url: &'a str,
+            _headers: &'a HashMap<String, String>,
+            _network_policy: Option<NetworkPolicy>,
+        ) -> UpstreamConnectFuture<'a> {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async {
+                Ok(UpstreamResponse {
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
+                    body: Body::from("segment"),
+                })
+            })
+        }
+    }
 
     #[test]
     fn page_headers_are_scoped_to_their_original_media_origin() {
@@ -478,27 +548,54 @@ mod policy_tests {
     }
 
     #[tokio::test]
-    async fn private_destinations_require_the_explicit_grant() {
+    async fn page_requests_do_not_reuse_the_trusted_segment_cache() {
+        let fetcher = Arc::new(CountingFetcher(AtomicUsize::new(0)));
+        let engine = ConnectionEngine::with_fetcher(fetcher.clone());
+        let headers = HashMap::new();
+        let first = engine
+            .connect_upstream("https://media.example/segment.ts", &headers)
+            .await
+            .unwrap();
+        axum::body::to_bytes(first.body, usize::MAX).await.unwrap();
+        let page = engine
+            .connect_upstream_with_policy(
+                "https://media.example/segment.ts",
+                &headers,
+                Some(NetworkPolicy::new(vec![]).unwrap()),
+            )
+            .await
+            .unwrap();
+        axum::body::to_bytes(page.body, usize::MAX).await.unwrap();
+        assert_eq!(fetcher.0.load(Ordering::Relaxed), 2);
+    }
+
+    #[tokio::test]
+    async fn private_destinations_require_the_exact_origin_grant() {
+        let public_only = NetworkPolicy::new(vec![]).unwrap();
+        let approved = NetworkPolicy::new(vec!["http://192.168.1.5".into()]).unwrap();
+        assert!(NetworkPolicy::new(vec!["http://*.local".into()]).is_err());
         assert!(
-            validate_http_destination("http://127.0.0.1/media", Some(false))
+            validate_http_destination("http://127.0.0.1/media", Some(&public_only))
                 .await
                 .is_err()
         );
-        assert!(validate_http_destination("http://[::1]/media", Some(false))
-            .await
-            .is_err());
         assert!(
-            validate_http_destination("http://192.168.1.5/media", Some(true))
+            validate_http_destination("http://[::1]/media", Some(&approved))
+                .await
+                .is_err()
+        );
+        assert!(
+            validate_http_destination("http://192.168.1.5/media", Some(&approved))
                 .await
                 .is_ok()
         );
         assert!(
-            validate_http_destination("http://127.0.0.1/media", Some(true))
+            validate_http_destination("http://192.168.1.5:8080/media", Some(&approved))
                 .await
                 .is_err()
         );
         assert!(
-            validate_http_destination("http://169.254.169.254/metadata", Some(true))
+            validate_http_destination("http://169.254.169.254/metadata", Some(&approved))
                 .await
                 .is_err()
         );

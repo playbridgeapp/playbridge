@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use stream_proxy_rust::{ProxyServer, ProxyServerConfig};
 use tokio::sync::mpsc as tokio_mpsc;
 
-const SENDER_SERVICES_ABI_VERSION: u32 = 1;
+const SENDER_SERVICES_ABI_VERSION: u32 = 2;
 const COMMAND_CAPACITY: usize = 32;
 const EVENT_CAPACITY: usize = 128;
 
@@ -33,7 +33,7 @@ enum ServicesCommand {
         #[serde(default)]
         headers: HashMap<String, String>,
         content_type: Option<String>,
-        allow_private_network: Option<bool>,
+        allowed_private_origins: Option<Vec<String>>,
     },
     ProxyRegisterFile {
         request_id: Value,
@@ -274,17 +274,23 @@ async fn process_command(
             url,
             headers,
             content_type,
-            allow_private_network,
+            allowed_private_origins,
             ..
-        } => validate_page_headers(headers, allow_private_network.is_some())
-            .and_then(|headers| {
-                proxy.register_remote_with_policy(
+        } => validate_page_headers(headers, allowed_private_origins.is_some())
+            .and_then(|headers| match allowed_private_origins {
+                Some(origins) => proxy.register_remote_with_policy(
                     &host,
                     url,
                     headers,
                     content_type.as_deref(),
-                    allow_private_network.unwrap_or(true),
-                )
+                    origins,
+                ),
+                None => proxy.register_remote_with_content_type(
+                    &host,
+                    url,
+                    headers,
+                    content_type.as_deref(),
+                ),
             })
             .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
         ServicesCommand::ProxyRegisterFile {
@@ -547,13 +553,13 @@ mod tests {
             pb_sender_services_abi_version(),
             SENDER_SERVICES_ABI_VERSION
         );
-        assert_eq!(SENDER_SERVICES_ABI_VERSION, 1);
+        assert_eq!(SENDER_SERVICES_ABI_VERSION, 2);
     }
 
     #[test]
     fn browser_and_proxy_commands_use_the_documented_wire_names() {
         let proxy: ServicesCommand = serde_json::from_str(
-            r#"{"command":"proxy_register_url","request_id":"1","host":"192.0.2.1","url":"https://cdn.example/live","content_type":"application/vnd.apple.mpegurl"}"#,
+            r#"{"command":"proxy_register_url","request_id":"1","host":"192.0.2.1","url":"https://cdn.example/live","content_type":"application/vnd.apple.mpegurl","allowed_private_origins":["http://192.168.1.20:8080"]}"#,
         )
         .unwrap();
         assert_eq!(proxy.operation(), "proxy_register_url");
@@ -561,8 +567,10 @@ mod tests {
             proxy,
             ServicesCommand::ProxyRegisterUrl {
                 content_type: Some(ref value),
+                allowed_private_origins: Some(ref origins),
                 ..
             } if value == "application/vnd.apple.mpegurl"
+                && origins == &["http://192.168.1.20:8080"]
         ));
 
         let browser: ServicesCommand = serde_json::from_str(

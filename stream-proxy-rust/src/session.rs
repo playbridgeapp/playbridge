@@ -8,14 +8,16 @@ use std::time::{Duration, Instant};
 use tokio::time::interval;
 use tracing::info;
 
+use crate::upstream::NetworkPolicy;
+
 #[derive(Debug, Clone)]
 pub struct ProxySession {
     pub id: String,
     pub original_url: String,
     pub headers: HashMap<String, String>,
-    /// None is trusted application traffic. Some(false) is webpage/public-only;
-    /// Some(true) is webpage traffic with the separate LAN permission.
-    pub network_policy: Option<bool>,
+    /// None is trusted application traffic. Presence marks page-controlled traffic and
+    /// carries the exact private origins approved by the sender.
+    pub network_policy: Option<NetworkPolicy>,
     pub created_at: Instant,
     pub last_accessed_at: Instant,
 }
@@ -25,7 +27,7 @@ impl ProxySession {
         id: String,
         original_url: String,
         headers: HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> Self {
         let now = Instant::now();
         Self {
@@ -65,7 +67,7 @@ impl SessionManager {
         &self,
         original_url: String,
         headers: HashMap<String, String>,
-        network_policy: Option<bool>,
+        network_policy: Option<NetworkPolicy>,
     ) -> Result<ProxySession, String> {
         let _guard = self
             .registration_lock
