@@ -53,7 +53,8 @@ class WebSocketServer: ObservableObject {
     @Published var wssPort: UInt16?
 
     var deviceName: String { UIDevice.current.name }
-    private let authorizedTokensKey = "pb_authorized_tokens"
+    private let legacyAuthorizedTokensKey = "pb_authorized_tokens"
+    private let authorizedTokenVerifiersKey = "pb_authorized_token_verifiers"
     private let deviceUUIDKey = "pb_device_uuid"
     private let pairedDevicesKey = "pb_paired_devices"
     private let receiverPortKey = "pb_receiver_port"
@@ -76,25 +77,46 @@ class WebSocketServer: ObservableObject {
         return newUUID
     }
 
-    private var storedPairedDevices: [PairedDevice] {
-        get {
-            guard let data = UserDefaults.standard.data(forKey: pairedDevicesKey),
-                  let devices = try? JSONDecoder().decode([PairedDevice].self, from: data) else {
-                return []
-            }
-            return devices
+    private var pairingCredentials = PairingCredentialState()
+
+    private func loadAndMigratePairingCredentials() -> PairingCredentialState {
+        let defaults = UserDefaults.standard
+        let devices: [PairedDevice]
+        if let data = defaults.data(forKey: pairedDevicesKey),
+           let decoded = try? JSONDecoder().decode([PairedDevice].self, from: data) {
+            devices = decoded
+        } else {
+            devices = []
         }
-        set {
-            if let data = try? JSONEncoder().encode(newValue) {
-                UserDefaults.standard.set(data, forKey: pairedDevicesKey)
-            }
-            pairedDevicesList = newValue
-        }
+
+        let legacyTokens = Set(
+            defaults.stringArray(forKey: legacyAuthorizedTokensKey) ?? []
+        )
+        let storedVerifiers = Set(
+            defaults.stringArray(forKey: authorizedTokenVerifiersKey) ?? []
+        )
+        return PairingCredentialState.migrated(
+            pairedDevices: devices,
+            legacyAuthorizedTokens: legacyTokens,
+            authorizedTokenVerifiers: storedVerifiers
+        )
     }
 
-    private var authorizedTokens: Set<String> {
-        get { Set(UserDefaults.standard.stringArray(forKey: authorizedTokensKey) ?? []) }
-        set { UserDefaults.standard.set(Array(newValue), forKey: authorizedTokensKey) }
+    private func persistPairingCredentials() {
+        let defaults = UserDefaults.standard
+        guard let devicesData = try? JSONEncoder().encode(pairingCredentials.pairedDevices) else {
+            return
+        }
+
+        // Write both verifier-backed records before removing the legacy plaintext key.
+        // If the process exits between writes, the next launch safely repeats migration.
+        defaults.set(devicesData, forKey: pairedDevicesKey)
+        defaults.set(
+            Array(pairingCredentials.authorizedTokenVerifiers),
+            forKey: authorizedTokenVerifiersKey
+        )
+        defaults.removeObject(forKey: legacyAuthorizedTokensKey)
+        pairedDevicesList = pairingCredentials.pairedDevices
     }
 
     /// Re-broadcasts `playlist_status` whenever the queue changes — including index moves
@@ -105,7 +127,8 @@ class WebSocketServer: ObservableObject {
         self.historyStore = historyStore
         self.playlistStore = playlistStore
         self.localIP = getIPAddress()
-        self.pairedDevicesList = storedPairedDevices
+        self.pairingCredentials = loadAndMigratePairingCredentials()
+        persistPairingCredentials()
 
         // objectWillChange fires *before* the mutation lands; the debounce hop onto the
         // main queue ensures we serialize the post-mutation queue state.
@@ -644,17 +667,6 @@ class WebSocketServer: ObservableObject {
         autoTimeoutWork = nil
 
         let token = UUID().uuidString
-        var tokens = authorizedTokens
-        tokens.insert(token)
-        authorizedTokens = tokens
-
-        let device = PairedDevice(
-            deviceUUID: handshake.deviceUUID,
-            deviceName: handshake.deviceName,
-            token: token,
-            lastConnected: Date()
-        )
-        savePairedDevice(device)
 
         guard let commitBytes = Data(base64Encoded: handshake.commit),
               let senderEphPub = handshake.senderEphPub,
@@ -692,6 +704,12 @@ class WebSocketServer: ObservableObject {
                 plaintext: plaintext,
                 aad: transcriptHash
             )
+            pairingCredentials.authorize(
+                deviceUUID: handshake.deviceUUID,
+                deviceName: handshake.deviceName,
+                token: token
+            )
+            persistPairingCredentials()
             send(json: [
                 "type": "pairing_approved",
                 "nonce": credentialNonce.base64EncodedString(),
@@ -785,8 +803,9 @@ class WebSocketServer: ObservableObject {
             send(json: ["type": "auth_response", "success": false], to: connection)
             return
         }
-        if authorizedTokens.contains(msg.token) {
-            updateLastConnected(token: msg.token)
+        if pairingCredentials.isTokenAuthorized(msg.token) {
+            pairingCredentials.updateLastConnected(token: msg.token)
+            persistPairingCredentials()
             completeAuth(from: connection, token: msg.token)
         } else {
             send(json: ["type": "auth_response", "success": false], to: connection)
@@ -822,41 +841,14 @@ class WebSocketServer: ObservableObject {
 
     // MARK: - Paired Device Management
 
-    private func savePairedDevice(_ device: PairedDevice) {
-        var devices = storedPairedDevices
-        if let idx = devices.firstIndex(where: { $0.deviceUUID == device.deviceUUID }) {
-            devices[idx] = device
-        } else {
-            devices.append(device)
-        }
-        storedPairedDevices = devices
-    }
-
     func forgetDevice(_ device: PairedDevice) {
-        var devices = storedPairedDevices
-        devices.removeAll { $0.deviceUUID == device.deviceUUID }
-        storedPairedDevices = devices
-        var tokens = authorizedTokens
-        tokens.remove(device.token)
-        authorizedTokens = tokens
+        pairingCredentials.forgetDevice(deviceUUID: device.deviceUUID)
+        persistPairingCredentials()
     }
 
     func forgetAllDevices() {
-        storedPairedDevices = []
-        authorizedTokens = []
-        DispatchQueue.main.async { self.pairedDevicesList = [] }
-    }
-
-    private func updateLastConnected(token: String) {
-        var devices = storedPairedDevices
-        if let idx = devices.firstIndex(where: { $0.token == token }) {
-            let d = devices[idx]
-            devices[idx] = PairedDevice(
-                deviceUUID: d.deviceUUID, deviceName: d.deviceName,
-                token: token, lastConnected: Date()
-            )
-            storedPairedDevices = devices
-        }
+        pairingCredentials.forgetAllDevices()
+        persistPairingCredentials()
     }
 
     // MARK: - Command Handling
