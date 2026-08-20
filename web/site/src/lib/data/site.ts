@@ -1,14 +1,17 @@
 export const SITE = {
   name: 'PlayBridge',
   tagline: 'Your phone. Your TV. One bridge.',
+  /** Document title for the homepage (H1 stays `tagline`). */
+  title: 'PlayBridge app — Cast your phone to your TV',
   description:
-    'PlayBridge is an open-source casting suite in active development. Browse on your phone, watch on your TV — no accounts, no telemetry, local network only.',
+    'Open-source PlayBridge app: browse on your phone, watch on Android TV, Apple TV, Desktop, or a DLNA TV. Local network, no account.',
   url: 'https://playbridge.app',
   ogImage: '/favicon.svg',
   twitter: '@playbridge',
   email: 'playbridgeapp@gmail.com',
   github: 'https://github.com/playbridgeapp/PlayBridge',
   githubOrg: 'https://github.com/playbridgeapp',
+  discord: 'https://discord.gg/4U6WPSdSa9',
   /** Suite is multi-product; do not invent a single semver for the marketing site. */
   versionLabel: 'Alpha'
 };
@@ -51,7 +54,7 @@ export const SENDERS: Platform[] = [
   {
     icon: 'android',
     name: 'Android app',
-    desc: 'Browse, search, and send anything to a receiver on your network.',
+    desc: 'Browse, search, and send media to a receiver on your network.',
     href: '/senders#android'
   },
   {
@@ -98,6 +101,12 @@ export const RECEIVERS: Platform[] = [
     name: 'CLI',
     desc: 'Receive casts via mpv, or host a browser receiver from the terminal.',
     href: '/receivers#cli'
+  },
+  {
+    icon: 'tv',
+    name: 'DLNA / UPnP TV',
+    desc: 'Nothing to install. The phone discovers the renderer on your network.',
+    href: '/receivers#dlna'
   }
 ];
 
@@ -124,7 +133,7 @@ export const STEPS: Step[] = [
   {
     num: '03',
     title: 'Connect on the same Wi-Fi',
-    desc: 'They discover each other automatically. Approve the sender on the receiver once and it stays trusted.',
+    desc: 'They discover each other automatically. Confirm a 6-digit code on first connect; paired devices stay trusted.',
     phase: 'Set up once'
   },
   {
@@ -139,46 +148,58 @@ export type FeatureItem = {
   tag: string;
   title: string;
   desc: string;
-  visual: 'allow' | 'remote' | 'queue' | 'engine' | 'debrid' | 'browser';
+  visual: 'allow' | 'remote' | 'queue' | 'engine' | 'library' | 'browser';
 };
 
 export const FEATURES: FeatureItem[] = [
   {
     tag: 'PAIRING',
-    title: 'Allow with one tap.',
-    desc: 'When a sender connects, the receiver shows an Allow / Reject prompt. Approve once and the device is trusted from then on.',
+    title: 'A 6-digit code. Then it stays trusted.',
+    desc: 'First connect shows a short code on the receiver. Confirm it on the sender for an encrypted local link. Paired devices reconnect on their own.',
     visual: 'allow'
   },
   {
     tag: 'CONTROL',
     title: 'Your phone is the remote.',
-    desc: 'Full touchpad, D-pad, volume, and scrub. Switch episodes from the couch.',
+    desc: 'Touchpad, D-pad, keyboard, transport, volume, and track selection — from the couch, while the video stays on the big screen.',
     visual: 'remote'
   },
   {
+    tag: 'BROWSER',
+    title: 'Browse on the phone. Cast what it finds.',
+    desc: 'The Android sender includes a GeckoView browser with uBlock Origin. It detects direct files, HLS, DASH, and page players — tap cast.',
+    visual: 'browser'
+  },
+  {
+    tag: 'LIBRARY',
+    title: 'Your library. Your files.',
+    desc: 'A library on the phone with a watchlist and collections. Send a title to the receiver, or cast a video stored on the phone.',
+    visual: 'library'
+  },
+  {
     tag: 'PLAYBACK',
-    title: 'Season binge mode.',
-    desc: 'Start episode one instantly. The rest of the season pre-queues quietly in the background.',
+    title: 'Queue, auto-advance, resume.',
+    desc: 'Start an episode; the rest of the season can follow. Watch progress is remembered, and resume seeks the receiver to where you left off.',
     visual: 'queue'
   },
   {
-    tag: 'ENGINE',
-    title: 'Multi-engine playback.',
-    desc: 'ExoPlayer, MPV, VLC, AVPlayer — PlayBridge picks the right one for the content.',
+    tag: 'SCREENS',
+    title: 'PlayBridge receivers — or the TV you already have.',
+    desc: 'Android TV, Fire TV, Apple TV, and Desktop play with ExoPlayer, MPV, VLC, or AVPlayer depending on the device. DLNA / UPnP TVs need nothing installed.',
     visual: 'engine'
-  },
-  {
-    tag: 'SOURCES',
-    title: 'Debrid & Stremio support.',
-    desc: 'Real-Debrid, AllDebrid, and Stremio addons — resolved locally, no proxy in between.',
-    visual: 'debrid'
-  },
-  {
-    tag: 'BROWSER',
-    title: 'Ad-free GeckoView browser.',
-    desc: "The TV receiver's built-in System WebView can't block ads. An optional GeckoView plugin adds Mozilla's engine so uBlock Origin runs natively — clean from the first tap.",
-    visual: 'browser'
   }
+];
+
+export type FeatureBand = {
+  primary: FeatureItem;
+  secondary: FeatureItem;
+};
+
+/** Homepage bands — same facts as FEATURES, grouped so the page is not six identical rows. */
+export const FEATURE_BANDS: FeatureBand[] = [
+  { primary: FEATURES[2], secondary: FEATURES[3] },
+  { primary: FEATURES[0], secondary: FEATURES[1] },
+  { primary: FEATURES[4], secondary: FEATURES[5] }
 ];
 
 export type InstallRole = 'sender' | 'receiver';
@@ -325,8 +346,12 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       steps: [
         ['Google Play', 'Install PlayBridge Sender from the Google Play Store.'],
         ['Or GitHub Releases', `Download APK from GitHub Releases (marker ${RELEASE_MARKERS.phone}) for direct sideloading.`],
-        ['Open & cast', 'Discover a receiver on your Wi‑Fi and send media to it.']
+        ['Open & cast', 'Discover a PlayBridge receiver or a DLNA / UPnP TV on your Wi‑Fi and send media to it.']
       ],
+      notice: {
+        badge: 'DLNA / UPnP',
+        text: 'The Android sender can also find TVs that already speak DLNA / UPnP. Nothing to install on those sets. Details are on Receivers → DLNA / UPnP.'
+      },
       cmd: releaseSearchUrl(RELEASE_MARKERS.phone),
       playStoreUrl: 'https://play.google.com/store/apps/details?id=com.playbridge.sender',
       downloadUrl: '/download/android',
@@ -498,6 +523,40 @@ export const INSTALL_PRODUCTS: InstallProduct[] = [
       notice: {
         badge: 'Pre-release',
         text: 'Not yet on TestFlight. Developers and testers can build from source with Xcode.'
+      }
+    }
+  },
+  {
+    id: 'dlna',
+    label: 'DLNA / UPnP',
+    icon: 'tv',
+    receiver: {
+      title: 'DLNA / UPnP TV',
+      steps: [
+        ['Same Wi-Fi', 'Phone and TV on the same local network.'],
+        [
+          'Android sender',
+          'This path uses the PlayBridge Android phone app. Other senders do not discover DLNA renderers.'
+        ],
+        [
+          'Pick the TV',
+          'Open the device list on the phone. Compatible renderers appear next to PlayBridge receivers. No 6-digit code.'
+        ],
+        [
+          'Cast',
+          'Play, pause, stop, and seek from the phone. Volume and audio/subtitle tracks are not exposed. Keep the phone awake if you use a queue.'
+        ]
+      ],
+      cmd: '',
+      meta: [
+        ['role', 'receiver'],
+        ['install', 'None on the TV'],
+        ['sender', 'Android phone'],
+        ['pairing', 'Not required']
+      ],
+      notice: {
+        badge: 'Nothing to install',
+        text: 'The TV already has a renderer. PlayBridge does not run on that set.'
       }
     }
   }

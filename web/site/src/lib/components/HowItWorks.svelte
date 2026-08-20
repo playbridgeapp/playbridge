@@ -32,12 +32,12 @@
     {/each}
   </div>
 
-  <div class="cta-row how__cta">
+  <div class="how__cta">
     <a href="/#install" class="btn btn--primary"
-      ><Icon name="download" size={14} /> Get started</a
+      ><Icon name="download" size={14} /> Get a receiver</a
     >
-    <a href="/receivers" class="btn">Receivers</a>
-    <a href="/senders" class="btn">Senders</a>
+    <a class="how__link" href="/receivers">Receivers</a>
+    <a class="how__link" href="/senders">Senders</a>
   </div>
 </section>
 
@@ -49,7 +49,7 @@
 
   .step__phase {
     display: inline-block;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 9px;
     letter-spacing: 0.14em;
     text-transform: uppercase;
@@ -62,8 +62,8 @@
   }
   .step__phase--use {
     color: var(--accent);
-    background: rgba(74, 144, 226, 0.1);
-    border-color: rgba(74, 144, 226, 0.25);
+    background: color-mix(in oklab, var(--accent) 12%, transparent);
+    border-color: color-mix(in oklab, var(--accent) 28%, transparent);
   }
 
   .how__diagram {
@@ -71,6 +71,31 @@
   }
 
   .how__cta {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 18px;
     margin-top: 48px;
+  }
+  .how__link {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 1px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+  }
+  .how__link:hover {
+    color: var(--text);
+    border-bottom-color: color-mix(in oklab, var(--accent) 60%, transparent);
+  }
+  @media (max-width: 600px) {
+    .how__cta {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 14px;
+    }
+    .how__cta .btn { justify-content: center; }
+    .how__diagram { margin: 0 0 36px; }
   }
 </style>

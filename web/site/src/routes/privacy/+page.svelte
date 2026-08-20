@@ -16,7 +16,7 @@
   <div class="prose">
     <p><strong>Short version.</strong> PlayBridge has no accounts, no analytics, and no telemetry. It runs entirely on your local network.</p>
     <p>The Sender (phone) and Receiver (TV / desktop) communicate over a WebSocket on your LAN. Nothing about what you watch, search for, or cast is transmitted to PlayBridge or any third party.</p>
-    <p>Some optional integrations — Real-Debrid, AllDebrid, Stremio addons — are direct connections from your device to those services. Their privacy policies apply when you use them.</p>
+    <p>If you connect an optional third-party service yourself, that service’s privacy policy applies to the data you send it. PlayBridge does not proxy or collect that traffic.</p>
     <p>Crash reports are off by default and never enabled silently.</p>
   </div>
 </section>

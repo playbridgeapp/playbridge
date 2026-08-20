@@ -329,7 +329,9 @@
         </ol>
 
         <div class="cta-row">
-          {#if product.id === 'appletv'}
+          {#if product.id === 'dlna'}
+            <a href="/senders#android" class="btn btn--primary">Get the Android sender</a>
+          {:else if product.id === 'appletv'}
             <a
               href="https://github.com/playbridgeapp/PlayBridge/tree/main/tv/apple"
               target="_blank"
@@ -467,12 +469,12 @@
     text-decoration: underline;
   }
   .role-pill {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 9px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #4a90e2;
-    background: rgba(74, 144, 226, 0.15);
+    color: var(--accent);
+    background: rgba(74, 144, 226, 0.12);
     padding: 2px 8px;
     border-radius: 99px;
     font-weight: 600;
@@ -484,9 +486,9 @@
 
   .code-block {
     margin: 0 0 24px;
-    border-radius: 10px;
-    border: 1px solid var(--line-strong);
-    background: rgba(0, 0, 0, 0.35);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: rgba(0, 0, 0, 0.2);
     overflow: hidden;
   }
   .code-block__bar {
@@ -499,7 +501,7 @@
     background: rgba(200, 220, 255, 0.03);
   }
   .code-block__label {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 10px;
     letter-spacing: 0.1em;
     text-transform: uppercase;
@@ -521,7 +523,7 @@
     margin: 0;
     padding: 14px 16px;
     overflow-x: auto;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.5;
     color: var(--text);
@@ -531,55 +533,53 @@
 
   .installer__sub-selector {
     display: flex;
-    background: rgba(0, 0, 0, 0.25);
-    padding: 4px;
-    border-radius: 8px;
-    border: 1px solid var(--line);
+    padding: 0;
+    border-radius: 0;
+    border: 0;
     margin-bottom: 24px;
-    gap: 2px;
+    gap: 8px;
     width: fit-content;
     flex-wrap: wrap;
   }
   .sub-tab {
     background: transparent;
-    border: 0;
+    border: 1px solid var(--line);
     color: var(--text-faint);
-    padding: 6px 14px;
+    padding: 6px 12px;
     font-size: 12px;
     font-weight: 500;
     display: flex;
     align-items: center;
     gap: 6px;
-    border-radius: 6px;
+    border-radius: 8px;
     transition:
       color 0.15s ease,
-      background-color 0.15s ease;
+      border-color 0.15s ease;
   }
   .sub-tab:hover {
     color: var(--text);
   }
   .sub-tab--active {
     color: var(--text);
-    background: rgba(74, 144, 226, 0.12);
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    border-color: color-mix(in oklab, var(--accent) 55%, transparent);
   }
 
   .notice-box {
     margin-bottom: 24px;
     padding: 16px;
-    border-radius: 10px;
-    background: rgba(74, 144, 226, 0.04);
-    border: 1px solid rgba(74, 144, 226, 0.15);
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--line);
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
   .notice-badge {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 9px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #4a90e2;
+    color: var(--accent);
     background: rgba(74, 144, 226, 0.15);
     padding: 2px 8px;
     border-radius: 99px;
@@ -615,19 +615,19 @@
   .plugin-box {
     margin-top: 24px;
     padding: 16px;
-    border-radius: 10px;
-    background: rgba(74, 144, 226, 0.04);
-    border: 1px solid rgba(74, 144, 226, 0.15);
+    border-radius: 8px;
+    background: transparent;
+    border: 1px solid var(--line);
     display: flex;
     gap: 14px;
     align-items: flex-start;
   }
   .plugin-badge {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 9px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
-    color: #4a90e2;
+    color: var(--accent);
     background: rgba(74, 144, 226, 0.15);
     padding: 3px 8px;
     border-radius: 99px;
@@ -676,7 +676,7 @@
     min-width: 100px;
   }
   .meta-row dt {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 10px;
     letter-spacing: 0.12em;
     text-transform: uppercase;

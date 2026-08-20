@@ -43,7 +43,7 @@
     border-radius: 50%;
     border: 1px solid var(--line-strong);
     display: grid; place-items: center;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 9px;
     color: var(--text-dim);
     letter-spacing: 0.15em;
@@ -65,7 +65,7 @@
   .btn--active { color: var(--accent); }
   .vol {
     display: flex; align-items: center; gap: 10px;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 10px; color: var(--text-faint);
   }
   .vol__bar { flex: 1; height: 1px; background: var(--line-strong); position: relative; }

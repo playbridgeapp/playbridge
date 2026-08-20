@@ -4,7 +4,7 @@
 </script>
 
 <svg width={size} height={size} viewBox="0 0 1024 1024" fill="none" aria-hidden="true">
-  <g transform="rotate(-13 512 512)" fill="none" stroke="#1a3fa6"
+  <g transform="rotate(-13 512 512)" fill="none" stroke="currentColor"
      stroke-width="170" stroke-linecap="round" stroke-linejoin="round">
     <path d="M 332 772 L 332 252"/>
     <path d="M 332 252 L 552 252 C 692 252 772 332 772 422

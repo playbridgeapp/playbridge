@@ -5,9 +5,11 @@ export const prerender = true;
 const ROUTES = ['/', '/senders', '/receivers', '/privacy', '/security'];
 
 export const GET = async () => {
+  const lastmod = new Date().toISOString().slice(0, 10);
   const urls = ROUTES.map(
     (path) => `  <url>
     <loc>${SITE.url}${path === '/' ? '' : path}</loc>
+    <lastmod>${lastmod}</lastmod>
     <changefreq>monthly</changefreq>
     <priority>${path === '/' ? '1.0' : '0.6'}</priority>
   </url>`

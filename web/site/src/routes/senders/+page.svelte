@@ -1,6 +1,5 @@
 <script lang="ts">
   import Seo from '$lib/seo/Seo.svelte';
-  import Icon from '$lib/icons/Icon.svelte';
   import InstallRole from '$lib/components/InstallRole.svelte';
 </script>
 
@@ -18,10 +17,8 @@
       Senders browse, detect, and push media to a <strong>receiver</strong> on the same Wi‑Fi. Desktop
       and the CLI also work as receivers — this page is only the cast-out path.
     </p>
-    <div class="cta-row role-page__switch">
-      <a class="btn" href="/receivers">
-        Looking to watch? Install receivers <Icon name="arrow" size={12} />
-      </a>
+    <div class="role-page__switch">
+      <a class="role-page__link" href="/receivers">Looking to watch? Get a receiver</a>
     </div>
   </div>
 
@@ -46,5 +43,16 @@
   }
   .role-page__switch {
     margin-top: 20px;
+  }
+  .role-page__link {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 1px;
+  }
+  .role-page__link:hover {
+    color: var(--text);
+    border-bottom-color: color-mix(in oklab, var(--accent) 60%, transparent);
   }
 </style>

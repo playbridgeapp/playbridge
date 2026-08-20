@@ -1,6 +1,7 @@
 <script lang="ts">
   import LogoMark from '$lib/icons/LogoMark.svelte';
   import Icon from '$lib/icons/Icon.svelte';
+  import ThemeToggle from './ThemeToggle.svelte';
   import { SITE } from '$lib/data/site';
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
@@ -57,7 +58,7 @@
     <a class="logo" href="/">
       <LogoMark size={30} />
       <span>{SITE.name}</span>
-      <span class="logo__badge">Alpha</span>
+      <span class="logo__badge">{SITE.versionLabel}</span>
     </a>
     <div class="nav__links">
       <a href="/#how">How it works</a>
@@ -72,11 +73,12 @@
       <a href="/#features">Features</a>
     </div>
     <div class="nav__actions">
-      <a class="btn" href={SITE.github} rel="noopener noreferrer" target="_blank"
-        ><Icon name="github" size={13} /> GitHub</a
+      <a class="nav__source" href={SITE.github} rel="noopener noreferrer" target="_blank"
+        >GitHub</a
       >
-      <a class="btn btn--primary" href="/#install">Get started</a>
+      <a class="btn btn--primary" href="/#install">Get a receiver</a>
     </div>
+    <ThemeToggle />
     <button
       type="button"
       class="nav__toggle"
@@ -114,16 +116,17 @@
       <a href="/senders" onclick={closeMenu}>Senders</a>
       <a href="/receivers" onclick={closeMenu}>Receivers</a>
       <a href="/#features" onclick={closeMenu}>Features</a>
-      <a href="/#install" onclick={closeMenu}>Get started</a>
+      <a class="btn btn--primary nav__mobile-cta" href="/#install" onclick={closeMenu}
+        >Get a receiver</a
+      >
       <a
-        class="btn btn--primary nav__mobile-github"
+        class="nav__mobile-source"
         href={SITE.github}
         rel="noopener noreferrer"
         target="_blank"
         onclick={closeMenu}
+      >GitHub</a
       >
-        <Icon name="github" size={14} /> GitHub
-      </a>
     </div>
   </div>
 {/if}

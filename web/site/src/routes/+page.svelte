@@ -17,12 +17,13 @@
     url: SITE.url,
     downloadUrl: `${SITE.url}/receivers`,
     license: 'https://www.gnu.org/licenses/gpl-3.0.html',
+    isAccessibleForFree: true,
     offers: {
       '@type': 'Offer',
       price: '0',
       priceCurrency: 'USD'
     },
-    image: `${SITE.url}${SITE.ogImage}`
+    sameAs: [SITE.github, SITE.githubOrg, SITE.discord]
   };
 </script>
 

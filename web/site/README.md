@@ -72,9 +72,10 @@ clients never receive the token.
 
 ## Color tokens
 
-The palette in `src/app.css` mirrors the canonical PlayBridge `DESIGN.md`:
-indigo brand (`#9ea7ff`), AMOLED-flavored surface (`#06051a → #0a0826`), on-surface `#e7e2ff`.
-Change the values at the top of `app.css` to retheme.
+Marketing art direction lives in [`DESIGN.md`](DESIGN.md). Tokens in `src/app.css`
+(Bond blue `#4a90e2`, navy `#06091e`) follow that file, not the native-app indigo
+system in the repo-root `DESIGN.md`.
+Change `:root` in `app.css` and the tables in `DESIGN.md` together.
 
 ## Editing copy
 

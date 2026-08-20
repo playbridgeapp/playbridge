@@ -1,13 +1,12 @@
 <script lang="ts">
   import Seo from '$lib/seo/Seo.svelte';
-  import Icon from '$lib/icons/Icon.svelte';
   import InstallRole from '$lib/components/InstallRole.svelte';
 </script>
 
 <Seo
   path="/receivers"
   title="Install receivers"
-  description="Install PlayBridge receivers: Android TV, Apple TV, Desktop, and CLI. Watch casts from phones, extensions, and more on your local network."
+  description="Watch on Android TV, Apple TV, Desktop, CLI, or a DLNA / UPnP TV. PlayBridge receivers install on the screen; DLNA TVs need nothing extra."
 />
 
 <section class="section wrap role-page">
@@ -15,14 +14,12 @@
     <span class="eyebrow">Receivers</span>
     <h1>Watch on these devices.</h1>
     <p>
-      Receivers play what <strong>senders</strong> cast. Put one on the screen you watch on, approve
-      senders once, and they stay trusted. Desktop and the CLI also send — this page is the
-      receive path.
+      Receivers play what <strong>senders</strong> cast. Install PlayBridge on the screen, or use a
+      DLNA / UPnP TV that already has a renderer — the Android phone finds it, nothing to install
+      on that set.
     </p>
-    <div class="cta-row role-page__switch">
-      <a class="btn" href="/senders">
-        Looking to cast? Install senders <Icon name="arrow" size={12} />
-      </a>
+    <div class="role-page__switch">
+      <a class="role-page__link" href="/senders">Looking to cast? Senders</a>
     </div>
   </div>
 
@@ -47,5 +44,16 @@
   }
   .role-page__switch {
     margin-top: 20px;
+  }
+  .role-page__link {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 1px;
+  }
+  .role-page__link:hover {
+    color: var(--text);
+    border-bottom-color: color-mix(in oklab, var(--accent) 60%, transparent);
   }
 </style>

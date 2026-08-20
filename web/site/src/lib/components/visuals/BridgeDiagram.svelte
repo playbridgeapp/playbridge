@@ -100,7 +100,7 @@
   .bridge__cap { display: flex; flex-direction: column; gap: 2px; }
   .bridge__cap--right { text-align: right; }
   .bridge__role {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: var(--font-mono-ui);
     font-size: 10px;
     letter-spacing: 0.14em;
     text-transform: uppercase;

@@ -4,7 +4,7 @@
   let { w = 320, ratio = 'auto', children }: Props = $props();
 </script>
 
-<div class="frame" style:max-width="{w}px" style:aspect-ratio={ratio}>
+<div class="frame" style:max-width="min(100%, {w}px)" style:aspect-ratio={ratio}>
   {@render children()}
 </div>
 

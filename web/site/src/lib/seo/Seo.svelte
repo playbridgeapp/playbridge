@@ -19,7 +19,7 @@
     jsonLd = null
   }: Props = $props();
 
-  const fullTitle = $derived(title ? `${title} — ${SITE.name}` : `${SITE.name} — ${SITE.tagline}`);
+  const fullTitle = $derived(title ? `${title} — ${SITE.name}` : SITE.title);
   const canonical = $derived(`${SITE.url}${path}`);
   const fullImage = $derived(image.startsWith('http') ? image : `${SITE.url}${image}`);
 </script>
