@@ -11,10 +11,12 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -23,13 +25,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
@@ -75,6 +81,7 @@ import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 import com.playbridge.sender.data.library.AddonDao
 import com.playbridge.sender.data.settings.SettingsRepository
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
@@ -102,6 +109,8 @@ fun AppNavHost(
     onIsEditingChange: (Boolean) -> Unit,
     isFullscreen: Boolean,
     onIsFullscreenChange: (Boolean) -> Unit,
+    isBrowserChromeHidden: Boolean,
+    onIsBrowserChromeHiddenChange: (Boolean) -> Unit,
     backPressedTime: Long,
     onBackPressedTimeChange: (Long) -> Unit,
     onFinishActivity: () -> Unit,
@@ -425,7 +434,10 @@ fun AppNavHost(
                             session?.exitFullScreenMode()
                         }
                     }
-                    BackHandler(enabled = !isFullscreen && !isEditing) {
+                    BackHandler(enabled = !isFullscreen && isBrowserChromeHidden) {
+                        onIsBrowserChromeHiddenChange(false)
+                    }
+                    BackHandler(enabled = !isFullscreen && !isBrowserChromeHidden && !isEditing) {
                         if (browserCanGoBack) {
                             session?.goBack()
                         } else {
@@ -443,14 +455,28 @@ fun AppNavHost(
                         }
                     }
 
-                    BackHandler(enabled = isEditing) {
+                    BackHandler(enabled = isEditing && !isBrowserChromeHidden) {
                         onIsEditingChange(false)
                         onUrlBarTappedChange(false)
                         keyboardController?.hide()
                         focusManager.clearFocus()
                     }
 
-                    Box(modifier = Modifier.fillMaxSize()) {
+                    var chromeHandleOnRight by rememberSaveable { mutableStateOf(true) }
+                    var chromeHandleYFraction by rememberSaveable { mutableFloatStateOf(0f) }
+                    var chromeHandleDragOffset by remember { mutableStateOf<Offset?>(null) }
+
+                    BoxWithConstraints(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (isBrowserChromeHidden && !isFullscreen) {
+                                    Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                    ) {
                         if (currentScreen == Screen.Browser && session != null) {
                             browserViewContent(session) { url ->
                                 onContextMenuUrlChange(url)
@@ -465,6 +491,80 @@ fun AppNavHost(
                                 historyDao = historyDao,
                                 bookmarkDao = bookmarkDao
                             )
+                        }
+
+                        if (isBrowserChromeHidden && !isFullscreen) {
+                            val density = LocalDensity.current
+                            val handleSizePx = with(density) { 48.dp.toPx() }
+                            val maxHandleX = (with(density) { maxWidth.toPx() } - handleSizePx)
+                                .coerceAtLeast(0f)
+                            val maxHandleY = (with(density) { maxHeight.toPx() } - handleSizePx)
+                                .coerceAtLeast(0f)
+                            val restingHandleOffset = Offset(
+                                x = if (chromeHandleOnRight) maxHandleX else 0f,
+                                y = chromeHandleYFraction.coerceIn(0f, 1f) * maxHandleY,
+                            )
+                            val displayedHandleOffset = chromeHandleDragOffset ?: restingHandleOffset
+
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .offset {
+                                        IntOffset(
+                                            x = displayedHandleOffset.x.roundToInt(),
+                                            y = displayedHandleOffset.y.roundToInt(),
+                                        )
+                                    }
+                                    .pointerInput(maxHandleX, maxHandleY, restingHandleOffset) {
+                                        detectDragGestures(
+                                            onDragStart = {
+                                                chromeHandleDragOffset = restingHandleOffset
+                                            },
+                                            onDragEnd = {
+                                                chromeHandleDragOffset?.let { position ->
+                                                    chromeHandleOnRight = position.x >= maxHandleX / 2f
+                                                    chromeHandleYFraction = if (maxHandleY > 0f) {
+                                                        position.y / maxHandleY
+                                                    } else {
+                                                        0f
+                                                    }
+                                                }
+                                                chromeHandleDragOffset = null
+                                            },
+                                            onDragCancel = {
+                                                chromeHandleDragOffset = null
+                                            },
+                                        ) { change, dragAmount ->
+                                            change.consume()
+                                            val current = chromeHandleDragOffset ?: restingHandleOffset
+                                            chromeHandleDragOffset = Offset(
+                                                x = (current.x + dragAmount.x).coerceIn(0f, maxHandleX),
+                                                y = (current.y + dragAmount.y).coerceIn(0f, maxHandleY),
+                                            )
+                                        }
+                                    },
+                                shape = when {
+                                    chromeHandleDragOffset != null -> RoundedCornerShape(16.dp)
+                                    chromeHandleOnRight -> RoundedCornerShape(
+                                        topStart = 16.dp,
+                                        bottomStart = 16.dp,
+                                    )
+                                    else -> RoundedCornerShape(
+                                        topEnd = 16.dp,
+                                        bottomEnd = 16.dp,
+                                    )
+                                },
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
+                                tonalElevation = 6.dp,
+                                shadowElevation = 4.dp,
+                            ) {
+                                IconButton(onClick = { onIsBrowserChromeHiddenChange(false) }) {
+                                    Icon(
+                                        imageVector = Icons.Default.FullscreenExit,
+                                        contentDescription = "Show browser controls",
+                                    )
+                                }
+                            }
                         }
 
                         if (isEditing) {

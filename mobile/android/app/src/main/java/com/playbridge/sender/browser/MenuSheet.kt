@@ -60,6 +60,7 @@ fun MenuSheet(
     onToggleDesktopMode: () -> Unit,
     onToggleVideoDetect: () -> Unit,
     onUserAgentClick: () -> Unit = {},
+    onFullScreenClick: () -> Unit = {},
     onClearDataClick: () -> Unit = {}
 ) {
     val items = listOf(
@@ -111,7 +112,13 @@ fun MenuSheet(
             label = "Extensions",
             onClick = onExtensionsClick
         ),
-        // Settings lives on Dashboard (top-right gear) only.
+        MenuAction(
+            icon = Icons.Default.Fullscreen,
+            label = "Full Screen",
+            onClick = onFullScreenClick
+        ),
+        // Settings lives on Dashboard (top-right gear) only. Keep the destructive
+        // action after the primary browser controls so it overflows first.
         MenuAction(
             icon = Icons.Default.DeleteSweep,
             label = "Clear Data",
