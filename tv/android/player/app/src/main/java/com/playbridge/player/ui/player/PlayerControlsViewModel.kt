@@ -42,6 +42,9 @@ class PlayerControlsViewModel : ViewModel() {
 
     /** Request headers for fetching subtitle files (set by the activity when media loads). */
     var subtitleRequestHeaders: Map<String, String>? = null
+    var subtitleRequestHeadersByUrl: Map<String, Map<String, String>> = emptyMap()
+    var enforcePageSubtitleNetworkPolicy: Boolean = false
+    var allowedPrivateSubtitleOrigins: List<String> = emptyList()
 
     /**
      * Lazily download + parse the given subtitle URLs (for the live preview in the overlay).
@@ -52,7 +55,12 @@ class PlayerControlsViewModel : ViewModel() {
         urls.forEach { url ->
             if (SubtitleCueLoader.cached(url) != null || SubtitleCueLoader.isLoading(url)) return@forEach
             viewModelScope.launch {
-                SubtitleCueLoader.load(url, subtitleRequestHeaders)
+                SubtitleCueLoader.load(
+                    url,
+                    subtitleRequestHeadersByUrl[url] ?: subtitleRequestHeaders,
+                    enforcePageSubtitleNetworkPolicy,
+                    allowedPrivateSubtitleOrigins,
+                )
                 _controlsState.update { it.copy(subtitleCuesVersion = it.subtitleCuesVersion + 1) }
             }
         }
@@ -468,7 +476,21 @@ class PlayerControlsViewModel : ViewModel() {
     }
 
     fun showSwitchPlayer() {
+        if (!_controlsState.value.canSwitchPlayer) return
         showOverlay(ActiveOverlay.SWITCH_PLAYER)
+    }
+
+    fun setPlayerSwitchAllowed(allowed: Boolean) {
+        _controlsState.update {
+            it.copy(
+                canSwitchPlayer = allowed,
+                activeOverlay = if (!allowed && it.activeOverlay == ActiveOverlay.SWITCH_PLAYER) {
+                    ActiveOverlay.NONE
+                } else {
+                    it.activeOverlay
+                },
+            )
+        }
     }
 
     private fun showOverlay(overlay: ActiveOverlay) {
@@ -583,7 +605,12 @@ class PlayerControlsViewModel : ViewModel() {
         }
         subtitleManager?.setPlayer { engine?.currentPosition ?: 0L }
         subtitleManager?.setOffset(_controlsState.value.subtitleDelayMs)
-        subtitleManager?.loadSubtitle(url, headers)
+        subtitleManager?.loadSubtitle(
+            url,
+            headers,
+            enforcePageSubtitleNetworkPolicy,
+            allowedPrivateSubtitleOrigins,
+        )
     }
 
     fun clearSubtitle() {

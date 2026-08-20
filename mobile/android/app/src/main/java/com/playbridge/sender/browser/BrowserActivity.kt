@@ -133,6 +133,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
 
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.withContext
@@ -146,8 +147,36 @@ import com.playbridge.sender.library.LibraryViewModel
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
+import com.playbridge.shared.network.MediaNetworkPolicy
 import playbridge.PlaylistPayload
 import playbridge.PlayPayload
+
+private data class PendingPageCast(
+    val items: List<PlayPayload>,
+    val startIndex: Int,
+    val playlistMetadata: playbridge.VisualMetadata?,
+    val origin: String,
+    val tabId: Int,
+    val navigationGeneration: Long,
+    val stage: PageCastConsentStage,
+    val requestedPrivateOrigins: Set<String>,
+)
+
+private data class PendingLinkedPageCast(
+    val request: LinkedPageCastOpenRequest,
+    val stage: PageCastConsentStage,
+    val requestedPrivateOrigins: Set<String>,
+)
+
+private data class PendingLinkedOperation(
+    val message: org.json.JSONObject,
+    val origin: String,
+    val tabId: Int,
+    val navigationGeneration: Long,
+    val requestedPrivateOrigins: Set<String>,
+)
+
+private enum class PageCastConsentStage { WEBSITE, PRIVATE_ORIGINS }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
@@ -212,6 +241,7 @@ class BrowserActivity : ComponentActivity() {
 
     private val connectionViewModel: ConnectionViewModel by viewModel()
     private val connectionCoordinator: ConnectionCoordinator by inject()
+    private val linkedPageCastCoordinator: LinkedPageCastCoordinator by inject()
     private val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
@@ -220,6 +250,7 @@ class BrowserActivity : ComponentActivity() {
     private val downloadDao: com.playbridge.sender.data.downloads.DownloadDao by inject()
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
     private val updateChecker: com.playbridge.sender.update.UpdateChecker by inject()
+    private var pendingLinkedDeviceRequest: LinkedPageCastOpenRequest? = null
 
     /**
      * Third-party protocols do not expose PlayBridge's native playlist command. Keep the
@@ -345,10 +376,10 @@ class BrowserActivity : ComponentActivity() {
     private suspend fun <T> org.mozilla.geckoview.GeckoResult<T>.awaitSuccess(what: String): Boolean =
         kotlinx.coroutines.suspendCancellableCoroutine { cont ->
             accept(
-                { if (cont.isActive) cont.resume(true) {} },
+                { if (cont.isActive) cont.resume(true) { _, _, _ -> } },
                 { e ->
                     android.util.Log.w("BrowserActivity", "Gecko $what failed", e)
-                    if (cont.isActive) cont.resume(false) {}
+                    if (cont.isActive) cont.resume(false) { _, _, _ -> }
                 }
             )
         }
@@ -427,6 +458,66 @@ class BrowserActivity : ComponentActivity() {
         val tabs = Components.store.state.tabs
         val allStates = tabManager.captureAllStates()
         browserViewModel.saveTabs(tabs, selectedId, allStates, tabManager.parentIds)
+    }
+
+    private fun dispatchLinkedOpen(
+        request: LinkedPageCastOpenRequest,
+        selectedDevice: TvDevice? = null,
+    ) {
+        lifecycleScope.launch {
+            if (linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)) return@launch
+            if (selectedDevice == null) {
+                when (connectionViewModel.route.value) {
+                    is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice,
+                    is com.playbridge.sender.cast.CastSessionManager.Route.External,
+                    -> {
+                        pendingLinkedDeviceRequest = request
+                        Components.requestLinkedDevicePicker()
+                        return@launch
+                    }
+                    is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
+                }
+            }
+
+            val targetDevice = selectedDevice ?: connectionViewModel.tvDevice.first()
+            if (targetDevice == null) {
+                linkedPageCastCoordinator.reject(request.bridgeRequestId, "no_receiver")
+                return@launch
+            }
+            val currentDevice = connectionViewModel.tvDevice.first()
+            val alreadyConnected = connectionViewModel.connectionState.value is
+                WebSocketClient.ConnectionState.Connected &&
+                currentDevice?.let {
+                    com.playbridge.sender.connection.ConnectionMerge.isSameDevice(it, targetDevice)
+                } == true
+            if (!alreadyConnected) {
+                // DevicePicker already initiated pairing/connection for an explicitly selected
+                // target. A retained native route reconnects its exact saved target here.
+                if (selectedDevice == null) connectionViewModel.connect(targetDevice)
+                withTimeoutOrNull(if (selectedDevice == null) 8_000 else 30_000) {
+                    combine(
+                        connectionViewModel.tvDevice,
+                        connectionViewModel.connectionState,
+                    ) { device, state -> device to state }.first { (device, state) ->
+                        state is WebSocketClient.ConnectionState.Connected &&
+                            device?.let {
+                                com.playbridge.sender.connection.ConnectionMerge.isSameDevice(it, targetDevice)
+                            } == true
+                    }
+                }
+            }
+            val connectedDevice = connectionViewModel.tvDevice.first()
+            if (linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)) return@launch
+            if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected ||
+                connectedDevice?.let {
+                    com.playbridge.sender.connection.ConnectionMerge.isSameDevice(it, targetDevice)
+                } != true
+            ) {
+                linkedPageCastCoordinator.reject(request.bridgeRequestId, "connect_failed")
+                return@launch
+            }
+            linkedPageCastCoordinator.open(request, targetDevice)
+        }
     }
 
     @OptIn(ExperimentalMaterial3Api::class)
@@ -873,19 +964,40 @@ class BrowserActivity : ComponentActivity() {
             val maxBitrateCapMbpsFlow by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
             val maxBitrateCapMbps = maxBitrateCapMbpsFlow.takeIf { it > 0.0 }
             val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
+            var pendingPageCast by remember { mutableStateOf<PendingPageCast?>(null) }
+            var pendingLinkedPageCast by remember { mutableStateOf<PendingLinkedPageCast?>(null) }
+            var pendingLinkedOperation by remember { mutableStateOf<PendingLinkedOperation?>(null) }
+            val pageCastCallbackOwner = remember { Any() }
+            DisposableEffect(pageCastCallbackOwner) {
+                Components.claimPageCastCallbacks(pageCastCallbackOwner)
+                onDispose {
+                    pendingLinkedPageCast?.request?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId, "activity_recreated")
+                    }
+                    pendingLinkedDeviceRequest?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId, "activity_recreated")
+                    }
+                    pendingLinkedOperation?.let {
+                        linkedPageCastCoordinator.reject(
+                            it.message.optString("bridgeRequestId"),
+                            "session_ended",
+                        )
+                    }
+                    pendingLinkedDeviceRequest = null
+                    Components.clearPageCastCallbacks(pageCastCallbackOwner)
+                }
+            }
 
-            // Set up Bridge callback to handle Hub UI cast requests
-            LaunchedEffect(
-                connectionViewModel,
-                castRoute,
-                preferredAudioLang,
-                preferredSubLang,
-                defaultVideoQuality,
-                maxBitrateCapMbps,
-            ) {
-                com.playbridge.sender.browser.Components.onBridgeCastRequest = { items, startIndex, playlistMetadata ->
+            val dispatchBridgeCast: (
+                List<PlayPayload>,
+                Int,
+                playbridge.VisualMetadata?,
+                Int,
+                Long,
+            ) -> Unit =
+                { items, startIndex, playlistMetadata, tabId, navigationGeneration ->
+                    linkedPageCastCoordinator.supersedeIfActive()
                     Log.d("BrowserActivity", "Cast requested via Extension Bridge: ${items.size} items, startIndex: $startIndex")
-                    
                     lifecycleScope.launch {
                         val currentMode = tvPlayerMode.takeIf { it != "tv" }
                         val playPayloads = items.map { item ->
@@ -897,7 +1009,9 @@ class BrowserActivity : ComponentActivity() {
                                 max_bitrate_cap_mbps = item.max_bitrate_cap_mbps ?: maxBitrateCapMbps,
                             )
                         }
-                        if (playPayloads.isEmpty()) return@launch
+                        if (playPayloads.isEmpty() ||
+                            !Components.isCurrentPageNavigation(tabId, navigationGeneration)
+                        ) return@launch
 
                         when (castRoute) {
                             is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
@@ -907,7 +1021,13 @@ class BrowserActivity : ComponentActivity() {
                                 return@launch
                             }
                             is com.playbridge.sender.cast.CastSessionManager.Route.External -> {
-                                startExternalPlaylist(playPayloads, startIndex)
+                                runOnUiThread {
+                                    Toast.makeText(
+                                        this@BrowserActivity,
+                                        "Website casting requires a PlayBridge receiver",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
                                 return@launch
                             }
                             is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv -> Unit
@@ -916,18 +1036,45 @@ class BrowserActivity : ComponentActivity() {
                         // Reconnect only the selected native route. A retained PlayBridge socket
                         // must not steal a cast intended for This Device or another protocol.
                         val savedDevice = connectionViewModel.tvDevice.first()
-                        if (savedDevice != null && connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                        if (savedDevice == null) {
+                            runOnUiThread {
+                                Toast.makeText(
+                                    this@BrowserActivity,
+                                    "Choose a receiver first",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            return@launch
+                        }
+                        if (connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
                             Log.i("BrowserActivity", "TV disconnected, attempting reconnection before bridge cast")
                             runOnUiThread {
                                 Toast.makeText(this@BrowserActivity, "Connecting to TV...", Toast.LENGTH_SHORT).show()
                             }
                             connectionViewModel.connect(savedDevice)
                             withTimeoutOrNull(8000) {
-                                connectionViewModel.connectionState.first {
-                                    it is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected
+                                combine(
+                                    connectionViewModel.tvDevice,
+                                    connectionViewModel.connectionState,
+                                ) { device, state -> device to state }.first { (device, state) ->
+                                    state is WebSocketClient.ConnectionState.Connected &&
+                                        device?.let {
+                                            com.playbridge.sender.connection.ConnectionMerge.isSameDevice(
+                                                it,
+                                                savedDevice,
+                                            )
+                                        } == true
                                 }
                             }
-                            if (connectionViewModel.connectionState.value !is com.playbridge.sender.connection.WebSocketClient.ConnectionState.Connected) {
+                            val connectedDevice = connectionViewModel.tvDevice.first()
+                            if (connectionViewModel.connectionState.value !is WebSocketClient.ConnectionState.Connected ||
+                                connectedDevice?.let {
+                                    com.playbridge.sender.connection.ConnectionMerge.isSameDevice(
+                                        it,
+                                        savedDevice,
+                                    )
+                                } != true
+                            ) {
                                 Log.w("BrowserActivity", "Wait for connection timed out or failed. Aborting cast.")
                                 runOnUiThread {
                                     Toast.makeText(this@BrowserActivity, "Could not connect to TV", Toast.LENGTH_SHORT).show()
@@ -941,6 +1088,9 @@ class BrowserActivity : ComponentActivity() {
                                 start_index = startIndex,
                                 visual_metadata = playlistMetadata,
                             ))
+                        if (!Components.isCurrentPageNavigation(tabId, navigationGeneration)) {
+                            return@launch
+                        }
                         connectionViewModel.sendCommandAndRecord(
                             commandJson = cmd,
                             type = "playlist",
@@ -949,6 +1099,468 @@ class BrowserActivity : ComponentActivity() {
                         )
                     }
                 }
+
+            // A page may request a cast only after the user approved that exact web origin.
+            LaunchedEffect(
+                connectionViewModel,
+                castRoute,
+                preferredAudioLang,
+                preferredSubLang,
+                defaultVideoQuality,
+                maxBitrateCapMbps,
+            ) {
+                Components.onBridgeCastRequest = bridgeRequest@ {
+                        items,
+                        startIndex,
+                        playlistMetadata,
+                        origin,
+                        tabId,
+                        navigationGeneration,
+                        declaredPrivateOrigins,
+                    ->
+                    if (startIndex !in items.indices) return@bridgeRequest
+                    lifecycleScope.launch {
+                        val requestedPrivateOrigins = withContext(Dispatchers.IO) {
+                            val origins = declaredPrivateOrigins
+                                .mapNotNullTo(linkedSetOf(), MediaNetworkPolicy::privateOrigin)
+                            items.forEach { item ->
+                                sequenceOf(item.url)
+                                    .plus(item.subtitles.asSequence())
+                                    .plus(item.subtitle_resources.asSequence().map { it.url })
+                                    .mapNotNull(MediaNetworkPolicy::privateOrigin)
+                                    .forEach(origins::add)
+                            }
+                            MediaNetworkPolicy.normalizePrivateOrigins(origins)
+                        } ?: return@launch
+                        if (!Components.isCurrentPageNavigation(tabId, navigationGeneration)) {
+                            return@launch
+                        }
+                        val websiteApproved = PageCastConsentStore.isApproved(this@BrowserActivity, origin)
+                        val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
+                            this@BrowserActivity,
+                            origin,
+                            requestedPrivateOrigins,
+                        )
+                        val authorizedItems = items.map {
+                            it.copy(allowed_private_origins = requestedPrivateOrigins.toList())
+                        }
+                        when {
+                            !websiteApproved -> pendingPageCast = PendingPageCast(
+                                items,
+                                startIndex,
+                                playlistMetadata,
+                                origin,
+                                tabId,
+                                navigationGeneration,
+                                PageCastConsentStage.WEBSITE,
+                                requestedPrivateOrigins,
+                            )
+                            unapprovedPrivateOrigins.isNotEmpty() -> pendingPageCast = PendingPageCast(
+                                items,
+                                startIndex,
+                                playlistMetadata,
+                                origin,
+                                tabId,
+                                navigationGeneration,
+                                PageCastConsentStage.PRIVATE_ORIGINS,
+                                requestedPrivateOrigins,
+                            )
+                            else -> dispatchBridgeCast(
+                                authorizedItems,
+                                startIndex,
+                                playlistMetadata,
+                                tabId,
+                                navigationGeneration,
+                            )
+                        }
+                    }
+                }
+                Components.onLinkedNativePortDisconnected = {
+                    linkedPageCastCoordinator.unlink("native_port_lost")
+                }
+                Components.onLinkedDevicePicked = { device ->
+                    val request = pendingLinkedDeviceRequest
+                    if (request != null) {
+                        pendingLinkedDeviceRequest = null
+                        if (device.resolvedProtocol != com.playbridge.sender.model.CastProtocol.PLAYBRIDGE) {
+                            linkedPageCastCoordinator.reject(request.bridgeRequestId, "unsupported_target")
+                        } else {
+                            dispatchLinkedOpen(request, device)
+                        }
+                    }
+                }
+                Components.onLinkedDevicePickerDismissed = {
+                    pendingLinkedDeviceRequest?.let {
+                        linkedPageCastCoordinator.reject(it.bridgeRequestId, "user_cancelled")
+                    }
+                    pendingLinkedDeviceRequest = null
+                }
+                Components.onLinkedCastRequest = linkedRequest@ { message ->
+                    val type = message.optString("type")
+                    if (type == "linked_cancel_open") {
+                        val targetBridgeRequestId = message.optString("targetBridgeRequestId")
+                        linkedPageCastCoordinator.cancelOpen(targetBridgeRequestId)
+                        if (pendingLinkedPageCast?.request?.bridgeRequestId == targetBridgeRequestId) {
+                            pendingLinkedPageCast = null
+                        }
+                        if (pendingLinkedDeviceRequest?.bridgeRequestId == targetBridgeRequestId) {
+                            pendingLinkedDeviceRequest = null
+                        }
+                        return@linkedRequest
+                    }
+                    if (type != "linked_open") {
+                        val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin"))
+                        val tabId = message.optInt("tabId", -1)
+                        val navigationGeneration = message.optLong("navigationGeneration", -1)
+                        if (origin == null || tabId < 0 || navigationGeneration < 0 ||
+                            !linkedPageCastCoordinator.isMessageForActiveSession(message, origin)
+                        ) {
+                            linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), "session_ended")
+                            return@linkedRequest
+                        }
+                        lifecycleScope.launch {
+                            val requestedPrivateOrigins =
+                                linkedPageCastCoordinator.messageRequestedPrivateOrigins(message)
+                                    ?: run {
+                                        linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), "invalid_request")
+                                        return@launch
+                                    }
+                            if (!Components.isCurrentPageNavigation(tabId, navigationGeneration) ||
+                                !linkedPageCastCoordinator.isMessageForActiveSession(message, origin)
+                            ) {
+                                linkedPageCastCoordinator.reject(
+                                    message.optString("bridgeRequestId"),
+                                    "session_ended",
+                                )
+                                return@launch
+                            }
+                            val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
+                                this@BrowserActivity, origin, requestedPrivateOrigins,
+                            )
+                            if (unapprovedPrivateOrigins.isNotEmpty()) {
+                                pendingLinkedOperation?.let {
+                                    linkedPageCastCoordinator.reject(
+                                        it.message.optString("bridgeRequestId"),
+                                        "superseded",
+                                    )
+                                }
+                                pendingLinkedOperation = PendingLinkedOperation(
+                                    message,
+                                    origin,
+                                    tabId,
+                                    navigationGeneration,
+                                    requestedPrivateOrigins,
+                                )
+                            } else {
+                                if (linkedPageCastCoordinator.allowPrivateOriginsForActive(
+                                        origin, requestedPrivateOrigins,
+                                    )
+                                ) {
+                                    linkedPageCastCoordinator.handle(message)
+                                } else {
+                                    linkedPageCastCoordinator.reject(
+                                        message.optString("bridgeRequestId"), "resource_limit",
+                                    )
+                                }
+                            }
+                        }
+                        return@linkedRequest
+                    }
+                    val request = linkedPageCastCoordinator.parseOpen(message)
+                    if (request == null) {
+                        linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), "invalid_request")
+                        return@linkedRequest
+                    }
+                    if (!Components.isCurrentPageNavigation(
+                            request.tabId,
+                            request.navigationGeneration,
+                        )
+                    ) {
+                        linkedPageCastCoordinator.reject(request.bridgeRequestId, "session_ended")
+                        return@linkedRequest
+                    }
+                    pendingLinkedPageCast?.request?.let {
+                        linkedPageCastCoordinator.reject(it.bridgeRequestId, "superseded")
+                    }
+                    pendingLinkedDeviceRequest?.let {
+                        linkedPageCastCoordinator.reject(it.bridgeRequestId, "superseded")
+                    }
+                    pendingLinkedDeviceRequest = null
+                    lifecycleScope.launch {
+                        val requestedPrivateOrigins = linkedPageCastCoordinator.requestedPrivateOrigins(request)
+                            ?: run {
+                                linkedPageCastCoordinator.reject(request.bridgeRequestId, "invalid_request")
+                                return@launch
+                            }
+                        if (!Components.isCurrentPageNavigation(
+                                request.tabId,
+                                request.navigationGeneration,
+                            ) || linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)
+                        ) {
+                            linkedPageCastCoordinator.cancelOpen(request.bridgeRequestId)
+                            return@launch
+                        }
+                        val websiteApproved =
+                            PageCastConsentStore.isApproved(this@BrowserActivity, request.origin)
+                        val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
+                            this@BrowserActivity, request.origin, requestedPrivateOrigins,
+                        )
+                        when {
+                            !websiteApproved -> pendingLinkedPageCast = PendingLinkedPageCast(
+                                request,
+                                PageCastConsentStage.WEBSITE,
+                                requestedPrivateOrigins,
+                            )
+                            unapprovedPrivateOrigins.isNotEmpty() ->
+                                pendingLinkedPageCast = PendingLinkedPageCast(
+                                    request,
+                                    PageCastConsentStage.PRIVATE_ORIGINS,
+                                    requestedPrivateOrigins,
+                                )
+                            else -> dispatchLinkedOpen(
+                                request.withPrivateOriginPermission(requestedPrivateOrigins),
+                            )
+                        }
+                    }
+                }
+                Components.onPageNavigation = { tabId, navigationGeneration ->
+                    pendingPageCast?.takeIf {
+                        pageRequestSuperseded(
+                            it.tabId,
+                            it.navigationGeneration,
+                            tabId,
+                            navigationGeneration,
+                        )
+                    }?.let { pendingPageCast = null }
+                    pendingLinkedPageCast?.request?.takeIf {
+                        pageRequestSuperseded(
+                            it.tabId,
+                            it.navigationGeneration,
+                            tabId,
+                            navigationGeneration,
+                        )
+                    }?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                        pendingLinkedPageCast = null
+                    }
+                    pendingLinkedDeviceRequest?.takeIf {
+                        pageRequestSuperseded(
+                            it.tabId,
+                            it.navigationGeneration,
+                            tabId,
+                            navigationGeneration,
+                        )
+                    }?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                        pendingLinkedDeviceRequest = null
+                    }
+                    pendingLinkedOperation?.takeIf {
+                        pageRequestSuperseded(
+                            it.tabId,
+                            it.navigationGeneration,
+                            tabId,
+                            navigationGeneration,
+                        )
+                    }?.let {
+                        linkedPageCastCoordinator.reject(
+                            it.message.optString("bridgeRequestId"),
+                            "session_ended",
+                        )
+                        pendingLinkedOperation = null
+                    }
+                }
+            }
+
+            pendingPageCast?.let { request ->
+                val websiteName = PageCastConsentStore.displayName(request.origin)
+                val localNetworkPrompt = request.stage == PageCastConsentStage.PRIVATE_ORIGINS
+                val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
+                    this@BrowserActivity, request.origin, request.requestedPrivateOrigins,
+                ).joinToString("\n") {
+                    "• ${PageCastConsentStore.displayName(it)}"
+                }
+                AlertDialog(
+                    onDismissRequest = { pendingPageCast = null },
+                    title = {
+                        Text(
+                            if (localNetworkPrompt) "Allow local-network media?"
+                            else "Allow $websiteName to cast?",
+                        )
+                    },
+                    text = {
+                        Text(
+                            if (localNetworkPrompt) {
+                                "$websiteName wants the selected receiver to load media from:\n\n" +
+                                    "$privateOriginList\n\nOnly allow servers you recognize. " +
+                                    "You can reset these grants separately in Settings > Browser > Website casting permissions."
+                            } else {
+                                "$websiteName can start one-off direct casts and future linked casts. " +
+                                    "A linked cast keeps a session open so the website can manage its playlist on your selected device.\n\n" +
+                                    "This does not allow access to local-network media. You can reset this permission later " +
+                                    "in Settings > Browser > Website casting permissions."
+                            },
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (localNetworkPrompt) {
+                                PageCastConsentStore.approvePrivateOrigins(
+                                    this@BrowserActivity, request.origin, request.requestedPrivateOrigins,
+                                )
+                                pendingPageCast = null
+                                dispatchBridgeCast(
+                                    request.items.map { it.copy(allowed_private_origins = request.requestedPrivateOrigins.toList()) },
+                                    request.startIndex,
+                                    request.playlistMetadata,
+                                    request.tabId,
+                                    request.navigationGeneration,
+                                )
+                            } else {
+                                PageCastConsentStore.approve(this@BrowserActivity, request.origin)
+                                if (PageCastConsentStore.unapprovedPrivateOrigins(
+                                        this@BrowserActivity, request.origin, request.requestedPrivateOrigins,
+                                    ).isNotEmpty()
+                                ) {
+                                    pendingPageCast = request.copy(stage = PageCastConsentStage.PRIVATE_ORIGINS)
+                                } else {
+                                    pendingPageCast = null
+                                    dispatchBridgeCast(
+                                        request.items.map {
+                                            it.copy(allowed_private_origins = request.requestedPrivateOrigins.toList())
+                                        },
+                                        request.startIndex,
+                                        request.playlistMetadata,
+                                        request.tabId,
+                                        request.navigationGeneration,
+                                    )
+                                }
+                            }
+                        }) { Text("Allow") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingPageCast = null }) { Text("Deny") }
+                    },
+                )
+            }
+
+            pendingLinkedPageCast?.let { pending ->
+                val request = pending.request
+                val websiteName = PageCastConsentStore.displayName(request.origin)
+                val localNetworkPrompt = pending.stage == PageCastConsentStage.PRIVATE_ORIGINS
+                val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
+                    this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
+                ).joinToString("\n") {
+                    "• ${PageCastConsentStore.displayName(it)}"
+                }
+                AlertDialog(
+                    onDismissRequest = {
+                        linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
+                        pendingLinkedPageCast = null
+                    },
+                    title = {
+                        Text(
+                            if (localNetworkPrompt) "Allow local-network media?"
+                            else "Allow $websiteName to cast?",
+                        )
+                    },
+                    text = {
+                        Text(
+                            if (localNetworkPrompt) {
+                                "$websiteName wants the selected receiver to load playlist media from:\n\n" +
+                                    "$privateOriginList\n\nOnly allow servers you recognize. Future linked items " +
+                                    "must request any additional server separately."
+                            } else {
+                                "$websiteName can start casts and stay linked while this page is open so it can manage the TV playlist. " +
+                                    "Playback controls remain available in PlayBridge. This does not allow access to local-network media.\n\n" +
+                                    "You can reset this permission later in Settings > Browser > Website casting permissions."
+                            },
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (localNetworkPrompt) {
+                                PageCastConsentStore.approvePrivateOrigins(
+                                    this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
+                                )
+                                pendingLinkedPageCast = null
+                                dispatchLinkedOpen(request.withPrivateOriginPermission(pending.requestedPrivateOrigins))
+                            } else {
+                                PageCastConsentStore.approve(this@BrowserActivity, request.origin)
+                                if (PageCastConsentStore.unapprovedPrivateOrigins(
+                                        this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
+                                    ).isNotEmpty()
+                                ) {
+                                    pendingLinkedPageCast = pending.copy(
+                                        stage = PageCastConsentStage.PRIVATE_ORIGINS,
+                                    )
+                                } else {
+                                    pendingLinkedPageCast = null
+                                    dispatchLinkedOpen(
+                                        request.withPrivateOriginPermission(pending.requestedPrivateOrigins),
+                                    )
+                                }
+                            }
+                        }) { Text("Allow") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
+                            pendingLinkedPageCast = null
+                        }) { Text("Deny") }
+                    },
+                )
+            }
+
+            pendingLinkedOperation?.let { pending ->
+                val websiteName = PageCastConsentStore.displayName(pending.origin)
+                val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
+                    this@BrowserActivity, pending.origin, pending.requestedPrivateOrigins,
+                ).joinToString("\n") {
+                    "• ${PageCastConsentStore.displayName(it)}"
+                }
+                AlertDialog(
+                    onDismissRequest = {
+                        linkedPageCastCoordinator.reject(
+                            pending.message.optString("bridgeRequestId"),
+                            "not_allowed",
+                        )
+                        pendingLinkedOperation = null
+                    },
+                    title = { Text("Allow local-network media?") },
+                    text = {
+                        Text(
+                            "$websiteName wants to add playlist media from:\n\n$privateOriginList\n\n" +
+                                "Only allow servers you recognize. Future linked items must request additional servers separately.",
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            PageCastConsentStore.approvePrivateOrigins(
+                                this@BrowserActivity, pending.origin, pending.requestedPrivateOrigins,
+                            )
+                            val allowed = linkedPageCastCoordinator.allowPrivateOriginsForActive(
+                                pending.origin, pending.requestedPrivateOrigins,
+                            )
+                            pendingLinkedOperation = null
+                            if (allowed) {
+                                linkedPageCastCoordinator.handle(pending.message)
+                            } else {
+                                linkedPageCastCoordinator.reject(
+                                    pending.message.optString("bridgeRequestId"), "resource_limit",
+                                )
+                            }
+                        }) { Text("Allow") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = {
+                            linkedPageCastCoordinator.reject(
+                                pending.message.optString("bridgeRequestId"),
+                                "not_allowed",
+                            )
+                            pendingLinkedOperation = null
+                        }) { Text("Deny") }
+                    },
+                )
             }
 
             val detectVideosEnabled by settingsRepository.detectVideos.collectAsState(initial = true)
@@ -1131,6 +1743,7 @@ class BrowserActivity : ComponentActivity() {
                                 visual_metadata = content.visual_metadata,
                             )
                         )
+                        linkedPageCastCoordinator.supersedeIfActive()
                         if (connectionViewModel.webSocketClient.send(cmd)) {
                             // Library content — record identity for the progress tracker.
                             connectionCoordinator.startLocalPlaybackSession(
@@ -1156,8 +1769,9 @@ class BrowserActivity : ComponentActivity() {
                     if (playable.isNotEmpty()) {
                         val video = playable.first()
                         if (video.playlistPayload != null) {
+                            linkedPageCastCoordinator.supersedeIfActive()
                             val cmd = com.playbridge.shared.protocol.createPlaylistCommandJson(
-                                payload = playbridge.PlaylistPayload(items = video.playlistPayload!!)
+                                payload = playbridge.PlaylistPayload(items = video.playlistPayload)
                             )
                             if (connectionViewModel.webSocketClient.send(cmd)) {
                                 // Browser content has no library identity — clear it so the
@@ -1176,7 +1790,7 @@ class BrowserActivity : ComponentActivity() {
                                 PlayPayload(
                                     url = video.url,
                                     title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                    headers = headers ?: emptyMap(),
+                                    headers = headers,
                                     content_type = video.contentType,
                                     detected_by = video.detectedBy,
                                     player_mode = sheetPlayerMode.takeIf { it != "tv" },
@@ -1187,9 +1801,10 @@ class BrowserActivity : ComponentActivity() {
                                 )
                             )
                             connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
+                            linkedPageCastCoordinator.supersedeIfActive()
                             if (connectionViewModel.webSocketClient.send(cmd)) {
                                 connectionCoordinator.startLocalPlaybackSession(null, null, null) // browser content
-                                session?.let { tabManager.pauseMedia(it) }
+                                tabManager.pauseMedia(session)
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                     currentScreen = Screen.Remote
@@ -1994,7 +2609,7 @@ class BrowserActivity : ComponentActivity() {
                          // playlistPayload with a "playlist://…" sentinel URL; send it as a playlist,
                          // not as a single video (otherwise the TV tries to play the sentinel URL).
                          val cmd = if (video.playlistPayload != null) {
-                             val items = video.playlistPayload!!.map {
+                             val items = video.playlistPayload.map {
                                  it.copy(
                                      player_mode = sheetPlayerMode.takeIf { m -> m != "tv" },
                                      preferred_audio_language = preferredAudioLang.takeIf { l -> l.isNotEmpty() },
@@ -2013,7 +2628,7 @@ class BrowserActivity : ComponentActivity() {
                                  PlayPayload(
                                      url = video.url,
                                      title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                     headers = headers ?: emptyMap(),
+                                     headers = headers,
                                      content_type = video.contentType,
                                      detected_by = video.detectedBy,
                                      subtitles = subs.orEmpty(),
@@ -2027,6 +2642,7 @@ class BrowserActivity : ComponentActivity() {
                          }
                          val sent = when (connectionState) {
                              is WebSocketClient.ConnectionState.Connected -> {
+                                 linkedPageCastCoordinator.supersedeIfActive()
                                  val ok = connectionViewModel.webSocketClient.send(cmd)
                                  if (ok) {
                                      connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
@@ -2062,7 +2678,7 @@ class BrowserActivity : ComponentActivity() {
                                         PlayPayload(
                                             url = video.url,
                                             title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
-                                            headers = headers ?: emptyMap(),
+                                            headers = headers,
                                             content_type = video.contentType,
                                             detected_by = video.detectedBy,
                                             subtitles = subtitles.orEmpty(),
@@ -2179,6 +2795,7 @@ class BrowserActivity : ComponentActivity() {
                         )
                         val sent = when (connectionState) {
                             is WebSocketClient.ConnectionState.Connected -> {
+                                linkedPageCastCoordinator.supersedeIfActive()
                                 val ok = connectionViewModel.webSocketClient.send(cmd)
                                 if (ok) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())

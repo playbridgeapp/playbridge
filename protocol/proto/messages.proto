@@ -45,6 +45,15 @@ message VisualMetadata {
 
 // ==================== Command Payloads (Phone → TV) ====================
 
+// A sidecar subtitle is an independent network resource. Its headers are scoped
+// to this URL's origin and must never be inherited from an unrelated media URL.
+message SubtitleResource {
+  string url = 1;
+  map<string, string> headers = 2;
+  optional string label = 3;
+  optional string language = 4;
+}
+
 message PlayPayload {
   string url = 1;
   optional string title = 2;
@@ -65,6 +74,12 @@ message PlayPayload {
   // Resume point: start playback at this position (ms). The phone seeds it from its
   // content-keyed resume store; the receiver maps it onto the player's start position.
   optional int64 start_position_ms = 14       [json_name = "startPositionMs"];
+  // Exact private/LAN origins approved by the sender for page-initiated media.
+  // Receivers must still validate every resolved address, redirect, and derived resource.
+  repeated string allowed_private_origins = 15 [json_name = "allowedPrivateOrigins"];
+  // Additive replacement for credentialed sidecars. Legacy `subtitles` remains
+  // supported for senders that only provide URLs.
+  repeated SubtitleResource subtitle_resources = 16 [json_name = "subtitleResources"];
 }
 
 message PlaylistPayload {

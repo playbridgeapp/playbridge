@@ -51,9 +51,11 @@ class CastSessionService : Service(), KoinComponent {
         val needsWakeLock: Boolean,
         val mirroring: Boolean,
         val capturesDeviceAudio: Boolean,
+        val linkedController: String?,
     )
 
     private val manager: CastSessionManager by inject()
+    private val linkedPageCastCoordinator: com.playbridge.sender.browser.LinkedPageCastCoordinator by inject()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -80,8 +82,9 @@ class CastSessionService : Service(), KoinComponent {
                 manager.isActivelyPlaying,
                 manager.needsCastWakeLock,
                 manager.screenMirrorState,
-            ) { info, playing, needsWake, mirror ->
-                ForegroundState(info, playing, needsWake, mirror.isActive, mirror.deviceAudioRequested)
+                linkedPageCastCoordinator.uiState,
+            ) { info, playing, needsWake, mirror, linked ->
+                ForegroundState(info, playing, needsWake, mirror.isActive, mirror.deviceAudioRequested, linked.controllerName)
             }.collect { state ->
                 if (!foregroundStarted) return@collect
                 currentlyPlaying = state.playing
@@ -91,6 +94,7 @@ class CastSessionService : Service(), KoinComponent {
                     state.playing,
                     state.mirroring,
                     state.capturesDeviceAudio,
+                    state.linkedController,
                 )
             }
         }
@@ -152,6 +156,18 @@ class CastSessionService : Service(), KoinComponent {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_UNLINK_PAGE -> {
+                linkedPageCastCoordinator.unlink("unlinked")
+                val mirror = manager.screenMirrorState.value
+                startForegroundWithType(
+                    manager.sessionInfo.value,
+                    manager.isActivelyPlaying.value,
+                    mirror.isActive,
+                    mirror.deviceAudioRequested,
+                    null,
+                )
+                return START_STICKY
+            }
             ACTION_NOTIFICATION_DISMISSED -> {
                 if (manager.hasActiveSession.value) {
                     Log.i(TAG, "Cast notification dismissed while session active — re-showing")
@@ -191,8 +207,9 @@ class CastSessionService : Service(), KoinComponent {
         playing: Boolean,
         mirroring: Boolean,
         capturesDeviceAudio: Boolean,
+        linkedController: String? = linkedPageCastCoordinator.uiState.value.controllerName,
     ) {
-        val notif = buildNotification(info, playing)
+        val notif = buildNotification(info, playing, linkedController)
         val microphoneType = if (
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mirroring && capturesDeviceAudio
         ) {
@@ -266,7 +283,11 @@ class CastSessionService : Service(), KoinComponent {
         super.onDestroy()
     }
 
-    private fun buildNotification(info: CastSessionManager.SessionInfo, playing: Boolean): Notification {
+    private fun buildNotification(
+        info: CastSessionManager.SessionInfo,
+        playing: Boolean,
+        linkedController: String?,
+    ): Notification {
         val stopCastPi = PendingIntent.getService(
             this, 1,
             Intent(this, CastSessionService::class.java).setAction(ACTION_STOP_CAST),
@@ -282,6 +303,11 @@ class CastSessionService : Service(), KoinComponent {
             Intent(this, CastSessionService::class.java).setAction(ACTION_NOTIFICATION_DISMISSED),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        val unlinkPi = PendingIntent.getService(
+            this, 4,
+            Intent(this, CastSessionService::class.java).setAction(ACTION_UNLINK_PAGE),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val contentPi = packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
             PendingIntent.getActivity(
                 this, 0, launch,
@@ -289,7 +315,8 @@ class CastSessionService : Service(), KoinComponent {
             )
         }
         val title = if (playing) "Casting to ${info.deviceName}" else "Connected to ${info.deviceName}"
-        val text = if (playing) (info.title ?: "Playing") else "Ready to cast"
+        val text = linkedController?.let { "Controlled by $it" }
+            ?: if (playing) (info.title ?: "Playing") else "Ready to cast"
         val actionLabel = if (playing) "Stop" else "Disconnect"
         val actionPi = if (playing) stopCastPi else disconnectPi
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
@@ -305,6 +332,10 @@ class CastSessionService : Service(), KoinComponent {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setDeleteIntent(dismissPi)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+
+        if (linkedController != null) {
+            builder.addAction(0, "Unlink", unlinkPi)
+        }
 
         val notification = builder.build()
         notification.flags = notification.flags or
@@ -331,6 +362,7 @@ class CastSessionService : Service(), KoinComponent {
         private const val NOTIF_ID = 4712
         private const val ACTION_STOP_CAST = "com.playbridge.sender.cast.action.STOP_CAST"
         private const val ACTION_DISCONNECT = "com.playbridge.sender.cast.action.DISCONNECT"
+        private const val ACTION_UNLINK_PAGE = "com.playbridge.sender.cast.action.UNLINK_PAGE"
         private const val ACTION_NOTIFICATION_DISMISSED =
             "com.playbridge.sender.cast.action.NOTIFICATION_DISMISSED"
         private const val ACTION_START_SCREEN_MIRROR =

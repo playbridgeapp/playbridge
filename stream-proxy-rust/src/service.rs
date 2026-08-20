@@ -159,6 +159,23 @@ impl ProxyServer {
         )
     }
 
+    pub fn register_remote_with_policy(
+        &self,
+        host: &str,
+        url: impl Into<String>,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+        allowed_private_origins: Vec<String>,
+    ) -> Result<RegisteredMedia, String> {
+        self.service.register_remote_with_policy(
+            &self.base_url(host),
+            url.into(),
+            headers,
+            content_type,
+            allowed_private_origins,
+        )
+    }
+
     pub fn register_file(
         &self,
         host: &str,

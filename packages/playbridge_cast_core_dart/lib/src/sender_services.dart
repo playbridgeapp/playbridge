@@ -19,7 +19,7 @@ typedef _StringFreeDart = void Function(Pointer<Utf8>);
 typedef _AbiVersionNative = Uint32 Function();
 typedef _AbiVersionDart = int Function();
 
-const senderServicesAbiVersion = 1;
+const senderServicesAbiVersion = 2;
 
 final class RegisteredMedia {
   const RegisteredMedia({
@@ -111,12 +111,17 @@ final class SenderServices implements Finalizable {
     required String host,
     required String url,
     Map<String, String> headers = const {},
+    String? contentType,
+    List<String>? allowedPrivateOrigins,
   }) async =>
       RegisteredMedia.fromJson(
         await _submitData('proxy_register_url', {
           'host': host,
           'url': url,
           'headers': headers,
+          if (contentType != null) 'content_type': contentType,
+          if (allowedPrivateOrigins != null)
+            'allowed_private_origins': allowedPrivateOrigins,
         }),
       );
 

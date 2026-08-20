@@ -60,15 +60,31 @@ class StreamProxyServer {
     String originalUrl,
     Map<String, String> headers, {
     String host = '127.0.0.1',
+    String? contentType,
+    List<String>? allowedPrivateOrigins,
   }) =>
-      services.registerUrl(host: host, url: originalUrl, headers: headers);
+      services.registerUrl(
+        host: host,
+        url: originalUrl,
+        headers: headers,
+        contentType: contentType,
+        allowedPrivateOrigins: allowedPrivateOrigins,
+      );
 
   /// Compatibility helper for local playback callers.
   Future<String> registerSession(
     String originalUrl,
-    Map<String, String> headers,
-  ) async =>
-      (await registerRemote(originalUrl, headers)).url;
+    Map<String, String> headers, {
+    String? contentType,
+    List<String>? allowedPrivateOrigins,
+  }) async =>
+      (await registerRemote(
+        originalUrl,
+        headers,
+        contentType: contentType,
+        allowedPrivateOrigins: allowedPrivateOrigins,
+      ))
+          .url;
 
   bool ownsUrl(String value) {
     final uri = Uri.tryParse(value);

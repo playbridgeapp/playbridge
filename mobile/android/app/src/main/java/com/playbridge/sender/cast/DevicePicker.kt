@@ -276,6 +276,7 @@ fun DeviceConnectionDialog(
     showThisDevice: Boolean = true,
     onPickedThisDevice: (() -> Unit)? = null,
     onPickedDevice: ((TvDevice) -> Unit)? = null,
+    playBridgeOnly: Boolean = false,
 ) {
     val viewModel: ConnectionViewModel = koinViewModel()
     val history by viewModel.deviceHistory.collectAsState(initial = emptyList())
@@ -537,7 +538,7 @@ fun DeviceConnectionDialog(
                 }
             }
 
-            if (recentExternal.isNotEmpty()) {
+            if (!playBridgeOnly && recentExternal.isNotEmpty()) {
                 SectionLabel("Recent other")
                 recentExternal.forEach { device ->
                     TvDeviceRow(
@@ -553,7 +554,7 @@ fun DeviceConnectionDialog(
             }
 
             // Ready browser sessions (host running) + setup entry.
-            if (browserHost.running && browserHost.ready.isNotEmpty()) {
+            if (!playBridgeOnly && browserHost.running && browserHost.ready.isNotEmpty()) {
                 SectionLabel("Browser")
                 browserHost.ready.forEach { session ->
                     val device = session.toTvDevice(browserRepo.lanHostIp(), browserHost.port)
@@ -594,7 +595,7 @@ fun DeviceConnectionDialog(
                 }
             }
 
-            Surface(
+            if (!playBridgeOnly) Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { showBrowserSheet = true },
@@ -644,7 +645,7 @@ fun DeviceConnectionDialog(
         }
     }
 
-    if (showBrowserSheet) {
+    if (!playBridgeOnly && showBrowserSheet) {
         BrowserReceiverSheet(
             viewModel = viewModel,
             onDismiss = { showBrowserSheet = false },

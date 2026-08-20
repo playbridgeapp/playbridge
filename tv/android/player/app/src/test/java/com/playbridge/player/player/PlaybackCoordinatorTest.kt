@@ -231,6 +231,41 @@ class PlaybackCoordinatorTest {
     }
 
     @Test
+    fun `queueAdd keeps linked page items that share a url but have distinct payloads`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        val first = PlayPayload(
+            url = "https://cdn/stream.m3u8",
+            title = "Linked item 1",
+            detected_by = "linked_page",
+        )
+        val second = first.copy(title = "Linked item 2")
+        c.setPlaylist(listOf(first), 0)
+
+        c.queueAdd(listOf(second))
+
+        assertEquals(listOf("Linked item 1", "Linked item 2"), c.playlist.map { it.title })
+        assertEquals(1, host.playlistChangedCount)
+    }
+
+    @Test
+    fun `queueAdd suppresses an exact linked page retry`() {
+        val host = FakeHost()
+        val c = PlaybackCoordinator(host)
+        val item = PlayPayload(
+            url = "https://cdn/stream.m3u8",
+            title = "Linked item 1",
+            detected_by = "linked_page",
+        )
+        c.setPlaylist(listOf(item), 0)
+
+        c.queueAdd(listOf(item))
+
+        assertEquals(1, c.playlist.size)
+        assertEquals(0, host.playlistChangedCount)
+    }
+
+    @Test
     fun `queueAdd of an all-duplicate batch does not notify`() {
         val host = FakeHost()
         val c = PlaybackCoordinator(host)

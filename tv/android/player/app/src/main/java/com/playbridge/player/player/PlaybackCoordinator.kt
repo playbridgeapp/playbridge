@@ -66,8 +66,9 @@ class PlaybackCoordinator(private val host: Host) {
      *
      * An episode is considered already present when its `visual_metadata` season/episode (and
      * imdb_id, when both sides carry one) match an existing item; content without episode
-     * identity (channels, generic items) falls back to an exact URL match so legitimate repeats
-     * in an IPTV/M3U playlist are preserved.
+     * identity (channels, generic items) falls back to an exact URL match. Linked-page items are
+     * compared as complete payloads because a webpage may intentionally reuse one media URL for
+     * multiple logical queue entries (for example, a playlist demo with distinct item titles).
      */
     fun queueAdd(newItems: List<PlayPayload>) {
         if (newItems.isEmpty()) return
@@ -90,6 +91,11 @@ class PlaybackCoordinator(private val host: Host) {
      */
     private fun isDuplicateOf(item: PlayPayload, against: List<PlayPayload>): Boolean {
         if (against.isEmpty()) return false
+        if (item.detected_by == "linked_page") {
+            return against.any { existing ->
+                existing.detected_by == "linked_page" && existing == item
+            }
+        }
         val vm = item.visual_metadata
         val season = vm?.season
         val episode = vm?.episode

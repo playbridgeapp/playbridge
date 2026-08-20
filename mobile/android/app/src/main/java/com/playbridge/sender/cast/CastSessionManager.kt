@@ -1099,6 +1099,13 @@ class CastSessionManager(
 
     fun load(media: MediaItem, userInitiated: Boolean = true): Boolean {
         val target = _externalTarget.value ?: return false
+        if (userInitiated) {
+            runCatching {
+                org.koin.core.context.GlobalContext.get()
+                    .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>()
+                    .supersedeIfActive()
+            }.onFailure { Log.w(TAG, "Could not supersede linked page queue: ${it.message}") }
+        }
         val route = media.effectiveRoute ?: if (target is BrowserCastTarget) {
             BrowserStreamRoute.effectiveMode(
                 requested = _preferredStreamRoute.value,

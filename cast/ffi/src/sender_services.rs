@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::{CStr, CString, c_char},
     sync::{
         Arc, Mutex,
@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use stream_proxy_rust::{ProxyServer, ProxyServerConfig};
 use tokio::sync::mpsc as tokio_mpsc;
 
-const SENDER_SERVICES_ABI_VERSION: u32 = 1;
+const SENDER_SERVICES_ABI_VERSION: u32 = 2;
 const COMMAND_CAPACITY: usize = 32;
 const EVENT_CAPACITY: usize = 128;
 
@@ -33,6 +33,7 @@ enum ServicesCommand {
         #[serde(default)]
         headers: HashMap<String, String>,
         content_type: Option<String>,
+        allowed_private_origins: Option<Vec<String>>,
     },
     ProxyRegisterFile {
         request_id: Value,
@@ -273,9 +274,24 @@ async fn process_command(
             url,
             headers,
             content_type,
+            allowed_private_origins,
             ..
-        } => proxy
-            .register_remote_with_content_type(&host, url, headers, content_type.as_deref())
+        } => validate_page_headers(headers, allowed_private_origins.is_some())
+            .and_then(|headers| match allowed_private_origins {
+                Some(origins) => proxy.register_remote_with_policy(
+                    &host,
+                    url,
+                    headers,
+                    content_type.as_deref(),
+                    origins,
+                ),
+                None => proxy.register_remote_with_content_type(
+                    &host,
+                    url,
+                    headers,
+                    content_type.as_deref(),
+                ),
+            })
             .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
         ServicesCommand::ProxyRegisterFile {
             host,
@@ -394,6 +410,47 @@ async fn process_command(
     false
 }
 
+fn validate_page_headers(
+    headers: HashMap<String, String>,
+    page_controlled: bool,
+) -> Result<HashMap<String, String>, String> {
+    if !page_controlled {
+        return Ok(headers);
+    }
+    const ALLOWED: &[&str] = &[
+        "authorization",
+        "cookie",
+        "referer",
+        "origin",
+        "user-agent",
+        "accept",
+        "accept-language",
+    ];
+    if headers.len() > 16 {
+        return Err("too many webpage media headers".into());
+    }
+    let mut bytes = 0usize;
+    let mut normalized_names = HashSet::new();
+    for (name, value) in &headers {
+        let lower = name.to_ascii_lowercase();
+        if name.trim() != name
+            || !ALLOWED.contains(&lower.as_str())
+            || !normalized_names.insert(lower)
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+            || value.bytes().any(|byte| byte < 0x20 || byte == 0x7f)
+        {
+            return Err("invalid webpage media header".into());
+        }
+        bytes = bytes.saturating_add(name.len()).saturating_add(value.len());
+        if bytes > 16 * 1024 {
+            return Err("webpage media headers are too large".into());
+        }
+    }
+    Ok(headers)
+}
+
 fn send_browser_event(events: &SyncSender<Value>, event: BrowserReceiverEvent) {
     if let Ok(value) = serde_json::to_value(event) {
         send_event(events, value);
@@ -483,7 +540,12 @@ pub unsafe extern "C" fn pb_sender_services_free(services: *const SenderServices
 
 #[cfg(test)]
 mod tests {
-    use super::{SENDER_SERVICES_ABI_VERSION, ServicesCommand, pb_sender_services_abi_version};
+    use std::collections::HashMap;
+
+    use super::{
+        SENDER_SERVICES_ABI_VERSION, ServicesCommand, pb_sender_services_abi_version,
+        validate_page_headers,
+    };
 
     #[test]
     fn sender_services_abi_is_stable() {
@@ -491,13 +553,13 @@ mod tests {
             pb_sender_services_abi_version(),
             SENDER_SERVICES_ABI_VERSION
         );
-        assert_eq!(SENDER_SERVICES_ABI_VERSION, 1);
+        assert_eq!(SENDER_SERVICES_ABI_VERSION, 2);
     }
 
     #[test]
     fn browser_and_proxy_commands_use_the_documented_wire_names() {
         let proxy: ServicesCommand = serde_json::from_str(
-            r#"{"command":"proxy_register_url","request_id":"1","host":"192.0.2.1","url":"https://cdn.example/live","content_type":"application/vnd.apple.mpegurl"}"#,
+            r#"{"command":"proxy_register_url","request_id":"1","host":"192.0.2.1","url":"https://cdn.example/live","content_type":"application/vnd.apple.mpegurl","allowed_private_origins":["http://192.168.1.20:8080"]}"#,
         )
         .unwrap();
         assert_eq!(proxy.operation(), "proxy_register_url");
@@ -505,8 +567,10 @@ mod tests {
             proxy,
             ServicesCommand::ProxyRegisterUrl {
                 content_type: Some(ref value),
+                allowed_private_origins: Some(ref origins),
                 ..
             } if value == "application/vnd.apple.mpegurl"
+                && origins == &["http://192.168.1.20:8080"]
         ));
 
         let browser: ServicesCommand = serde_json::from_str(
@@ -514,5 +578,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(browser.operation(), "browser_control");
+    }
+
+    #[test]
+    fn webpage_proxy_headers_are_bounded_and_case_unique() {
+        assert!(
+            validate_page_headers(
+                HashMap::from([("Authorization".into(), "Bearer token".into())]),
+                true,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_page_headers(
+                HashMap::from([
+                    ("Authorization".into(), "one".into()),
+                    ("authorization".into(), "two".into()),
+                ]),
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_page_headers(
+                HashMap::from([("Cookie".into(), "good\r\nX-Evil: yes".into())]),
+                true,
+            )
+            .is_err()
+        );
     }
 }

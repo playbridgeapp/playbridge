@@ -5,7 +5,7 @@ use crate::epg::EpgCache;
 use crate::hls::{HlsPlaylistRewriter, HlsResourceKind};
 use crate::local_file::FileGrantManager;
 use crate::session::SessionManager;
-use crate::upstream::{filter_upstream_headers, ConnectionEngine, UpstreamResponse};
+use crate::upstream::{filter_upstream_headers, ConnectionEngine, NetworkPolicy, UpstreamResponse};
 use axum::{
     body::Body,
     extract::{Path as AxumPath, Query, State},
@@ -138,14 +138,53 @@ impl ProxyService {
         headers: HashMap<String, String>,
         content_type: Option<&str>,
     ) -> Result<RegisteredMedia, String> {
+        self.register_remote_with_network_policy(
+            base_url,
+            original_url,
+            headers,
+            content_type,
+            None,
+        )
+    }
+
+    pub fn register_remote_with_policy(
+        &self,
+        base_url: &str,
+        original_url: String,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+        allowed_private_origins: Vec<String>,
+    ) -> Result<RegisteredMedia, String> {
+        self.register_remote_with_network_policy(
+            base_url,
+            original_url,
+            headers,
+            content_type,
+            Some(NetworkPolicy::new(allowed_private_origins)?),
+        )
+    }
+
+    fn register_remote_with_network_policy(
+        &self,
+        base_url: &str,
+        original_url: String,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+        network_policy: Option<NetworkPolicy>,
+    ) -> Result<RegisteredMedia, String> {
         let parsed = Url::parse(&original_url).map_err(|error| error.to_string())?;
-        if !matches!(parsed.scheme(), "http" | "https") {
-            return Err("only HTTP(S) media URLs can be proxied".into());
+        if original_url.len() > 8_192
+            || !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err("only bounded HTTP(S) media URLs without userinfo can be proxied".into());
         }
-        let session = self
-            .state
-            .session_manager
-            .register(original_url.clone(), headers.clone());
+        let session = self.state.session_manager.register(
+            original_url.clone(),
+            headers.clone(),
+            network_policy,
+        )?;
         let filename = registered_media_filename(&parsed, content_type);
         let proxy_url = format!(
             "{}/s/{}/{}",
@@ -294,7 +333,8 @@ async fn register_handler(
 ) -> Result<Json<RegisterResponse>, (StatusCode, String)> {
     let session = state
         .session_manager
-        .register(payload.url.clone(), payload.headers.clone());
+        .register(payload.url.clone(), payload.headers.clone(), None)
+        .map_err(|error| (StatusCode::TOO_MANY_REQUESTS, error))?;
     let host_str = headers
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
@@ -433,8 +473,13 @@ async fn stateful_proxy_handler(
         }
     }
 
-    let forward_headers =
-        filter_upstream_headers(&session.headers, &incoming_headers, &target_url, session_id);
+    let forward_headers = filter_upstream_headers(
+        &session.headers,
+        &incoming_headers,
+        &target_url,
+        &session.original_url,
+        session_id,
+    );
     let public_base_url = request_public_base_url(&incoming_headers);
     let wants_mpv_edl = req.uri().path().to_ascii_lowercase().ends_with(".edl");
     let is_hls = target_url.to_lowercase().contains(".m3u8")
@@ -456,6 +501,7 @@ async fn stateful_proxy_handler(
             &target_url,
             &forward_headers,
             &public_base_url,
+            session.network_policy,
         )
         .await
     } else if is_hls {
@@ -465,6 +511,7 @@ async fn stateful_proxy_handler(
             &target_url,
             &forward_headers,
             &public_base_url,
+            session.network_policy,
         )
         .await
     } else if is_dash {
@@ -474,6 +521,7 @@ async fn stateful_proxy_handler(
             &target_url,
             &forward_headers,
             &public_base_url,
+            session.network_policy,
         )
         .await
     } else {
@@ -484,6 +532,7 @@ async fn stateful_proxy_handler(
             &forward_headers,
             &public_base_url,
             hls_segment_mime,
+            session.network_policy,
         )
         .await
     }
@@ -529,6 +578,7 @@ async fn encrypted_proxy_handler(
         &session_headers,
         &incoming_headers,
         &target_url,
+        &proxy_data.destination,
         "encrypted",
     );
 
@@ -551,8 +601,13 @@ async fn handle_stateful_hls_playlist(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
-    match state.engine.fetch_url_bytes(target_url, headers).await {
+    match state
+        .engine
+        .fetch_url_bytes_with_policy(target_url, headers, network_policy.clone())
+        .await
+    {
         Ok(bytes) => rewrite_stateful_hls(
             state,
             session_id,
@@ -560,6 +615,7 @@ async fn handle_stateful_hls_playlist(
             headers,
             public_base_url,
             &bytes,
+            network_policy,
         ),
         Err(e) => Err((
             // 502 = origin fetch failed (common on Via phone without FFmpeg AVIO).
@@ -576,6 +632,7 @@ fn rewrite_stateful_hls(
     headers: &HashMap<String, String>,
     public_base_url: &str,
     bytes: &[u8],
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let content = String::from_utf8_lossy(bytes);
     // Guard against serving HTML/error pages as playlists (Brave demuxer parse errors).
@@ -631,7 +688,9 @@ fn rewrite_stateful_hls(
 
     let prefetch_urls = crate::upstream::hls_media_segment_urls(&content, &base_uri, 3);
     if !prefetch_urls.is_empty() {
-        state.engine.prefetch_segment_urls(prefetch_urls, headers);
+        state
+            .engine
+            .prefetch_segment_urls_with_policy(prefetch_urls, headers, network_policy);
     }
 
     Ok((
@@ -678,10 +737,11 @@ async fn handle_stateful_unknown_or_segment(
     headers: &HashMap<String, String>,
     public_base_url: &str,
     hls_segment_mime: Option<&'static str>,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let upstream = state
         .engine
-        .connect_upstream(target_url, headers)
+        .connect_upstream_with_policy(target_url, headers, network_policy.clone())
         .await
         .map_err(|error| {
             (
@@ -706,6 +766,7 @@ async fn handle_stateful_unknown_or_segment(
             headers,
             public_base_url,
             &bytes,
+            network_policy,
         );
     }
 
@@ -733,10 +794,11 @@ async fn handle_stateful_dash_manifest(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let bytes = state
         .engine
-        .fetch_url_bytes(target_url, headers)
+        .fetch_url_bytes_with_policy(target_url, headers, network_policy.clone())
         .await
         .map_err(|error| {
             (
@@ -776,10 +838,11 @@ async fn handle_stateful_dash_edl(
     target_url: &str,
     headers: &HashMap<String, String>,
     public_base_url: &str,
+    network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
     let bytes = state
         .engine
-        .fetch_url_bytes(target_url, headers)
+        .fetch_url_bytes_with_policy(target_url, headers, network_policy.clone())
         .await
         .map_err(|error| {
             (

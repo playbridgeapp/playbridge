@@ -30,6 +30,77 @@ void main() {
     expect(prepared.headers, equals(item.headers));
   });
 
+  test('webpage media remains policy-proxied when proxy mode is off', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+    final item = QueueItem(
+      url: 'https://cdn.example/stream.m3u8',
+      title: 'Page stream',
+      headers: {'Authorization': 'Bearer token'},
+      subtitles: ['https://cdn.example/captions.vtt'],
+      enforcePageNetworkPolicy: true,
+      allowedPrivateOrigins: const ['http://192.168.1.20:8080'],
+    );
+
+    final prepared =
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.off);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.subtitles?.single, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.headers, isNull);
+    expect(prepared.enforcePageNetworkPolicy, isTrue);
+    expect(
+      prepared.allowedPrivateOrigins,
+      const ['http://192.168.1.20:8080'],
+    );
+  });
+
+  test('webpage media remains policy-proxied in auto mode', () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+    final item = QueueItem(
+      url: 'https://new-page-host.example/movie.mp4',
+      title: 'Page movie',
+      enforcePageNetworkPolicy: true,
+    );
+
+    final prepared =
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
+
+    expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
+    expect(prepared.headers, isNull);
+  });
+
+  test('credentialed cross-origin subtitles are registered independently',
+      () async {
+    await StreamProxyServer.instance.start();
+    final port = StreamProxyServer.instance.port;
+    final item = QueueItem(
+      url: 'https://video.provider.example/stream.m3u8',
+      title: 'Page stream',
+      headers: {'Authorization': 'Bearer video-token'},
+      subtitles: ['https://legacy.other.example/captions.vtt'],
+      subtitleResources: const [
+        SubtitleRequest(
+          url: 'https://subs.provider.example/captions.vtt',
+          headers: {'Authorization': 'Bearer subtitle-token'},
+          language: 'en',
+        ),
+      ],
+      enforcePageNetworkPolicy: true,
+    );
+
+    final prepared =
+        await PlaybackRequestPreparer.prepare(item, StreamProxyMode.off);
+
+    expect(prepared.subtitles, hasLength(2));
+    expect(
+      prepared.subtitles,
+      everyElement(startsWith('http://127.0.0.1:$port/s/')),
+    );
+    expect(prepared.subtitleResources, isNull);
+  });
+
   test('DASH uses mpv-compatible proxy EDL when proxy mode is off', () async {
     await StreamProxyServer.instance.start();
     final port = StreamProxyServer.instance.port;

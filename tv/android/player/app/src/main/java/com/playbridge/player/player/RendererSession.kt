@@ -4,6 +4,20 @@ import java.util.concurrent.atomic.AtomicLong
 
 internal enum class RendererKind { MPV, EXO, WEBVIEW, IMAGE }
 
+internal fun rendererAllowedForPageMedia(
+    pageControlled: Boolean,
+    target: RendererKind,
+): Boolean = !pageControlled || target == RendererKind.EXO
+
+internal fun fallbackRenderer(
+    failed: RendererKind,
+    pageControlled: Boolean,
+): RendererKind? = when (failed) {
+    RendererKind.MPV -> RendererKind.EXO
+    RendererKind.EXO -> RendererKind.MPV
+    else -> null
+}.takeIf { it != null && rendererAllowedForPageMedia(pageControlled, it) }
+
 internal enum class RendererSessionPhase { IDLE, PREPARING, READY, PLAYING, STOPPING, FAILED }
 
 internal data class RendererSessionSnapshot(

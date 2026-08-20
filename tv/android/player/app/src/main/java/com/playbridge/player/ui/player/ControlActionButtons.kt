@@ -19,6 +19,7 @@ fun ControlActionButtons(
     isLooping: Boolean,
     hasPlaylist: Boolean,
     hasMultipleStreams: Boolean,
+    canSwitchPlayer: Boolean,
     onTogglePlay: () -> Unit,
     onTrackSelection: () -> Unit,
     onSubtitles: () -> Unit,
@@ -119,11 +120,13 @@ fun ControlActionButtons(
             tint = if (isLooping) MaterialTheme.colorScheme.primary else Color.White
         )
 
-        PlayerIconButton(
-            iconRes = android.R.drawable.ic_menu_sort_by_size,
-            contentDescription = "Switch Player",
-            onClick = onSwitchPlayer
-        )
+        if (canSwitchPlayer) {
+            PlayerIconButton(
+                iconRes = android.R.drawable.ic_menu_sort_by_size,
+                contentDescription = "Switch Player",
+                onClick = onSwitchPlayer
+            )
+        }
 
         // Tracks / Settings (Far right)
         PlayerIconButton(

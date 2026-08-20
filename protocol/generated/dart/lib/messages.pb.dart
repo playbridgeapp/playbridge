@@ -404,6 +404,84 @@ class VisualMetadata extends $pb.GeneratedMessage {
   void clearTmdbId() => $_clearField(16);
 }
 
+/// A sidecar subtitle is an independent network resource. Its headers are scoped
+/// to this URL's origin and must never be inherited from an unrelated media URL.
+class SubtitleResource extends $pb.GeneratedMessage {
+  factory SubtitleResource({
+    $core.String? url,
+    $core.Iterable<$core.MapEntry<$core.String, $core.String>>? headers,
+    $core.String? label,
+    $core.String? language,
+  }) {
+    final result = create();
+    if (url != null) result.url = url;
+    if (headers != null) result.headers.addEntries(headers);
+    if (label != null) result.label = label;
+    if (language != null) result.language = language;
+    return result;
+  }
+
+  SubtitleResource._();
+
+  factory SubtitleResource.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory SubtitleResource.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'SubtitleResource', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'url')
+    ..m<$core.String, $core.String>(2, _omitFieldNames ? '' : 'headers', entryClassName: 'SubtitleResource.HeadersEntry', keyFieldType: $pb.PbFieldType.OS, valueFieldType: $pb.PbFieldType.OS, packageName: const $pb.PackageName('playbridge'))
+    ..aOS(3, _omitFieldNames ? '' : 'label')
+    ..aOS(4, _omitFieldNames ? '' : 'language')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubtitleResource clone() => SubtitleResource()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  SubtitleResource copyWith(void Function(SubtitleResource) updates) => super.copyWith((message) => updates(message as SubtitleResource)) as SubtitleResource;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static SubtitleResource create() => SubtitleResource._();
+  @$core.override
+  SubtitleResource createEmptyInstance() => create();
+  static $pb.PbList<SubtitleResource> createRepeated() => $pb.PbList<SubtitleResource>();
+  @$core.pragma('dart2js:noInline')
+  static SubtitleResource getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<SubtitleResource>(create);
+  static SubtitleResource? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get url => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set url($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasUrl() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearUrl() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $pb.PbMap<$core.String, $core.String> get headers => $_getMap(1);
+
+  @$pb.TagNumber(3)
+  $core.String get label => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set label($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasLabel() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearLabel() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get language => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set language($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasLanguage() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearLanguage() => $_clearField(4);
+}
+
 class PlayPayload extends $pb.GeneratedMessage {
   factory PlayPayload({
     $core.String? url,
@@ -420,6 +498,8 @@ class PlayPayload extends $pb.GeneratedMessage {
     VisualMetadata? visualMetadata,
     $core.String? bingeGroup,
     $fixnum.Int64? startPositionMs,
+    $core.Iterable<$core.String>? allowedPrivateOrigins,
+    $core.Iterable<SubtitleResource>? subtitleResources,
   }) {
     final result = create();
     if (url != null) result.url = url;
@@ -436,6 +516,8 @@ class PlayPayload extends $pb.GeneratedMessage {
     if (visualMetadata != null) result.visualMetadata = visualMetadata;
     if (bingeGroup != null) result.bingeGroup = bingeGroup;
     if (startPositionMs != null) result.startPositionMs = startPositionMs;
+    if (allowedPrivateOrigins != null) result.allowedPrivateOrigins.addAll(allowedPrivateOrigins);
+    if (subtitleResources != null) result.subtitleResources.addAll(subtitleResources);
     return result;
   }
 
@@ -459,6 +541,8 @@ class PlayPayload extends $pb.GeneratedMessage {
     ..aOM<VisualMetadata>(12, _omitFieldNames ? '' : 'visualMetadata', subBuilder: VisualMetadata.create)
     ..aOS(13, _omitFieldNames ? '' : 'bingeGroup')
     ..aInt64(14, _omitFieldNames ? '' : 'startPositionMs')
+    ..pPS(15, _omitFieldNames ? '' : 'allowedPrivateOrigins')
+    ..pc<SubtitleResource>(16, _omitFieldNames ? '' : 'subtitleResources', $pb.PbFieldType.PM, subBuilder: SubtitleResource.create)
     ..hasRequiredFields = false
   ;
 
@@ -599,6 +683,16 @@ class PlayPayload extends $pb.GeneratedMessage {
   $core.bool hasStartPositionMs() => $_has(13);
   @$pb.TagNumber(14)
   void clearStartPositionMs() => $_clearField(14);
+
+  /// Exact private/LAN origins approved by the sender for page-initiated media.
+  /// Receivers must still validate every resolved address, redirect, and derived resource.
+  @$pb.TagNumber(15)
+  $pb.PbList<$core.String> get allowedPrivateOrigins => $_getList(14);
+
+  /// Additive replacement for credentialed sidecars. Legacy `subtitles` remains
+  /// supported for senders that only provide URLs.
+  @$pb.TagNumber(16)
+  $pb.PbList<SubtitleResource> get subtitleResources => $_getList(15);
 }
 
 class PlaylistPayload extends $pb.GeneratedMessage {

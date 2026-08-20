@@ -521,6 +521,13 @@ class ConnectionViewModel(
 
 
     fun sendCommandAndRecord(commandJson: String, type: String, url: String, title: String?) {
+        if (type == "playlist" || type == "play") {
+            runCatching {
+                org.koin.core.context.GlobalContext.get()
+                    .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>()
+                    .supersedeIfActive()
+            }.onFailure { Log.w(TAG, "Could not supersede linked page queue: ${it.message}") }
+        }
         viewModelScope.launch(Dispatchers.IO) {
             commandHistoryDb.commandHistoryDao().insert(
                 CommandHistoryEntity(

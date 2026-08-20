@@ -4,7 +4,6 @@ import android.util.Log
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.Request
 import java.util.concurrent.ConcurrentHashMap
 
 /** A single subtitle cue (times in ms). */
@@ -124,14 +123,24 @@ object SubtitleCueLoader {
     }
 
     /** Download + parse (once). Returns cues, or null on failure. */
-    suspend fun load(url: String, headers: Map<String, String>?): List<SubtitleCue>? {
+    suspend fun load(
+        url: String,
+        headers: Map<String, String>?,
+        enforcePageNetworkPolicy: Boolean = false,
+        allowedPrivateOrigins: List<String> = emptyList(),
+    ): List<SubtitleCue>? {
         cache[url]?.let { return it }
         if (!inFlight.add(url)) return cache[url]
         return try {
             withContext(Dispatchers.IO) {
-                val bytes = download(url, headers)
-                val content = SubtitleParser.decode(bytes)
-                val isVtt = url.substringBefore('#').endsWith(".vtt", true) || content.startsWith("WEBVTT")
+                val downloaded = ExternalSubtitleLoader.download(
+                    url,
+                    headers,
+                    enforcePageNetworkPolicy,
+                    allowedPrivateOrigins,
+                )
+                val content = SubtitleParser.decode(downloaded.bytes)
+                val isVtt = downloaded.format == ExternalSubtitleFormat.WEBVTT
                 val cues = SubtitleParser.parse(content, isVtt)
                 cache[url] = cues
                 cues
@@ -157,14 +166,4 @@ object SubtitleCueLoader {
             .filter { it.isNotBlank() }
     }
 
-    private fun download(url: String, headers: Map<String, String>?): ByteArray {
-        val sniffer = ContentSniffer()
-        val client = sniffer.getOkHttpClient(allowLocalSelfSigned = sniffer.isLocalUrl(url))
-        val builder = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0")
-        headers?.forEach { (k, v) -> if (!k.equals("Host", true)) builder.header(k, v) }
-        client.newCall(builder.build()).execute().use { resp ->
-            if (!resp.isSuccessful) throw java.io.IOException("HTTP ${resp.code}")
-            return resp.body?.bytes() ?: ByteArray(0)
-        }
-    }
 }

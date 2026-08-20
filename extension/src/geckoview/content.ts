@@ -147,17 +147,146 @@ window.addEventListener("PlayBridgeMediaFound", ((event: CustomEvent) => {
     .catch(() => {});
 }) as EventListener);
 
+// The injected page-world bridge deliberately crosses into this isolated
+// content script through a DOM event. The background owns validation before it
+// reaches Android native messaging.
+window.addEventListener("PlayBridgeCast", ((event: CustomEvent) => {
+  if (window.top !== window) return;
+  browser.runtime
+    .sendMessage({
+      action: "page_cast_requested",
+      payload: event.detail,
+      origin: window.location.href,
+    })
+    .catch(() => {});
+}) as EventListener);
+
+window.addEventListener("PlayBridgeLinkedRequest", ((event: CustomEvent) => {
+  if (window.top !== window) return;
+  const detail = event.detail;
+  browser.runtime
+    .sendMessage({ action: "page_linked_cast", ...detail })
+    .then((response: unknown) => {
+      window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
+        detail: JSON.stringify({ pageRequestId: detail?.pageRequestId, response }),
+      }));
+    })
+    .catch((error: Error) => {
+      window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
+        detail: JSON.stringify({
+          pageRequestId: detail?.pageRequestId,
+          response: { ok: false, error: "native_unavailable", message: error?.message },
+        }),
+      }));
+    });
+}) as EventListener);
+
+browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown }) => {
+  if (window.top !== window || message?.type !== "linked_cast_event") return;
+  // CustomEvent object details created in the extension's isolated world are not
+  // reliably readable by Firefox page scripts. A string crosses that boundary
+  // safely; the injected page bridge parses it into a page-owned object.
+  window.dispatchEvent(new CustomEvent("PlayBridgeLinkedEventJson", {
+    detail: JSON.stringify(message.event ?? {}),
+  }));
+});
+
 // Page-world bridge + light player config probe (same idea as legacy phone detector).
 (function injectBridge() {
+  if (window.top !== window) return;
   const bridgeScript = document.createElement("script");
   bridgeScript.textContent = `
     (function() {
-      if (window.playbridge_injected) return;
+      if (window.playbridge_injected_version === 4) return;
       window.playbridge_injected = true;
-      window.playbridge = {
-        cast: function(payload) {
-          window.dispatchEvent(new CustomEvent('PlayBridgeCast', { detail: payload }));
+      window.playbridge_injected_version = 4;
+      var pending = new Map();
+      var sessions = new Map();
+      function request(operation, sessionId, payload) {
+        var pageRequestId = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random());
+        return new Promise(function(resolve, reject) {
+          if (pending.size >= 32) {
+            var limitError = new Error('Too many pending linked cast requests');
+            limitError.code = 'resource_limit';
+            reject(limitError);
+            return;
+          }
+          var timeout = setTimeout(function() {
+            pending.delete(pageRequestId);
+            var timeoutError = new Error('Linked cast request timed out');
+            timeoutError.code = 'timeout';
+            reject(timeoutError);
+          }, operation === 'open' ? 660000 : 45000);
+          pending.set(pageRequestId, { resolve: resolve, reject: reject, timeout: timeout });
+          window.dispatchEvent(new CustomEvent('PlayBridgeLinkedRequest', {
+            detail: { pageRequestId: pageRequestId, operation: operation, sessionId: sessionId || null, payload: payload || {} }
+          }));
+        });
+      }
+      window.addEventListener('PlayBridgeLinkedResponseJson', function(event) {
+        var detail;
+        try { detail = JSON.parse(event.detail || '{}'); }
+        catch (_) { return; }
+        var waiter = pending.get(detail.pageRequestId);
+        if (!waiter) return;
+        pending.delete(detail.pageRequestId);
+        clearTimeout(waiter.timeout);
+        var response = detail.response || {};
+        if (response.ok) waiter.resolve(response);
+        else {
+          var error = new Error(response.message || response.error || 'Linked cast failed');
+          error.code = response.error || 'linked_cast_failed';
+          waiter.reject(error);
         }
+      });
+      window.addEventListener('PlayBridgeLinkedEventJson', function(event) {
+        var detail;
+        try { detail = JSON.parse(event.detail || '{}'); }
+        catch (_) { return; }
+        var session = sessions.get(detail.sessionId);
+        if (!session) return;
+        session.dispatchEvent(new CustomEvent(detail.event || 'statechange', { detail: detail.detail || {} }));
+        if (detail.event === 'ended') sessions.delete(detail.sessionId);
+      });
+      function LinkedCastSession(sessionId) {
+        var target = new EventTarget();
+        target.sessionId = sessionId;
+        target.replace = function(items, startIndex, metadata) {
+          return request('replace', sessionId, { items: items, startIndex: startIndex || 0, metadata: metadata });
+        };
+        target.append = function(items, options) {
+          return request('append', sessionId, {
+            items: items,
+            privateNetworkOrigins: (options && options.privateNetworkOrigins) || []
+          });
+        };
+        target.jump = function(index) { return request('jump', sessionId, { index: index }); };
+        target.provideItems = function(requestId, result) {
+          return request('supply', sessionId, {
+            requestId: requestId,
+            items: (result && result.items) || [],
+            endOfList: !!(result && result.endOfList),
+            privateNetworkOrigins: (result && result.privateNetworkOrigins) || []
+          });
+        };
+        target.unlink = function() { return request('unlink', sessionId, {}); };
+        return target;
+      }
+      window.playbridge = window.playbridge || {};
+      window.playbridge.cast = function(payload) {
+        window.dispatchEvent(new CustomEvent('PlayBridgeCast', { detail: payload }));
+      };
+      window.playbridge.capabilities = Object.assign({}, window.playbridge.capabilities, {
+        linkedCast: 1,
+        explicitHeaders: 1,
+        privateNetworkOriginPermission: 1
+      });
+      window.playbridge.linkCast = function(payload) {
+        return request('open', null, payload).then(function(response) {
+          var session = LinkedCastSession(response.sessionId);
+          sessions.set(response.sessionId, session);
+          return session;
+        });
       };
       try {
         Object.defineProperty(document, 'hidden', { get: function() { return false; } });

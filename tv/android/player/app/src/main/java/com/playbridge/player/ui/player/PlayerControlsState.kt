@@ -52,6 +52,7 @@ data class PlayerControlsState(
     val hdrFormat: String? = null,
     val isLooping: Boolean = false,
     val hasPlaylist: Boolean = false,
+    val canSwitchPlayer: Boolean = true,
     val engineType: String = "",
     val prePlayMetadata: playbridge.VisualMetadata? = null,
     val activeMetadata: playbridge.VisualMetadata? = null,
