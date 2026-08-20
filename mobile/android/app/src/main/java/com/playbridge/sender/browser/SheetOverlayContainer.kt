@@ -42,6 +42,7 @@ fun SheetOverlayContainer(
     onToggleDesktopMode: () -> Unit,
     onToggleVideoDetect: () -> Unit,
     onUserAgentClick: () -> Unit = {},
+    onFullScreenClick: () -> Unit = {},
     userAgentActive: Boolean = false,
 
     // Clear Data Sheet States
@@ -118,6 +119,7 @@ fun SheetOverlayContainer(
                 onToggleVideoDetect = onToggleVideoDetect,
                 userAgentActive = userAgentActive,
                 onUserAgentClick = onUserAgentClick,
+                onFullScreenClick = onFullScreenClick,
                 onClearDataClick = onClearDataClick
             )
         }

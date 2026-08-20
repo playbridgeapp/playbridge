@@ -752,6 +752,9 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
+            // Chrome-hidden mode belongs to the selected tab and intentionally remains
+            // session-only: it survives tab switches/navigation, but not an app restart.
+            var chromeHiddenTabIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
                 Log.d("PB_STARTUP", "Compose: syncSessions triggered — tabCount=${browserState.tabs.size}, selectedTabId=${browserState.selectedTabId}")
@@ -761,12 +764,14 @@ class BrowserActivity : ComponentActivity() {
                 // from the store (e.g. via Mozilla Components paths that bypass
                 // closeTab). This is the safety net for memory leaks.
                 tabManager.reconcileWithStoreTabs(tabIds.toSet())
+                chromeHiddenTabIds = chromeHiddenTabIds.intersect(tabIds.toSet())
             }
 
             val sessions = tabManager.sessions
 
             val selectedTabId = browserState.selectedTabId
             val selectedTab = browserState.tabs.find { it.id == selectedTabId }
+            val isBrowserChromeHidden = selectedTabId?.let(chromeHiddenTabIds::contains) == true
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
 
             Log.d("PB_STARTUP", "Compose: recompose — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, sessionNull=${session == null}, tabsRestored=${tabsRestoredOrReady.value}, sessionsMapSize=${sessions.size}")
@@ -2064,8 +2069,8 @@ class BrowserActivity : ComponentActivity() {
                     Scaffold(
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
                         topBar = {
-                        if (isFullscreen) {
-                            // Hide toolbar in fullscreen
+                        if (isFullscreen || (currentScreen == Screen.Browser && isBrowserChromeHidden)) {
+                            // Media fullscreen and chrome-hidden browsing both hide the toolbar.
                         } else when (currentScreen) {
                             Screen.Browser -> {
                                 Box(modifier = Modifier.fillMaxWidth()) {
@@ -2262,7 +2267,7 @@ class BrowserActivity : ComponentActivity() {
                         }
                     },
                         bottomBar = {
-                            if (currentScreen == Screen.Browser && !isFullscreen) {
+                            if (currentScreen == Screen.Browser && !isFullscreen && !isBrowserChromeHidden) {
                                 Surface(
                                     modifier = Modifier.fillMaxWidth(),
                                     color = MaterialTheme.colorScheme.surfaceContainer,
@@ -2382,6 +2387,16 @@ class BrowserActivity : ComponentActivity() {
                         onIsEditingChange = { isEditing = it },
                         isFullscreen = isFullscreen,
                         onIsFullscreenChange = { isFullscreen = it },
+                        isBrowserChromeHidden = isBrowserChromeHidden,
+                        onIsBrowserChromeHiddenChange = { hidden ->
+                            selectedTabId?.let { tabId ->
+                                chromeHiddenTabIds = if (hidden) {
+                                    chromeHiddenTabIds + tabId
+                                } else {
+                                    chromeHiddenTabIds - tabId
+                                }
+                            }
+                        },
                         backPressedTime = backPressedTime,
                         onBackPressedTimeChange = { backPressedTime = it },
                         onFinishActivity = { finish() },
@@ -2484,6 +2499,14 @@ class BrowserActivity : ComponentActivity() {
                         scope.launch { sheetState.hide() }.invokeOnCompletion {
                             showMenuSheet = false
                             showUserAgentSheet = true
+                        }
+                    },
+                    onFullScreenClick = {
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showMenuSheet = false
+                            isEditing = false
+                            showFindBar = false
+                            selectedTabId?.let { chromeHiddenTabIds = chromeHiddenTabIds + it }
                         }
                     },
 
