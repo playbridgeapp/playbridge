@@ -59,6 +59,7 @@ data class PlayBridgeCredentials(
     val certFingerprint: String? = null,
     val players: List<String> = emptyList(),
     val browsers: List<String> = emptyList(),
+    val mediaKinds: List<String> = emptyList(),
 )
 
 /** Persisted endpoint plus optional protocol-specific credentials. */

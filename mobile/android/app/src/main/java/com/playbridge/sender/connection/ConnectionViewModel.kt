@@ -3,9 +3,11 @@ import androidx.core.content.edit
 
 import android.app.Application
 import android.content.Context
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import androidx.core.net.toUri
 import android.util.Log
+import android.util.Size
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.playbridge.sender.data.history.DatabaseProvider
@@ -15,6 +17,7 @@ import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
+import com.playbridge.sender.cast.MediaKind
 import com.playbridge.sender.cast.PlaybackStatus
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
@@ -25,6 +28,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 import java.net.Socket
 import java.net.InetSocketAddress
 import kotlinx.coroutines.async
@@ -241,7 +245,13 @@ class ConnectionViewModel(
         // reflect what this specific TV can actually drive (see TvCapabilityOptions).
         viewModelScope.launch {
             webSocketClient.tvCapabilities.collect { caps ->
-                updateSavedDevice { device -> device.copy(players = caps.players, browsers = caps.browsers) }
+                updateSavedDevice { device ->
+                    device.copy(
+                        players = caps.players,
+                        browsers = caps.browsers,
+                        mediaKinds = caps.mediaKinds,
+                    )
+                }
             }
         }
 
@@ -383,8 +393,28 @@ class ConnectionViewModel(
      * external receiver; otherwise a connected native receiver (served via the proxy so
      * the TV can fetch it). Returns false if no target is available.
      */
-    fun castLocalFile(uriString: String, mime: String?, title: String?, durationMs: Long = 0L): Boolean {
-        val media = MediaItem(url = uriString, mimeType = mime, title = title, durationMs = durationMs)
+    fun castLocalFile(
+        uriString: String,
+        mime: String?,
+        title: String?,
+        durationMs: Long = 0L,
+        mediaKind: MediaKind? = null,
+        artist: String? = null,
+        album: String? = null,
+        trackNumber: Int? = null,
+    ): Boolean {
+        val resolvedMediaKind = mediaKind ?: when {
+            mime?.startsWith("audio/", ignoreCase = true) == true -> MediaKind.AUDIO
+            mime?.startsWith("image/", ignoreCase = true) == true -> MediaKind.IMAGE
+            else -> MediaKind.VIDEO
+        }
+        val media = MediaItem(
+            url = uriString,
+            mimeType = mime,
+            mediaKind = resolvedMediaKind,
+            title = title,
+            durationMs = durationMs,
+        )
         if (castSessionManager.load(media)) return true
         if (route.value is CastSessionManager.Route.NativeTv &&
             connectionState.value is WebSocketClient.ConnectionState.Connected
@@ -392,8 +422,8 @@ class ConnectionViewModel(
             viewModelScope.launch {
                 try {
                     val app = getApplication<Application>()
-                    val packaged = com.playbridge.sender.cast.proxy.StreamRouteService(app)
-                        .packageForCast(
+                    val routeService = com.playbridge.sender.cast.proxy.StreamRouteService(app)
+                    val packaged = routeService.packageForCast(
                             media = com.playbridge.sender.cast.proxy.CastableMedia(
                                 url = uriString,
                                 contentType = mime,
@@ -402,11 +432,36 @@ class ConnectionViewModel(
                             ),
                             mode = com.playbridge.sender.cast.proxy.StreamRouteMode.VIA_PHONE,
                         )
+                    val packagedArtwork = if (resolvedMediaKind == MediaKind.AUDIO) {
+                        packageLocalAudioArtwork(
+                            app = app,
+                            mediaUri = uriString,
+                            routeService = routeService,
+                        )
+                    } else {
+                        null
+                    }
+                    val visualMetadata = if (
+                        resolvedMediaKind == MediaKind.AUDIO &&
+                        listOf(artist, album, packagedArtwork).any { !it.isNullOrBlank() }
+                    ) {
+                        playbridge.VisualMetadata(
+                            title = title.orEmpty(),
+                            artist = artist,
+                            album = album,
+                            track_number = trackNumber,
+                            artwork_url = packagedArtwork,
+                        )
+                    } else {
+                        null
+                    }
                     val cmd = createSingleVideoCommandJson(
                         PlayPayload(
                             url = packaged.url,
                             title = title ?: "Phone file",
                             content_type = packaged.contentType ?: mime,
+                            media_kind = resolvedMediaKind.wireValue,
+                            visual_metadata = visualMetadata,
                         ),
                     )
                     sendCommandAndRecord(cmd, "play", packaged.url, title)
@@ -420,6 +475,74 @@ class ConnectionViewModel(
             return true
         }
         return false
+    }
+
+    private suspend fun packageLocalAudioArtwork(
+        app: Application,
+        mediaUri: String,
+        routeService: com.playbridge.sender.cast.proxy.StreamRouteService,
+    ): String? {
+        suspend fun packageUri(uri: android.net.Uri, contentType: String?): String? =
+            runCatching {
+                routeService.packageForCast(
+                    media = com.playbridge.sender.cast.proxy.CastableMedia(
+                        url = uri.toString(),
+                        contentType = contentType ?: "image/jpeg",
+                        localUri = uri,
+                    ),
+                    mode = com.playbridge.sender.cast.proxy.StreamRouteMode.VIA_PHONE,
+                ).url
+            }.getOrNull()
+
+        // Prefer artwork embedded in this exact file. MediaStore album IDs can group
+        // unrelated downloads under one synthetic album, which would send the same cover.
+        val extracted = kotlinx.coroutines.withContext(Dispatchers.IO) {
+            val directory = File(app.cacheDir, "cast-artwork").apply { mkdirs() }
+            val stem = Integer.toUnsignedString(mediaUri.hashCode())
+            val retriever = MediaMetadataRetriever()
+            val embedded = try {
+                retriever.setDataSource(app, mediaUri.toUri())
+                retriever.embeddedPicture
+            } catch (_: Exception) {
+                null
+            } finally {
+                retriever.release()
+            }
+            if (embedded != null) {
+                val extension = when {
+                    embedded.size >= 8 && embedded[0] == 0x89.toByte() && embedded[1] == 0x50.toByte() -> "png"
+                    embedded.size >= 12 && String(embedded, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp"
+                    else -> "jpg"
+                }
+                File(directory, "$stem.$extension").apply { writeBytes(embedded) }
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // This is the same per-item thumbnail path used by the Phone Files UI.
+                runCatching {
+                    val thumbnail = app.contentResolver.loadThumbnail(
+                        mediaUri.toUri(),
+                        Size(1_024, 1_024),
+                        null,
+                    )
+                    File(directory, "$stem.jpg").apply {
+                        outputStream().use { output ->
+                            thumbnail.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, output)
+                        }
+                    }
+                }.getOrNull()
+            } else {
+                null
+            }
+        }
+        if (extracted != null) {
+            val contentType = when (extracted.extension.lowercase()) {
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
+            packageUri(extracted.toUri(), contentType)?.let { return it }
+        }
+
+        return null
     }
 
     /**

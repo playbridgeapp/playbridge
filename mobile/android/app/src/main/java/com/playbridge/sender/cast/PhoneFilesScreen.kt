@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.Audiotrack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Movie
+import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -102,7 +103,7 @@ enum class SortKey { UNSORTED, NAME, SIZE, MODIFIED }
  * disposes the Phone Files content.
  */
 class PhoneFilesUiState {
-    var tab by mutableIntStateOf(0) // 0 = Videos, 1 = Audio
+    var tab by mutableIntStateOf(0) // 0 = Videos, 1 = Audio, 2 = Images
     var query by mutableStateOf("")
     var searchActive by mutableStateOf(false)
     var sortKey by mutableStateOf(SortKey.UNSORTED)
@@ -113,9 +114,9 @@ class PhoneFilesUiState {
 }
 
 /**
- * Phone Files: in-app Videos/Audio tabs listing on-device media (MediaStore) with thumbnails.
+ * Phone Files: in-app Videos/Audio/Images tabs listing on-device media (MediaStore) with thumbnails.
  * Each item is cast to the active target (DLNA renderer or native receiver) when one is
- * connected, or played in the in-app player ("This Device") when nothing is connected.
+ * connected, or opened on this device when nothing is connected.
  *
  * The top bar offers a SAF file picker, search (filters the current tab), and a sort sheet;
  * a folder row under the tabs filters the current tab by containing folder.
@@ -136,6 +137,7 @@ fun PhoneFilesScreen(
     var showSortSheet by remember { mutableStateOf(false) }
 
     val connectionState by viewModel.connectionState.collectAsState()
+    val nativeDevice by viewModel.tvDevice.collectAsState(initial = null)
     val activeExternalDevice by viewModel.activeExternalDevice.collectAsState()
     val castRoute by viewModel.route.collectAsState()
     val hasExternalTarget = activeExternalDevice != null ||
@@ -144,7 +146,11 @@ fun PhoneFilesScreen(
 
     val requiredPerms = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO)
+            arrayOf(
+                Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_AUDIO,
+                Manifest.permission.READ_MEDIA_IMAGES,
+            )
         } else {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
@@ -154,18 +160,28 @@ fun PhoneFilesScreen(
     }
 
     var granted by remember { mutableStateOf(hasAnyPerm()) }
+    var permissionRevision by remember { mutableIntStateOf(0) }
     var allItems by remember { mutableStateOf<List<PhoneMediaItem>>(emptyList()) }
     var loading by remember { mutableStateOf(false) }
 
-    val videos = remember(allItems) { allItems.filter { !it.isAudio } }
-    val audio = remember(allItems) { allItems.filter { it.isAudio } }
+    val videos = remember(allItems) { allItems.filter { it.mediaKind == MediaKind.VIDEO } }
+    val audio = remember(allItems) { allItems.filter { it.mediaKind == MediaKind.AUDIO } }
+    val images = remember(allItems) { allItems.filter { it.mediaKind == MediaKind.IMAGE } }
 
     val permLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { granted = it.values.any { v -> v } || hasAnyPerm() }
+    ) {
+        granted = it.values.any { value -> value } || hasAnyPerm()
+        permissionRevision++
+    }
 
-    LaunchedEffect(Unit) { if (!granted) permLauncher.launch(requiredPerms) }
-    LaunchedEffect(granted) {
+    LaunchedEffect(Unit) {
+        val missingPermissions = requiredPerms.filter {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingPermissions.isNotEmpty()) permLauncher.launch(missingPermissions.toTypedArray())
+    }
+    LaunchedEffect(granted, permissionRevision) {
         if (granted) {
             loading = true
             allItems = PhoneMediaStore.query(context)
@@ -184,12 +200,40 @@ fun PhoneFilesScreen(
     // Play on the active external target, or in the in-app player ("This Device").
     fun playOrCast(media: PhoneMediaItem) {
         if (hasExternalTarget) {
-            val ok = viewModel.castLocalFile(media.uri.toString(), media.mimeType, media.title, media.durationMs)
+            if (castRoute is CastSessionManager.Route.NativeTv &&
+                nativeDevice?.supportsNativeMediaKind(media.mediaKind.wireValue) == false
+            ) {
+                scope.launch {
+                    snackbar.showSnackbar("This receiver does not support this media type")
+                }
+                return
+            }
+            val ok = viewModel.castLocalFile(
+                uriString = media.uri.toString(),
+                mime = media.mimeType,
+                title = media.title,
+                durationMs = media.durationMs,
+                mediaKind = media.mediaKind,
+                artist = media.artist,
+                album = media.album,
+                trackNumber = media.trackNumber,
+            )
             if (ok) {
                 scope.launch { snackbar.showSnackbar("Casting ${media.title}") }
             } else {
                 // Lost the target between the check and the send — offer the picker.
                 showDevicePicker = true
+            }
+        } else if (media.mediaKind == MediaKind.IMAGE) {
+            // The phone player is video/audio-only; use the system image viewer locally.
+            runCatching {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(media.uri, media.mimeType ?: "image/*")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
+                )
+            }.onFailure {
+                scope.launch { snackbar.showSnackbar("No image viewer is available") }
             }
         } else {
             // No cast target → play locally in the in-app player (no proxy needed).
@@ -215,7 +259,11 @@ fun PhoneFilesScreen(
                     title = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: "File",
                     durationMs = 0L,
                     mimeType = mime,
-                    isAudio = mime?.startsWith("audio") == true,
+                    mediaKind = when {
+                        mime?.startsWith("audio/") == true -> MediaKind.AUDIO
+                        mime?.startsWith("image/") == true -> MediaKind.IMAGE
+                        else -> MediaKind.VIDEO
+                    },
                 ),
             )
         }
@@ -229,7 +277,15 @@ fun PhoneFilesScreen(
                         TextField(
                             value = uiState.query,
                             onValueChange = { uiState.query = it },
-                            placeholder = { Text("Search ${if (uiState.tab == 0) "videos" else "audio"}") },
+                            placeholder = {
+                                Text(
+                                    "Search ${when (uiState.tab) {
+                                        0 -> "videos"
+                                        1 -> "audio"
+                                        else -> "images"
+                                    }}",
+                                )
+                            },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             colors = TextFieldDefaults.colors(
@@ -262,8 +318,8 @@ fun PhoneFilesScreen(
                 },
                 actions = {
                     IconButton(onClick = {
-                        // OpenDocument takes mime filters; allow video + audio.
-                        filePicker.launch(arrayOf("video/*", "audio/*"))
+                        // OpenDocument also covers media that MediaStore has not indexed.
+                        filePicker.launch(arrayOf("video/*", "audio/*", "image/*"))
                     }) {
                         Icon(Icons.Default.FolderOpen, contentDescription = "Pick a file")
                     }
@@ -298,7 +354,7 @@ fun PhoneFilesScreen(
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Text(
-                        "Permission needed to list your videos and audio.",
+                        "Permission needed to list your videos, audio, and images.",
                         style = MaterialTheme.typography.bodyMedium,
                     )
                     Spacer(Modifier.height(12.dp))
@@ -309,11 +365,28 @@ fun PhoneFilesScreen(
 
                 else -> Column(modifier = Modifier.fillMaxSize()) {
                     TabRow(selectedTabIndex = uiState.tab) {
-                        Tab(selected = uiState.tab == 0, onClick = { selectTab(0) }, text = { Text("Videos (${videos.size})") })
-                        Tab(selected = uiState.tab == 1, onClick = { selectTab(1) }, text = { Text("Audio (${audio.size})") })
+                        Tab(
+                            selected = uiState.tab == 0,
+                            onClick = { selectTab(0) },
+                            text = { Text("Videos (${videos.size})") },
+                        )
+                        Tab(
+                            selected = uiState.tab == 1,
+                            onClick = { selectTab(1) },
+                            text = { Text("Audio (${audio.size})") },
+                        )
+                        Tab(
+                            selected = uiState.tab == 2,
+                            onClick = { selectTab(2) },
+                            text = { Text("Images (${images.size})") },
+                        )
                     }
 
-                    val base = if (uiState.tab == 0) videos else audio
+                    val base = when (uiState.tab) {
+                        0 -> videos
+                        1 -> audio
+                        else -> images
+                    }
 
                     // Distinct folders for the current tab (id → display name), preserving order.
                     val folders = remember(base) {
@@ -351,7 +424,8 @@ fun PhoneFilesScreen(
                                 when {
                                     uiState.query.isNotBlank() -> "No matches."
                                     uiState.tab == 0 -> "No videos found."
-                                    else -> "No audio found."
+                                    uiState.tab == 1 -> "No audio found."
+                                    else -> "No images found."
                                 },
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -559,7 +633,11 @@ private fun MediaThumbnail(media: PhoneMediaItem) {
             )
         } else {
             Icon(
-                imageVector = if (media.isAudio) Icons.Default.Audiotrack else Icons.Default.Movie,
+                imageVector = when (media.mediaKind) {
+                    MediaKind.AUDIO -> Icons.Default.Audiotrack
+                    MediaKind.IMAGE -> Icons.Default.Photo
+                    MediaKind.VIDEO -> Icons.Default.Movie
+                },
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(24.dp),

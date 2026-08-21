@@ -28,6 +28,7 @@ class MessageEnvelope extends $pb.GeneratedMessage {
     $fixnum.Int64? position,
     $fixnum.Int64? duration,
     $core.String? title,
+    $core.String? mediaKind,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -36,6 +37,7 @@ class MessageEnvelope extends $pb.GeneratedMessage {
     if (position != null) result.position = position;
     if (duration != null) result.duration = duration;
     if (title != null) result.title = title;
+    if (mediaKind != null) result.mediaKind = mediaKind;
     return result;
   }
 
@@ -51,6 +53,7 @@ class MessageEnvelope extends $pb.GeneratedMessage {
     ..aInt64(4, _omitFieldNames ? '' : 'position')
     ..aInt64(5, _omitFieldNames ? '' : 'duration')
     ..aOS(6, _omitFieldNames ? '' : 'title')
+    ..aOS(7, _omitFieldNames ? '' : 'mediaKind')
     ..hasRequiredFields = false
   ;
 
@@ -124,6 +127,15 @@ class MessageEnvelope extends $pb.GeneratedMessage {
   $core.bool hasTitle() => $_has(5);
   @$pb.TagNumber(6)
   void clearTitle() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get mediaKind => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set mediaKind($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasMediaKind() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearMediaKind() => $_clearField(7);
 }
 
 class SeriesEpisodeRef extends $pb.GeneratedMessage {
@@ -214,6 +226,11 @@ class VisualMetadata extends $pb.GeneratedMessage {
     $core.String? episodeTitle,
     $core.String? imdbId,
     $core.String? tmdbId,
+    $core.String? artist,
+    $core.String? album,
+    $core.String? albumArtist,
+    $core.String? artworkUrl,
+    $core.int? trackNumber,
   }) {
     final result = create();
     if (title != null) result.title = title;
@@ -232,6 +249,11 @@ class VisualMetadata extends $pb.GeneratedMessage {
     if (episodeTitle != null) result.episodeTitle = episodeTitle;
     if (imdbId != null) result.imdbId = imdbId;
     if (tmdbId != null) result.tmdbId = tmdbId;
+    if (artist != null) result.artist = artist;
+    if (album != null) result.album = album;
+    if (albumArtist != null) result.albumArtist = albumArtist;
+    if (artworkUrl != null) result.artworkUrl = artworkUrl;
+    if (trackNumber != null) result.trackNumber = trackNumber;
     return result;
   }
 
@@ -257,6 +279,11 @@ class VisualMetadata extends $pb.GeneratedMessage {
     ..aOS(14, _omitFieldNames ? '' : 'episodeTitle')
     ..aOS(15, _omitFieldNames ? '' : 'imdbId')
     ..aOS(16, _omitFieldNames ? '' : 'tmdbId')
+    ..aOS(17, _omitFieldNames ? '' : 'artist')
+    ..aOS(18, _omitFieldNames ? '' : 'album')
+    ..aOS(19, _omitFieldNames ? '' : 'albumArtist')
+    ..aOS(20, _omitFieldNames ? '' : 'artworkUrl')
+    ..a<$core.int>(21, _omitFieldNames ? '' : 'trackNumber', $pb.PbFieldType.O3)
     ..hasRequiredFields = false
   ;
 
@@ -402,6 +429,51 @@ class VisualMetadata extends $pb.GeneratedMessage {
   $core.bool hasTmdbId() => $_has(15);
   @$pb.TagNumber(16)
   void clearTmdbId() => $_clearField(16);
+
+  @$pb.TagNumber(17)
+  $core.String get artist => $_getSZ(16);
+  @$pb.TagNumber(17)
+  set artist($core.String value) => $_setString(16, value);
+  @$pb.TagNumber(17)
+  $core.bool hasArtist() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearArtist() => $_clearField(17);
+
+  @$pb.TagNumber(18)
+  $core.String get album => $_getSZ(17);
+  @$pb.TagNumber(18)
+  set album($core.String value) => $_setString(17, value);
+  @$pb.TagNumber(18)
+  $core.bool hasAlbum() => $_has(17);
+  @$pb.TagNumber(18)
+  void clearAlbum() => $_clearField(18);
+
+  @$pb.TagNumber(19)
+  $core.String get albumArtist => $_getSZ(18);
+  @$pb.TagNumber(19)
+  set albumArtist($core.String value) => $_setString(18, value);
+  @$pb.TagNumber(19)
+  $core.bool hasAlbumArtist() => $_has(18);
+  @$pb.TagNumber(19)
+  void clearAlbumArtist() => $_clearField(19);
+
+  @$pb.TagNumber(20)
+  $core.String get artworkUrl => $_getSZ(19);
+  @$pb.TagNumber(20)
+  set artworkUrl($core.String value) => $_setString(19, value);
+  @$pb.TagNumber(20)
+  $core.bool hasArtworkUrl() => $_has(19);
+  @$pb.TagNumber(20)
+  void clearArtworkUrl() => $_clearField(20);
+
+  @$pb.TagNumber(21)
+  $core.int get trackNumber => $_getIZ(20);
+  @$pb.TagNumber(21)
+  set trackNumber($core.int value) => $_setSignedInt32(20, value);
+  @$pb.TagNumber(21)
+  $core.bool hasTrackNumber() => $_has(20);
+  @$pb.TagNumber(21)
+  void clearTrackNumber() => $_clearField(21);
 }
 
 /// A sidecar subtitle is an independent network resource. Its headers are scoped
@@ -500,6 +572,8 @@ class PlayPayload extends $pb.GeneratedMessage {
     $fixnum.Int64? startPositionMs,
     $core.Iterable<$core.String>? allowedPrivateOrigins,
     $core.Iterable<SubtitleResource>? subtitleResources,
+    $core.String? mediaKind,
+    $fixnum.Int64? displayDurationMs,
   }) {
     final result = create();
     if (url != null) result.url = url;
@@ -518,6 +592,8 @@ class PlayPayload extends $pb.GeneratedMessage {
     if (startPositionMs != null) result.startPositionMs = startPositionMs;
     if (allowedPrivateOrigins != null) result.allowedPrivateOrigins.addAll(allowedPrivateOrigins);
     if (subtitleResources != null) result.subtitleResources.addAll(subtitleResources);
+    if (mediaKind != null) result.mediaKind = mediaKind;
+    if (displayDurationMs != null) result.displayDurationMs = displayDurationMs;
     return result;
   }
 
@@ -543,6 +619,8 @@ class PlayPayload extends $pb.GeneratedMessage {
     ..aInt64(14, _omitFieldNames ? '' : 'startPositionMs')
     ..pPS(15, _omitFieldNames ? '' : 'allowedPrivateOrigins')
     ..pc<SubtitleResource>(16, _omitFieldNames ? '' : 'subtitleResources', $pb.PbFieldType.PM, subBuilder: SubtitleResource.create)
+    ..aOS(17, _omitFieldNames ? '' : 'mediaKind')
+    ..aInt64(18, _omitFieldNames ? '' : 'displayDurationMs')
     ..hasRequiredFields = false
   ;
 
@@ -693,6 +771,27 @@ class PlayPayload extends $pb.GeneratedMessage {
   /// supported for senders that only provide URLs.
   @$pb.TagNumber(16)
   $pb.PbList<SubtitleResource> get subtitleResources => $_getList(15);
+
+  /// Per-item presentation kind. Omitted means the receiver should infer it.
+  @$pb.TagNumber(17)
+  $core.String get mediaKind => $_getSZ(16);
+  @$pb.TagNumber(17)
+  set mediaKind($core.String value) => $_setString(16, value);
+  @$pb.TagNumber(17)
+  $core.bool hasMediaKind() => $_has(16);
+  @$pb.TagNumber(17)
+  void clearMediaKind() => $_clearField(17);
+
+  /// For image items only. Positive values auto-advance after this display time;
+  /// omitted or zero keeps the image visible until explicit navigation.
+  @$pb.TagNumber(18)
+  $fixnum.Int64 get displayDurationMs => $_getI64(17);
+  @$pb.TagNumber(18)
+  set displayDurationMs($fixnum.Int64 value) => $_setInt64(17, value);
+  @$pb.TagNumber(18)
+  $core.bool hasDisplayDurationMs() => $_has(17);
+  @$pb.TagNumber(18)
+  void clearDisplayDurationMs() => $_clearField(18);
 }
 
 class PlaylistPayload extends $pb.GeneratedMessage {
@@ -1158,6 +1257,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     $fixnum.Int64? position,
     $fixnum.Int64? duration,
     $core.String? title,
+    $core.String? mediaKind,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -1165,6 +1265,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     if (position != null) result.position = position;
     if (duration != null) result.duration = duration;
     if (title != null) result.title = title;
+    if (mediaKind != null) result.mediaKind = mediaKind;
     return result;
   }
 
@@ -1179,6 +1280,7 @@ class StatusMessage extends $pb.GeneratedMessage {
     ..aInt64(3, _omitFieldNames ? '' : 'position')
     ..aInt64(4, _omitFieldNames ? '' : 'duration')
     ..aOS(5, _omitFieldNames ? '' : 'title')
+    ..aOS(6, _omitFieldNames ? '' : 'mediaKind')
     ..hasRequiredFields = false
   ;
 
@@ -1243,6 +1345,15 @@ class StatusMessage extends $pb.GeneratedMessage {
   $core.bool hasTitle() => $_has(4);
   @$pb.TagNumber(5)
   void clearTitle() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get mediaKind => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set mediaKind($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasMediaKind() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearMediaKind() => $_clearField(6);
 }
 
 class ContextMessage extends $pb.GeneratedMessage {
@@ -1308,10 +1419,12 @@ class PlaylistItemInfo extends $pb.GeneratedMessage {
   factory PlaylistItemInfo({
     $core.int? index,
     $core.String? title,
+    $core.String? mediaKind,
   }) {
     final result = create();
     if (index != null) result.index = index;
     if (title != null) result.title = title;
+    if (mediaKind != null) result.mediaKind = mediaKind;
     return result;
   }
 
@@ -1323,6 +1436,7 @@ class PlaylistItemInfo extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'PlaylistItemInfo', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
     ..a<$core.int>(1, _omitFieldNames ? '' : 'index', $pb.PbFieldType.O3)
     ..aOS(2, _omitFieldNames ? '' : 'title')
+    ..aOS(3, _omitFieldNames ? '' : 'mediaKind')
     ..hasRequiredFields = false
   ;
 
@@ -1360,6 +1474,15 @@ class PlaylistItemInfo extends $pb.GeneratedMessage {
   $core.bool hasTitle() => $_has(1);
   @$pb.TagNumber(2)
   void clearTitle() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get mediaKind => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set mediaKind($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasMediaKind() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearMediaKind() => $_clearField(3);
 }
 
 class PlaylistStatusMessage extends $pb.GeneratedMessage {
@@ -1502,12 +1625,20 @@ class AuthResponse extends $pb.GeneratedMessage {
     $core.bool? success,
     $core.String? token,
     $core.String? certFingerprint,
+    $core.Iterable<$core.String>? players,
+    $core.Iterable<$core.String>? browsers,
+    $core.bool? screenMirrorWebRtc,
+    $core.Iterable<$core.String>? mediaKinds,
   }) {
     final result = create();
     if (type != null) result.type = type;
     if (success != null) result.success = success;
     if (token != null) result.token = token;
     if (certFingerprint != null) result.certFingerprint = certFingerprint;
+    if (players != null) result.players.addAll(players);
+    if (browsers != null) result.browsers.addAll(browsers);
+    if (screenMirrorWebRtc != null) result.screenMirrorWebRtc = screenMirrorWebRtc;
+    if (mediaKinds != null) result.mediaKinds.addAll(mediaKinds);
     return result;
   }
 
@@ -1521,6 +1652,10 @@ class AuthResponse extends $pb.GeneratedMessage {
     ..aOB(2, _omitFieldNames ? '' : 'success')
     ..aOS(3, _omitFieldNames ? '' : 'token')
     ..aOS(4, _omitFieldNames ? '' : 'certFingerprint')
+    ..pPS(5, _omitFieldNames ? '' : 'players')
+    ..pPS(6, _omitFieldNames ? '' : 'browsers')
+    ..aOB(7, _omitFieldNames ? '' : 'screenMirrorWebRtc')
+    ..pPS(8, _omitFieldNames ? '' : 'mediaKinds')
     ..hasRequiredFields = false
   ;
 
@@ -1578,6 +1713,24 @@ class AuthResponse extends $pb.GeneratedMessage {
   $core.bool hasCertFingerprint() => $_has(3);
   @$pb.TagNumber(4)
   void clearCertFingerprint() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $pb.PbList<$core.String> get players => $_getList(4);
+
+  @$pb.TagNumber(6)
+  $pb.PbList<$core.String> get browsers => $_getList(5);
+
+  @$pb.TagNumber(7)
+  $core.bool get screenMirrorWebRtc => $_getBF(6);
+  @$pb.TagNumber(7)
+  set screenMirrorWebRtc($core.bool value) => $_setBool(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasScreenMirrorWebRtc() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearScreenMirrorWebRtc() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $pb.PbList<$core.String> get mediaKinds => $_getList(7);
 }
 
 /// Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.

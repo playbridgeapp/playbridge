@@ -83,7 +83,9 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.sin
 
 /** Live playback status synced from the TV via `status` messages. */
@@ -91,7 +93,8 @@ data class TvPlaybackStatus(
     val state: String,
     val positionMs: Long,
     val durationMs: Long,
-    val title: String?
+    val title: String?,
+    val mediaKind: String = "video",
 )
 
 /** An available audio or subtitle track on the TV, synced via `tracks` messages. */
@@ -139,6 +142,8 @@ fun RemoteControlScreen(
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
     onPinchZoom: (factor: Float) -> Unit = {},
+    onRotateImage: (degrees: Float) -> Unit = {},
+    onResetZoom: () -> Unit = {},
     onMouseDown: () -> Unit = {},
     onMouseUp: () -> Unit = {},
     onBrowserControl: (String) -> Unit = {},
@@ -151,6 +156,7 @@ fun RemoteControlScreen(
     positionMs: Long = 0L,
     durationMs: Long = 0L,
     mediaTitle: String? = null,
+    mediaKind: String = "video",
     episodes: List<PlaylistEpisode> = emptyList(),
     currentEpisodeIndex: Int = 0,
     videoTracks: List<MediaTrack> = emptyList(),
@@ -177,6 +183,9 @@ fun RemoteControlScreen(
     var showSubtitlesSheet by remember { mutableStateOf(false) }
     val remoteContext = remoteContextOf(activeContext)
     val videoActive = playbackState == "playing" || playbackState == "paused" || playbackState == "buffering"
+    val resolvedMediaKind = mediaKind.takeIf { it in setOf("video", "audio", "image") } ?: "video"
+    val isImage = resolvedMediaKind == "image"
+    val isAudio = resolvedMediaKind == "audio"
     val externalMode = externalProtocolLabel != null
     val capabilities = externalCapabilities.orEmpty()
     val supportsRemote = !externalMode || Capability.REMOTE in capabilities
@@ -262,12 +271,12 @@ fun RemoteControlScreen(
                     when (mode) {
                         RemoteMode.CONTEXT -> when (ctx) {
                             RemoteContext.PLAYER -> {
-                                NowPlayingPanel(title = mediaTitle)
+                                NowPlayingPanel(title = mediaTitle, mediaKind = resolvedMediaKind)
 
-                                if (!externalMode) {
+                                if (!externalMode && !isImage) {
                                     TrackChipsRow(
                                         audioTracks = audioTracks,
-                                        subtitleTracks = subtitleTracks,
+                                        subtitleTracks = if (isAudio) emptyList() else subtitleTracks,
                                         onSelectAudio = onSelectAudio,
                                         onSubtitlesClick = { showSubtitlesSheet = true },
                                         onMore = { showSettingsSheet = true }
@@ -281,22 +290,24 @@ fun RemoteControlScreen(
                                     modifier = Modifier.weight(1f)
                                 )
 
-                                SeekVolumeBar(
-                                    positionMs = positionMs,
-                                    durationMs = durationMs,
-                                    isLive = isLive,
-                                    isSeekable = supportsSeek,
-                                    isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
-                                    enableVolume = supportsVolume,
-                                    onSeekTo = onSeekTo,
-                                    onVolumeUp = { onRemoteKey("volume_up") },
-                                    onVolumeDown = { onRemoteKey("volume_down") },
-                                    onPlayPauseToggle = { onPlayerControl(if (playbackState == "playing") "pause" else "play") }
-                                )
+                                if (!isImage || durationMs > 0L) {
+                                    SeekVolumeBar(
+                                        positionMs = positionMs,
+                                        durationMs = durationMs,
+                                        isLive = isLive,
+                                        isSeekable = supportsSeek && !isImage,
+                                        isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
+                                        enableVolume = supportsVolume && !isImage,
+                                        onSeekTo = onSeekTo,
+                                        onVolumeUp = { onRemoteKey("volume_up") },
+                                        onVolumeDown = { onRemoteKey("volume_down") },
+                                        onPlayPauseToggle = { onPlayerControl(if (playbackState == "playing") "pause" else "play") }
+                                    )
+                                }
                                 MediaControlRow(
                                     onPlayerControl = onPlayerControl,
-                                    showLoop = !externalMode,
-                                    showSeek = !isLive && supportsSeek,
+                                    showLoop = !externalMode && !isImage,
+                                    showSeek = !isImage && !isLive && supportsSeek,
                                 )
                             }
 
@@ -336,6 +347,9 @@ fun RemoteControlScreen(
                                     onMouseClick = onMouseClick,
                                     onMouseScroll = onMouseScroll,
                                     onPinchZoom = onPinchZoom,
+                                    onRotate = onRotateImage,
+                                    onDoubleTap = if (isImage) onResetZoom else onMouseClick,
+                                    imageGestures = isImage,
                                     onMouseDown = onMouseDown,
                                     onMouseUp = onMouseUp
                                 )
@@ -355,7 +369,7 @@ fun RemoteControlScreen(
         }
     }
 
-    if (showSettingsSheet) {
+    if (showSettingsSheet && !isImage) {
         PlayerSettingsSheet(
             settings = playerSettings,
             videoTracks = videoTracks,
@@ -369,7 +383,7 @@ fun RemoteControlScreen(
             onDismiss = { showSettingsSheet = false }
         )
     }
-    if (showAddSubtitle) {
+    if (showAddSubtitle && resolvedMediaKind == "video") {
         AddSubtitleDialog(
             onSearchSubtitles = onSearchSubtitles,
             onAddUrl = { url ->
@@ -380,7 +394,7 @@ fun RemoteControlScreen(
             onDismiss = { showAddSubtitle = false }
         )
     }
-    if (showSubtitlesSheet) {
+    if (showSubtitlesSheet && resolvedMediaKind == "video") {
         SubtitlesBottomSheet(
             tracks = subtitleTracks,
             onSelect = onSelectSubtitle,
@@ -1034,7 +1048,7 @@ private fun SeekVolumeBar(
     }
 }
 
-private enum class TwoFingerMode { UNDECIDED, SCROLL, ZOOM }
+private enum class TwoFingerMode { UNDECIDED, SCROLL, ZOOM, ROTATE }
 
 @Composable
 private fun TouchpadArea(
@@ -1042,6 +1056,9 @@ private fun TouchpadArea(
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
     onPinchZoom: (factor: Float) -> Unit = {},
+    onRotate: (degrees: Float) -> Unit = {},
+    onDoubleTap: () -> Unit = onMouseClick,
+    imageGestures: Boolean = false,
     onMouseDown: () -> Unit = {},
     onMouseUp: () -> Unit = {}
 ) {
@@ -1051,8 +1068,13 @@ private fun TouchpadArea(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .glassSurface(RoundedCornerShape(24.dp), alpha = 0.05f)
-            .pointerInput(Unit) {
+            .glassSurface(RoundedCornerShape(24.dp), alpha = 0.05f),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .pointerInput(Unit) {
                 awaitPointerEventScope {
                     // Two-finger gesture is locked to one mode for its whole lifetime so a
                     // scroll never flips into a zoom (or vice-versa) mid-drag. We accumulate
@@ -1060,13 +1082,19 @@ private fun TouchpadArea(
                     var twoFingerMode = TwoFingerMode.UNDECIDED
                     var accumZoom = 0f
                     var accumPan = 0f
+                    var rotationReferenceAngle: Float? = null
                     val gestureSlop = 24f
+                    val rotationSlopDegrees = 5f
 
                     var downTime = 0L
                     var downPos = androidx.compose.ui.geometry.Offset.Zero
                     var maxMoveDist = 0f
                     val clickSlop = 15f // pixels
                     val clickTimeout = 300L // ms
+                    val doubleTapTimeout = 350L
+                    val doubleTapSlop = 40f
+                    var lastTapTime = 0L
+                    var lastTapPosition = androidx.compose.ui.geometry.Offset.Zero
 
                     while (true) {
                         val event = awaitPointerEvent()
@@ -1083,15 +1111,37 @@ private fun TouchpadArea(
                                 val panX = ((a.position.x + b.position.x) - (a.previousPosition.x + b.previousPosition.x)) / 2f
                                 val panY = ((a.position.y + b.position.y) - (a.previousPosition.y + b.previousPosition.y)) / 2f
                                 val distDelta = curDist - prevDist
+                                val currentVector = a.position - b.position
+                                val previousVector = a.previousPosition - b.previousPosition
+                                val currentAngle = atan2(currentVector.y, currentVector.x)
+                                val previousAngle = atan2(previousVector.y, previousVector.x)
+                                var angleDelta = currentAngle - previousAngle
+                                while (angleDelta > PI.toFloat()) angleDelta -= (2 * PI).toFloat()
+                                while (angleDelta < -PI.toFloat()) angleDelta += (2 * PI).toFloat()
+                                val angleDeltaDegrees = Math.toDegrees(angleDelta.toDouble()).toFloat()
+                                val referenceAngle = rotationReferenceAngle ?: currentAngle.also {
+                                    rotationReferenceAngle = it
+                                }
+                                var netRotation = currentAngle - referenceAngle
+                                while (netRotation > PI.toFloat()) netRotation -= (2 * PI).toFloat()
+                                while (netRotation < -PI.toFloat()) netRotation += (2 * PI).toFloat()
+                                val netRotationDegrees = Math.toDegrees(netRotation.toDouble()).toFloat()
 
                                 if (twoFingerMode == TwoFingerMode.UNDECIDED) {
                                     accumZoom += abs(distDelta)
                                     accumPan += abs(panX) + abs(panY)
-                                    if (accumZoom > gestureSlop || accumPan > gestureSlop) {
-                                        twoFingerMode = if (accumZoom > accumPan) {
-                                            TwoFingerMode.ZOOM
-                                        } else {
-                                            TwoFingerMode.SCROLL
+                                    val zoomProgress = accumZoom / gestureSlop
+                                    val rotationProgress = if (imageGestures) {
+                                        abs(netRotationDegrees) / rotationSlopDegrees
+                                    } else {
+                                        0f
+                                    }
+                                    val panProgress = if (imageGestures) 0f else accumPan / gestureSlop
+                                    if (maxOf(zoomProgress, rotationProgress, panProgress) > 1f) {
+                                        twoFingerMode = when (maxOf(zoomProgress, rotationProgress, panProgress)) {
+                                            rotationProgress -> TwoFingerMode.ROTATE
+                                            zoomProgress -> TwoFingerMode.ZOOM
+                                            else -> TwoFingerMode.SCROLL
                                         }
                                     }
                                 }
@@ -1099,8 +1149,8 @@ private fun TouchpadArea(
                                 when (twoFingerMode) {
                                     TwoFingerMode.ZOOM ->
                                         if (prevDist > 0f) onPinchZoom(curDist / prevDist)
-                                    TwoFingerMode.SCROLL ->
-                                        onMouseScroll(panX, panY * 2f)
+                                    TwoFingerMode.ROTATE -> onRotate(angleDeltaDegrees)
+                                    TwoFingerMode.SCROLL -> onMouseScroll(panX, panY * 2f)
                                     TwoFingerMode.UNDECIDED -> { /* still gathering slop */ }
                                 }
                                 a.consume(); b.consume()
@@ -1125,13 +1175,24 @@ private fun TouchpadArea(
                             val upTime = System.currentTimeMillis()
                             val duration = upTime - downTime
                             if (!isScrolling && duration < clickTimeout && maxMoveDist < clickSlop && downTime > 0L) {
-                                onMouseClick()
+                                val isDoubleTap = lastTapTime > 0L &&
+                                    upTime - lastTapTime <= doubleTapTimeout &&
+                                    (downPos - lastTapPosition).getDistance() <= doubleTapSlop
+                                if (isDoubleTap) {
+                                    onDoubleTap()
+                                    lastTapTime = 0L
+                                } else {
+                                    onMouseClick()
+                                    lastTapTime = upTime
+                                    lastTapPosition = downPos
+                                }
                             }
 
                             isScrolling = false
                             twoFingerMode = TwoFingerMode.UNDECIDED
                             accumZoom = 0f
                             accumPan = 0f
+                            rotationReferenceAngle = null
                             downTime = 0L
                         }
                     }
@@ -1145,8 +1206,7 @@ private fun TouchpadArea(
                     onDragCancel = { if (isDragging) { isDragging = false; onMouseUp() } }
                 )
             },
-        contentAlignment = Alignment.Center
-    ) {
+        ) {}
         // High-tech grid overlay for spatial awareness
         Canvas(modifier = Modifier.fillMaxSize()) {
             val gridColor = Color.White.copy(alpha = 0.05f)
@@ -1170,12 +1230,31 @@ private fun TouchpadArea(
             Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f))
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "1 finger: move  •  2 fingers: scroll  •  Pinch: zoom  •  Tap: click  •  Long-press+drag: drag",
+                if (imageGestures) {
+                    "1 finger: move  •  Pinch: zoom  •  Twist: rotate  •  Double-tap: reset"
+                } else {
+                    "1 finger: move  •  2 fingers: scroll  •  Pinch: zoom  •  Tap: click  •  Long-press+drag: drag"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                 textAlign = TextAlign.Center,
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
+        }
+        if (imageGestures) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                FilledTonalIconButton(onClick = { onRotate(-90f) }) {
+                    Icon(Icons.Default.RotateLeft, contentDescription = "Rotate left 90 degrees")
+                }
+                FilledTonalIconButton(onClick = { onRotate(90f) }) {
+                    Icon(Icons.Default.RotateRight, contentDescription = "Rotate right 90 degrees")
+                }
+            }
         }
     }
 }
@@ -1318,7 +1397,16 @@ private fun LabeledIconButton(icon: ImageVector, label: String, tint: Color, onC
 }
 
 @Composable
-private fun NowPlayingPanel(title: String?, episodeLabel: String? = null) {
+private fun NowPlayingPanel(
+    title: String?,
+    episodeLabel: String? = null,
+    mediaKind: String = "video",
+) {
+    val kindLabel = when (mediaKind) {
+        "audio" -> "Playing music"
+        "image" -> "Viewing image"
+        else -> "Playing video"
+    }
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
             text = title ?: "Playing on TV",
@@ -1327,9 +1415,11 @@ private fun NowPlayingPanel(title: String?, episodeLabel: String? = null) {
             maxLines = 2,
             textAlign = TextAlign.Center
         )
-        if (episodeLabel != null) {
-            Text(text = episodeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        Text(
+            text = episodeLabel ?: kindLabel,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -1375,11 +1465,17 @@ private fun EpisodesCarousel(
                     verticalArrangement = Arrangement.Center,
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    if (isCurrent) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = "Now playing", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                    } else {
-                        Text(text = "${ep.index + 1}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.Bold)
+                    val kindSymbol = when (ep.mediaKind) {
+                        "audio" -> "♫"
+                        "image" -> "▧"
+                        else -> "▶"
                     }
+                    Text(
+                        text = if (isCurrent) kindSymbol else "$kindSymbol  ${ep.index + 1}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Bold,
+                    )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = shortEpisodeLabel(ep.title),

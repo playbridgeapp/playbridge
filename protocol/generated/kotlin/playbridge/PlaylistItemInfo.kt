@@ -44,6 +44,13 @@ public class PlaylistItemInfo(
     schemaIndex = 1,
   )
   public val title: String = "",
+  @field:WireField(
+    tag = 3,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "mediaKind",
+    schemaIndex = 2,
+  )
+  public val media_kind: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlaylistItemInfo, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -59,6 +66,7 @@ public class PlaylistItemInfo(
     if (unknownFields != other.unknownFields) return false
     if (index != other.index) return false
     if (title != other.title) return false
+    if (media_kind != other.media_kind) return false
     return true
   }
 
@@ -68,6 +76,7 @@ public class PlaylistItemInfo(
       result = unknownFields.hashCode()
       result = result * 37 + index.hashCode()
       result = result * 37 + title.hashCode()
+      result = result * 37 + (media_kind?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -77,14 +86,16 @@ public class PlaylistItemInfo(
     val result = mutableListOf<String>()
     result += """index=$index"""
     result += """title=${sanitize(title)}"""
+    if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
     return result.joinToString(prefix = "PlaylistItemInfo{", separator = ", ", postfix = "}")
   }
 
   public fun copy(
     index: Int = this.index,
     title: String = this.title,
+    media_kind: String? = this.media_kind,
     unknownFields: ByteString = this.unknownFields,
-  ): PlaylistItemInfo = PlaylistItemInfo(index, title, unknownFields)
+  ): PlaylistItemInfo = PlaylistItemInfo(index, title, media_kind, unknownFields)
 
   public companion object {
     @JvmField
@@ -104,6 +115,7 @@ public class PlaylistItemInfo(
         if (value.title != "") {
           size += ProtoAdapter.STRING.encodedSizeWithTag(2, value.title)
         }
+        size += ProtoAdapter.STRING.encodedSizeWithTag(3, value.media_kind)
         return size
       }
 
@@ -114,11 +126,13 @@ public class PlaylistItemInfo(
         if (value.title != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 2, value.title)
         }
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.media_kind)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlaylistItemInfo) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.media_kind)
         if (value.title != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 2, value.title)
         }
@@ -130,16 +144,19 @@ public class PlaylistItemInfo(
       override fun decode(reader: ProtoReader): PlaylistItemInfo {
         var index: Int = 0
         var title: String = ""
+        var media_kind: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> index = ProtoAdapter.INT32.decode(reader)
             2 -> title = ProtoAdapter.STRING.decode(reader)
+            3 -> media_kind = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
         return PlaylistItemInfo(
           index = index,
           title = title,
+          media_kind = media_kind,
           unknownFields = unknownFields
         )
       }

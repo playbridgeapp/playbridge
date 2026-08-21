@@ -72,7 +72,9 @@ class WebSocketServer(
     private val onWssReady: ((wssPort: Int, logsPort: Int?) -> Unit)? = null,
     // Players/browsers this receiver supports, re-evaluated per auth so a plugin installed
     // after start-up is picked up on the next (re)connect. Reported to the phone at auth.
-    private val capabilities: () -> TvCapabilities = { TvCapabilities(emptyList(), emptyList(), false) },
+    private val capabilities: () -> TvCapabilities = {
+        TvCapabilities(emptyList(), emptyList(), screenMirrorWebRtc = false)
+    },
 ) {
     data class PairingRequest(
         val deviceName: String,
@@ -545,6 +547,7 @@ class WebSocketServer(
                                 certFingerprint?.let { put("certFingerprint", it) }
                                 put("players", buildJsonArray { caps.players.forEach { add(it) } })
                                 put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
+                                put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
                                 if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
                             }.toString().toByteArray()
                             val ciphertext = SasCrypto.aesGcmEncrypt(
@@ -606,6 +609,7 @@ class WebSocketServer(
                                 success = true, certFingerprint = certFingerprint,
                                 players = caps.players,
                                 browsers = caps.browsers,
+                                mediaKinds = caps.mediaKinds,
                                 screenMirrorWebRtc = caps.screenMirrorWebRtc,
                             ))
                         }

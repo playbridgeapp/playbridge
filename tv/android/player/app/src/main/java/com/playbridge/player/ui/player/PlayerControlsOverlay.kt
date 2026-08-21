@@ -42,6 +42,7 @@ import com.playbridge.player.ui.theme.TvExpressiveMotion
 @Composable
 fun PlayerControlsOverlay(
     state: PlayerControlsState,
+    mediaKind: String = "video",
     stillWatchingState: StillWatchingState = StillWatchingState(),
     onContinueWatching: () -> Unit = {},
     onTogglePlay: () -> Unit,
@@ -203,12 +204,14 @@ fun PlayerControlsOverlay(
                             )
                         }
 
-                        PlayerSeekbar(
-                            position = state.currentPosition,
-                            duration = state.duration,
-                            bufferedPosition = state.bufferedPosition,
-                            onSeek = { delta -> onSeek(delta) }
-                        )
+                        if (mediaKind != "image") {
+                            PlayerSeekbar(
+                                position = state.currentPosition,
+                                duration = state.duration,
+                                bufferedPosition = state.bufferedPosition,
+                                onSeek = { delta -> onSeek(delta) },
+                            )
+                        }
 
                         if (state.isFullControlsVisible) {
                             ControlActionButtons(
@@ -217,6 +220,7 @@ fun PlayerControlsOverlay(
                                 hasPlaylist = state.hasPlaylist,
                                 hasMultipleStreams = false,
                                 canSwitchPlayer = state.canSwitchPlayer,
+                                mediaKind = mediaKind,
                                 onTogglePlay = onTogglePlay,
                                 onTrackSelection = onTrackSelection,
                                 onSubtitles = onSubtitles,

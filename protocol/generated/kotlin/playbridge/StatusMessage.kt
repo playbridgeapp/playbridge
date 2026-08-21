@@ -67,6 +67,13 @@ public class StatusMessage(
     schemaIndex = 4,
   )
   public val title: String? = null,
+  @field:WireField(
+    tag = 6,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "mediaKind",
+    schemaIndex = 5,
+  )
+  public val media_kind: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<StatusMessage, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -85,6 +92,7 @@ public class StatusMessage(
     if (position != other.position) return false
     if (duration != other.duration) return false
     if (title != other.title) return false
+    if (media_kind != other.media_kind) return false
     return true
   }
 
@@ -97,6 +105,7 @@ public class StatusMessage(
       result = result * 37 + position.hashCode()
       result = result * 37 + duration.hashCode()
       result = result * 37 + (title?.hashCode() ?: 0)
+      result = result * 37 + (media_kind?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -109,6 +118,7 @@ public class StatusMessage(
     result += """position=$position"""
     result += """duration=$duration"""
     if (title != null) result += """title=${sanitize(title)}"""
+    if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
     return result.joinToString(prefix = "StatusMessage{", separator = ", ", postfix = "}")
   }
 
@@ -118,8 +128,10 @@ public class StatusMessage(
     position: Long = this.position,
     duration: Long = this.duration,
     title: String? = this.title,
+    media_kind: String? = this.media_kind,
     unknownFields: ByteString = this.unknownFields,
-  ): StatusMessage = StatusMessage(type, state, position, duration, title, unknownFields)
+  ): StatusMessage = StatusMessage(type, state, position, duration, title, media_kind,
+      unknownFields)
 
   public companion object {
     @JvmField
@@ -146,6 +158,7 @@ public class StatusMessage(
           size += ProtoAdapter.INT64.encodedSizeWithTag(4, value.duration)
         }
         size += ProtoAdapter.STRING.encodedSizeWithTag(5, value.title)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(6, value.media_kind)
         return size
       }
 
@@ -163,11 +176,13 @@ public class StatusMessage(
           ProtoAdapter.INT64.encodeWithTag(writer, 4, value.duration)
         }
         ProtoAdapter.STRING.encodeWithTag(writer, 5, value.title)
+        ProtoAdapter.STRING.encodeWithTag(writer, 6, value.media_kind)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: StatusMessage) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 6, value.media_kind)
         ProtoAdapter.STRING.encodeWithTag(writer, 5, value.title)
         if (value.duration != 0L) {
           ProtoAdapter.INT64.encodeWithTag(writer, 4, value.duration)
@@ -189,6 +204,7 @@ public class StatusMessage(
         var position: Long = 0L
         var duration: Long = 0L
         var title: String? = null
+        var media_kind: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
@@ -196,6 +212,7 @@ public class StatusMessage(
             3 -> position = ProtoAdapter.INT64.decode(reader)
             4 -> duration = ProtoAdapter.INT64.decode(reader)
             5 -> title = ProtoAdapter.STRING.decode(reader)
+            6 -> media_kind = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -205,6 +222,7 @@ public class StatusMessage(
           position = position,
           duration = duration,
           title = title,
+          media_kind = media_kind,
           unknownFields = unknownFields
         )
       }

@@ -20,6 +20,7 @@ fun ControlActionButtons(
     hasPlaylist: Boolean,
     hasMultipleStreams: Boolean,
     canSwitchPlayer: Boolean,
+    mediaKind: String = "video",
     onTogglePlay: () -> Unit,
     onTrackSelection: () -> Unit,
     onSubtitles: () -> Unit,
@@ -107,20 +108,24 @@ fun ControlActionButtons(
             )
         }
 
-        PlayerIconButton(
-            iconRes = R.drawable.ic_subtitles,
-            contentDescription = "Subtitles",
-            onClick = onSubtitles
-        )
+        if (mediaKind == "video") {
+            PlayerIconButton(
+                iconRes = R.drawable.ic_subtitles,
+                contentDescription = "Subtitles",
+                onClick = onSubtitles
+            )
+        }
 
-        PlayerIconButton(
-            iconRes = R.drawable.ic_loop,
-            contentDescription = "Loop",
-            onClick = onLoop,
-            tint = if (isLooping) MaterialTheme.colorScheme.primary else Color.White
-        )
+        if (mediaKind != "image") {
+            PlayerIconButton(
+                iconRes = R.drawable.ic_loop,
+                contentDescription = "Loop",
+                onClick = onLoop,
+                tint = if (isLooping) MaterialTheme.colorScheme.primary else Color.White
+            )
+        }
 
-        if (canSwitchPlayer) {
+        if (canSwitchPlayer && mediaKind != "image") {
             PlayerIconButton(
                 iconRes = android.R.drawable.ic_menu_sort_by_size,
                 contentDescription = "Switch Player",
@@ -129,11 +134,13 @@ fun ControlActionButtons(
         }
 
         // Tracks / Settings (Far right)
-        PlayerIconButton(
-            iconRes = R.drawable.ic_settings,
-            contentDescription = "Tracks",
-            onClick = onTrackSelection
-        )
+        if (mediaKind != "image") {
+            PlayerIconButton(
+                iconRes = R.drawable.ic_settings,
+                contentDescription = "Tracks",
+                onClick = onTrackSelection
+            )
+        }
     }
 }
 

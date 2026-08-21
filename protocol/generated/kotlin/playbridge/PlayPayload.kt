@@ -132,6 +132,27 @@ public class PlayPayload(
   public val start_position_ms: Long? = null,
   allowed_private_origins: List<String> = emptyList(),
   subtitle_resources: List<SubtitleResource> = emptyList(),
+  /**
+   * Per-item presentation kind. Omitted means the receiver should infer it.
+   */
+  @field:WireField(
+    tag = 17,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "mediaKind",
+    schemaIndex = 16,
+  )
+  public val media_kind: String? = null,
+  /**
+   * For image items only. Positive values auto-advance after this display time;
+   * omitted or zero keeps the image visible until explicit navigation.
+   */
+  @field:WireField(
+    tag = 18,
+    adapter = "com.squareup.wire.ProtoAdapter#INT64",
+    jsonName = "displayDurationMs",
+    schemaIndex = 17,
+  )
+  public val display_duration_ms: Long? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlayPayload, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -205,6 +226,8 @@ public class PlayPayload(
     if (start_position_ms != other.start_position_ms) return false
     if (allowed_private_origins != other.allowed_private_origins) return false
     if (subtitle_resources != other.subtitle_resources) return false
+    if (media_kind != other.media_kind) return false
+    if (display_duration_ms != other.display_duration_ms) return false
     return true
   }
 
@@ -228,6 +251,8 @@ public class PlayPayload(
       result = result * 37 + (start_position_ms?.hashCode() ?: 0)
       result = result * 37 + allowed_private_origins.hashCode()
       result = result * 37 + subtitle_resources.hashCode()
+      result = result * 37 + (media_kind?.hashCode() ?: 0)
+      result = result * 37 + (display_duration_ms?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -255,6 +280,8 @@ public class PlayPayload(
     if (allowed_private_origins.isNotEmpty()) result +=
         """allowed_private_origins=${sanitize(allowed_private_origins)}"""
     if (subtitle_resources.isNotEmpty()) result += """subtitle_resources=$subtitle_resources"""
+    if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
+    if (display_duration_ms != null) result += """display_duration_ms=$display_duration_ms"""
     return result.joinToString(prefix = "PlayPayload{", separator = ", ", postfix = "}")
   }
 
@@ -275,11 +302,13 @@ public class PlayPayload(
     start_position_ms: Long? = this.start_position_ms,
     allowed_private_origins: List<String> = this.allowed_private_origins,
     subtitle_resources: List<SubtitleResource> = this.subtitle_resources,
+    media_kind: String? = this.media_kind,
+    display_duration_ms: Long? = this.display_duration_ms,
     unknownFields: ByteString = this.unknownFields,
   ): PlayPayload = PlayPayload(url, title, headers, content_type, subtitles, detected_by,
       player_mode, preferred_audio_language, preferred_subtitle_language, default_video_quality,
       max_bitrate_cap_mbps, visual_metadata, binge_group, start_position_ms,
-      allowed_private_origins, subtitle_resources, unknownFields)
+      allowed_private_origins, subtitle_resources, media_kind, display_duration_ms, unknownFields)
 
   public companion object {
     @JvmField
@@ -316,6 +345,8 @@ public class PlayPayload(
             value.allowed_private_origins)
         size += SubtitleResource.ADAPTER.asRepeated().encodedSizeWithTag(16,
             value.subtitle_resources)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(17, value.media_kind)
+        size += ProtoAdapter.INT64.encodedSizeWithTag(18, value.display_duration_ms)
         return size
       }
 
@@ -338,11 +369,15 @@ public class PlayPayload(
         ProtoAdapter.INT64.encodeWithTag(writer, 14, value.start_position_ms)
         ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 15, value.allowed_private_origins)
         SubtitleResource.ADAPTER.asRepeated().encodeWithTag(writer, 16, value.subtitle_resources)
+        ProtoAdapter.STRING.encodeWithTag(writer, 17, value.media_kind)
+        ProtoAdapter.INT64.encodeWithTag(writer, 18, value.display_duration_ms)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlayPayload) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.INT64.encodeWithTag(writer, 18, value.display_duration_ms)
+        ProtoAdapter.STRING.encodeWithTag(writer, 17, value.media_kind)
         SubtitleResource.ADAPTER.asRepeated().encodeWithTag(writer, 16, value.subtitle_resources)
         ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 15, value.allowed_private_origins)
         ProtoAdapter.INT64.encodeWithTag(writer, 14, value.start_position_ms)
@@ -380,6 +415,8 @@ public class PlayPayload(
         var start_position_ms: Long? = null
         val allowed_private_origins = mutableListOf<String>()
         val subtitle_resources = mutableListOf<SubtitleResource>()
+        var media_kind: String? = null
+        var display_duration_ms: Long? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> url = ProtoAdapter.STRING.decode(reader)
@@ -398,6 +435,8 @@ public class PlayPayload(
             14 -> start_position_ms = ProtoAdapter.INT64.decode(reader)
             15 -> allowed_private_origins.add(ProtoAdapter.STRING.decode(reader))
             16 -> subtitle_resources.add(SubtitleResource.ADAPTER.decode(reader))
+            17 -> media_kind = ProtoAdapter.STRING.decode(reader)
+            18 -> display_duration_ms = ProtoAdapter.INT64.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -418,6 +457,8 @@ public class PlayPayload(
           start_position_ms = start_position_ms,
           allowed_private_origins = allowed_private_origins,
           subtitle_resources = subtitle_resources,
+          media_kind = media_kind,
+          display_duration_ms = display_duration_ms,
           unknownFields = unknownFields
         )
       }

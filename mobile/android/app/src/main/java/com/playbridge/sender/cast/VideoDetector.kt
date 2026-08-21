@@ -150,7 +150,12 @@ data class DetectedVideo(
         }
 }
 
-enum class DetectedMediaKind { VIDEO, AUDIO, IMAGE, SUBTITLE }
+enum class DetectedMediaKind(val protocolValue: String?) {
+    VIDEO("video"),
+    AUDIO("audio"),
+    IMAGE("image"),
+    SUBTITLE(null),
+}
 
 internal fun detectionEvidenceScore(detectedBy: String?): Int = when (detectedBy?.lowercase()) {
     "body_content_m3u8", "body_content_mpd" -> 80

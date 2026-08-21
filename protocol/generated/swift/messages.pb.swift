@@ -33,6 +33,9 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
   case mouseScroll // = 2
   case mouseDown // = 3
   case mouseUp // = 4
+  case mouseZoom // = 5
+  case mouseReset // = 6
+  case mouseRotate // = 7
   case UNRECOGNIZED(Int)
 
   init() {
@@ -46,6 +49,9 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
     case 2: self = .mouseScroll
     case 3: self = .mouseDown
     case 4: self = .mouseUp
+    case 5: self = .mouseZoom
+    case 6: self = .mouseReset
+    case 7: self = .mouseRotate
     default: self = .UNRECOGNIZED(rawValue)
     }
   }
@@ -57,6 +63,9 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
     case .mouseScroll: return 2
     case .mouseDown: return 3
     case .mouseUp: return 4
+    case .mouseZoom: return 5
+    case .mouseReset: return 6
+    case .mouseRotate: return 7
     case .UNRECOGNIZED(let i): return i
     }
   }
@@ -68,6 +77,9 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
     .mouseScroll,
     .mouseDown,
     .mouseUp,
+    .mouseZoom,
+    .mouseReset,
+    .mouseRotate,
   ]
 
 }
@@ -125,6 +137,15 @@ nonisolated struct Playbridge_MessageEnvelope: Sendable {
   /// Clears the value of `title`. Subsequent reads from it will return its default value.
   mutating func clearTitle() {self._title = nil}
 
+  var mediaKind: String {
+    get {_mediaKind ?? String()}
+    set {_mediaKind = newValue}
+  }
+  /// Returns true if `mediaKind` has been explicitly set.
+  var hasMediaKind: Bool {self._mediaKind != nil}
+  /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
+  mutating func clearMediaKind() {self._mediaKind = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -134,6 +155,7 @@ nonisolated struct Playbridge_MessageEnvelope: Sendable {
   fileprivate var _position: Int64? = nil
   fileprivate var _duration: Int64? = nil
   fileprivate var _title: String? = nil
+  fileprivate var _mediaKind: String? = nil
 }
 
 nonisolated struct Playbridge_SeriesEpisodeRef: Sendable {
@@ -161,143 +183,189 @@ nonisolated struct Playbridge_SeriesEpisodeRef: Sendable {
   fileprivate var _title: String? = nil
 }
 
-nonisolated struct Playbridge_VisualMetadata: Sendable {
+nonisolated struct Playbridge_VisualMetadata: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var title: String = String()
+  var title: String {
+    get {_storage._title}
+    set {_uniqueStorage()._title = newValue}
+  }
 
   var year: String {
-    get {_year ?? String()}
-    set {_year = newValue}
+    get {_storage._year ?? String()}
+    set {_uniqueStorage()._year = newValue}
   }
   /// Returns true if `year` has been explicitly set.
-  var hasYear: Bool {self._year != nil}
+  var hasYear: Bool {_storage._year != nil}
   /// Clears the value of `year`. Subsequent reads from it will return its default value.
-  mutating func clearYear() {self._year = nil}
+  mutating func clearYear() {_uniqueStorage()._year = nil}
 
   var rating: String {
-    get {_rating ?? String()}
-    set {_rating = newValue}
+    get {_storage._rating ?? String()}
+    set {_uniqueStorage()._rating = newValue}
   }
   /// Returns true if `rating` has been explicitly set.
-  var hasRating: Bool {self._rating != nil}
+  var hasRating: Bool {_storage._rating != nil}
   /// Clears the value of `rating`. Subsequent reads from it will return its default value.
-  mutating func clearRating() {self._rating = nil}
+  mutating func clearRating() {_uniqueStorage()._rating = nil}
 
   var runtime: String {
-    get {_runtime ?? String()}
-    set {_runtime = newValue}
+    get {_storage._runtime ?? String()}
+    set {_uniqueStorage()._runtime = newValue}
   }
   /// Returns true if `runtime` has been explicitly set.
-  var hasRuntime: Bool {self._runtime != nil}
+  var hasRuntime: Bool {_storage._runtime != nil}
   /// Clears the value of `runtime`. Subsequent reads from it will return its default value.
-  mutating func clearRuntime() {self._runtime = nil}
+  mutating func clearRuntime() {_uniqueStorage()._runtime = nil}
 
   var overview: String {
-    get {_overview ?? String()}
-    set {_overview = newValue}
+    get {_storage._overview ?? String()}
+    set {_uniqueStorage()._overview = newValue}
   }
   /// Returns true if `overview` has been explicitly set.
-  var hasOverview: Bool {self._overview != nil}
+  var hasOverview: Bool {_storage._overview != nil}
   /// Clears the value of `overview`. Subsequent reads from it will return its default value.
-  mutating func clearOverview() {self._overview = nil}
+  mutating func clearOverview() {_uniqueStorage()._overview = nil}
 
-  var genres: [String] = []
+  var genres: [String] {
+    get {_storage._genres}
+    set {_uniqueStorage()._genres = newValue}
+  }
 
-  var cast: [String] = []
+  var cast: [String] {
+    get {_storage._cast}
+    set {_uniqueStorage()._cast = newValue}
+  }
 
-  var director: [String] = []
+  var director: [String] {
+    get {_storage._director}
+    set {_uniqueStorage()._director = newValue}
+  }
 
   var backdropURL: String {
-    get {_backdropURL ?? String()}
-    set {_backdropURL = newValue}
+    get {_storage._backdropURL ?? String()}
+    set {_uniqueStorage()._backdropURL = newValue}
   }
   /// Returns true if `backdropURL` has been explicitly set.
-  var hasBackdropURL: Bool {self._backdropURL != nil}
+  var hasBackdropURL: Bool {_storage._backdropURL != nil}
   /// Clears the value of `backdropURL`. Subsequent reads from it will return its default value.
-  mutating func clearBackdropURL() {self._backdropURL = nil}
+  mutating func clearBackdropURL() {_uniqueStorage()._backdropURL = nil}
 
   var posterURL: String {
-    get {_posterURL ?? String()}
-    set {_posterURL = newValue}
+    get {_storage._posterURL ?? String()}
+    set {_uniqueStorage()._posterURL = newValue}
   }
   /// Returns true if `posterURL` has been explicitly set.
-  var hasPosterURL: Bool {self._posterURL != nil}
+  var hasPosterURL: Bool {_storage._posterURL != nil}
   /// Clears the value of `posterURL`. Subsequent reads from it will return its default value.
-  mutating func clearPosterURL() {self._posterURL = nil}
+  mutating func clearPosterURL() {_uniqueStorage()._posterURL = nil}
 
   var logoURL: String {
-    get {_logoURL ?? String()}
-    set {_logoURL = newValue}
+    get {_storage._logoURL ?? String()}
+    set {_uniqueStorage()._logoURL = newValue}
   }
   /// Returns true if `logoURL` has been explicitly set.
-  var hasLogoURL: Bool {self._logoURL != nil}
+  var hasLogoURL: Bool {_storage._logoURL != nil}
   /// Clears the value of `logoURL`. Subsequent reads from it will return its default value.
-  mutating func clearLogoURL() {self._logoURL = nil}
+  mutating func clearLogoURL() {_uniqueStorage()._logoURL = nil}
 
   var season: Int32 {
-    get {_season ?? 0}
-    set {_season = newValue}
+    get {_storage._season ?? 0}
+    set {_uniqueStorage()._season = newValue}
   }
   /// Returns true if `season` has been explicitly set.
-  var hasSeason: Bool {self._season != nil}
+  var hasSeason: Bool {_storage._season != nil}
   /// Clears the value of `season`. Subsequent reads from it will return its default value.
-  mutating func clearSeason() {self._season = nil}
+  mutating func clearSeason() {_uniqueStorage()._season = nil}
 
   var episode: Int32 {
-    get {_episode ?? 0}
-    set {_episode = newValue}
+    get {_storage._episode ?? 0}
+    set {_uniqueStorage()._episode = newValue}
   }
   /// Returns true if `episode` has been explicitly set.
-  var hasEpisode: Bool {self._episode != nil}
+  var hasEpisode: Bool {_storage._episode != nil}
   /// Clears the value of `episode`. Subsequent reads from it will return its default value.
-  mutating func clearEpisode() {self._episode = nil}
+  mutating func clearEpisode() {_uniqueStorage()._episode = nil}
 
   var episodeTitle: String {
-    get {_episodeTitle ?? String()}
-    set {_episodeTitle = newValue}
+    get {_storage._episodeTitle ?? String()}
+    set {_uniqueStorage()._episodeTitle = newValue}
   }
   /// Returns true if `episodeTitle` has been explicitly set.
-  var hasEpisodeTitle: Bool {self._episodeTitle != nil}
+  var hasEpisodeTitle: Bool {_storage._episodeTitle != nil}
   /// Clears the value of `episodeTitle`. Subsequent reads from it will return its default value.
-  mutating func clearEpisodeTitle() {self._episodeTitle = nil}
+  mutating func clearEpisodeTitle() {_uniqueStorage()._episodeTitle = nil}
 
   var imdbID: String {
-    get {_imdbID ?? String()}
-    set {_imdbID = newValue}
+    get {_storage._imdbID ?? String()}
+    set {_uniqueStorage()._imdbID = newValue}
   }
   /// Returns true if `imdbID` has been explicitly set.
-  var hasImdbID: Bool {self._imdbID != nil}
+  var hasImdbID: Bool {_storage._imdbID != nil}
   /// Clears the value of `imdbID`. Subsequent reads from it will return its default value.
-  mutating func clearImdbID() {self._imdbID = nil}
+  mutating func clearImdbID() {_uniqueStorage()._imdbID = nil}
 
   var tmdbID: String {
-    get {_tmdbID ?? String()}
-    set {_tmdbID = newValue}
+    get {_storage._tmdbID ?? String()}
+    set {_uniqueStorage()._tmdbID = newValue}
   }
   /// Returns true if `tmdbID` has been explicitly set.
-  var hasTmdbID: Bool {self._tmdbID != nil}
+  var hasTmdbID: Bool {_storage._tmdbID != nil}
   /// Clears the value of `tmdbID`. Subsequent reads from it will return its default value.
-  mutating func clearTmdbID() {self._tmdbID = nil}
+  mutating func clearTmdbID() {_uniqueStorage()._tmdbID = nil}
+
+  var artist: String {
+    get {_storage._artist ?? String()}
+    set {_uniqueStorage()._artist = newValue}
+  }
+  /// Returns true if `artist` has been explicitly set.
+  var hasArtist: Bool {_storage._artist != nil}
+  /// Clears the value of `artist`. Subsequent reads from it will return its default value.
+  mutating func clearArtist() {_uniqueStorage()._artist = nil}
+
+  var album: String {
+    get {_storage._album ?? String()}
+    set {_uniqueStorage()._album = newValue}
+  }
+  /// Returns true if `album` has been explicitly set.
+  var hasAlbum: Bool {_storage._album != nil}
+  /// Clears the value of `album`. Subsequent reads from it will return its default value.
+  mutating func clearAlbum() {_uniqueStorage()._album = nil}
+
+  var albumArtist: String {
+    get {_storage._albumArtist ?? String()}
+    set {_uniqueStorage()._albumArtist = newValue}
+  }
+  /// Returns true if `albumArtist` has been explicitly set.
+  var hasAlbumArtist: Bool {_storage._albumArtist != nil}
+  /// Clears the value of `albumArtist`. Subsequent reads from it will return its default value.
+  mutating func clearAlbumArtist() {_uniqueStorage()._albumArtist = nil}
+
+  var artworkURL: String {
+    get {_storage._artworkURL ?? String()}
+    set {_uniqueStorage()._artworkURL = newValue}
+  }
+  /// Returns true if `artworkURL` has been explicitly set.
+  var hasArtworkURL: Bool {_storage._artworkURL != nil}
+  /// Clears the value of `artworkURL`. Subsequent reads from it will return its default value.
+  mutating func clearArtworkURL() {_uniqueStorage()._artworkURL = nil}
+
+  var trackNumber: Int32 {
+    get {_storage._trackNumber ?? 0}
+    set {_uniqueStorage()._trackNumber = newValue}
+  }
+  /// Returns true if `trackNumber` has been explicitly set.
+  var hasTrackNumber: Bool {_storage._trackNumber != nil}
+  /// Clears the value of `trackNumber`. Subsequent reads from it will return its default value.
+  mutating func clearTrackNumber() {_uniqueStorage()._trackNumber = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _year: String? = nil
-  fileprivate var _rating: String? = nil
-  fileprivate var _runtime: String? = nil
-  fileprivate var _overview: String? = nil
-  fileprivate var _backdropURL: String? = nil
-  fileprivate var _posterURL: String? = nil
-  fileprivate var _logoURL: String? = nil
-  fileprivate var _season: Int32? = nil
-  fileprivate var _episode: Int32? = nil
-  fileprivate var _episodeTitle: String? = nil
-  fileprivate var _imdbID: String? = nil
-  fileprivate var _tmdbID: String? = nil
+  fileprivate var _storage = _StorageClass.defaultInstance
 }
 
 /// A sidecar subtitle is an independent network resource. Its headers are scoped
@@ -475,6 +543,27 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
     set {_uniqueStorage()._subtitleResources = newValue}
   }
 
+  /// Per-item presentation kind. Omitted means the receiver should infer it.
+  var mediaKind: String {
+    get {_storage._mediaKind ?? String()}
+    set {_uniqueStorage()._mediaKind = newValue}
+  }
+  /// Returns true if `mediaKind` has been explicitly set.
+  var hasMediaKind: Bool {_storage._mediaKind != nil}
+  /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
+  mutating func clearMediaKind() {_uniqueStorage()._mediaKind = nil}
+
+  /// For image items only. Positive values auto-advance after this display time;
+  /// omitted or zero keeps the image visible until explicit navigation.
+  var displayDurationMs: Int64 {
+    get {_storage._displayDurationMs ?? 0}
+    set {_uniqueStorage()._displayDurationMs = newValue}
+  }
+  /// Returns true if `displayDurationMs` has been explicitly set.
+  var hasDisplayDurationMs: Bool {_storage._displayDurationMs != nil}
+  /// Clears the value of `displayDurationMs`. Subsequent reads from it will return its default value.
+  mutating func clearDisplayDurationMs() {_uniqueStorage()._displayDurationMs = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -482,46 +571,41 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
-nonisolated struct Playbridge_PlaylistPayload: @unchecked Sendable {
+nonisolated struct Playbridge_PlaylistPayload: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var items: [Playbridge_PlayPayload] {
-    get {_storage._items}
-    set {_uniqueStorage()._items = newValue}
-  }
+  var items: [Playbridge_PlayPayload] = []
 
-  var startIndex: Int32 {
-    get {_storage._startIndex}
-    set {_uniqueStorage()._startIndex = newValue}
-  }
+  var startIndex: Int32 = 0
 
   var visualMetadata: Playbridge_VisualMetadata {
-    get {_storage._visualMetadata ?? Playbridge_VisualMetadata()}
-    set {_uniqueStorage()._visualMetadata = newValue}
+    get {_visualMetadata ?? Playbridge_VisualMetadata()}
+    set {_visualMetadata = newValue}
   }
   /// Returns true if `visualMetadata` has been explicitly set.
-  var hasVisualMetadata: Bool {_storage._visualMetadata != nil}
+  var hasVisualMetadata: Bool {self._visualMetadata != nil}
   /// Clears the value of `visualMetadata`. Subsequent reads from it will return its default value.
-  mutating func clearVisualMetadata() {_uniqueStorage()._visualMetadata = nil}
+  mutating func clearVisualMetadata() {self._visualMetadata = nil}
 
   /// Presentation hint for receivers that normally show a metadata-rich pre-play screen.
   /// Metadata remains available for playback controls and history when this is true.
   var skipPreplay: Bool {
-    get {_storage._skipPreplay ?? false}
-    set {_uniqueStorage()._skipPreplay = newValue}
+    get {_skipPreplay ?? false}
+    set {_skipPreplay = newValue}
   }
   /// Returns true if `skipPreplay` has been explicitly set.
-  var hasSkipPreplay: Bool {_storage._skipPreplay != nil}
+  var hasSkipPreplay: Bool {self._skipPreplay != nil}
   /// Clears the value of `skipPreplay`. Subsequent reads from it will return its default value.
-  mutating func clearSkipPreplay() {_uniqueStorage()._skipPreplay = nil}
+  mutating func clearSkipPreplay() {self._skipPreplay = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _storage = _StorageClass.defaultInstance
+  fileprivate var _visualMetadata: Playbridge_VisualMetadata? = nil
+  fileprivate var _skipPreplay: Bool? = nil
 }
 
 nonisolated struct Playbridge_QueueAddPayload: Sendable {
@@ -668,11 +752,21 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   /// Clears the value of `title`. Subsequent reads from it will return its default value.
   mutating func clearTitle() {self._title = nil}
 
+  var mediaKind: String {
+    get {_mediaKind ?? String()}
+    set {_mediaKind = newValue}
+  }
+  /// Returns true if `mediaKind` has been explicitly set.
+  var hasMediaKind: Bool {self._mediaKind != nil}
+  /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
+  mutating func clearMediaKind() {self._mediaKind = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _title: String? = nil
+  fileprivate var _mediaKind: String? = nil
 }
 
 nonisolated struct Playbridge_ContextMessage: Sendable {
@@ -699,9 +793,20 @@ nonisolated struct Playbridge_PlaylistItemInfo: Sendable {
 
   var title: String = String()
 
+  var mediaKind: String {
+    get {_mediaKind ?? String()}
+    set {_mediaKind = newValue}
+  }
+  /// Returns true if `mediaKind` has been explicitly set.
+  var hasMediaKind: Bool {self._mediaKind != nil}
+  /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
+  mutating func clearMediaKind() {self._mediaKind = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _mediaKind: String? = nil
 }
 
 nonisolated struct Playbridge_PlaylistStatusMessage: Sendable {
@@ -774,12 +879,28 @@ nonisolated struct Playbridge_AuthResponse: Sendable {
   /// Clears the value of `certFingerprint`. Subsequent reads from it will return its default value.
   mutating func clearCertFingerprint() {self._certFingerprint = nil}
 
+  var players: [String] = []
+
+  var browsers: [String] = []
+
+  var screenMirrorWebRtc: Bool {
+    get {_screenMirrorWebRtc ?? false}
+    set {_screenMirrorWebRtc = newValue}
+  }
+  /// Returns true if `screenMirrorWebRtc` has been explicitly set.
+  var hasScreenMirrorWebRtc: Bool {self._screenMirrorWebRtc != nil}
+  /// Clears the value of `screenMirrorWebRtc`. Subsequent reads from it will return its default value.
+  mutating func clearScreenMirrorWebRtc() {self._screenMirrorWebRtc = nil}
+
+  var mediaKinds: [String] = []
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _token: String? = nil
   fileprivate var _certFingerprint: String? = nil
+  fileprivate var _screenMirrorWebRtc: Bool? = nil
 }
 
 /// Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.
@@ -940,12 +1061,12 @@ nonisolated struct Playbridge_PongMessage: Sendable {
 fileprivate nonisolated let _protobuf_package = "playbridge"
 
 nonisolated extension Playbridge_MouseEventType: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0MOUSE_MOVE\0\u{1}MOUSE_CLICK\0\u{1}MOUSE_SCROLL\0\u{1}MOUSE_DOWN\0\u{1}MOUSE_UP\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0MOUSE_MOVE\0\u{1}MOUSE_CLICK\0\u{1}MOUSE_SCROLL\0\u{1}MOUSE_DOWN\0\u{1}MOUSE_UP\0\u{1}MOUSE_ZOOM\0\u{1}MOUSE_RESET\0\u{1}MOUSE_ROTATE\0")
 }
 
 nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MessageEnvelope"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}action\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}action\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -959,6 +1080,7 @@ nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftPr
       case 4: try { try decoder.decodeSingularInt64Field(value: &self._position) }()
       case 5: try { try decoder.decodeSingularInt64Field(value: &self._duration) }()
       case 6: try { try decoder.decodeSingularStringField(value: &self._title) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
       default: break
       }
     }
@@ -987,6 +1109,9 @@ nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftPr
     try { if let v = self._title {
       try visitor.visitSingularStringField(value: v, fieldNumber: 6)
     } }()
+    try { if let v = self._mediaKind {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 7)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -997,6 +1122,7 @@ nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftPr
     if lhs._position != rhs._position {return false}
     if lhs._duration != rhs._duration {return false}
     if lhs._title != rhs._title {return false}
+    if lhs._mediaKind != rhs._mediaKind {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1048,108 +1174,209 @@ nonisolated extension Playbridge_SeriesEpisodeRef: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Playbridge_VisualMetadata: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".VisualMetadata"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}title\0\u{1}year\0\u{1}rating\0\u{1}runtime\0\u{1}overview\0\u{1}genres\0\u{1}cast\0\u{1}director\0\u{3}backdrop_url\0\u{3}poster_url\0\u{3}logo_url\0\u{1}season\0\u{1}episode\0\u{3}episode_title\0\u{3}imdb_id\0\u{3}tmdb_id\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}title\0\u{1}year\0\u{1}rating\0\u{1}runtime\0\u{1}overview\0\u{1}genres\0\u{1}cast\0\u{1}director\0\u{3}backdrop_url\0\u{3}poster_url\0\u{3}logo_url\0\u{1}season\0\u{1}episode\0\u{3}episode_title\0\u{3}imdb_id\0\u{3}tmdb_id\0\u{1}artist\0\u{1}album\0\u{3}album_artist\0\u{3}artwork_url\0\u{3}track_number\0")
+
+  fileprivate class _StorageClass {
+    var _title: String = String()
+    var _year: String? = nil
+    var _rating: String? = nil
+    var _runtime: String? = nil
+    var _overview: String? = nil
+    var _genres: [String] = []
+    var _cast: [String] = []
+    var _director: [String] = []
+    var _backdropURL: String? = nil
+    var _posterURL: String? = nil
+    var _logoURL: String? = nil
+    var _season: Int32? = nil
+    var _episode: Int32? = nil
+    var _episodeTitle: String? = nil
+    var _imdbID: String? = nil
+    var _tmdbID: String? = nil
+    var _artist: String? = nil
+    var _album: String? = nil
+    var _albumArtist: String? = nil
+    var _artworkURL: String? = nil
+    var _trackNumber: Int32? = nil
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _title = source._title
+      _year = source._year
+      _rating = source._rating
+      _runtime = source._runtime
+      _overview = source._overview
+      _genres = source._genres
+      _cast = source._cast
+      _director = source._director
+      _backdropURL = source._backdropURL
+      _posterURL = source._posterURL
+      _logoURL = source._logoURL
+      _season = source._season
+      _episode = source._episode
+      _episodeTitle = source._episodeTitle
+      _imdbID = source._imdbID
+      _tmdbID = source._tmdbID
+      _artist = source._artist
+      _album = source._album
+      _albumArtist = source._albumArtist
+      _artworkURL = source._artworkURL
+      _trackNumber = source._trackNumber
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.title) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self._year) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._rating) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self._runtime) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self._overview) }()
-      case 6: try { try decoder.decodeRepeatedStringField(value: &self.genres) }()
-      case 7: try { try decoder.decodeRepeatedStringField(value: &self.cast) }()
-      case 8: try { try decoder.decodeRepeatedStringField(value: &self.director) }()
-      case 9: try { try decoder.decodeSingularStringField(value: &self._backdropURL) }()
-      case 10: try { try decoder.decodeSingularStringField(value: &self._posterURL) }()
-      case 11: try { try decoder.decodeSingularStringField(value: &self._logoURL) }()
-      case 12: try { try decoder.decodeSingularInt32Field(value: &self._season) }()
-      case 13: try { try decoder.decodeSingularInt32Field(value: &self._episode) }()
-      case 14: try { try decoder.decodeSingularStringField(value: &self._episodeTitle) }()
-      case 15: try { try decoder.decodeSingularStringField(value: &self._imdbID) }()
-      case 16: try { try decoder.decodeSingularStringField(value: &self._tmdbID) }()
-      default: break
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularStringField(value: &_storage._title) }()
+        case 2: try { try decoder.decodeSingularStringField(value: &_storage._year) }()
+        case 3: try { try decoder.decodeSingularStringField(value: &_storage._rating) }()
+        case 4: try { try decoder.decodeSingularStringField(value: &_storage._runtime) }()
+        case 5: try { try decoder.decodeSingularStringField(value: &_storage._overview) }()
+        case 6: try { try decoder.decodeRepeatedStringField(value: &_storage._genres) }()
+        case 7: try { try decoder.decodeRepeatedStringField(value: &_storage._cast) }()
+        case 8: try { try decoder.decodeRepeatedStringField(value: &_storage._director) }()
+        case 9: try { try decoder.decodeSingularStringField(value: &_storage._backdropURL) }()
+        case 10: try { try decoder.decodeSingularStringField(value: &_storage._posterURL) }()
+        case 11: try { try decoder.decodeSingularStringField(value: &_storage._logoURL) }()
+        case 12: try { try decoder.decodeSingularInt32Field(value: &_storage._season) }()
+        case 13: try { try decoder.decodeSingularInt32Field(value: &_storage._episode) }()
+        case 14: try { try decoder.decodeSingularStringField(value: &_storage._episodeTitle) }()
+        case 15: try { try decoder.decodeSingularStringField(value: &_storage._imdbID) }()
+        case 16: try { try decoder.decodeSingularStringField(value: &_storage._tmdbID) }()
+        case 17: try { try decoder.decodeSingularStringField(value: &_storage._artist) }()
+        case 18: try { try decoder.decodeSingularStringField(value: &_storage._album) }()
+        case 19: try { try decoder.decodeSingularStringField(value: &_storage._albumArtist) }()
+        case 20: try { try decoder.decodeSingularStringField(value: &_storage._artworkURL) }()
+        case 21: try { try decoder.decodeSingularInt32Field(value: &_storage._trackNumber) }()
+        default: break
+        }
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.title.isEmpty {
-      try visitor.visitSingularStringField(value: self.title, fieldNumber: 1)
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._title.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._title, fieldNumber: 1)
+      }
+      try { if let v = _storage._year {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+      } }()
+      try { if let v = _storage._rating {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+      } }()
+      try { if let v = _storage._runtime {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+      } }()
+      try { if let v = _storage._overview {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+      } }()
+      if !_storage._genres.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._genres, fieldNumber: 6)
+      }
+      if !_storage._cast.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._cast, fieldNumber: 7)
+      }
+      if !_storage._director.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._director, fieldNumber: 8)
+      }
+      try { if let v = _storage._backdropURL {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 9)
+      } }()
+      try { if let v = _storage._posterURL {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 10)
+      } }()
+      try { if let v = _storage._logoURL {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 11)
+      } }()
+      try { if let v = _storage._season {
+        try visitor.visitSingularInt32Field(value: v, fieldNumber: 12)
+      } }()
+      try { if let v = _storage._episode {
+        try visitor.visitSingularInt32Field(value: v, fieldNumber: 13)
+      } }()
+      try { if let v = _storage._episodeTitle {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 14)
+      } }()
+      try { if let v = _storage._imdbID {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 15)
+      } }()
+      try { if let v = _storage._tmdbID {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 16)
+      } }()
+      try { if let v = _storage._artist {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 17)
+      } }()
+      try { if let v = _storage._album {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 18)
+      } }()
+      try { if let v = _storage._albumArtist {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 19)
+      } }()
+      try { if let v = _storage._artworkURL {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 20)
+      } }()
+      try { if let v = _storage._trackNumber {
+        try visitor.visitSingularInt32Field(value: v, fieldNumber: 21)
+      } }()
     }
-    try { if let v = self._year {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._rating {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    try { if let v = self._runtime {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
-    } }()
-    try { if let v = self._overview {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
-    } }()
-    if !self.genres.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.genres, fieldNumber: 6)
-    }
-    if !self.cast.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.cast, fieldNumber: 7)
-    }
-    if !self.director.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.director, fieldNumber: 8)
-    }
-    try { if let v = self._backdropURL {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 9)
-    } }()
-    try { if let v = self._posterURL {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 10)
-    } }()
-    try { if let v = self._logoURL {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 11)
-    } }()
-    try { if let v = self._season {
-      try visitor.visitSingularInt32Field(value: v, fieldNumber: 12)
-    } }()
-    try { if let v = self._episode {
-      try visitor.visitSingularInt32Field(value: v, fieldNumber: 13)
-    } }()
-    try { if let v = self._episodeTitle {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 14)
-    } }()
-    try { if let v = self._imdbID {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 15)
-    } }()
-    try { if let v = self._tmdbID {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 16)
-    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_VisualMetadata, rhs: Playbridge_VisualMetadata) -> Bool {
-    if lhs.title != rhs.title {return false}
-    if lhs._year != rhs._year {return false}
-    if lhs._rating != rhs._rating {return false}
-    if lhs._runtime != rhs._runtime {return false}
-    if lhs._overview != rhs._overview {return false}
-    if lhs.genres != rhs.genres {return false}
-    if lhs.cast != rhs.cast {return false}
-    if lhs.director != rhs.director {return false}
-    if lhs._backdropURL != rhs._backdropURL {return false}
-    if lhs._posterURL != rhs._posterURL {return false}
-    if lhs._logoURL != rhs._logoURL {return false}
-    if lhs._season != rhs._season {return false}
-    if lhs._episode != rhs._episode {return false}
-    if lhs._episodeTitle != rhs._episodeTitle {return false}
-    if lhs._imdbID != rhs._imdbID {return false}
-    if lhs._tmdbID != rhs._tmdbID {return false}
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._title != rhs_storage._title {return false}
+        if _storage._year != rhs_storage._year {return false}
+        if _storage._rating != rhs_storage._rating {return false}
+        if _storage._runtime != rhs_storage._runtime {return false}
+        if _storage._overview != rhs_storage._overview {return false}
+        if _storage._genres != rhs_storage._genres {return false}
+        if _storage._cast != rhs_storage._cast {return false}
+        if _storage._director != rhs_storage._director {return false}
+        if _storage._backdropURL != rhs_storage._backdropURL {return false}
+        if _storage._posterURL != rhs_storage._posterURL {return false}
+        if _storage._logoURL != rhs_storage._logoURL {return false}
+        if _storage._season != rhs_storage._season {return false}
+        if _storage._episode != rhs_storage._episode {return false}
+        if _storage._episodeTitle != rhs_storage._episodeTitle {return false}
+        if _storage._imdbID != rhs_storage._imdbID {return false}
+        if _storage._tmdbID != rhs_storage._tmdbID {return false}
+        if _storage._artist != rhs_storage._artist {return false}
+        if _storage._album != rhs_storage._album {return false}
+        if _storage._albumArtist != rhs_storage._albumArtist {return false}
+        if _storage._artworkURL != rhs_storage._artworkURL {return false}
+        if _storage._trackNumber != rhs_storage._trackNumber {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1206,7 +1433,7 @@ nonisolated extension Playbridge_SubtitleResource: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0")
 
   fileprivate class _StorageClass {
     var _url: String = String()
@@ -1225,6 +1452,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
     var _startPositionMs: Int64? = nil
     var _allowedPrivateOrigins: [String] = []
     var _subtitleResources: [Playbridge_SubtitleResource] = []
+    var _mediaKind: String? = nil
+    var _displayDurationMs: Int64? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1251,6 +1480,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       _startPositionMs = source._startPositionMs
       _allowedPrivateOrigins = source._allowedPrivateOrigins
       _subtitleResources = source._subtitleResources
+      _mediaKind = source._mediaKind
+      _displayDurationMs = source._displayDurationMs
     }
   }
 
@@ -1285,6 +1516,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         case 14: try { try decoder.decodeSingularInt64Field(value: &_storage._startPositionMs) }()
         case 15: try { try decoder.decodeRepeatedStringField(value: &_storage._allowedPrivateOrigins) }()
         case 16: try { try decoder.decodeRepeatedMessageField(value: &_storage._subtitleResources) }()
+        case 17: try { try decoder.decodeSingularStringField(value: &_storage._mediaKind) }()
+        case 18: try { try decoder.decodeSingularInt64Field(value: &_storage._displayDurationMs) }()
         default: break
         }
       }
@@ -1345,6 +1578,12 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       if !_storage._subtitleResources.isEmpty {
         try visitor.visitRepeatedMessageField(value: _storage._subtitleResources, fieldNumber: 16)
       }
+      try { if let v = _storage._mediaKind {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 17)
+      } }()
+      try { if let v = _storage._displayDurationMs {
+        try visitor.visitSingularInt64Field(value: v, fieldNumber: 18)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1370,6 +1609,8 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         if _storage._startPositionMs != rhs_storage._startPositionMs {return false}
         if _storage._allowedPrivateOrigins != rhs_storage._allowedPrivateOrigins {return false}
         if _storage._subtitleResources != rhs_storage._subtitleResources {return false}
+        if _storage._mediaKind != rhs_storage._mediaKind {return false}
+        if _storage._displayDurationMs != rhs_storage._displayDurationMs {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -1383,88 +1624,46 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
   static let protoMessageName: String = _protobuf_package + ".PlaylistPayload"
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}items\0\u{3}start_index\0\u{3}visual_metadata\0\u{3}skip_preplay\0")
 
-  fileprivate class _StorageClass {
-    var _items: [Playbridge_PlayPayload] = []
-    var _startIndex: Int32 = 0
-    var _visualMetadata: Playbridge_VisualMetadata? = nil
-    var _skipPreplay: Bool? = nil
-
-      // This property is used as the initial default value for new instances of the type.
-      // The type itself is protecting the reference to its storage via CoW semantics.
-      // This will force a copy to be made of this reference when the first mutation occurs;
-      // hence, it is safe to mark this as `nonisolated(unsafe)`.
-      static nonisolated(unsafe) let defaultInstance = _StorageClass()
-
-    private init() {}
-
-    init(copying source: _StorageClass) {
-      _items = source._items
-      _startIndex = source._startIndex
-      _visualMetadata = source._visualMetadata
-      _skipPreplay = source._skipPreplay
-    }
-  }
-
-  fileprivate mutating func _uniqueStorage() -> _StorageClass {
-    if !isKnownUniquelyReferenced(&_storage) {
-      _storage = _StorageClass(copying: _storage)
-    }
-    return _storage
-  }
-
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    _ = _uniqueStorage()
-    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
-      while let fieldNumber = try decoder.nextFieldNumber() {
-        // The use of inline closures is to circumvent an issue where the compiler
-        // allocates stack space for every case branch when no optimizations are
-        // enabled. https://github.com/apple/swift-protobuf/issues/1034
-        switch fieldNumber {
-        case 1: try { try decoder.decodeRepeatedMessageField(value: &_storage._items) }()
-        case 2: try { try decoder.decodeSingularInt32Field(value: &_storage._startIndex) }()
-        case 3: try { try decoder.decodeSingularMessageField(value: &_storage._visualMetadata) }()
-        case 4: try { try decoder.decodeSingularBoolField(value: &_storage._skipPreplay) }()
-        default: break
-        }
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.items) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.startIndex) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._visualMetadata) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self._skipPreplay) }()
+      default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every if/case branch local when no optimizations
-      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-      // https://github.com/apple/swift-protobuf/issues/1182
-      if !_storage._items.isEmpty {
-        try visitor.visitRepeatedMessageField(value: _storage._items, fieldNumber: 1)
-      }
-      if _storage._startIndex != 0 {
-        try visitor.visitSingularInt32Field(value: _storage._startIndex, fieldNumber: 2)
-      }
-      try { if let v = _storage._visualMetadata {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
-      } }()
-      try { if let v = _storage._skipPreplay {
-        try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
-      } }()
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.items.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.items, fieldNumber: 1)
     }
+    if self.startIndex != 0 {
+      try visitor.visitSingularInt32Field(value: self.startIndex, fieldNumber: 2)
+    }
+    try { if let v = self._visualMetadata {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._skipPreplay {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_PlaylistPayload, rhs: Playbridge_PlaylistPayload) -> Bool {
-    if lhs._storage !== rhs._storage {
-      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
-        let _storage = _args.0
-        let rhs_storage = _args.1
-        if _storage._items != rhs_storage._items {return false}
-        if _storage._startIndex != rhs_storage._startIndex {return false}
-        if _storage._visualMetadata != rhs_storage._visualMetadata {return false}
-        if _storage._skipPreplay != rhs_storage._skipPreplay {return false}
-        return true
-      }
-      if !storagesAreEqual {return false}
-    }
+    if lhs.items != rhs.items {return false}
+    if lhs.startIndex != rhs.startIndex {return false}
+    if lhs._visualMetadata != rhs._visualMetadata {return false}
+    if lhs._skipPreplay != rhs._skipPreplay {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1710,7 +1909,7 @@ nonisolated extension Playbridge_BrowserControlPayload: SwiftProtobuf.Message, S
 
 nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StatusMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1723,6 +1922,7 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
       case 3: try { try decoder.decodeSingularInt64Field(value: &self.position) }()
       case 4: try { try decoder.decodeSingularInt64Field(value: &self.duration) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self._title) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
       default: break
       }
     }
@@ -1748,6 +1948,9 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     try { if let v = self._title {
       try visitor.visitSingularStringField(value: v, fieldNumber: 5)
     } }()
+    try { if let v = self._mediaKind {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1757,6 +1960,7 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     if lhs.position != rhs.position {return false}
     if lhs.duration != rhs.duration {return false}
     if lhs._title != rhs._title {return false}
+    if lhs._mediaKind != rhs._mediaKind {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1799,7 +2003,7 @@ nonisolated extension Playbridge_ContextMessage: SwiftProtobuf.Message, SwiftPro
 
 nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaylistItemInfo"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0\u{1}title\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0\u{1}title\0\u{3}media_kind\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1809,24 +2013,33 @@ nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftP
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularInt32Field(value: &self.index) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.title) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
       default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if self.index != 0 {
       try visitor.visitSingularInt32Field(value: self.index, fieldNumber: 1)
     }
     if !self.title.isEmpty {
       try visitor.visitSingularStringField(value: self.title, fieldNumber: 2)
     }
+    try { if let v = self._mediaKind {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_PlaylistItemInfo, rhs: Playbridge_PlaylistItemInfo) -> Bool {
     if lhs.index != rhs.index {return false}
     if lhs.title != rhs.title {return false}
+    if lhs._mediaKind != rhs._mediaKind {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1918,7 +2131,7 @@ nonisolated extension Playbridge_AuthMessage: SwiftProtobuf.Message, SwiftProtob
 
 nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AuthResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}success\0\u{1}token\0\u{3}cert_fingerprint\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}success\0\u{1}token\0\u{3}cert_fingerprint\0\u{1}players\0\u{1}browsers\0\u{3}screen_mirror_web_rtc\0\u{3}media_kinds\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1930,6 +2143,10 @@ nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProto
       case 2: try { try decoder.decodeSingularBoolField(value: &self.success) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self._token) }()
       case 4: try { try decoder.decodeSingularStringField(value: &self._certFingerprint) }()
+      case 5: try { try decoder.decodeRepeatedStringField(value: &self.players) }()
+      case 6: try { try decoder.decodeRepeatedStringField(value: &self.browsers) }()
+      case 7: try { try decoder.decodeSingularBoolField(value: &self._screenMirrorWebRtc) }()
+      case 8: try { try decoder.decodeRepeatedStringField(value: &self.mediaKinds) }()
       default: break
       }
     }
@@ -1952,6 +2169,18 @@ nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProto
     try { if let v = self._certFingerprint {
       try visitor.visitSingularStringField(value: v, fieldNumber: 4)
     } }()
+    if !self.players.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.players, fieldNumber: 5)
+    }
+    if !self.browsers.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.browsers, fieldNumber: 6)
+    }
+    try { if let v = self._screenMirrorWebRtc {
+      try visitor.visitSingularBoolField(value: v, fieldNumber: 7)
+    } }()
+    if !self.mediaKinds.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.mediaKinds, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1960,6 +2189,10 @@ nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProto
     if lhs.success != rhs.success {return false}
     if lhs._token != rhs._token {return false}
     if lhs._certFingerprint != rhs._certFingerprint {return false}
+    if lhs.players != rhs.players {return false}
+    if lhs.browsers != rhs.browsers {return false}
+    if lhs._screenMirrorWebRtc != rhs._screenMirrorWebRtc {return false}
+    if lhs.mediaKinds != rhs.mediaKinds {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

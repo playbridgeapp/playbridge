@@ -2621,6 +2621,11 @@ class BrowserActivity : ComponentActivity() {
                                              url = video.url,
                                              headers = mediaHeaders,
                                              mimeType = video.contentType,
+                                             mediaKind = when (video.kind) {
+                                                 DetectedMediaKind.AUDIO -> com.playbridge.sender.cast.MediaKind.AUDIO
+                                                 DetectedMediaKind.IMAGE -> com.playbridge.sender.cast.MediaKind.IMAGE
+                                                 else -> com.playbridge.sender.cast.MediaKind.VIDEO
+                                             },
                                              title = video.title ?: selectedTab?.content?.title,
                                              startPositionMs = video.startPositionMs,
                                              visualMetadata = video.visualMetadata,
@@ -2662,6 +2667,7 @@ class BrowserActivity : ComponentActivity() {
                                      title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
                                      headers = headers,
                                      content_type = video.contentType,
+                                     media_kind = video.kind.protocolValue,
                                      detected_by = video.detectedBy,
                                      subtitles = subs.orEmpty(),
                                      player_mode = sheetPlayerMode.takeIf { it != "tv" },
@@ -2712,6 +2718,7 @@ class BrowserActivity : ComponentActivity() {
                                             title = video.title ?: selectedTab?.content?.title ?: "Video from browser",
                                             headers = headers,
                                             content_type = video.contentType,
+                                            media_kind = video.kind.protocolValue,
                                             detected_by = video.detectedBy,
                                             subtitles = subtitles.orEmpty(),
                                             player_mode = sheetPlayerMode.takeIf { it != "tv" },

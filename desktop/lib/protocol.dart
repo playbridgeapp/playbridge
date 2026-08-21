@@ -21,6 +21,9 @@ extension PlayPayloadX on PlayPayload {
       hasStartPositionMs() ? startPositionMs.toInt() : null;
   String? get bingeGroupOrNull => hasBingeGroup() ? bingeGroup : null;
   String? get contentTypeOrNull => hasContentType() ? contentType : null;
+  String? get mediaKindOrNull => hasMediaKind() ? mediaKind : null;
+  int? get displayDurationMsOrNull =>
+      hasDisplayDurationMs() ? displayDurationMs.toInt() : null;
   String? get detectedByOrNull => hasDetectedBy() ? detectedBy : null;
   List<String> get approvedPrivateOrigins =>
       List.unmodifiable(allowedPrivateOrigins);
@@ -47,6 +50,10 @@ extension PlayPayloadX on PlayPayload {
   String? get posterUrlOrNull =>
       _vm((m) => m.hasPosterUrl(), (m) => m.posterUrl);
   String? get logoUrlOrNull => _vm((m) => m.hasLogoUrl(), (m) => m.logoUrl);
+  String? get artistOrNull => _vm((m) => m.hasArtist(), (m) => m.artist);
+  String? get albumOrNull => _vm((m) => m.hasAlbum(), (m) => m.album);
+  String? get artworkUrlOrNull =>
+      _vm((m) => m.hasArtworkUrl(), (m) => m.artworkUrl);
   String? get overviewOrNull => _vm((m) => m.hasOverview(), (m) => m.overview);
   String? get yearOrNull => _vm((m) => m.hasYear(), (m) => m.year);
   String? get ratingOrNull => _vm((m) => m.hasRating(), (m) => m.rating);
@@ -71,6 +78,14 @@ class ControlCmd extends Command {
 class RemoteCmd extends Command {
   final String key;
   const RemoteCmd(this.key);
+}
+
+class MouseCmd extends Command {
+  const MouseCmd(this.event, this.dx, this.dy);
+
+  final String event;
+  final double dx;
+  final double dy;
 }
 
 class PlaylistCmd extends Command {
@@ -246,6 +261,14 @@ Command parseCommand(String json) {
             return ControlCmd((payload?['command'] ?? '') as String);
           case 'remote':
             return RemoteCmd((payload?['key'] ?? '') as String);
+          case 'mouse':
+            final event = payload?['event'];
+            final dx = payload?['dx'];
+            final dy = payload?['dy'];
+            if (event is String && dx is num && dy is num) {
+              return MouseCmd(event, dx.toDouble(), dy.toDouble());
+            }
+            return const UnknownCmd('mouse_parse_error');
           case 'context_query':
             return const ContextQueryCmd();
           case 'playlist':

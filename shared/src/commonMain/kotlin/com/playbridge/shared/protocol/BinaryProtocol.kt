@@ -4,7 +4,7 @@ package com.playbridge.shared.protocol
  * Compact binary representations for high-frequency events (Mouse).
  *
  * Packet Structure (9 bytes):
- * [0] - Type (0=Move, 1=Click, 2=Scroll, 3=Down, 4=Up, 5=Zoom)
+ * [0] - Type (0=Move, 1=Click, 2=Scroll, 3=Down, 4=Up, 5=Zoom, 6=Reset, 7=Rotate)
  * [1-4] - Float DX (Big Endian)  // for Zoom: relative scale factor (dy unused)
  * [5-8] - Float DY (Big Endian)
  */
@@ -15,6 +15,8 @@ object MousePacket {
     const val DOWN: Byte = 3
     const val UP: Byte = 4
     const val ZOOM: Byte = 5
+    const val RESET: Byte = 6
+    const val ROTATE: Byte = 7
 
     fun pack(event: String, dx: Float, dy: Float): ByteArray {
         val type = when (event) {
@@ -24,6 +26,8 @@ object MousePacket {
             "down" -> DOWN
             "up" -> UP
             "zoom" -> ZOOM
+            "reset" -> RESET
+            "rotate" -> ROTATE
             else -> MOVE
         }
         val result = ByteArray(9)
@@ -59,6 +63,8 @@ object MousePacket {
             DOWN -> "down"
             UP -> "up"
             ZOOM -> "zoom"
+            RESET -> "reset"
+            ROTATE -> "rotate"
             else -> "move"
         }
 

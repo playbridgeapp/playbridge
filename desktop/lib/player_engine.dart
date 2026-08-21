@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'media_kind.dart';
 
 /// One playlist entry. Carries the playback essentials the engines consume
 /// (url/title/headers/subtitles) plus the protocol metadata the server echoes
@@ -27,6 +28,11 @@ class QueueItem {
     this.originalUrl,
     this.originalHeaders,
     this.contentType,
+    this.declaredMediaKind,
+    this.displayDurationMs,
+    this.artist,
+    this.album,
+    this.artworkUrl,
     this.playlistBody,
     this.audioUrl,
     this.skipPreplay = false,
@@ -45,6 +51,17 @@ class QueueItem {
   final String? originalUrl;
   final Map<String, String>? originalHeaders;
   final String? contentType;
+  final String? declaredMediaKind;
+  final int? displayDurationMs;
+  final String? artist;
+  final String? album;
+  final String? artworkUrl;
+
+  MediaKind get mediaKind => resolveMediaKind(
+        declared: declaredMediaKind,
+        url: originalUrl ?? url,
+        contentType: contentType,
+      );
 
   /// Synthetic multivariant playlist text from the extension (absolute child
   /// URIs). Materialized to a temp `.m3u8` before mpv open — not a data: URL.

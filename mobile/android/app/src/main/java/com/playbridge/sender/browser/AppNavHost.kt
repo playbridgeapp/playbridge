@@ -984,6 +984,7 @@ fun AppNavHost(
                         positionMs = tvPlayback?.positionMs ?: 0L,
                         durationMs = tvPlayback?.durationMs ?: 0L,
                         mediaTitle = tvPlayback?.title,
+                        mediaKind = tvPlayback?.mediaKind ?: "video",
                         episodes = tvPlaylistState?.items ?: emptyList(),
                         currentEpisodeIndex = tvPlaylistState?.currentIndex ?: 0,
                         videoTracks = tvVideoTracks,
@@ -1060,6 +1061,12 @@ fun AppNavHost(
                         },
                         onPinchZoom = { factor ->
                             connectionViewModel.webSocketClient.sendMouseCommand("zoom", factor, 0f)
+                        },
+                        onRotateImage = { degrees ->
+                            connectionViewModel.webSocketClient.sendMouseCommand("rotate", degrees, 0f)
+                        },
+                        onResetZoom = {
+                            connectionViewModel.webSocketClient.sendMouseCommand("reset", 0f, 0f)
                         },
                         onMouseDown = {
                             connectionViewModel.webSocketClient.sendMouseCommand("down", 0f, 0f)

@@ -69,6 +69,8 @@ pub enum ReceiverFrame {
         #[serde(default)]
         browsers: Vec<String>,
         #[serde(default)]
+        media_kinds: Vec<String>,
+        #[serde(default)]
         screen_mirror_web_rtc: bool,
     },
     #[serde(rename = "status")]
@@ -81,6 +83,8 @@ pub enum ReceiverFrame {
         duration: u64,
         #[serde(default)]
         title: Option<String>,
+        #[serde(default)]
+        media_kind: Option<String>,
     },
     #[serde(other)]
     Unknown,
@@ -96,6 +100,8 @@ pub struct CredentialBundle {
     pub players: Vec<String>,
     #[serde(default)]
     pub browsers: Vec<String>,
+    #[serde(default)]
+    pub media_kinds: Vec<String>,
     #[serde(default)]
     pub screen_mirror_web_rtc: bool,
 }
@@ -456,16 +462,17 @@ mod tests {
     #[test]
     fn receiver_parser_tolerates_unknown_fields_and_types() {
         let response = decode_receiver_text(
-            r#"{"type":"auth_response","success":true,"players":["mpv"],"screenMirrorWebRtc":true,"future":1}"#,
+            r#"{"type":"auth_response","success":true,"players":["mpv"],"mediaKinds":["video","audio","image"],"screenMirrorWebRtc":true,"future":1}"#,
         )
         .unwrap();
         assert!(matches!(
             response,
             ReceiverFrame::AuthResponse {
                 success: true,
+                media_kinds,
                 screen_mirror_web_rtc: true,
                 ..
-            }
+            } if media_kinds == ["video", "audio", "image"]
         ));
         assert_eq!(
             decode_receiver_text(r#"{"type":"future_event","value":1}"#).unwrap(),
@@ -575,6 +582,7 @@ mod tests {
             cert_fingerprint: Some("sha256/test".into()),
             players: vec!["mpv".into()],
             browsers: vec![],
+            media_kinds: vec!["video".into(), "audio".into(), "image".into()],
             screen_mirror_web_rtc: true,
         };
         let ReceiverFrame::PairingApproved { nonce, ciphertext } =

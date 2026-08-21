@@ -77,6 +77,7 @@ import com.playbridge.sender.cast.proxy.StreamRouteService
 import com.playbridge.sender.cast.routing.CastPreparation
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
+import com.playbridge.shared.protocol.resolveMediaKind
 
 /**
  * Bottom sheet for casting media to a TV — pick a video or browse URL, choose a stream route, send.
@@ -422,6 +423,12 @@ fun CastSheet(
             ) {
                 // Shared by the header action dropdown and the Send button.
                 var actionMenuExpanded by remember { mutableStateOf(false) }
+                val requestedMediaKind = selectedVideo?.kind?.protocolValue
+                    ?: contentPayload?.let { resolveMediaKind(it).wireValue }
+                    ?: "video"
+                val nativeKindSupported = selectedTvDevice
+                    ?.supportsNativeMediaKind(requestedMediaKind)
+                    ?: true
                 val playEnabled = selectedVideo != null || contentPayload != null
                 val canQueue = isTvPlaying
 
@@ -759,10 +766,23 @@ fun CastSheet(
                     // The single send Action: runs whichever action the dropdown has selected.
                     IconButton(
                         onClick = {
-                            when (castAction) {
-                                "browse" -> onBrowseClick?.invoke(playerMode, browseDesktopMode)
-                                "queue"  -> dispatch(queue = true)
-                                else     -> dispatch(queue = false)
+                            if (castAction != "browse" && !nativeKindSupported) {
+                                val label = when (requestedMediaKind) {
+                                    "audio" -> "music playback"
+                                    "image" -> "image viewing"
+                                    else -> "video playback"
+                                }
+                                Toast.makeText(
+                                    context,
+                                    "This receiver does not support $label",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            } else {
+                                when (castAction) {
+                                    "browse" -> onBrowseClick?.invoke(playerMode, browseDesktopMode)
+                                    "queue"  -> dispatch(queue = true)
+                                    else     -> dispatch(queue = false)
+                                }
                             }
                         },
                         enabled = sendEnabled

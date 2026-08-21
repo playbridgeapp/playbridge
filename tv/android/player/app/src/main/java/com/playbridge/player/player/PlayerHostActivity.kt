@@ -26,8 +26,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.viewModels
 import androidx.annotation.StringRes
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.graphics.createBitmap
 import androidx.core.view.WindowCompat
@@ -45,14 +51,17 @@ import com.playbridge.player.data.toSafeLogString
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.server.ServerService
 import com.playbridge.player.ui.player.ActiveOverlay
+import com.playbridge.player.ui.player.MediaPresentation
 import com.playbridge.player.ui.player.PlayerControlsOverlay
 import com.playbridge.player.ui.player.PlayerControlsViewModel
 import com.playbridge.player.ui.player.PlaybackCapabilities
 import com.playbridge.player.ui.player.SettingsTab
 import com.playbridge.player.ui.player.UnifiedTrack
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
+import com.playbridge.shared.protocol.MediaKind
 import com.playbridge.shared.protocol.createStatusJson
 import com.playbridge.shared.protocol.encodePlayPayloadListJson
+import com.playbridge.shared.protocol.resolveMediaKind
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -123,6 +132,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var videoHeight = 0
     private var finishingSession = false
     private var skipPreplayForSession = false
+    private var currentMediaKind by mutableStateOf(MediaKind.VIDEO)
+    private var presentationPayload by mutableStateOf<PlayPayload?>(null)
+    private var imageScale by mutableFloatStateOf(1f)
+    private var imageOffsetX by mutableFloatStateOf(0f)
+    private var imageOffsetY by mutableFloatStateOf(0f)
+    private var imageRotation by mutableFloatStateOf(0f)
+    private var imageTimerJob: Job? = null
+    private var imageTimerRunning = false
     private val attemptedRenderers = linkedSetOf<RendererKind>()
     private var startupWatchdog: Runnable? = null
     private var failureFinishRunnable: Runnable? = null
@@ -249,6 +266,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 ServerService.ACTION_REMOTE -> handleRemote(
                     intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY),
                 )
+                ServerService.ACTION_MOUSE -> handleImagePointer(
+                    event = intent.getStringExtra(ServerService.EXTRA_MOUSE_EVENT),
+                    dx = intent.getFloatExtra(ServerService.EXTRA_MOUSE_DX, 0f),
+                    dy = intent.getFloatExtra(ServerService.EXTRA_MOUSE_DY, 0f),
+                )
                 ServerService.ACTION_QUEUE_ADD -> playbackCoordinator.queueAdd(
                     ServerService.drainPendingQueueItems(this@PlayerHostActivity),
                 )
@@ -314,9 +336,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             .takeIf { it > 0L }
         broadcastPlaylistStatus(playbackCoordinator.playlist, playbackCoordinator.index)
         skipPreplayForSession = intent.getBooleanExtra(ServerService.EXTRA_SKIP_PREPLAY, false)
-        updateControlsForCurrentItem(showPrePlay = !skipPreplayForSession)
+        currentMediaKind = resolveMediaKind(playlist.items[playbackCoordinator.index])
+        updateControlsForCurrentItem(
+            showPrePlay = !skipPreplayForSession && currentMediaKind == MediaKind.VIDEO,
+        )
         attemptedRenderers += rendererKind
-        session = sessionCoordinator.begin(rendererKind)
+        session = sessionCoordinator.begin(
+            if (currentMediaKind == MediaKind.IMAGE) RendererKind.IMAGE else rendererKind,
+        )
         ServerService.notifyContextPlayer(this, rendererKind.engineId)
         bindRenderer()
     }
@@ -341,6 +368,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val filter = android.content.IntentFilter().apply {
             addAction(ServerService.ACTION_CONTROL)
             addAction(ServerService.ACTION_REMOTE)
+            addAction(ServerService.ACTION_MOUSE)
             addAction(ServerService.ACTION_QUEUE_ADD)
             addAction(ServerService.ACTION_PLAYLIST_JUMP)
             addAction(ServerService.ACTION_RESYNC)
@@ -389,8 +417,18 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             PlayBridgeTVTheme {
                 val state by controlsViewModel.controlsState.collectAsState()
                 val stillWatching by stillWatchingController.state.collectAsState()
-                PlayerControlsOverlay(
+                Box(Modifier.fillMaxSize()) {
+                    MediaPresentation(
+                        payload = presentationPayload,
+                        mediaKind = currentMediaKind.wireValue,
+                        imageScale = imageScale,
+                        imageOffsetX = imageOffsetX,
+                        imageOffsetY = imageOffsetY,
+                        imageRotation = imageRotation,
+                    )
+                    PlayerControlsOverlay(
                     state = state,
+                    mediaKind = currentMediaKind.wireValue,
                     stillWatchingState = stillWatching,
                     onContinueWatching = stillWatchingController::continueWatching,
                     onTogglePlay = controlsViewModel::togglePlayPause,
@@ -477,7 +515,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     onPreloadSubtitles = controlsViewModel::preloadSubtitleCues,
                     onSkipSegment = controlsViewModel::skipCurrentSegment,
                     onSkipButtonFocusChanged = controlsViewModel::setSkipButtonFocused,
-                )
+                    )
+                }
             }
         }
     }
@@ -699,6 +738,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         logPlaybackContextCheckpoint("onDestroy")
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
+        imageTimerJob?.cancel()
+        imageTimerJob = null
         cancelFailureFinish()
         subtitleStageJob?.cancel()
         subtitleStageJob = null
@@ -729,6 +770,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         progressManager.saveProgress()
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
+        imageTimerJob?.cancel()
+        imageTimerJob = null
+        imageTimerRunning = false
         cancelFailureFinish()
 
         val oldKind = rendererKind
@@ -739,11 +783,16 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         // Begin the new logical session before touching the old renderer. Any stop/release
         // callbacks already in flight retain the old session id and are ignored by the host.
         rendererKind = targetKind
-        session = sessionCoordinator.begin(targetKind)
         finishingSession = false
         attemptedRenderers.clear()
         attemptedRenderers += targetKind
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
+        currentMediaKind = resolveMediaKind(playlist.items[playbackCoordinator.index])
+        presentationPayload = playlist.items[playbackCoordinator.index]
+            .takeIf { currentMediaKind != MediaKind.VIDEO }
+        session = sessionCoordinator.begin(
+            if (currentMediaKind == MediaKind.IMAGE) RendererKind.IMAGE else targetKind,
+        )
         activeHistoryId = requestIntent.getStringExtra(PlayerLauncher.EXTRA_HISTORY_ID)
             ?: PlayerLauncher.historyId(playlist.items)
         sessionPlaybackContext = PlayerLauncher.playbackContextFromIntent(requestIntent)
@@ -766,12 +815,24 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             ServerService.EXTRA_SKIP_PREPLAY,
             false,
         )
-        updateControlsForCurrentItem(showPrePlay = !skipPreplayForSession)
+        updateControlsForCurrentItem(
+            showPrePlay = !skipPreplayForSession && currentMediaKind == MediaKind.VIDEO,
+        )
         controlsViewModel.setEngine(controlsAdapter, targetKind.engineId, this)
         ServerService.notifyContextPlayer(this, targetKind.engineId)
 
+        // Image presentation bypasses the renderer, so explicitly tear down the old
+        // media session even when the selected renderer kind has not changed.
+        val oldRendererReleased = currentMediaKind == MediaKind.IMAGE && oldSession != null && oldRenderer != null
+        if (oldRendererReleased) {
+            runCatching { oldRenderer.detachSurface(oldSession.sessionId) }
+            runCatching { oldRenderer.release(oldSession.sessionId) }
+        }
+
         if (targetKind != oldKind) {
-            runCatching { oldSession?.let { oldRenderer?.release(it.sessionId) } }
+            if (!oldRendererReleased) {
+                runCatching { oldSession?.let { oldRenderer?.release(it.sessionId) } }
+            }
             unbindCurrentRenderer()
             rotateRendererSurface()
             terminateRendererProcess(oldKind)
@@ -793,7 +854,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
         val currentSession = session ?: return
         showTransition(R.string.player_preparing)
-        scheduleRendererOpenWatchdog(currentSession.sessionId, targetKind)
+        if (currentMediaKind != MediaKind.IMAGE) {
+            scheduleRendererOpenWatchdog(currentSession.sessionId, targetKind)
+        }
         try {
             renderer.setCallback(callback)
             prepareRenderer(renderer)
@@ -939,14 +1002,21 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     private fun prepareRenderer(renderer: IRendererService) {
         val currentSession = session ?: return
-        if (surface == null) {
-            FileLogger.d(TAG, "Waiting for a fresh surface before preparing $rendererKind")
-            return
-        }
         if (preparedSessionId == currentSession.sessionId) return
         val payload = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)
         if (payload == null) {
             handleRendererFailure("Host launch did not include a PlayPayload")
+            return
+        }
+        currentMediaKind = resolveMediaKind(payload)
+        presentationPayload = payload.takeIf { currentMediaKind != MediaKind.VIDEO }
+        if (currentMediaKind == MediaKind.IMAGE) {
+            configureProgress(payload)
+            startImagePresentation(payload, currentSession.sessionId)
+            return
+        }
+        if (surface == null) {
+            FileLogger.d(TAG, "Waiting for a fresh surface before preparing $rendererKind")
             return
         }
 
@@ -1022,6 +1092,62 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     ).show()
                 }
                 prepareRendererNow(renderer, payload, currentSession.sessionId)
+            }
+        }
+    }
+
+    private fun startImagePresentation(payload: PlayPayload, sessionId: Long) {
+        if (session?.sessionId != sessionId) return
+        resetImageTransform()
+        cancelStartupWatchdog()
+        cancelPrePlayCountdown()
+        imageTimerJob?.cancel()
+        preparedSessionId = sessionId
+        hostPlaying = payload.display_duration_ms?.let { it > 0L } == true
+        imageTimerRunning = hostPlaying
+        lastPositionMs = 0L
+        lastDurationMs = payload.display_duration_ms?.coerceIn(0L, 86_400_000L) ?: 0L
+        pendingPlayingState = null
+        sessionCoordinator.markReady(sessionId)
+        sessionCoordinator.markFirstFrame(sessionId)
+        controlsViewModel.setPlaying(hostPlaying)
+        controlsViewModel.setBuffering(false)
+        stillWatchingController.onPlayingChanged(hostPlaying)
+        controlsViewModel.clearPlaybackTransition()
+        controlsViewModel.updateCapabilities(
+            PlaybackCapabilities(
+                isLive = false,
+                isSeekable = false,
+                speedAvailable = false,
+                scalingAvailable = false,
+                audioBoostAvailable = false,
+                qualityAvailable = false,
+            ),
+            currentVideoHeight = 0,
+            qualityMaxHeight = 0,
+        )
+        broadcastTracks()
+        broadcastCurrentState()
+        if (lastDurationMs > 0L) startImageTimer(sessionId)
+        refreshKeepScreenOn()
+    }
+
+    private fun startImageTimer(sessionId: Long) {
+        imageTimerJob?.cancel()
+        if (!imageTimerRunning || lastDurationMs <= 0L) return
+        imageTimerJob = lifecycleScope.launch {
+            var previous = SystemClock.elapsedRealtime()
+            while (session?.sessionId == sessionId && imageTimerRunning) {
+                delay(250L)
+                val now = SystemClock.elapsedRealtime()
+                lastPositionMs = (lastPositionMs + now - previous).coerceAtMost(lastDurationMs)
+                previous = now
+                broadcastPlaybackStatus()
+                if (lastPositionMs >= lastDurationMs) {
+                    imageTimerRunning = false
+                    playbackCoordinator.next()
+                    return@launch
+                }
             }
         }
     }
@@ -1349,6 +1475,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             (thumbnailPlayingSinceElapsedMs?.let { (nowMs - it).coerceAtLeast(0L) } ?: 0L)
 
     private fun requestHistoryThumbnailCapture(exitFallback: Boolean = false) {
+        if (currentMediaKind != MediaKind.VIDEO) return
         val historyId = currentHistoryId ?: return
         if (thumbnailCaptureInFlightGeneration != null) return
         if (!getSharedPreferences("browser_prefs", MODE_PRIVATE)
@@ -1625,6 +1752,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     position = lastPositionMs,
                     duration = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L),
                     title = event.getString(RendererProtocol.KEY_TITLE),
+                    mediaKind = currentMediaKind.wireValue,
                 )
                 ServerService.broadcastStatus(this, status)
             }
@@ -1688,7 +1816,20 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             handleRendererFailure("Renderer disconnected while advancing the playlist")
             return
         }
-        session = sessionCoordinator.begin(rendererKind)
+        val payload = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
+        val outgoingSession = session
+        imageTimerJob?.cancel()
+        imageTimerJob = null
+        imageTimerRunning = false
+        currentMediaKind = resolveMediaKind(payload)
+        presentationPayload = payload.takeIf { currentMediaKind != MediaKind.VIDEO }
+        if (currentMediaKind == MediaKind.IMAGE && outgoingSession != null) {
+            runCatching { renderer.detachSurface(outgoingSession.sessionId) }
+            runCatching { renderer.release(outgoingSession.sessionId) }
+        }
+        session = sessionCoordinator.begin(
+            if (currentMediaKind == MediaKind.IMAGE) RendererKind.IMAGE else rendererKind,
+        )
         cancelPrePlayCountdown()
         pendingSeekTracker.clear()
         hostPlaying = false
@@ -1711,7 +1852,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         requestedStartPositionMs = null
         updateControlsForCurrentItem()
         showTransition(R.string.player_preparing)
-        scheduleRendererOpenWatchdog(session!!.sessionId, rendererKind)
+        if (currentMediaKind != MediaKind.IMAGE) {
+            scheduleRendererOpenWatchdog(session!!.sessionId, rendererKind)
+        }
         try {
             renderer.setCallback(callback)
             prepareRenderer(renderer)
@@ -1729,8 +1872,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         progressManager.saveProgress()
         session?.let { currentSession ->
             sessionCoordinator.requestStop(currentSession.sessionId)
-            runCatching { rendererService?.stop(currentSession.sessionId) }
+            if (currentMediaKind != MediaKind.IMAGE) {
+                runCatching { rendererService?.stop(currentSession.sessionId) }
+            }
         }
+        imageTimerJob?.cancel()
+        imageTimerJob = null
         finish()
     }
 
@@ -1758,6 +1905,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     item.visual_metadata?.episode?.let { put("episode", it) }
                     item.visual_metadata?.imdb_id?.let { put("imdbId", it) }
                     item.binge_group?.let { put("bingeGroup", it) }
+                    put("mediaKind", resolveMediaKind(item).wireValue)
                 })
             }
         }
@@ -1770,7 +1918,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         ServerService.broadcastPlaylistStatus(this, status)
     }
 
-    private fun broadcastCurrentState() {
+    private fun broadcastPlaybackStatus() {
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index)
         ServerService.broadcastStatus(
             this,
@@ -1779,8 +1927,13 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 position = lastPositionMs,
                 duration = lastDurationMs,
                 title = item?.title,
+                mediaKind = currentMediaKind.wireValue,
             ),
         )
+    }
+
+    private fun broadcastCurrentState() {
+        broadcastPlaybackStatus()
         broadcastPlaylistStatus(playbackCoordinator.playlist, playbackCoordinator.index)
         broadcastTracks()
         broadcastPlayerSettings()
@@ -1798,11 +1951,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             put("qualityMaxHeight", state.videoQualityMaxHeight)
             put("currentVideoHeight", state.currentVideoHeight)
             put("isLive", state.capabilities.isLive)
-            put("isSeekable", state.capabilities.isSeekable)
-            put("speedAvailable", state.capabilities.speedAvailable)
-            put("scalingAvailable", state.capabilities.scalingAvailable)
-            put("audioBoostAvailable", state.capabilities.audioBoostAvailable)
-            put("qualityAvailable", state.capabilities.qualityAvailable)
+            put("isSeekable", currentMediaKind != MediaKind.IMAGE && state.capabilities.isSeekable)
+            put("speedAvailable", currentMediaKind != MediaKind.IMAGE && state.capabilities.speedAvailable)
+            put("scalingAvailable", currentMediaKind == MediaKind.VIDEO && state.capabilities.scalingAvailable)
+            put("audioBoostAvailable", currentMediaKind != MediaKind.IMAGE && state.capabilities.audioBoostAvailable)
+            put("qualityAvailable", currentMediaKind == MediaKind.VIDEO && state.capabilities.qualityAvailable)
         }.toString()
         ServerService.broadcastStatus(this, status)
     }
@@ -2132,6 +2285,31 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleControl(command: String?) {
+        if (currentMediaKind == MediaKind.IMAGE) {
+            val currentSession = session ?: return
+            when (command) {
+                "play" -> {
+                    if (lastDurationMs > 0L) {
+                        imageTimerRunning = true
+                        hostPlaying = true
+                        controlsViewModel.setPlaying(true)
+                        stillWatchingController.onPlayingChanged(true)
+                        startImageTimer(currentSession.sessionId)
+                    }
+                }
+                "pause" -> {
+                    imageTimerRunning = false
+                    hostPlaying = false
+                    imageTimerJob?.cancel()
+                    stillWatchingController.onPlayingChanged(false)
+                    controlsViewModel.showControls(full = true, playing = false)
+                }
+                "toggle" -> handleControl(if (imageTimerRunning) "pause" else "play")
+                "stop" -> finishPlaybackSession()
+            }
+            broadcastCurrentState()
+            return
+        }
         if (command?.startsWith("switch_player:") == true) {
             switchRenderer(
                 if (command.removePrefix("switch_player:").equals("mpv", ignoreCase = true)) {
@@ -2277,6 +2455,43 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
     override fun seekTo(position: Long) {
         session?.let { seekForSession(position, it.sessionId) }
+    }
+
+    private fun resetImageTransform() {
+        imageScale = 1f
+        imageOffsetX = 0f
+        imageOffsetY = 0f
+        imageRotation = 0f
+    }
+
+    private fun handleImagePointer(event: String?, dx: Float, dy: Float) {
+        if (currentMediaKind != MediaKind.IMAGE || !dx.isFinite() || !dy.isFinite()) return
+        when (event) {
+            "reset" -> resetImageTransform()
+            "rotate" -> imageRotation += dx.coerceIn(-90f, 90f)
+            "move", "scroll" -> {
+                if (imageScale <= 1f) return
+                val maxX = window.decorView.width * (imageScale - 1f) / 2f
+                val maxY = window.decorView.height * (imageScale - 1f) / 2f
+                imageOffsetX = (imageOffsetX + dx).coerceIn(-maxX, maxX)
+                imageOffsetY = (imageOffsetY + dy).coerceIn(-maxY, maxY)
+            }
+            "zoom" -> {
+                if (dx <= 0f) return
+                val oldScale = imageScale
+                imageScale = (imageScale * dx.coerceIn(0.5f, 2f)).coerceIn(1f, 8f)
+                if (imageScale == 1f) {
+                    imageOffsetX = 0f
+                    imageOffsetY = 0f
+                } else {
+                    val ratio = imageScale / oldScale
+                    val maxX = window.decorView.width * (imageScale - 1f) / 2f
+                    val maxY = window.decorView.height * (imageScale - 1f) / 2f
+                    imageOffsetX = (imageOffsetX * ratio).coerceIn(-maxX, maxX)
+                    imageOffsetY = (imageOffsetY * ratio).coerceIn(-maxY, maxY)
+                }
+            }
+        }
     }
 
     private fun handleRemote(key: String?) {
@@ -2454,7 +2669,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val state = controlsViewModel.controlsState.value
         val shouldKeepScreenOn = shouldKeepPlayerScreenOn(
             isHostStarted = isHostStarted,
-            isPlaying = hostPlaying,
+            isPlaying = hostPlaying || currentMediaKind == MediaKind.IMAGE,
             isBuffering = state.isBuffering,
             hasTransition = state.playbackTransitionMessage != null,
             hasPrePlay = state.prePlayMetadata != null,
