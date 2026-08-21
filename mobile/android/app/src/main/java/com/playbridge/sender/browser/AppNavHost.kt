@@ -1074,6 +1074,9 @@ fun AppNavHost(
                         onMouseUp = {
                             connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
                         },
+                        onPointerGestureEnd = {
+                            connectionViewModel.webSocketClient.flushMouseCommands()
+                        },
                         onBrowserControl = { action ->
                             when (action) {
                                 // Phone-side actions: open a manager sheet and ask the TV for

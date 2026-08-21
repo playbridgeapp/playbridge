@@ -248,7 +248,7 @@ class _ImagePresentation extends StatelessWidget {
         color: Colors.black,
         child: ClipRect(
           child: TweenAnimationBuilder<Offset>(
-            duration: const Duration(milliseconds: 70),
+            duration: const Duration(milliseconds: 32),
             curve: Curves.linear,
             tween: Tween(
               begin: Offset(controller.imageOffsetX, controller.imageOffsetY),
@@ -259,7 +259,7 @@ class _ImagePresentation extends StatelessWidget {
               child: child,
             ),
             child: TweenAnimationBuilder<double>(
-              duration: const Duration(milliseconds: 70),
+              duration: const Duration(milliseconds: 32),
               curve: Curves.linear,
               tween: Tween(
                 begin: controller.imageScale,
@@ -270,7 +270,7 @@ class _ImagePresentation extends StatelessWidget {
                 child: child,
               ),
               child: TweenAnimationBuilder<double>(
-                duration: const Duration(milliseconds: 70),
+                duration: const Duration(milliseconds: 32),
                 curve: Curves.linear,
                 tween: Tween(
                   begin: controller.imageRotationDegrees,

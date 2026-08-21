@@ -146,6 +146,7 @@ fun RemoteControlScreen(
     onResetZoom: () -> Unit = {},
     onMouseDown: () -> Unit = {},
     onMouseUp: () -> Unit = {},
+    onPointerGestureEnd: () -> Unit = {},
     onBrowserControl: (String) -> Unit = {},
     onPlayerControl: (String) -> Unit = {},
     playbackState: String? = null,
@@ -351,7 +352,8 @@ fun RemoteControlScreen(
                                     onDoubleTap = if (isImage) onResetZoom else onMouseClick,
                                     imageGestures = isImage,
                                     onMouseDown = onMouseDown,
-                                    onMouseUp = onMouseUp
+                                    onMouseUp = onMouseUp,
+                                    onGestureEnd = onPointerGestureEnd,
                                 )
                             }
                             ModeBottomBar(
@@ -1060,10 +1062,15 @@ private fun TouchpadArea(
     onDoubleTap: () -> Unit = onMouseClick,
     imageGestures: Boolean = false,
     onMouseDown: () -> Unit = {},
-    onMouseUp: () -> Unit = {}
+    onMouseUp: () -> Unit = {},
+    onGestureEnd: () -> Unit = {},
 ) {
     var isScrolling by remember { mutableStateOf(false) }
     var isDragging by remember { mutableStateOf(false) }
+    val latestOnGestureEnd by rememberUpdatedState(onGestureEnd)
+    DisposableEffect(Unit) {
+        onDispose { latestOnGestureEnd() }
+    }
 
     Box(
         modifier = Modifier
@@ -1194,6 +1201,7 @@ private fun TouchpadArea(
                             accumPan = 0f
                             rotationReferenceAngle = null
                             downTime = 0L
+                            onGestureEnd()
                         }
                     }
                 }

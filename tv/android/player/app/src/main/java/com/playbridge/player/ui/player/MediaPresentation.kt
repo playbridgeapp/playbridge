@@ -197,7 +197,9 @@ private fun ImagePresentation(
     rotation: Float,
 ) {
     val context = LocalContext.current
-    val animation = tween<Float>(durationMillis = 70, easing = LinearEasing)
+    // Keep a small amount of smoothing without continuously chasing 60 Hz input
+    // several frames behind the sender.
+    val animation = tween<Float>(durationMillis = 32, easing = LinearEasing)
     val animatedScale = animateFloatAsState(scale, animation, label = "imageScale")
     val animatedOffsetX = animateFloatAsState(offsetX, animation, label = "imageOffsetX")
     val animatedOffsetY = animateFloatAsState(offsetY, animation, label = "imageOffsetY")
