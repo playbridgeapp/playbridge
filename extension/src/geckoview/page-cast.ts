@@ -29,6 +29,7 @@ export type LinkedPageCastRequest = {
   items: LinkedPageCastItem[];
   startIndex: number;
   metadata?: Record<string, unknown>;
+  skipPreplay?: boolean;
   privateNetworkOrigins?: string[];
 };
 
@@ -43,6 +44,7 @@ export type PageCastRequest = {
   items: PageCastItem[];
   startIndex: number;
   metadata?: Record<string, unknown>;
+  skipPreplay?: boolean;
   privateNetworkOrigins?: string[];
 };
 
@@ -256,12 +258,14 @@ export function normalizePageCastPayload(payload: unknown): PageCastRequest | un
       : 0;
   const visualMetadata = source.metadata === undefined ? undefined : metadata(source.metadata);
   if (source.metadata !== undefined && !visualMetadata) return undefined;
+  if (source.skipPreplay !== undefined && typeof source.skipPreplay !== "boolean") return undefined;
   const privateOrigins = privateNetworkOrigins(source.privateNetworkOrigins);
   if (source.privateNetworkOrigins !== undefined && !privateOrigins) return undefined;
   return {
     items: typedItems,
     startIndex: Math.max(0, Math.min(requestedIndex, typedItems.length - 1)),
     ...(visualMetadata ? { metadata: visualMetadata } : {}),
+    ...(source.skipPreplay !== undefined ? { skipPreplay: source.skipPreplay } : {}),
     ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),
   };
 }
@@ -296,12 +300,14 @@ export function normalizeLinkedPageCastPayload(payload: unknown): LinkedPageCast
   if (requestedIndex < 0 || requestedIndex >= items.length) return undefined;
   const visualMetadata = payload.metadata === undefined ? undefined : metadata(payload.metadata);
   if (payload.metadata !== undefined && !visualMetadata) return undefined;
+  if (payload.skipPreplay !== undefined && typeof payload.skipPreplay !== "boolean") return undefined;
   const privateOrigins = privateNetworkOrigins(payload.privateNetworkOrigins);
   if (payload.privateNetworkOrigins !== undefined && !privateOrigins) return undefined;
   return {
     items,
     startIndex: requestedIndex,
     ...(visualMetadata ? { metadata: visualMetadata } : {}),
+    ...(payload.skipPreplay !== undefined ? { skipPreplay: payload.skipPreplay } : {}),
     ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),
   };
 }

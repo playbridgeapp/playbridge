@@ -545,6 +545,7 @@ class PlayerController extends ChangeNotifier {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
         contentType: item.contentType,
+        skipPreplay: item.skipPreplay,
         // Keep demuxed LL-HLS handoff across proxy toggles.
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
@@ -597,6 +598,7 @@ class PlayerController extends ChangeNotifier {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
         contentType: item.contentType,
+        skipPreplay: item.skipPreplay,
         playlistBody: item.playlistBody,
         audioUrl: proxiedAudio,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,

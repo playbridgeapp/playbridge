@@ -43,6 +43,7 @@ class WebSocketServer: ObservableObject {
             broadcast(["type": "context", "active": currentPlayRequest != nil ? "player" : "idle"])
         }
     }
+    @Published var skipPreplayForCurrentRequest = false
     @Published var isAuthenticated = false
     @Published var pendingPairingRequest: PairingRequest?
     @Published var pairedDevicesList: [PairedDevice] = []
@@ -950,6 +951,7 @@ class WebSocketServer: ObservableObject {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.playlistStore?.clear()
             self.playlistStore?.addToQueue(item: payload)
+            self.skipPreplayForCurrentRequest = false
             self.currentPlayRequest = payload
         }
     }
@@ -970,6 +972,7 @@ class WebSocketServer: ObservableObject {
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.playlistStore?.setPlaylist(items: valid, startIndex: Int(payload.startIndex))
+            self.skipPreplayForCurrentRequest = payload.skipPreplay
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
                 self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil)
                 self.currentPlayRequest = first

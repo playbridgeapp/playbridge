@@ -48,6 +48,17 @@ public class PlaylistPayload(
     schemaIndex = 2,
   )
   public val visual_metadata: VisualMetadata? = null,
+  /**
+   * Presentation hint for receivers that normally show a metadata-rich pre-play screen.
+   * Metadata remains available for playback controls and history when this is true.
+   */
+  @field:WireField(
+    tag = 4,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "skipPreplay",
+    schemaIndex = 3,
+  )
+  public val skip_preplay: Boolean? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlaylistPayload, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -72,6 +83,7 @@ public class PlaylistPayload(
     if (items != other.items) return false
     if (start_index != other.start_index) return false
     if (visual_metadata != other.visual_metadata) return false
+    if (skip_preplay != other.skip_preplay) return false
     return true
   }
 
@@ -82,6 +94,7 @@ public class PlaylistPayload(
       result = result * 37 + items.hashCode()
       result = result * 37 + start_index.hashCode()
       result = result * 37 + (visual_metadata?.hashCode() ?: 0)
+      result = result * 37 + (skip_preplay?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -92,6 +105,7 @@ public class PlaylistPayload(
     if (items.isNotEmpty()) result += """items=$items"""
     result += """start_index=$start_index"""
     if (visual_metadata != null) result += """visual_metadata=$visual_metadata"""
+    if (skip_preplay != null) result += """skip_preplay=$skip_preplay"""
     return result.joinToString(prefix = "PlaylistPayload{", separator = ", ", postfix = "}")
   }
 
@@ -99,8 +113,10 @@ public class PlaylistPayload(
     items: List<PlayPayload> = this.items,
     start_index: Int = this.start_index,
     visual_metadata: VisualMetadata? = this.visual_metadata,
+    skip_preplay: Boolean? = this.skip_preplay,
     unknownFields: ByteString = this.unknownFields,
-  ): PlaylistPayload = PlaylistPayload(items, start_index, visual_metadata, unknownFields)
+  ): PlaylistPayload = PlaylistPayload(items, start_index, visual_metadata, skip_preplay,
+      unknownFields)
 
   public companion object {
     @JvmField
@@ -119,6 +135,7 @@ public class PlaylistPayload(
           size += ProtoAdapter.INT32.encodedSizeWithTag(2, value.start_index)
         }
         size += VisualMetadata.ADAPTER.encodedSizeWithTag(3, value.visual_metadata)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(4, value.skip_preplay)
         return size
       }
 
@@ -128,11 +145,13 @@ public class PlaylistPayload(
           ProtoAdapter.INT32.encodeWithTag(writer, 2, value.start_index)
         }
         VisualMetadata.ADAPTER.encodeWithTag(writer, 3, value.visual_metadata)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 4, value.skip_preplay)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlaylistPayload) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 4, value.skip_preplay)
         VisualMetadata.ADAPTER.encodeWithTag(writer, 3, value.visual_metadata)
         if (value.start_index != 0) {
           ProtoAdapter.INT32.encodeWithTag(writer, 2, value.start_index)
@@ -144,11 +163,13 @@ public class PlaylistPayload(
         val items = mutableListOf<PlayPayload>()
         var start_index: Int = 0
         var visual_metadata: VisualMetadata? = null
+        var skip_preplay: Boolean? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> items.add(PlayPayload.ADAPTER.decode(reader))
             2 -> start_index = ProtoAdapter.INT32.decode(reader)
             3 -> visual_metadata = VisualMetadata.ADAPTER.decode(reader)
+            4 -> skip_preplay = ProtoAdapter.BOOL.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -156,6 +177,7 @@ public class PlaylistPayload(
           items = items,
           start_index = start_index,
           visual_metadata = visual_metadata,
+          skip_preplay = skip_preplay,
           unknownFields = unknownFields
         )
       }

@@ -13,6 +13,7 @@ import coil.memory.MemoryCache
 import com.playbridge.sender.BuildConfig
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import com.playbridge.shared.network.MediaNetworkPolicy
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -76,7 +77,7 @@ object Components {
      * from scratch — which previously lost history and produced blank tabs.
      */
     val tabManager: TabManager = TabManager()
-    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?, origin: String, tabId: Int, navigationGeneration: Long, requestedPrivateOrigins: List<String>) -> Unit)? = null
+    var onBridgeCastRequest: ((items: List<PlayPayload>, startIndex: Int, playlistMetadata: VisualMetadata?, skipPreplay: Boolean, origin: String, tabId: Int, navigationGeneration: Long, requestedPrivateOrigins: List<String>) -> Unit)? = null
     var onLinkedCastRequest: ((JSONObject) -> Unit)? = null
     var onPageNavigation: ((tabId: Int, navigationGeneration: Long) -> Unit)? = null
     var onLinkedNativePortDisconnected: (() -> Unit)? = null
@@ -693,6 +694,9 @@ object Components {
                         if (it.toString().toByteArray().size > PAGE_CAST_METADATA_BYTES) return
                         decodeVisualMetadataJson(it.toString())
                     }
+                    val skipPreplayElement = jsonObject["skipPreplay"]
+                    val skipPreplay = skipPreplayElement?.jsonPrimitive?.booleanOrNull
+                    if (skipPreplayElement != null && skipPreplay == null) return
                     if (itemsJson != null) {
                         val items = itemsJson.mapNotNull { item ->
                             val obj = item as? JsonObject ?: return@mapNotNull null
@@ -768,6 +772,7 @@ object Components {
                                 items,
                                 startIndex,
                                 playlistMetadata,
+                                skipPreplay == true,
                                 origin,
                                 tabId,
                                 navigationGeneration,
@@ -784,6 +789,7 @@ object Components {
                                 listOf(PlayPayload(url = url, title = title, detected_by = "page_cast")),
                                 0,
                                 null,
+                                false,
                                 origin,
                                 tabId,
                                 navigationGeneration,

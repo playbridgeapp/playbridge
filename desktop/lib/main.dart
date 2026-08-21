@@ -473,7 +473,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     final idx = _player.currentIndex;
     final item =
         (idx >= 0 && idx < _player.queue.length) ? _player.queue[idx] : null;
-    if (item == null || !item.hasPrePlayMetadata) return;
+    if (item == null || item.skipPreplay || !item.hasPrePlayMetadata) return;
     _prePlayPrevVolume ??= _player.volume;
     unawaited(_player.setVolume(0));
     setState(() => _prePlayItem = item);

@@ -48,6 +48,7 @@ data class LinkedPageCastOpenRequest(
     val items: List<LinkedPageCastItem>,
     val startIndex: Int,
     val playlistMetadata: playbridge.VisualMetadata?,
+    val skipPreplay: Boolean,
     val requestedPrivateOrigins: Set<String>,
 ) {
     fun withPrivateOriginPermission(origins: Collection<String>): LinkedPageCastOpenRequest = copy(
@@ -217,6 +218,12 @@ class LinkedPageCastCoordinator(
             if (it.toString().toByteArray().size > MAX_METADATA_BYTES) return null
             com.playbridge.shared.protocol.decodeVisualMetadataJson(it.toString())
         }
+        val skipPreplayValue = payload.opt("skipPreplay")
+        val skipPreplay = if (skipPreplayValue == null || skipPreplayValue == JSONObject.NULL) {
+            false
+        } else {
+            skipPreplayValue as? Boolean ?: return null
+        }
         LinkedPageCastOpenRequest(
             bridgeRequestId,
             sessionId,
@@ -226,6 +233,7 @@ class LinkedPageCastCoordinator(
             items,
             startIndex,
             metadata,
+            skipPreplay,
             parseRequestedPrivateOrigins(payload) ?: return null,
         )
     }.getOrNull()
@@ -300,6 +308,7 @@ class LinkedPageCastCoordinator(
                             items = request.items.map { it.payload },
                             start_index = request.startIndex,
                             visual_metadata = request.playlistMetadata,
+                            skip_preplay = request.skipPreplay,
                         ),
                     ),
                 )
@@ -386,8 +395,27 @@ class LinkedPageCastCoordinator(
             }
             com.playbridge.shared.protocol.decodeVisualMetadataJson(it.toString())
         }
+        val skipPreplayValue = payload?.opt("skipPreplay")
+        val skipPreplay = if (skipPreplayValue == null || skipPreplayValue == JSONObject.NULL) {
+            false
+        } else {
+            skipPreplayValue as? Boolean ?: run {
+                result(bridgeRequestId, false, "invalid_request")
+                return
+            }
+        }
         connectionCoordinator.tvPlaylistState.value = null
-        if (!webSocketClient.send(createPlaylistCommandJson(PlaylistPayload(items.map { it.payload }, startIndex, metadata)))) {
+        val sent = webSocketClient.send(
+            createPlaylistCommandJson(
+                PlaylistPayload(
+                    items = items.map { it.payload },
+                    start_index = startIndex,
+                    visual_metadata = metadata,
+                    skip_preplay = skipPreplay,
+                ),
+            ),
+        )
+        if (!sent) {
             result(bridgeRequestId, false, "connect_failed")
             finish("queue_update_failed")
             return

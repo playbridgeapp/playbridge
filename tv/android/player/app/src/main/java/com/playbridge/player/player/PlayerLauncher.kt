@@ -109,6 +109,7 @@ object PlayerLauncher {
             }
             putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
             putExtra(ServerService.EXTRA_PLAYLIST_INDEX, payload.start_index)
+            putExtra(ServerService.EXTRA_SKIP_PREPLAY, payload.skip_preplay == true)
 
             // Playlist-level metadata wins; fall back to the start item's (single videos
             // carry it on the item, not the playlist wrapper).
@@ -163,8 +164,17 @@ object PlayerLauncher {
      * untouched per-episode [PlayPayload]s (so subtitles/headers/langs survive), [index]
      * is the current cursor.
      */
-    fun historyPayloadJson(items: List<PlayPayload>, index: Int): String =
-        encodePlaylistPayloadJson(PlaylistPayload(items = items, start_index = index))
+    fun historyPayloadJson(
+        items: List<PlayPayload>,
+        index: Int,
+        skipPreplay: Boolean = false,
+    ): String = encodePlaylistPayloadJson(
+        PlaylistPayload(
+            items = items,
+            start_index = index,
+            skip_preplay = skipPreplay,
+        ),
+    )
 
     /**
      * Stable, index-independent history key so every episode of a series updates the same

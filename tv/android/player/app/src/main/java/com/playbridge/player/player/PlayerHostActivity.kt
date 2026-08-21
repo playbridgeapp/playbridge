@@ -122,6 +122,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var videoWidth = 0
     private var videoHeight = 0
     private var finishingSession = false
+    private var skipPreplayForSession = false
     private val attemptedRenderers = linkedSetOf<RendererKind>()
     private var startupWatchdog: Runnable? = null
     private var failureFinishRunnable: Runnable? = null
@@ -312,9 +313,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             .getLongExtra(ServerService.EXTRA_START_POSITION, 0L)
             .takeIf { it > 0L }
         broadcastPlaylistStatus(playbackCoordinator.playlist, playbackCoordinator.index)
-        updateControlsForCurrentItem(
-            showPrePlay = !intent.getBooleanExtra(ServerService.EXTRA_SKIP_PREPLAY, false),
-        )
+        skipPreplayForSession = intent.getBooleanExtra(ServerService.EXTRA_SKIP_PREPLAY, false)
+        updateControlsForCurrentItem(showPrePlay = !skipPreplayForSession)
         attemptedRenderers += rendererKind
         session = sessionCoordinator.begin(rendererKind)
         ServerService.notifyContextPlayer(this, rendererKind.engineId)
@@ -762,12 +762,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             .takeIf { it > 0L }
         resetPlaybackUi()
         broadcastPlaylistStatus(playbackCoordinator.playlist, playbackCoordinator.index)
-        updateControlsForCurrentItem(
-            showPrePlay = !requestIntent.getBooleanExtra(
-                ServerService.EXTRA_SKIP_PREPLAY,
-                false,
-            ),
+        skipPreplayForSession = requestIntent.getBooleanExtra(
+            ServerService.EXTRA_SKIP_PREPLAY,
+            false,
         )
+        updateControlsForCurrentItem(showPrePlay = !skipPreplayForSession)
         controlsViewModel.setEngine(controlsAdapter, targetKind.engineId, this)
         ServerService.notifyContextPlayer(this, targetKind.engineId)
 
@@ -1295,7 +1294,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun configureProgress(payload: PlayPayload) {
         val items = playbackCoordinator.playlist
         val index = playbackCoordinator.index
-        val payloadJson = runCatching { PlayerLauncher.historyPayloadJson(items, index) }
+        val payloadJson = runCatching {
+            PlayerLauncher.historyPayloadJson(items, index, skipPreplayForSession)
+        }
             .getOrDefault("")
         val visualMetadata = payload.visual_metadata
         val historyId = activeHistoryId ?: PlayerLauncher.historyId(items).also {

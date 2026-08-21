@@ -2,6 +2,7 @@ package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
 import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
+import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createScreenMirrorCandidateCommandJson
 import com.playbridge.shared.protocol.createScreenMirrorOfferJson
 import com.playbridge.shared.protocol.createScreenMirrorReadyJson
@@ -16,10 +17,29 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import playbridge.PlayPayload
+import playbridge.PlaylistPayload
 
 class ProtocolJsonTest {
 
     private fun obj(json: String) = Json.parseToJsonElement(json).jsonObject
+
+    @Test
+    fun playlistSkipPreplayRoundTripsThroughTheParser() {
+        val parsed = parseIncomingMessage(
+            createPlaylistCommandJson(
+                PlaylistPayload(
+                    items = listOf(PlayPayload(url = "https://media.example/song.mp3")),
+                    skip_preplay = true,
+                ),
+            ),
+        )
+        assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.Playlist)
+        assertEquals(
+            true,
+            (parsed as com.playbridge.shared.protocol.IncomingMessage.Playlist).payload.skip_preplay,
+        )
+    }
 
     @Test
     fun pairingApprovedContainsOnlyProtectedCredentialEnvelope() {

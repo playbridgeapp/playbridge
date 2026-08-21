@@ -700,11 +700,13 @@ class PlaylistPayload extends $pb.GeneratedMessage {
     $core.Iterable<PlayPayload>? items,
     $core.int? startIndex,
     VisualMetadata? visualMetadata,
+    $core.bool? skipPreplay,
   }) {
     final result = create();
     if (items != null) result.items.addAll(items);
     if (startIndex != null) result.startIndex = startIndex;
     if (visualMetadata != null) result.visualMetadata = visualMetadata;
+    if (skipPreplay != null) result.skipPreplay = skipPreplay;
     return result;
   }
 
@@ -717,6 +719,7 @@ class PlaylistPayload extends $pb.GeneratedMessage {
     ..pc<PlayPayload>(1, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM, subBuilder: PlayPayload.create)
     ..a<$core.int>(2, _omitFieldNames ? '' : 'startIndex', $pb.PbFieldType.O3)
     ..aOM<VisualMetadata>(3, _omitFieldNames ? '' : 'visualMetadata', subBuilder: VisualMetadata.create)
+    ..aOB(4, _omitFieldNames ? '' : 'skipPreplay')
     ..hasRequiredFields = false
   ;
 
@@ -759,6 +762,17 @@ class PlaylistPayload extends $pb.GeneratedMessage {
   void clearVisualMetadata() => $_clearField(3);
   @$pb.TagNumber(3)
   VisualMetadata ensureVisualMetadata() => $_ensure(2);
+
+  /// Presentation hint for receivers that normally show a metadata-rich pre-play screen.
+  /// Metadata remains available for playback controls and history when this is true.
+  @$pb.TagNumber(4)
+  $core.bool get skipPreplay => $_getBF(3);
+  @$pb.TagNumber(4)
+  set skipPreplay($core.bool value) => $_setBool(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasSkipPreplay() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearSkipPreplay() => $_clearField(4);
 }
 
 class QueueAddPayload extends $pb.GeneratedMessage {
