@@ -258,13 +258,15 @@ class ReceiverServer extends ChangeNotifier {
         _broadcastStatus();
         _broadcastPlaylistStatus();
         _broadcastTracksIfChanged(force: true);
-      case PlaylistCmd(:final items, :final startIndex):
+      case PlaylistCmd(:final items, :final startIndex, :final skipPreplay):
         unawaited(
           screenMirror.stopForReplacement(reason: 'media_started'),
         );
         onNewMedia?.call();
         unawaited(player.playPlaylist(
-          items.map(_toQueueItem).toList(),
+          items
+              .map((item) => _toQueueItem(item, skipPreplay: skipPreplay))
+              .toList(),
           startIndex,
           isRemote: true,
         ));
@@ -424,7 +426,7 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
-  QueueItem _toQueueItem(PlayPayload payload) {
+  QueueItem _toQueueItem(PlayPayload payload, {bool skipPreplay = false}) {
     debugLogNetworkRequest(
       source: 'receiver',
       url: payload.url,
@@ -444,6 +446,7 @@ class ReceiverServer extends ChangeNotifier {
               ))
           .toList(growable: false),
       contentType: payload.contentTypeOrNull,
+      skipPreplay: skipPreplay,
       enforcePageNetworkPolicy: payload.detectedByOrNull == 'page_cast' ||
           payload.detectedByOrNull == 'linked_page',
       allowedPrivateOrigins: payload.allowedPrivateOrigins,

@@ -506,6 +506,17 @@ nonisolated struct Playbridge_PlaylistPayload: @unchecked Sendable {
   /// Clears the value of `visualMetadata`. Subsequent reads from it will return its default value.
   mutating func clearVisualMetadata() {_uniqueStorage()._visualMetadata = nil}
 
+  /// Presentation hint for receivers that normally show a metadata-rich pre-play screen.
+  /// Metadata remains available for playback controls and history when this is true.
+  var skipPreplay: Bool {
+    get {_storage._skipPreplay ?? false}
+    set {_uniqueStorage()._skipPreplay = newValue}
+  }
+  /// Returns true if `skipPreplay` has been explicitly set.
+  var hasSkipPreplay: Bool {_storage._skipPreplay != nil}
+  /// Clears the value of `skipPreplay`. Subsequent reads from it will return its default value.
+  mutating func clearSkipPreplay() {_uniqueStorage()._skipPreplay = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -1370,12 +1381,13 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
 
 nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaylistPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}items\0\u{3}start_index\0\u{3}visual_metadata\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}items\0\u{3}start_index\0\u{3}visual_metadata\0\u{3}skip_preplay\0")
 
   fileprivate class _StorageClass {
     var _items: [Playbridge_PlayPayload] = []
     var _startIndex: Int32 = 0
     var _visualMetadata: Playbridge_VisualMetadata? = nil
+    var _skipPreplay: Bool? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1389,6 +1401,7 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
       _items = source._items
       _startIndex = source._startIndex
       _visualMetadata = source._visualMetadata
+      _skipPreplay = source._skipPreplay
     }
   }
 
@@ -1410,6 +1423,7 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
         case 1: try { try decoder.decodeRepeatedMessageField(value: &_storage._items) }()
         case 2: try { try decoder.decodeSingularInt32Field(value: &_storage._startIndex) }()
         case 3: try { try decoder.decodeSingularMessageField(value: &_storage._visualMetadata) }()
+        case 4: try { try decoder.decodeSingularBoolField(value: &_storage._skipPreplay) }()
         default: break
         }
       }
@@ -1431,6 +1445,9 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
       try { if let v = _storage._visualMetadata {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
       } }()
+      try { if let v = _storage._skipPreplay {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1443,6 +1460,7 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
         if _storage._items != rhs_storage._items {return false}
         if _storage._startIndex != rhs_storage._startIndex {return false}
         if _storage._visualMetadata != rhs_storage._visualMetadata {return false}
+        if _storage._skipPreplay != rhs_storage._skipPreplay {return false}
         return true
       }
       if !storagesAreEqual {return false}

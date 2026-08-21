@@ -155,6 +155,7 @@ private data class PendingPageCast(
     val items: List<PlayPayload>,
     val startIndex: Int,
     val playlistMetadata: playbridge.VisualMetadata?,
+    val skipPreplay: Boolean,
     val origin: String,
     val tabId: Int,
     val navigationGeneration: Long,
@@ -997,10 +998,11 @@ class BrowserActivity : ComponentActivity() {
                 List<PlayPayload>,
                 Int,
                 playbridge.VisualMetadata?,
+                Boolean,
                 Int,
                 Long,
             ) -> Unit =
-                { items, startIndex, playlistMetadata, tabId, navigationGeneration ->
+                { items, startIndex, playlistMetadata, skipPreplay, tabId, navigationGeneration ->
                     linkedPageCastCoordinator.supersedeIfActive()
                     Log.d("BrowserActivity", "Cast requested via Extension Bridge: ${items.size} items, startIndex: $startIndex")
                     lifecycleScope.launch {
@@ -1092,6 +1094,7 @@ class BrowserActivity : ComponentActivity() {
                                 items = playPayloads,
                                 start_index = startIndex,
                                 visual_metadata = playlistMetadata,
+                                skip_preplay = skipPreplay,
                             ))
                         if (!Components.isCurrentPageNavigation(tabId, navigationGeneration)) {
                             return@launch
@@ -1118,6 +1121,7 @@ class BrowserActivity : ComponentActivity() {
                         items,
                         startIndex,
                         playlistMetadata,
+                        skipPreplay,
                         origin,
                         tabId,
                         navigationGeneration,
@@ -1154,6 +1158,7 @@ class BrowserActivity : ComponentActivity() {
                                 items,
                                 startIndex,
                                 playlistMetadata,
+                                skipPreplay,
                                 origin,
                                 tabId,
                                 navigationGeneration,
@@ -1164,6 +1169,7 @@ class BrowserActivity : ComponentActivity() {
                                 items,
                                 startIndex,
                                 playlistMetadata,
+                                skipPreplay,
                                 origin,
                                 tabId,
                                 navigationGeneration,
@@ -1174,6 +1180,7 @@ class BrowserActivity : ComponentActivity() {
                                 authorizedItems,
                                 startIndex,
                                 playlistMetadata,
+                                skipPreplay,
                                 tabId,
                                 navigationGeneration,
                             )
@@ -1417,6 +1424,7 @@ class BrowserActivity : ComponentActivity() {
                                     request.items.map { it.copy(allowed_private_origins = request.requestedPrivateOrigins.toList()) },
                                     request.startIndex,
                                     request.playlistMetadata,
+                                    request.skipPreplay,
                                     request.tabId,
                                     request.navigationGeneration,
                                 )
@@ -1435,6 +1443,7 @@ class BrowserActivity : ComponentActivity() {
                                         },
                                         request.startIndex,
                                         request.playlistMetadata,
+                                        request.skipPreplay,
                                         request.tabId,
                                         request.navigationGeneration,
                                     )

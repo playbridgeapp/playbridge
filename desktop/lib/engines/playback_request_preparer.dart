@@ -128,6 +128,7 @@ class PlaybackRequestPreparer {
         contentType: item.contentType,
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
+        skipPreplay: item.skipPreplay,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
         allowedPrivateOrigins: item.allowedPrivateOrigins,
         bingeGroup: item.bingeGroup,

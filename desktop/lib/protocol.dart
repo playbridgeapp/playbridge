@@ -76,7 +76,8 @@ class RemoteCmd extends Command {
 class PlaylistCmd extends Command {
   final List<PlayPayload> items;
   final int startIndex;
-  const PlaylistCmd(this.items, this.startIndex);
+  final bool skipPreplay;
+  const PlaylistCmd(this.items, this.startIndex, {this.skipPreplay = false});
 }
 
 class PlaylistJumpCmd extends Command {
@@ -252,7 +253,11 @@ Command parseCommand(String json) {
                 .whereType<Map<String, dynamic>>()
                 .map(_parsePlayPayload)
                 .toList();
-            return PlaylistCmd(items, (payload?['startIndex'] ?? 0) as int);
+            return PlaylistCmd(
+              items,
+              (payload?['startIndex'] ?? 0) as int,
+              skipPreplay: payload?['skipPreplay'] == true,
+            );
           case 'playlist_jump':
             return PlaylistJumpCmd((payload?['index'] ?? 0) as int);
           case 'queue_add':

@@ -29,6 +29,7 @@ class QueueItem {
     this.contentType,
     this.playlistBody,
     this.audioUrl,
+    this.skipPreplay = false,
     this.enforcePageNetworkPolicy = false,
     this.allowedPrivateOrigins = const [],
   });
@@ -51,6 +52,9 @@ class QueueItem {
 
   /// Companion demuxed audio media playlist URL (same live session), if any.
   final String? audioUrl;
+
+  /// Suppress the initial presentation screen without discarding visual metadata.
+  final bool skipPreplay;
 
   /// Untrusted webpage media must remain behind the receiver-side proxy so
   /// every manifest, segment, subtitle, and redirect uses its network policy.

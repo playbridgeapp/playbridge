@@ -682,6 +682,10 @@ components:
           oneOf:
             - $ref: '#/components/schemas/VisualMetadata'
             - type: 'null'
+        skipPreplay:
+          type: boolean
+          default: false
+          description: Skip the receiver's initial pre-play presentation while retaining visual metadata for playback UI and history.
       additionalProperties: false
     VisualMetadata:
       type: object

@@ -104,7 +104,9 @@ struct ContentView: View {
             }
 
             if let request = server.currentPlayRequest {
-                let isPreBuffering = !playerStarted && request.hasVisualMetadata
+                let isPreBuffering = !playerStarted &&
+                    request.hasVisualMetadata &&
+                    !server.skipPreplayForCurrentRequest
                 ZStack {
                     // PlayerView always renders so it can buffer in the background.
                     // isPreBuffering=true keeps it muted and UI-hidden during preplay.

@@ -86,6 +86,9 @@ message PlaylistPayload {
   repeated PlayPayload items = 1;
   int32 start_index = 2               [json_name = "startIndex"];
   optional VisualMetadata visual_metadata = 3 [json_name = "visualMetadata"];
+  // Presentation hint for receivers that normally show a metadata-rich pre-play screen.
+  // Metadata remains available for playback controls and history when this is true.
+  optional bool skip_preplay = 4      [json_name = "skipPreplay"];
 }
 
 message QueueAddPayload {

@@ -240,9 +240,11 @@ const PlaylistPayload$json = {
     {'1': 'items', '3': 1, '4': 3, '5': 11, '6': '.playbridge.PlayPayload', '10': 'items'},
     {'1': 'start_index', '3': 2, '4': 1, '5': 5, '10': 'startIndex'},
     {'1': 'visual_metadata', '3': 3, '4': 1, '5': 11, '6': '.playbridge.VisualMetadata', '9': 0, '10': 'visualMetadata', '17': true},
+    {'1': 'skip_preplay', '3': 4, '4': 1, '5': 8, '9': 1, '10': 'skipPreplay', '17': true},
   ],
   '8': [
     {'1': '_visual_metadata'},
+    {'1': '_skip_preplay'},
   ],
 };
 
@@ -251,7 +253,8 @@ final $typed_data.Uint8List playlistPayloadDescriptor = $convert.base64Decode(
     'Cg9QbGF5bGlzdFBheWxvYWQSLQoFaXRlbXMYASADKAsyFy5wbGF5YnJpZGdlLlBsYXlQYXlsb2'
     'FkUgVpdGVtcxIfCgtzdGFydF9pbmRleBgCIAEoBVIKc3RhcnRJbmRleBJICg92aXN1YWxfbWV0'
     'YWRhdGEYAyABKAsyGi5wbGF5YnJpZGdlLlZpc3VhbE1ldGFkYXRhSABSDnZpc3VhbE1ldGFkYX'
-    'RhiAEBQhIKEF92aXN1YWxfbWV0YWRhdGE=');
+    'RhiAEBEiYKDHNraXBfcHJlcGxheRgEIAEoCEgBUgtza2lwUHJlcGxheYgBAUISChBfdmlzdWFs'
+    'X21ldGFkYXRhQg8KDV9za2lwX3ByZXBsYXk=');
 
 @$core.Deprecated('Use queueAddPayloadDescriptor instead')
 const QueueAddPayload$json = {

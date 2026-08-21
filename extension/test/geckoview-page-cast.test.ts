@@ -35,6 +35,21 @@ test("normalizes a page bridge playlist and clamps its start index", () => {
   assert.equal(request?.startIndex, 1);
 });
 
+test("preserves an explicit pre-play preference", () => {
+  assert.equal(normalizePageCastPayload({
+    url: "https://media.example/song.mp3",
+    skipPreplay: true,
+  })?.skipPreplay, true);
+  assert.equal(normalizeLinkedPageCastPayload({
+    items: [{ id: "song-1", url: "https://media.example/song.mp3" }],
+    skipPreplay: false,
+  })?.skipPreplay, false);
+  assert.equal(normalizePageCastPayload({
+    url: "https://media.example/song.mp3",
+    skipPreplay: "yes",
+  }), undefined);
+});
+
 test("normalizes bounded exact private-origin requests", () => {
   const direct = normalizePageCastPayload({
     url: "http://media-box.local/video.mp4",
