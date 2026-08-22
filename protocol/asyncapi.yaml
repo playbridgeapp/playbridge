@@ -101,9 +101,11 @@ components:
       contentType: application/octet-stream
       description: |
         Exactly 9 bytes: byte 0 is event type (0 move, 1 click, 2 scroll,
-        3 down, 4 up, 5 zoom, 6 reset, 7 rotate); bytes 1..4 are dx as IEEE-754
-        float32 big-endian (relative scale for zoom, degrees for rotate);
-        bytes 5..8 are dy as IEEE-754 float32 big-endian.
+        3 down, 4 up, 5 zoom, 6 reset, 7 rotate, 8 transform anchor); bytes 1..4
+        are dx as IEEE-754 float32 big-endian (relative scale for zoom, degrees
+        for rotate, normalized x for transform anchor); bytes 5..8 are dy as
+        IEEE-754 float32 big-endian (normalized y for transform anchor). Anchor
+        coordinates are normalized to 0..1; negative x/y clears the touch anchor.
       payload:
         type: string
         format: binary

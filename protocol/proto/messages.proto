@@ -265,4 +265,7 @@ enum MouseEventType {
   MOUSE_ZOOM   = 5;
   MOUSE_RESET  = 6;
   MOUSE_ROTATE = 7;
+  // dx/dy are normalized viewport coordinates for subsequent zoom/rotation events;
+  // negative coordinates clear the touch anchor.
+  MOUSE_TRANSFORM_ANCHOR = 8;
 }

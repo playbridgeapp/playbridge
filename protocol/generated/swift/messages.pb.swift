@@ -36,6 +36,10 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
   case mouseZoom // = 5
   case mouseReset // = 6
   case mouseRotate // = 7
+
+  /// dx/dy are normalized viewport coordinates for subsequent zoom/rotation events;
+  /// negative coordinates clear the touch anchor.
+  case mouseTransformAnchor // = 8
   case UNRECOGNIZED(Int)
 
   init() {
@@ -52,6 +56,7 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
     case 5: self = .mouseZoom
     case 6: self = .mouseReset
     case 7: self = .mouseRotate
+    case 8: self = .mouseTransformAnchor
     default: self = .UNRECOGNIZED(rawValue)
     }
   }
@@ -66,6 +71,7 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
     case .mouseZoom: return 5
     case .mouseReset: return 6
     case .mouseRotate: return 7
+    case .mouseTransformAnchor: return 8
     case .UNRECOGNIZED(let i): return i
     }
   }
@@ -80,6 +86,7 @@ nonisolated enum Playbridge_MouseEventType: SwiftProtobuf.Enum, Swift.CaseIterab
     .mouseZoom,
     .mouseReset,
     .mouseRotate,
+    .mouseTransformAnchor,
   ]
 
 }
@@ -1061,7 +1068,7 @@ nonisolated struct Playbridge_PongMessage: Sendable {
 fileprivate nonisolated let _protobuf_package = "playbridge"
 
 nonisolated extension Playbridge_MouseEventType: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0MOUSE_MOVE\0\u{1}MOUSE_CLICK\0\u{1}MOUSE_SCROLL\0\u{1}MOUSE_DOWN\0\u{1}MOUSE_UP\0\u{1}MOUSE_ZOOM\0\u{1}MOUSE_RESET\0\u{1}MOUSE_ROTATE\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0MOUSE_MOVE\0\u{1}MOUSE_CLICK\0\u{1}MOUSE_SCROLL\0\u{1}MOUSE_DOWN\0\u{1}MOUSE_UP\0\u{1}MOUSE_ZOOM\0\u{1}MOUSE_RESET\0\u{1}MOUSE_ROTATE\0\u{1}MOUSE_TRANSFORM_ANCHOR\0")
 }
 
 nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {

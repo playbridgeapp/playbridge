@@ -1065,6 +1065,13 @@ fun AppNavHost(
                         onRotateImage = { degrees ->
                             connectionViewModel.webSocketClient.sendMouseCommand("rotate", degrees, 0f)
                         },
+                        onTransformAnchor = { x, y ->
+                            connectionViewModel.webSocketClient.sendMouseCommand(
+                                "transform_anchor",
+                                x,
+                                y,
+                            )
+                        },
                         onResetZoom = {
                             connectionViewModel.webSocketClient.sendMouseCommand("reset", 0f, 0f)
                         },
@@ -1075,7 +1082,7 @@ fun AppNavHost(
                             connectionViewModel.webSocketClient.sendMouseCommand("up", 0f, 0f)
                         },
                         onPointerGestureEnd = {
-                            connectionViewModel.webSocketClient.flushMouseCommands()
+                            connectionViewModel.webSocketClient.endPointerGesture()
                         },
                         onBrowserControl = { action ->
                             when (action) {

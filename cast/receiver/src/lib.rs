@@ -149,6 +149,7 @@ fn decode_mouse_packet(bytes: &[u8]) -> Option<ReceiverCommand> {
         5 => "zoom",
         6 => "reset",
         7 => "rotate",
+        8 => "transform_anchor",
         _ => return None,
     };
     let dx = f32::from_be_bytes(bytes[1..5].try_into().ok()?);
@@ -1001,6 +1002,18 @@ mod tests {
                 "event": "rotate",
                 "dx": 12.5,
                 "dy": 0.0,
+            })))
+        );
+
+        packet[0] = 8;
+        packet[1..5].copy_from_slice(&0.25_f32.to_be_bytes());
+        packet[5..9].copy_from_slice(&0.75_f32.to_be_bytes());
+        assert_eq!(
+            decode_mouse_packet(&packet),
+            Some(ReceiverCommand::Mouse(json!({
+                "event": "transform_anchor",
+                "dx": 0.25,
+                "dy": 0.75,
             })))
         );
 

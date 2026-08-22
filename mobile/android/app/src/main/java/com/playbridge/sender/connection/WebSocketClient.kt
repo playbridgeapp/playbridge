@@ -106,6 +106,8 @@ class WebSocketClient {
     private var pendingScrollDy = 0f
     private var pendingZoomFactor = 1f
     private var pendingRotationDegrees = 0f
+    private var pendingAnchorX: Float? = null
+    private var pendingAnchorY: Float? = null
     private var mouseFlushScheduled = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val mouseFlushRunnable = Runnable { flushPendingMouseCommands() }
@@ -633,6 +635,10 @@ class WebSocketClient {
                 pendingZoomFactor = (pendingZoomFactor * dx).coerceIn(0.125f, 8f)
             }
             "rotate" -> pendingRotationDegrees += dx
+            "transform_anchor" -> {
+                pendingAnchorX = dx.coerceIn(0f, 1f)
+                pendingAnchorY = dy.coerceIn(0f, 1f)
+            }
             else -> {
                 flushPendingMouseCommands()
                 sendMousePacket(event, dx, dy)
@@ -654,6 +660,18 @@ class WebSocketClient {
         }
     }
 
+    /** Finish the transform around its last touch midpoint, then restore center anchoring. */
+    fun endPointerGesture() {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            mainHandler.post { endPointerGesture() }
+            return
+        }
+        flushPendingMouseCommands()
+        // Negative coordinates clear the touch anchor so discrete rotate buttons
+        // continue to pivot around the image's own center.
+        sendMousePacket("transform_anchor", -1f, -1f)
+    }
+
     private fun flushPendingMouseCommands() {
         mainHandler.removeCallbacks(mouseFlushRunnable)
         mouseFlushScheduled = false
@@ -664,13 +682,20 @@ class WebSocketClient {
         val scrollDy = pendingScrollDy
         val zoomFactor = pendingZoomFactor
         val rotationDegrees = pendingRotationDegrees
+        val anchorX = pendingAnchorX
+        val anchorY = pendingAnchorY
         pendingMoveDx = 0f
         pendingMoveDy = 0f
         pendingScrollDx = 0f
         pendingScrollDy = 0f
         pendingZoomFactor = 1f
         pendingRotationDegrees = 0f
+        pendingAnchorX = null
+        pendingAnchorY = null
 
+        if (anchorX != null && anchorY != null) {
+            sendMousePacket("transform_anchor", anchorX, anchorY)
+        }
         if (moveDx != 0f || moveDy != 0f) sendMousePacket("move", moveDx, moveDy)
         if (scrollDx != 0f || scrollDy != 0f) sendMousePacket("scroll", scrollDx, scrollDy)
         if (zoomFactor != 1f) sendMousePacket("zoom", zoomFactor, 0f)
@@ -692,6 +717,8 @@ class WebSocketClient {
         pendingScrollDy = 0f
         pendingZoomFactor = 1f
         pendingRotationDegrees = 0f
+        pendingAnchorX = null
+        pendingAnchorY = null
     }
     
     /**

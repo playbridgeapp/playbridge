@@ -311,6 +311,8 @@ class ReceiverServer extends ChangeNotifier {
               player.panImage(dx, dy);
             case 'zoom':
               player.zoomImage(dx);
+            case 'transform_anchor':
+              player.setImageTransformAnchor(dx, dy);
             case 'reset':
               player.resetImageTransform();
             case 'rotate':

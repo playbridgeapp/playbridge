@@ -141,6 +141,13 @@ void main() {
     expect(controller.imageOffsetY, -20);
     expect(controller.imageRotationDegrees, 90);
 
+    controller.resetImageTransform();
+    controller.setImageViewportSize(1000, 600);
+    controller.setImageTransformAnchor(0.75, 0.5);
+    controller.zoomImage(2);
+    expect(controller.imageOffsetX, -250);
+    expect(controller.imageOffsetY, 0);
+
     await controller.next();
     expect(controller.currentMediaKind, MediaKind.audio);
     expect(controller.imageScale, 1);

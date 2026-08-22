@@ -138,6 +138,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var imageOffsetX by mutableFloatStateOf(0f)
     private var imageOffsetY by mutableFloatStateOf(0f)
     private var imageRotation by mutableFloatStateOf(0f)
+    private var imageTransformAnchorX = 0.5f
+    private var imageTransformAnchorY = 0.5f
+    private var imageTransformAnchorActive = false
     private var imageTimerJob: Job? = null
     private var imageTimerRunning = false
     private val attemptedRenderers = linkedSetOf<RendererKind>()
@@ -2462,13 +2465,45 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         imageOffsetX = 0f
         imageOffsetY = 0f
         imageRotation = 0f
+        imageTransformAnchorX = 0.5f
+        imageTransformAnchorY = 0.5f
+        imageTransformAnchorActive = false
     }
 
     private fun handleImagePointer(event: String?, dx: Float, dy: Float) {
         if (currentMediaKind != MediaKind.IMAGE || !dx.isFinite() || !dy.isFinite()) return
         when (event) {
             "reset" -> resetImageTransform()
-            "rotate" -> imageRotation += dx.coerceIn(-90f, 90f)
+            "transform_anchor" -> {
+                if (dx < 0f || dy < 0f) {
+                    imageTransformAnchorActive = false
+                } else {
+                    imageTransformAnchorX = dx.coerceIn(0f, 1f)
+                    imageTransformAnchorY = dy.coerceIn(0f, 1f)
+                    imageTransformAnchorActive = true
+                }
+            }
+            "rotate" -> {
+                val degrees = dx.coerceIn(-90f, 90f)
+                val radians = Math.toRadians(degrees.toDouble())
+                val anchorX = if (imageTransformAnchorActive) {
+                    (imageTransformAnchorX - 0.5f) * window.decorView.width
+                } else {
+                    imageOffsetX
+                }
+                val anchorY = if (imageTransformAnchorActive) {
+                    (imageTransformAnchorY - 0.5f) * window.decorView.height
+                } else {
+                    imageOffsetY
+                }
+                val relativeX = imageOffsetX - anchorX
+                val relativeY = imageOffsetY - anchorY
+                val cosine = kotlin.math.cos(radians).toFloat()
+                val sine = kotlin.math.sin(radians).toFloat()
+                imageOffsetX = anchorX + relativeX * cosine - relativeY * sine
+                imageOffsetY = anchorY + relativeX * sine + relativeY * cosine
+                imageRotation += degrees
+            }
             "move", "scroll" -> {
                 if (imageScale <= 1f) return
                 val maxX = window.decorView.width * (imageScale - 1f) / 2f
@@ -2485,10 +2520,22 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     imageOffsetY = 0f
                 } else {
                     val ratio = imageScale / oldScale
+                    val anchorX = if (imageTransformAnchorActive) {
+                        (imageTransformAnchorX - 0.5f) * window.decorView.width
+                    } else {
+                        imageOffsetX
+                    }
+                    val anchorY = if (imageTransformAnchorActive) {
+                        (imageTransformAnchorY - 0.5f) * window.decorView.height
+                    } else {
+                        imageOffsetY
+                    }
                     val maxX = window.decorView.width * (imageScale - 1f) / 2f
                     val maxY = window.decorView.height * (imageScale - 1f) / 2f
-                    imageOffsetX = (imageOffsetX * ratio).coerceIn(-maxX, maxX)
-                    imageOffsetY = (imageOffsetY * ratio).coerceIn(-maxY, maxY)
+                    imageOffsetX = (anchorX + (imageOffsetX - anchorX) * ratio)
+                        .coerceIn(-maxX, maxX)
+                    imageOffsetY = (anchorY + (imageOffsetY - anchorY) * ratio)
+                        .coerceIn(-maxY, maxY)
                 }
             }
         }

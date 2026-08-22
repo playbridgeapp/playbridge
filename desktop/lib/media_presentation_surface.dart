@@ -244,60 +244,193 @@ class _ImagePresentation extends StatelessWidget {
   final PlayerController controller;
 
   @override
-  Widget build(BuildContext context) => ColoredBox(
-        color: Colors.black,
-        child: ClipRect(
-          child: TweenAnimationBuilder<Offset>(
-            duration: const Duration(milliseconds: 32),
-            curve: Curves.linear,
-            tween: Tween(
-              begin: Offset(controller.imageOffsetX, controller.imageOffsetY),
-              end: Offset(controller.imageOffsetX, controller.imageOffsetY),
-            ),
-            builder: (context, offset, child) => Transform.translate(
-              offset: offset,
-              child: child,
-            ),
-            child: TweenAnimationBuilder<double>(
-              duration: const Duration(milliseconds: 32),
-              curve: Curves.linear,
-              tween: Tween(
-                begin: controller.imageScale,
-                end: controller.imageScale,
-              ),
-              builder: (context, scale, child) => Transform.scale(
-                scale: scale,
-                child: child,
-              ),
-              child: TweenAnimationBuilder<double>(
-                duration: const Duration(milliseconds: 32),
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          controller.setImageViewportSize(
+            constraints.maxWidth,
+            constraints.maxHeight,
+          );
+          return ColoredBox(
+            color: Colors.black,
+            child: ClipRect(
+              child: TweenAnimationBuilder<Offset>(
+                duration: const Duration(milliseconds: 70),
                 curve: Curves.linear,
                 tween: Tween(
-                  begin: controller.imageRotationDegrees,
-                  end: controller.imageRotationDegrees,
+                  begin:
+                      Offset(controller.imageOffsetX, controller.imageOffsetY),
+                  end: Offset(controller.imageOffsetX, controller.imageOffsetY),
                 ),
-                builder: (context, degrees, child) {
-                  // RotatedBox swaps layout constraints for each 90° turn, so a
-                  // landscape image remains fully contained after becoming portrait.
-                  final quarterTurns = (degrees / 90).round();
-                  final residualDegrees = degrees - quarterTurns * 90;
-                  return Transform.rotate(
-                    angle: residualDegrees * math.pi / 180,
-                    child: RotatedBox(
-                      quarterTurns: quarterTurns % 4,
-                      child: child,
+                builder: (context, offset, child) => Transform.translate(
+                  offset: offset,
+                  child: child,
+                ),
+                child: TweenAnimationBuilder<double>(
+                  // Keep scale and translation on the same timeline. Different
+                  // durations make a panned image visibly wobble during zoom.
+                  duration: const Duration(milliseconds: 70),
+                  curve: Curves.linear,
+                  tween: Tween(
+                    begin: controller.imageScale,
+                    end: controller.imageScale,
+                  ),
+                  builder: (context, scale, child) => Transform.scale(
+                    scale: scale,
+                    child: child,
+                  ),
+                  child: TweenAnimationBuilder<double>(
+                    // Rotation and anchor-compensating translation must
+                    // interpolate together or the gesture midpoint drifts.
+                    duration: const Duration(milliseconds: 70),
+                    curve: Curves.linear,
+                    tween: Tween(
+                      begin: controller.imageRotationDegrees,
+                      end: controller.imageRotationDegrees,
                     ),
-                  );
-                },
-                child: _MediaImage(
-                  url: item.url,
-                  headers: item.headers,
-                  fit: BoxFit.contain,
+                    builder: (context, degrees, child) =>
+                        _FittedRotatedMediaImage(
+                      url: item.url,
+                      headers: item.headers,
+                      degrees: degrees,
+                    ),
+                  ),
                 ),
               ),
             ),
-          ),
-        ),
+          );
+        },
+      );
+}
+
+class _FittedRotatedMediaImage extends StatefulWidget {
+  const _FittedRotatedMediaImage({
+    required this.url,
+    required this.headers,
+    required this.degrees,
+  });
+
+  final String url;
+  final Map<String, String>? headers;
+  final double degrees;
+
+  @override
+  State<_FittedRotatedMediaImage> createState() =>
+      _FittedRotatedMediaImageState();
+}
+
+class _FittedRotatedMediaImageState extends State<_FittedRotatedMediaImage> {
+  ImageStream? _stream;
+  ImageStreamListener? _listener;
+  double? _imageWidth;
+  double? _imageHeight;
+
+  ImageProvider<Object> get _provider {
+    final uri = Uri.tryParse(widget.url);
+    if (uri?.scheme == 'file') return FileImage(File.fromUri(uri!));
+    return NetworkImage(widget.url, headers: widget.headers);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _resolveImage();
+  }
+
+  @override
+  void didUpdateWidget(covariant _FittedRotatedMediaImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.url != widget.url) _resolveImage();
+  }
+
+  void _resolveImage() {
+    final nextStream =
+        _provider.resolve(createLocalImageConfiguration(context));
+    if (nextStream.key == _stream?.key) return;
+    if (_stream != null && _listener != null) {
+      _stream!.removeListener(_listener!);
+    }
+    _stream = nextStream;
+    _listener = ImageStreamListener((info, _) {
+      final width = info.image.width.toDouble();
+      final height = info.image.height.toDouble();
+      info.dispose();
+      if (mounted && (width != _imageWidth || height != _imageHeight)) {
+        setState(() {
+          _imageWidth = width;
+          _imageHeight = height;
+        });
+      }
+    });
+    nextStream.addListener(_listener!);
+  }
+
+  @override
+  void dispose() {
+    if (_stream != null && _listener != null) {
+      _stream!.removeListener(_listener!);
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+        builder: (context, constraints) {
+          final viewportWidth = constraints.maxWidth;
+          final viewportHeight = constraints.maxHeight;
+          final sourceWidth = _imageWidth;
+          final sourceHeight = _imageHeight;
+          var rotationFit = 1.0;
+          var imageWidth = viewportWidth;
+          var imageHeight = viewportHeight;
+
+          if (sourceWidth != null &&
+              sourceHeight != null &&
+              sourceWidth > 0 &&
+              sourceHeight > 0 &&
+              viewportWidth.isFinite &&
+              viewportHeight.isFinite) {
+            final baseScale = math.min(
+              viewportWidth / sourceWidth,
+              viewportHeight / sourceHeight,
+            );
+            imageWidth = sourceWidth * baseScale;
+            imageHeight = sourceHeight * baseScale;
+            final nearestQuarterTurn = (widget.degrees / 90).round();
+            final residualDegrees = widget.degrees - nearestQuarterTurn * 90;
+            final isExactOddQuarterTurn =
+                nearestQuarterTurn.isOdd && residualDegrees.abs() < 0.01;
+            if (isExactOddQuarterTurn) {
+              // Fit precise ±90° button rotations without continuously resizing
+              // the image during a free-form twist. Continuous bounding-box
+              // fitting made portrait photos visibly breathe in and out.
+              rotationFit = math.min(
+                1.0,
+                math.min(
+                  viewportWidth / imageHeight,
+                  viewportHeight / imageWidth,
+                ),
+              );
+            }
+          }
+
+          return Center(
+            child: Transform.rotate(
+              angle: widget.degrees * math.pi / 180,
+              child: Transform.scale(
+                scale: rotationFit,
+                child: SizedBox(
+                  width: imageWidth,
+                  height: imageHeight,
+                  child: _MediaImage(
+                    url: widget.url,
+                    headers: widget.headers,
+                    fit: BoxFit.fill,
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
       );
 }
 

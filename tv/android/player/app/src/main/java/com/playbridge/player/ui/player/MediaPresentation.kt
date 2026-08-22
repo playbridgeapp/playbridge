@@ -197,13 +197,13 @@ private fun ImagePresentation(
     rotation: Float,
 ) {
     val context = LocalContext.current
-    // Keep a small amount of smoothing without continuously chasing 60 Hz input
-    // several frames behind the sender.
-    val animation = tween<Float>(durationMillis = 32, easing = LinearEasing)
-    val animatedScale = animateFloatAsState(scale, animation, label = "imageScale")
-    val animatedOffsetX = animateFloatAsState(offsetX, animation, label = "imageOffsetX")
-    val animatedOffsetY = animateFloatAsState(offsetY, animation, label = "imageOffsetY")
-    val animatedRotation = animateFloatAsState(rotation, animation, label = "imageRotation")
+    // Keep scale, rotation, and anchor-compensating translation on one timeline so
+    // the gesture midpoint remains stationary throughout interpolation.
+    val panAnimation = tween<Float>(durationMillis = 70, easing = LinearEasing)
+    val animatedScale = animateFloatAsState(scale, panAnimation, label = "imageScale")
+    val animatedOffsetX = animateFloatAsState(offsetX, panAnimation, label = "imageOffsetX")
+    val animatedOffsetY = animateFloatAsState(offsetY, panAnimation, label = "imageOffsetY")
+    val animatedRotation = animateFloatAsState(rotation, panAnimation, label = "imageRotation")
     val request = payload?.let { item ->
         val headers = NetworkHeaders.Builder().apply {
             item.headers.forEach { (name, value) -> set(name, value) }

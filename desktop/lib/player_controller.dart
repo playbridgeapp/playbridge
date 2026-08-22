@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'media_kind.dart';
 import 'player_engine.dart';
@@ -174,6 +176,11 @@ class PlayerController extends ChangeNotifier {
   double _imageOffsetX = 0;
   double _imageOffsetY = 0;
   double _imageRotationDegrees = 0;
+  double _imageTransformAnchorX = 0.5;
+  double _imageTransformAnchorY = 0.5;
+  bool _imageTransformAnchorActive = false;
+  double _imageViewportWidth = 0;
+  double _imageViewportHeight = 0;
 
   double get imageScale => _imageScale;
   double get imageOffsetX => _imageOffsetX;
@@ -349,6 +356,26 @@ class PlayerController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setImageViewportSize(double width, double height) {
+    if (width.isFinite && height.isFinite && width > 0 && height > 0) {
+      _imageViewportWidth = width;
+      _imageViewportHeight = height;
+    }
+  }
+
+  void setImageTransformAnchor(double x, double y) {
+    if (currentMediaKind != MediaKind.image || !x.isFinite || !y.isFinite) {
+      return;
+    }
+    if (x < 0 || y < 0) {
+      _imageTransformAnchorActive = false;
+      return;
+    }
+    _imageTransformAnchorX = x.clamp(0.0, 1.0).toDouble();
+    _imageTransformAnchorY = y.clamp(0.0, 1.0).toDouble();
+    _imageTransformAnchorActive = true;
+  }
+
   void zoomImage(double factor) {
     if (currentMediaKind != MediaKind.image ||
         !factor.isFinite ||
@@ -363,17 +390,39 @@ class PlayerController extends ChangeNotifier {
       _imageOffsetY = 0;
     } else {
       final ratio = _imageScale / oldScale;
-      _imageOffsetX =
-          (_imageOffsetX * ratio).clamp(-10000.0, 10000.0).toDouble();
-      _imageOffsetY =
-          (_imageOffsetY * ratio).clamp(-10000.0, 10000.0).toDouble();
+      final anchorX = _imageTransformAnchorActive
+          ? (_imageTransformAnchorX - 0.5) * _imageViewportWidth
+          : _imageOffsetX;
+      final anchorY = _imageTransformAnchorActive
+          ? (_imageTransformAnchorY - 0.5) * _imageViewportHeight
+          : _imageOffsetY;
+      _imageOffsetX = (anchorX + (_imageOffsetX - anchorX) * ratio)
+          .clamp(-10000.0, 10000.0)
+          .toDouble();
+      _imageOffsetY = (anchorY + (_imageOffsetY - anchorY) * ratio)
+          .clamp(-10000.0, 10000.0)
+          .toDouble();
     }
     notifyListeners();
   }
 
   void rotateImage(double degrees) {
     if (currentMediaKind != MediaKind.image || !degrees.isFinite) return;
-    _imageRotationDegrees += degrees.clamp(-90.0, 90.0).toDouble();
+    final appliedDegrees = degrees.clamp(-90.0, 90.0).toDouble();
+    final radians = appliedDegrees * math.pi / 180;
+    final anchorX = _imageTransformAnchorActive
+        ? (_imageTransformAnchorX - 0.5) * _imageViewportWidth
+        : _imageOffsetX;
+    final anchorY = _imageTransformAnchorActive
+        ? (_imageTransformAnchorY - 0.5) * _imageViewportHeight
+        : _imageOffsetY;
+    final relativeX = _imageOffsetX - anchorX;
+    final relativeY = _imageOffsetY - anchorY;
+    _imageOffsetX =
+        anchorX + relativeX * math.cos(radians) - relativeY * math.sin(radians);
+    _imageOffsetY =
+        anchorY + relativeX * math.sin(radians) + relativeY * math.cos(radians);
+    _imageRotationDegrees += appliedDegrees;
     notifyListeners();
   }
 
@@ -382,6 +431,9 @@ class PlayerController extends ChangeNotifier {
     _imageOffsetX = 0;
     _imageOffsetY = 0;
     _imageRotationDegrees = 0;
+    _imageTransformAnchorX = 0.5;
+    _imageTransformAnchorY = 0.5;
+    _imageTransformAnchorActive = false;
     if (notify) notifyListeners();
   }
 

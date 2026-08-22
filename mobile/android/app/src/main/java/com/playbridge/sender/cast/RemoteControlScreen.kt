@@ -86,6 +86,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ln
 import kotlin.math.sin
 
 /** Live playback status synced from the TV via `status` messages. */
@@ -143,6 +144,7 @@ fun RemoteControlScreen(
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
     onPinchZoom: (factor: Float) -> Unit = {},
     onRotateImage: (degrees: Float) -> Unit = {},
+    onTransformAnchor: (x: Float, y: Float) -> Unit = { _, _ -> },
     onResetZoom: () -> Unit = {},
     onMouseDown: () -> Unit = {},
     onMouseUp: () -> Unit = {},
@@ -349,6 +351,7 @@ fun RemoteControlScreen(
                                     onMouseScroll = onMouseScroll,
                                     onPinchZoom = onPinchZoom,
                                     onRotate = onRotateImage,
+                                    onTransformAnchor = onTransformAnchor,
                                     onDoubleTap = if (isImage) onResetZoom else onMouseClick,
                                     imageGestures = isImage,
                                     onMouseDown = onMouseDown,
@@ -1059,6 +1062,7 @@ private fun TouchpadArea(
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
     onPinchZoom: (factor: Float) -> Unit = {},
     onRotate: (degrees: Float) -> Unit = {},
+    onTransformAnchor: (x: Float, y: Float) -> Unit = { _, _ -> },
     onDoubleTap: () -> Unit = onMouseClick,
     imageGestures: Boolean = false,
     onMouseDown: () -> Unit = {},
@@ -1087,11 +1091,15 @@ private fun TouchpadArea(
                     // scroll never flips into a zoom (or vice-versa) mid-drag. We accumulate
                     // evidence until one axis clears the slop, then commit.
                     var twoFingerMode = TwoFingerMode.UNDECIDED
-                    var accumZoom = 0f
+                    var initialPinchDistance: Float? = null
+                    var twoFingerStartTimeMs = 0L
                     var accumPan = 0f
                     var rotationReferenceAngle: Float? = null
                     val gestureSlop = 24f
-                    val rotationSlopDegrees = 5f
+                    val zoomSlopLogRatio = 0.08f
+                    val imageTransformSlopPx = 16f
+                    val imageZoomObservationMs = 120L
+                    val modeDominance = 1.2f
 
                     var downTime = 0L
                     var downPos = androidx.compose.ui.geometry.Offset.Zero
@@ -1113,11 +1121,15 @@ private fun TouchpadArea(
                             val a = pressed.getOrNull(0)
                             val b = pressed.getOrNull(1)
                             if (a != null && b != null && a.previousPressed && b.previousPressed) {
+                                val midpoint = (a.position + b.position) / 2f
+                                onTransformAnchor(
+                                    (midpoint.x / size.width).coerceIn(0f, 1f),
+                                    (midpoint.y / size.height).coerceIn(0f, 1f),
+                                )
                                 val curDist = (a.position - b.position).getDistance()
                                 val prevDist = (a.previousPosition - b.previousPosition).getDistance()
                                 val panX = ((a.position.x + b.position.x) - (a.previousPosition.x + b.previousPosition.x)) / 2f
                                 val panY = ((a.position.y + b.position.y) - (a.previousPosition.y + b.previousPosition.y)) / 2f
-                                val distDelta = curDist - prevDist
                                 val currentVector = a.position - b.position
                                 val previousVector = a.previousPosition - b.previousPosition
                                 val currentAngle = atan2(currentVector.y, currentVector.x)
@@ -1132,23 +1144,54 @@ private fun TouchpadArea(
                                 var netRotation = currentAngle - referenceAngle
                                 while (netRotation > PI.toFloat()) netRotation -= (2 * PI).toFloat()
                                 while (netRotation < -PI.toFloat()) netRotation += (2 * PI).toFloat()
-                                val netRotationDegrees = Math.toDegrees(netRotation.toDouble()).toFloat()
 
                                 if (twoFingerMode == TwoFingerMode.UNDECIDED) {
-                                    accumZoom += abs(distDelta)
+                                    val startDistance = initialPinchDistance ?: curDist.also {
+                                        initialPinchDistance = it
+                                        twoFingerStartTimeMs = android.os.SystemClock.uptimeMillis()
+                                    }
                                     accumPan += abs(panX) + abs(panY)
-                                    val zoomProgress = accumZoom / gestureSlop
-                                    val rotationProgress = if (imageGestures) {
-                                        abs(netRotationDegrees) / rotationSlopDegrees
+                                    // Use net scale from the gesture's initial distance rather
+                                    // than accumulated absolute distance jitter. During a twist,
+                                    // the fingers naturally move slightly in/out; accumulating
+                                    // that jitter incorrectly locked the whole gesture to zoom.
+                                    val zoomProgress = if (startDistance > 0f && curDist > 0f) {
+                                        abs(ln((curDist / startDistance).toDouble())).toFloat() /
+                                            zoomSlopLogRatio
                                     } else {
                                         0f
                                     }
-                                    val panProgress = if (imageGestures) 0f else accumPan / gestureSlop
-                                    if (maxOf(zoomProgress, rotationProgress, panProgress) > 1f) {
-                                        twoFingerMode = when (maxOf(zoomProgress, rotationProgress, panProgress)) {
-                                            rotationProgress -> TwoFingerMode.ROTATE
-                                            zoomProgress -> TwoFingerMode.ZOOM
-                                            else -> TwoFingerMode.SCROLL
+                                    if (imageGestures) {
+                                        // Compare radial travel (pinch) and tangential arc
+                                        // travel (twist) in the same pixel units. A twist can
+                                        // alter finger spacing, but its tangential movement
+                                        // should dominate. Delay zoom classification briefly
+                                        // so early radial wobble cannot steal a slow twist.
+                                        val radialTravel = abs(curDist - startDistance)
+                                        val averageRadius = (curDist + startDistance) / 4f
+                                        val tangentialTravel = abs(netRotation) * averageRadius * 2f
+                                        val elapsed = android.os.SystemClock.uptimeMillis() -
+                                            twoFingerStartTimeMs
+                                        val selectedMode = when {
+                                            tangentialTravel > imageTransformSlopPx &&
+                                                tangentialTravel >= radialTravel * modeDominance ->
+                                                TwoFingerMode.ROTATE
+                                            elapsed >= imageZoomObservationMs &&
+                                                radialTravel > imageTransformSlopPx &&
+                                                radialTravel >= tangentialTravel * 1.5f ->
+                                                TwoFingerMode.ZOOM
+                                            else -> TwoFingerMode.UNDECIDED
+                                        }
+                                        twoFingerMode = selectedMode
+                                    } else {
+                                        val panProgress = accumPan / gestureSlop
+                                        twoFingerMode = when {
+                                            zoomProgress > 1f &&
+                                                zoomProgress >= panProgress * modeDominance ->
+                                                TwoFingerMode.ZOOM
+                                            panProgress > 1f -> TwoFingerMode.SCROLL
+                                            zoomProgress > 1.75f -> TwoFingerMode.ZOOM
+                                            else -> TwoFingerMode.UNDECIDED
                                         }
                                     }
                                 }
@@ -1197,7 +1240,8 @@ private fun TouchpadArea(
 
                             isScrolling = false
                             twoFingerMode = TwoFingerMode.UNDECIDED
-                            accumZoom = 0f
+                            initialPinchDistance = null
+                            twoFingerStartTimeMs = 0L
                             accumPan = 0f
                             rotationReferenceAngle = null
                             downTime = 0L

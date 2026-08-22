@@ -26,6 +26,7 @@ const MouseEventType$json = {
     {'1': 'MOUSE_ZOOM', '2': 5},
     {'1': 'MOUSE_RESET', '2': 6},
     {'1': 'MOUSE_ROTATE', '2': 7},
+    {'1': 'MOUSE_TRANSFORM_ANCHOR', '2': 8},
   ],
 };
 
@@ -33,7 +34,8 @@ const MouseEventType$json = {
 final $typed_data.Uint8List mouseEventTypeDescriptor = $convert.base64Decode(
     'Cg5Nb3VzZUV2ZW50VHlwZRIOCgpNT1VTRV9NT1ZFEAASDwoLTU9VU0VfQ0xJQ0sQARIQCgxNT1'
     'VTRV9TQ1JPTEwQAhIOCgpNT1VTRV9ET1dOEAMSDAoITU9VU0VfVVAQBBIOCgpNT1VTRV9aT09N'
-    'EAUSDwoLTU9VU0VfUkVTRVQQBhIQCgxNT1VTRV9ST1RBVEUQBw==');
+    'EAUSDwoLTU9VU0VfUkVTRVQQBhIQCgxNT1VTRV9ST1RBVEUQBxIaChZNT1VTRV9UUkFOU0ZPUk'
+    '1fQU5DSE9SEAg=');
 
 @$core.Deprecated('Use messageEnvelopeDescriptor instead')
 const MessageEnvelope$json = {
