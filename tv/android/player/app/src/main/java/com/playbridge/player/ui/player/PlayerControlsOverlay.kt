@@ -73,9 +73,15 @@ fun PlayerControlsOverlay(
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier.fillMaxSize()) {
+        // Music keeps a compact progress surface visible after the expanded controls time out.
+        // Video controls continue to disappear completely for an unobstructed picture.
+        val keepCompactMusicProgress = mediaKind == "audio"
+        val showExpandedControls = state.isVisible && state.isFullControlsVisible
+
         // Main Controls Overlay
         AnimatedVisibility(
-            visible = state.isVisible && state.playbackTransitionMessage == null,
+            visible = (state.isVisible || keepCompactMusicProgress) &&
+                state.playbackTransitionMessage == null,
             enter = fadeIn(TvExpressiveMotion.effects()),
             exit = fadeOut(TvExpressiveMotion.effects()),
             modifier = Modifier.fillMaxSize()
@@ -83,7 +89,7 @@ fun PlayerControlsOverlay(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(if (state.isFullControlsVisible) Color.Black.copy(alpha = 0.5f) else Color.Transparent)
+                    .background(if (showExpandedControls) Color.Black.copy(alpha = 0.5f) else Color.Transparent)
             ) {
                 // Settings Panel (Slides from right)
                 AnimatedVisibility(
@@ -154,7 +160,7 @@ fun PlayerControlsOverlay(
                 }
 
                 if (state.activeOverlay == ActiveOverlay.NONE) {
-                    if (state.isFullControlsVisible) {
+                    if (showExpandedControls) {
                         // Top shadow
                         Box(
                             modifier = Modifier
@@ -196,7 +202,7 @@ fun PlayerControlsOverlay(
                             .padding(bottom = 40.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        if (state.isFullControlsVisible) {
+                        if (showExpandedControls) {
                             BottomMetadata(
                                 engineType = state.engineType,
                                 streamInfo = state.streamInfo,
@@ -213,7 +219,7 @@ fun PlayerControlsOverlay(
                             )
                         }
 
-                        if (state.isFullControlsVisible) {
+                        if (showExpandedControls) {
                             ControlActionButtons(
                                 isPlaying = state.isPlaying,
                                 isLooping = state.isLooping,

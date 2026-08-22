@@ -1764,17 +1764,25 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     final hasDuration = dur > 0;
     final mediaKind = p.currentMediaKind ?? MediaKind.video;
     final isImage = mediaKind == MediaKind.image;
+    final keepCompactMusicProgress = mediaKind == MediaKind.audio;
+    final barVisible = widget.visible || keepCompactMusicProgress;
+    final showExpandedControls = widget.visible;
 
     return IgnorePointer(
-      ignoring: !widget.visible,
+      ignoring: !barVisible,
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 150),
-        opacity: widget.visible ? 1.0 : 0.0,
+        opacity: barVisible ? 1.0 : 0.0,
         child: ClipRect(
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
             child: Container(
-              padding: const EdgeInsets.fromLTRB(12, 18, 12, 8),
+              padding: EdgeInsets.fromLTRB(
+                12,
+                showExpandedControls ? 18 : 10,
+                12,
+                showExpandedControls ? 8 : 10,
+              ),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.4),
                 border: Border(
@@ -1835,119 +1843,124 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         ),
                       ],
                     ),
-                  // Buttons
-                  Row(
-                    children: [
-                      if (widget.showQueueControls)
-                        IconButton(
-                          tooltip: 'Previous',
-                          icon: const Icon(Icons.skip_previous),
-                          onPressed: p.hasPrevious ? () => p.previous() : null,
-                        ),
-                      IconButton(
-                        tooltip: p.state == 'playing' ? 'Pause' : 'Play',
-                        icon: Icon(
-                          p.state == 'playing' ? Icons.pause : Icons.play_arrow,
-                        ),
-                        onPressed: !isImage || hasDuration
-                            ? () =>
-                                p.state == 'playing' ? p.pause() : p.resume()
-                            : null,
-                      ),
-                      IconButton(
-                        tooltip: 'Stop',
-                        icon: const Icon(Icons.stop),
-                        onPressed: () => p.stop(),
-                      ),
-                      if (widget.showQueueControls)
-                        IconButton(
-                          tooltip: 'Next',
-                          icon: const Icon(Icons.skip_next),
-                          onPressed: p.hasNext ? () => p.next() : null,
-                        ),
-                      const SizedBox(width: 12),
-                      if (widget.showQueueControls)
-                        Text(
-                          '${p.currentIndex + 1} / ${p.queue.length}',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      const Spacer(),
-                      if (p.engineType == EngineType.mpvInternal &&
-                          !isImage) ...[
-                        if (Platform.isLinux && mediaKind == MediaKind.video)
-                          _VideoOutputMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
+                  // Music collapses to the progress surface instead of disappearing.
+                  if (showExpandedControls)
+                    Row(
+                      children: [
+                        if (widget.showQueueControls)
+                          IconButton(
+                            tooltip: 'Previous',
+                            icon: const Icon(Icons.skip_previous),
+                            onPressed:
+                                p.hasPrevious ? () => p.previous() : null,
                           ),
-                        _AudioMenuButton(
-                          player: p,
-                          onOpened: widget.onMenuOpened,
-                          onClosed: widget.onMenuClosed,
-                        ),
-                        if (mediaKind == MediaKind.video)
-                          _SubtitleMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
-                      ],
-                      IconButton(
-                        tooltip: p.isCurrentItemProxied
-                            ? 'Switch to direct playback'
-                            : 'Route through proxy',
-                        icon: Icon(
-                          p.isCurrentItemProxied
-                              ? Icons.shield
-                              : Icons.shield_outlined,
-                          color:
-                              p.isCurrentItemProxied ? Colors.tealAccent : null,
-                        ),
-                        onPressed:
-                            hasMedia && !isImage && !p.proxyToggleInProgress
-                                ? widget.onToggleProxy
-                                : null,
-                      ),
-                      if (widget.showQueueControls)
                         IconButton(
-                          tooltip: widget.playlistOpen
-                              ? 'Hide playlist'
-                              : 'Show playlist',
+                          tooltip: p.state == 'playing' ? 'Pause' : 'Play',
                           icon: Icon(
-                            widget.playlistOpen
-                                ? Icons.playlist_remove
-                                : Icons.playlist_play,
+                            p.state == 'playing'
+                                ? Icons.pause
+                                : Icons.play_arrow,
                           ),
-                          onPressed: widget.onTogglePlaylist,
-                        ),
-                      if (!isImage)
-                        IconButton(
-                          tooltip: 'Play in external player (mpv/VLC)',
-                          icon: const Icon(Icons.open_in_new),
-                          onPressed: hasMedia
-                              ? () async {
-                                  if (p.state == 'playing') {
-                                    p.pause();
-                                  }
-                                  final currentItem = p.queue[p.currentIndex];
-                                  await _openInExternalPlayer(
-                                      context, currentItem);
-                                }
+                          onPressed: !isImage || hasDuration
+                              ? () =>
+                                  p.state == 'playing' ? p.pause() : p.resume()
                               : null,
                         ),
-                      IconButton(
-                        tooltip: widget.isFullScreen
-                            ? 'Exit fullscreen'
-                            : 'Fullscreen',
-                        icon: Icon(
-                          widget.isFullScreen
-                              ? Icons.fullscreen_exit
-                              : Icons.fullscreen,
+                        IconButton(
+                          tooltip: 'Stop',
+                          icon: const Icon(Icons.stop),
+                          onPressed: () => p.stop(),
                         ),
-                        onPressed: widget.onToggleFullScreen,
-                      ),
-                    ],
-                  ),
+                        if (widget.showQueueControls)
+                          IconButton(
+                            tooltip: 'Next',
+                            icon: const Icon(Icons.skip_next),
+                            onPressed: p.hasNext ? () => p.next() : null,
+                          ),
+                        const SizedBox(width: 12),
+                        if (widget.showQueueControls)
+                          Text(
+                            '${p.currentIndex + 1} / ${p.queue.length}',
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        const Spacer(),
+                        if (p.engineType == EngineType.mpvInternal &&
+                            !isImage) ...[
+                          if (Platform.isLinux && mediaKind == MediaKind.video)
+                            _VideoOutputMenuButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
+                          _AudioMenuButton(
+                            player: p,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
+                          ),
+                          if (mediaKind == MediaKind.video)
+                            _SubtitleMenuButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
+                        ],
+                        IconButton(
+                          tooltip: p.isCurrentItemProxied
+                              ? 'Switch to direct playback'
+                              : 'Route through proxy',
+                          icon: Icon(
+                            p.isCurrentItemProxied
+                                ? Icons.shield
+                                : Icons.shield_outlined,
+                            color: p.isCurrentItemProxied
+                                ? Colors.tealAccent
+                                : null,
+                          ),
+                          onPressed:
+                              hasMedia && !isImage && !p.proxyToggleInProgress
+                                  ? widget.onToggleProxy
+                                  : null,
+                        ),
+                        if (widget.showQueueControls)
+                          IconButton(
+                            tooltip: widget.playlistOpen
+                                ? 'Hide playlist'
+                                : 'Show playlist',
+                            icon: Icon(
+                              widget.playlistOpen
+                                  ? Icons.playlist_remove
+                                  : Icons.playlist_play,
+                            ),
+                            onPressed: widget.onTogglePlaylist,
+                          ),
+                        if (!isImage)
+                          IconButton(
+                            tooltip: 'Play in external player (mpv/VLC)',
+                            icon: const Icon(Icons.open_in_new),
+                            onPressed: hasMedia
+                                ? () async {
+                                    if (p.state == 'playing') {
+                                      p.pause();
+                                    }
+                                    final currentItem = p.queue[p.currentIndex];
+                                    await _openInExternalPlayer(
+                                        context, currentItem);
+                                  }
+                                : null,
+                          ),
+                        IconButton(
+                          tooltip: widget.isFullScreen
+                              ? 'Exit fullscreen'
+                              : 'Fullscreen',
+                          icon: Icon(
+                            widget.isFullScreen
+                                ? Icons.fullscreen_exit
+                                : Icons.fullscreen,
+                          ),
+                          onPressed: widget.onToggleFullScreen,
+                        ),
+                      ],
+                    ),
                 ],
               ),
             ),
