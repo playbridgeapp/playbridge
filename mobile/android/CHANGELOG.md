@@ -7,10 +7,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Screen mirroring**: Mirror the phone to compatible PlayBridge TV and Desktop receivers over WebRTC with H.264 video, optional playback audio, orientation-aware sizing, and selectable quality limits. Google Cast and DLNA receivers can receive the same capture as a video-only H.264/MPEG-TS live stream.
+- **Consent-gated page casting**: Cast the page you are browsing to linked TV/Desktop receivers with per-site consent prompts, a dedicated consent settings screen, and richer page media/subtitle metadata shared over the protocol.
+- **Browser fullscreen mode**: Toggle fullscreen chrome in the in-app browser from the menu.
+- **Skip pre-play cast preference**: New casting preference that lets supported receivers skip pre-play screens when loading casts.
 
 ### Changed
 - **Release optimization**: Enable R8 code and resource optimization for smaller, optimized FOSS and Play release builds.
 - **External screen mirroring**: Keep Google Cast playback active across phone orientation changes by using a stable encoded canvas and resizing only the captured display source.
+- **Menu sheet layout**: Fill the browser menu grid left-to-right and add paging only once the 2x5 grid is full, hiding dots and swipe on single-page menus.
+
+### Fixed
+- **Remote control pointer input**: Smooth high-frequency pointer input and anchor image transforms to the touch midpoint so remote-control sessions track gestures accurately.
 
 ## [0.12.0] — 2026-08-03 (versionCode 222)
 
