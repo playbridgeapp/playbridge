@@ -32,6 +32,14 @@ public enum class MouseEventType(
   MOUSE_SCROLL(2),
   MOUSE_DOWN(3),
   MOUSE_UP(4),
+  MOUSE_ZOOM(5),
+  MOUSE_RESET(6),
+  MOUSE_ROTATE(7),
+  /**
+   * dx/dy are normalized viewport coordinates for subsequent zoom/rotation events;
+   * negative coordinates clear the touch anchor.
+   */
+  MOUSE_TRANSFORM_ANCHOR(8),
   ;
 
   public companion object {
@@ -51,6 +59,10 @@ public enum class MouseEventType(
       2 -> MOUSE_SCROLL
       3 -> MOUSE_DOWN
       4 -> MOUSE_UP
+      5 -> MOUSE_ZOOM
+      6 -> MOUSE_RESET
+      7 -> MOUSE_ROTATE
+      8 -> MOUSE_TRANSFORM_ANCHOR
       else -> null
     }
   }

@@ -27,9 +27,10 @@
     <!-- Explicitly remove QUERY_ALL_PACKAGES permission potentially merged from dependencies -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" tools:node="remove" tools:ignore="QueryAllPackagesPermission" />
 
-    <!-- Phone Files: enumerate on-device videos/audio to cast (Android 13+ granular media perms; legacy below 33) -->
+    <!-- Phone Files: enumerate on-device videos/audio/images to cast (Android 13+ granular media perms; legacy below 33) -->
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 

@@ -14,6 +14,7 @@ message MessageEnvelope {
   optional int64 position = 4;
   optional int64 duration = 5;
   optional string title = 6;
+  optional string media_kind = 7 [json_name = "mediaKind"];
 }
 
 // ==================== Shared Metadata ====================
@@ -41,6 +42,11 @@ message VisualMetadata {
   optional string episode_title = 14 [json_name = "episodeTitle"];
   optional string imdb_id = 15       [json_name = "imdbId"];
   optional string tmdb_id = 16       [json_name = "tmdbId"];
+  optional string artist = 17;
+  optional string album = 18;
+  optional string album_artist = 19   [json_name = "albumArtist"];
+  optional string artwork_url = 20    [json_name = "artworkUrl"];
+  optional int32 track_number = 21    [json_name = "trackNumber"];
 }
 
 // ==================== Command Payloads (Phone → TV) ====================
@@ -80,6 +86,11 @@ message PlayPayload {
   // Additive replacement for credentialed sidecars. Legacy `subtitles` remains
   // supported for senders that only provide URLs.
   repeated SubtitleResource subtitle_resources = 16 [json_name = "subtitleResources"];
+  // Per-item presentation kind. Omitted means the receiver should infer it.
+  optional string media_kind = 17 [json_name = "mediaKind"];
+  // For image items only. Positive values auto-advance after this display time;
+  // omitted or zero keeps the image visible until explicit navigation.
+  optional int64 display_duration_ms = 18 [json_name = "displayDurationMs"];
 }
 
 message PlaylistPayload {
@@ -135,6 +146,7 @@ message StatusMessage {
   int64 position = 3;
   int64 duration = 4;
   optional string title = 5;
+  optional string media_kind = 6 [json_name = "mediaKind"];
 }
 
 message ContextMessage {
@@ -146,6 +158,7 @@ message ContextMessage {
 message PlaylistItemInfo {
   int32 index = 1;
   string title = 2;
+  optional string media_kind = 3 [json_name = "mediaKind"];
 }
 
 message PlaylistStatusMessage {
@@ -169,6 +182,10 @@ message AuthResponse {
   // Lets the receiver re-assert (or rotate) its SPKI pin on reconnect. Same
   // format as PairingApprovedMessage.cert_fingerprint. Optional during rollout.
   optional string cert_fingerprint = 4 [json_name = "certFingerprint"];
+  repeated string players = 5;
+  repeated string browsers = 6;
+  optional bool screen_mirror_web_rtc = 7 [json_name = "screenMirrorWebRtc"];
+  repeated string media_kinds = 8 [json_name = "mediaKinds"];
 }
 
 // Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.
@@ -245,4 +262,10 @@ enum MouseEventType {
   MOUSE_SCROLL = 2;
   MOUSE_DOWN   = 3;
   MOUSE_UP     = 4;
+  MOUSE_ZOOM   = 5;
+  MOUSE_RESET  = 6;
+  MOUSE_ROTATE = 7;
+  // dx/dy are normalized viewport coordinates for subsequent zoom/rotation events;
+  // negative coordinates clear the touch anchor.
+  MOUSE_TRANSFORM_ANCHOR = 8;
 }

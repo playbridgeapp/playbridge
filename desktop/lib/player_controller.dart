@@ -1,5 +1,8 @@
 import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
+import 'media_kind.dart';
 import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
@@ -154,11 +157,42 @@ class PlayerController extends ChangeNotifier {
 
   String get state {
     if (_currentIndex < 0) return 'idle';
+    if (currentMediaKind == MediaKind.image) {
+      return _imagePlaying ? 'playing' : 'paused';
+    }
     return _engine.state;
   }
 
-  int get positionMs => _engine.positionMs;
-  int get durationMs => _engine.durationMs;
+  MediaKind? get currentMediaKind =>
+      _currentIndex >= 0 && _currentIndex < _queue.length
+          ? _queue[_currentIndex].mediaKind
+          : null;
+
+  Timer? _imageTimer;
+  int _imagePositionMs = 0;
+  int _imageDurationMs = 0;
+  bool _imagePlaying = false;
+  double _imageScale = 1;
+  double _imageOffsetX = 0;
+  double _imageOffsetY = 0;
+  double _imageRotationDegrees = 0;
+  double _imageTransformAnchorX = 0.5;
+  double _imageTransformAnchorY = 0.5;
+  bool _imageTransformAnchorActive = false;
+  double _imageViewportWidth = 0;
+  double _imageViewportHeight = 0;
+
+  double get imageScale => _imageScale;
+  double get imageOffsetX => _imageOffsetX;
+  double get imageOffsetY => _imageOffsetY;
+  double get imageRotationDegrees => _imageRotationDegrees;
+
+  int get positionMs => currentMediaKind == MediaKind.image
+      ? _imagePositionMs
+      : _engine.positionMs;
+  int get durationMs => currentMediaKind == MediaKind.image
+      ? _imageDurationMs
+      : _engine.durationMs;
   double get volume => _engine.volume;
   bool get hardwareVideoOutput => store?.hardwareVideoOutput ?? true;
 
@@ -182,6 +216,8 @@ class PlayerController extends ChangeNotifier {
     Map<String, String>? headers,
     List<String>? subtitles,
     String? contentType,
+    String? declaredMediaKind,
+    int? displayDurationMs,
     String? playlistBody,
     String? audioUrl,
     bool isRemote = false,
@@ -194,6 +230,8 @@ class PlayerController extends ChangeNotifier {
           headers: headers,
           subtitles: subtitles,
           contentType: contentType,
+          declaredMediaKind: declaredMediaKind,
+          displayDurationMs: displayDurationMs,
           playlistBody: playlistBody,
           audioUrl: audioUrl,
         ),
@@ -240,14 +278,7 @@ class PlayerController extends ChangeNotifier {
     }
     notifyListeners();
     try {
-      await _engine.openPlaylist(_queue, _currentIndex);
-      unawaited(_applyStartPosition());
-      // Keep the mask until the demuxer has real media so the first paint is B.
-      var retries = 0;
-      while (_engine.durationMs <= 0 && retries < 40) {
-        await Future.delayed(const Duration(milliseconds: 50));
-        retries++;
-      }
+      await _openCurrentItem();
     } finally {
       _opening = false;
       notifyListeners();
@@ -274,8 +305,7 @@ class PlayerController extends ChangeNotifier {
     await _waitForProxyToggle();
     if (index < 0 || index >= _queue.length) return;
     _setIndex(index);
-    await _engine.openPlaylist(_queue, _currentIndex);
-    unawaited(_applyStartPosition());
+    await _openCurrentItem();
   }
 
   Future<void> next() async {
@@ -286,6 +316,147 @@ class PlayerController extends ChangeNotifier {
   Future<void> previous() async {
     if (!hasPrevious) return;
     await jumpTo(_currentIndex - 1);
+  }
+
+  Future<void> _openCurrentItem() async {
+    _imageTimer?.cancel();
+    _imageTimer = null;
+    final item = _queue[_currentIndex];
+    resetImageTransform(notify: false);
+    if (item.mediaKind == MediaKind.image) {
+      await _engine.stop();
+      _imagePositionMs = 0;
+      _imageDurationMs = (item.displayDurationMs ?? 0).clamp(0, 86400000);
+      _imagePlaying = _imageDurationMs > 0;
+      if (_imagePlaying) _startImageTimer();
+      notifyListeners();
+      return;
+    }
+
+    _imagePositionMs = 0;
+    _imageDurationMs = 0;
+    _imagePlaying = false;
+    await _engine.open(item);
+    unawaited(_applyStartPosition());
+    var retries = 0;
+    while (_engine.durationMs <= 0 && retries < 40) {
+      await Future.delayed(const Duration(milliseconds: 50));
+      retries++;
+    }
+  }
+
+  void panImage(double dx, double dy) {
+    if (currentMediaKind != MediaKind.image || _imageScale <= 1) return;
+    if (!dx.isFinite || !dy.isFinite) return;
+    final nextX = (_imageOffsetX + dx).clamp(-10000.0, 10000.0).toDouble();
+    final nextY = (_imageOffsetY + dy).clamp(-10000.0, 10000.0).toDouble();
+    if (nextX == _imageOffsetX && nextY == _imageOffsetY) return;
+    _imageOffsetX = nextX;
+    _imageOffsetY = nextY;
+    notifyListeners();
+  }
+
+  void setImageViewportSize(double width, double height) {
+    if (width.isFinite && height.isFinite && width > 0 && height > 0) {
+      _imageViewportWidth = width;
+      _imageViewportHeight = height;
+    }
+  }
+
+  void setImageTransformAnchor(double x, double y) {
+    if (currentMediaKind != MediaKind.image || !x.isFinite || !y.isFinite) {
+      return;
+    }
+    if (x < 0 || y < 0) {
+      _imageTransformAnchorActive = false;
+      return;
+    }
+    _imageTransformAnchorX = x.clamp(0.0, 1.0).toDouble();
+    _imageTransformAnchorY = y.clamp(0.0, 1.0).toDouble();
+    _imageTransformAnchorActive = true;
+  }
+
+  void zoomImage(double factor) {
+    if (currentMediaKind != MediaKind.image ||
+        !factor.isFinite ||
+        factor <= 0) {
+      return;
+    }
+    final oldScale = _imageScale;
+    _imageScale =
+        (_imageScale * factor.clamp(0.5, 2.0)).clamp(1.0, 8.0).toDouble();
+    if (_imageScale == 1) {
+      _imageOffsetX = 0;
+      _imageOffsetY = 0;
+    } else {
+      final ratio = _imageScale / oldScale;
+      final anchorX = _imageTransformAnchorActive
+          ? (_imageTransformAnchorX - 0.5) * _imageViewportWidth
+          : _imageOffsetX;
+      final anchorY = _imageTransformAnchorActive
+          ? (_imageTransformAnchorY - 0.5) * _imageViewportHeight
+          : _imageOffsetY;
+      _imageOffsetX = (anchorX + (_imageOffsetX - anchorX) * ratio)
+          .clamp(-10000.0, 10000.0)
+          .toDouble();
+      _imageOffsetY = (anchorY + (_imageOffsetY - anchorY) * ratio)
+          .clamp(-10000.0, 10000.0)
+          .toDouble();
+    }
+    notifyListeners();
+  }
+
+  void rotateImage(double degrees) {
+    if (currentMediaKind != MediaKind.image || !degrees.isFinite) return;
+    final appliedDegrees = degrees.clamp(-90.0, 90.0).toDouble();
+    final radians = appliedDegrees * math.pi / 180;
+    final anchorX = _imageTransformAnchorActive
+        ? (_imageTransformAnchorX - 0.5) * _imageViewportWidth
+        : _imageOffsetX;
+    final anchorY = _imageTransformAnchorActive
+        ? (_imageTransformAnchorY - 0.5) * _imageViewportHeight
+        : _imageOffsetY;
+    final relativeX = _imageOffsetX - anchorX;
+    final relativeY = _imageOffsetY - anchorY;
+    _imageOffsetX =
+        anchorX + relativeX * math.cos(radians) - relativeY * math.sin(radians);
+    _imageOffsetY =
+        anchorY + relativeX * math.sin(radians) + relativeY * math.cos(radians);
+    _imageRotationDegrees += appliedDegrees;
+    notifyListeners();
+  }
+
+  void resetImageTransform({bool notify = true}) {
+    _imageScale = 1;
+    _imageOffsetX = 0;
+    _imageOffsetY = 0;
+    _imageRotationDegrees = 0;
+    _imageTransformAnchorX = 0.5;
+    _imageTransformAnchorY = 0.5;
+    _imageTransformAnchorActive = false;
+    if (notify) notifyListeners();
+  }
+
+  void _startImageTimer() {
+    _imageTimer?.cancel();
+    if (!_imagePlaying || _imageDurationMs <= 0) return;
+    _imageTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      if (currentMediaKind != MediaKind.image || !_imagePlaying) {
+        timer.cancel();
+        return;
+      }
+      _imagePositionMs = (_imagePositionMs + 200).clamp(0, _imageDurationMs);
+      notifyListeners();
+      if (_imagePositionMs >= _imageDurationMs) {
+        timer.cancel();
+        _imagePlaying = false;
+        if (hasNext) {
+          unawaited(next());
+        } else {
+          unawaited(stop());
+        }
+      }
+    });
   }
 
   void _onCompleted() {
@@ -346,9 +517,33 @@ class PlayerController extends ChangeNotifier {
     indexChanges.value = i;
   }
 
-  Future<void> resume() => _engine.resume();
-  Future<void> pause() => _engine.pause();
-  Future<void> seek(Duration position) => _engine.seek(position);
+  Future<void> resume() async {
+    if (currentMediaKind == MediaKind.image) {
+      if (_imageDurationMs > 0) {
+        _imagePlaying = true;
+        _startImageTimer();
+        notifyListeners();
+      }
+      return;
+    }
+    await _engine.resume();
+  }
+
+  Future<void> pause() async {
+    if (currentMediaKind == MediaKind.image) {
+      _imagePlaying = false;
+      _imageTimer?.cancel();
+      notifyListeners();
+      return;
+    }
+    await _engine.pause();
+  }
+
+  Future<void> seek(Duration position) async {
+    if (currentMediaKind == MediaKind.image) return;
+    await _engine.seek(position);
+  }
+
   Future<void> setVolume(double volume) => _engine.setVolume(volume);
 
   /// Recreates libmpv so media_kit can construct a new video output using the
@@ -384,8 +579,8 @@ class PlayerController extends ChangeNotifier {
 
       if (itemIndex >= 0 && itemIndex < _queue.length) {
         await _engine.openPlaylist(
-          _queue,
-          itemIndex,
+          [_queue[itemIndex]],
+          0,
           play: wasPlaying,
         );
         await _engine.setVolume(currentVolume);
@@ -411,6 +606,11 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> stop() async {
     await _waitForProxyToggle();
+    _imageTimer?.cancel();
+    _imageTimer = null;
+    _imagePlaying = false;
+    _imagePositionMs = 0;
+    _imageDurationMs = 0;
     await _engine.stop();
     _queue.clear();
     _setIndex(-1);
@@ -462,7 +662,7 @@ class PlayerController extends ChangeNotifier {
     );
     if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
     _queue[_currentIndex] = preparedItem;
-    await _engine.openPlaylist(_queue, _currentIndex);
+    await _engine.open(preparedItem);
   }
 
   /// Seamlessly switches the current item between direct ↔ proxied playback.
@@ -545,6 +745,11 @@ class PlayerController extends ChangeNotifier {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
         contentType: item.contentType,
+        declaredMediaKind: item.declaredMediaKind,
+        displayDurationMs: item.displayDurationMs,
+        artist: item.artist,
+        album: item.album,
+        artworkUrl: item.artworkUrl,
         skipPreplay: item.skipPreplay,
         // Keep demuxed LL-HLS handoff across proxy toggles.
         playlistBody: item.playlistBody,
@@ -598,6 +803,11 @@ class PlayerController extends ChangeNotifier {
         runtime: item.runtime,
         episodeTitle: item.episodeTitle,
         contentType: item.contentType,
+        declaredMediaKind: item.declaredMediaKind,
+        displayDurationMs: item.displayDurationMs,
+        artist: item.artist,
+        album: item.album,
+        artworkUrl: item.artworkUrl,
         skipPreplay: item.skipPreplay,
         playlistBody: item.playlistBody,
         audioUrl: proxiedAudio,
@@ -612,8 +822,8 @@ class PlayerController extends ChangeNotifier {
 
     try {
       await _engine.openPlaylist(
-        _queue,
-        itemIndex,
+        [replacement],
+        0,
         play: wasPlaying,
       );
     } catch (error) {
@@ -623,8 +833,8 @@ class PlayerController extends ChangeNotifier {
         notifyListeners();
         try {
           await _engine.openPlaylist(
-            _queue,
-            itemIndex,
+            [item],
+            0,
             play: wasPlaying,
           );
           if (currentPos > 0) {
@@ -656,6 +866,7 @@ class PlayerController extends ChangeNotifier {
     indexChanges.dispose();
     queueChanges.dispose();
     playRequests.dispose();
+    _imageTimer?.cancel();
     await _engine.dispose();
     super.dispose();
   }

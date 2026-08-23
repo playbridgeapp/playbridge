@@ -165,7 +165,10 @@ private fun envelope(action: String, payloadJson: String): String =
     }.toString()
 
 fun createPlaylistCommandJson(payload: PlaylistPayload): String =
-    envelope("playlist", playlistAdapter.toJson(payload))
+    envelope(
+        "playlist",
+        playlistAdapter.toJson(payload.copy(items = payload.items.map(PlayPayload::withResolvedMediaKind))),
+    )
 
 /**
  * Send a single video. There is no standalone `play` command anymore — a single video
@@ -176,7 +179,7 @@ fun createSingleVideoCommandJson(payload: PlayPayload): String =
     createPlaylistCommandJson(PlaylistPayload(items = listOf(payload)))
 
 fun createQueueAddCommandJson(item: PlayPayload): String =
-    envelope("queue_add", queueAddAdapter.toJson(QueueAddPayload(item = item)))
+    envelope("queue_add", queueAddAdapter.toJson(QueueAddPayload(item = item.withResolvedMediaKind())))
 
 fun createPlaylistJumpCommandJson(index: Int): String =
     envelope("playlist_jump", playlistJumpAdapter.toJson(PlaylistJumpPayload(index = index)))
@@ -351,6 +354,7 @@ fun createAuthResponseJson(
     certFingerprint: String? = null,
     players: List<String> = emptyList(),
     browsers: List<String> = emptyList(),
+    mediaKinds: List<String> = emptyList(),
     screenMirrorWebRtc: Boolean = false,
 ): String =
     buildJsonObject {
@@ -359,6 +363,7 @@ fun createAuthResponseJson(
         if (certFingerprint != null) put("certFingerprint", certFingerprint)
         if (players.isNotEmpty()) put("players", buildJsonArray { players.forEach { add(it) } })
         if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })
+        if (mediaKinds.isNotEmpty()) put("mediaKinds", buildJsonArray { mediaKinds.forEach { add(it) } })
         if (screenMirrorWebRtc) put("screenMirrorWebRtc", true)
     }.toString()
 
@@ -368,13 +373,19 @@ fun createContextJson(active: String): String =
         put("active", active)
     }.toString()
 
-fun createStatusJson(state: String, position: Long, duration: Long, title: String?): String =
-    buildJsonObject {
+fun createStatusJson(
+    state: String,
+    position: Long,
+    duration: Long,
+    title: String?,
+    mediaKind: String? = null,
+): String = buildJsonObject {
         put("type", "status")
         put("state", state)
         put("position", position)
         put("duration", duration)
         if (title != null) put("title", title)
+        if (mediaKind != null) put("mediaKind", mediaKind)
     }.toString()
 
 fun createPlaylistStatusJson(

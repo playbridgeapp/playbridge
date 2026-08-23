@@ -35,10 +35,10 @@ class ProtocolJsonTest {
             ),
         )
         assertTrue(parsed is com.playbridge.shared.protocol.IncomingMessage.Playlist)
-        assertEquals(
-            true,
-            (parsed as com.playbridge.shared.protocol.IncomingMessage.Playlist).payload.skip_preplay,
-        )
+        val playlist =
+            (parsed as com.playbridge.shared.protocol.IncomingMessage.Playlist).payload
+        assertEquals(true, playlist.skip_preplay)
+        assertEquals("audio", playlist.items.single().media_kind)
     }
 
     @Test
@@ -72,6 +72,7 @@ class ProtocolJsonTest {
             success = true,
             players = listOf("exo", "mpv"),
             browsers = listOf("webview", "gecko"),
+            mediaKinds = listOf("video", "audio", "image"),
         ))
         assertEquals(
             listOf("exo", "mpv"),
@@ -80,6 +81,10 @@ class ProtocolJsonTest {
         assertEquals(
             listOf("webview", "gecko"),
             o["browsers"]?.jsonArray?.map { it.jsonPrimitive.content }
+        )
+        assertEquals(
+            listOf("video", "audio", "image"),
+            o["mediaKinds"]?.jsonArray?.map { it.jsonPrimitive.content },
         )
     }
 
@@ -130,6 +135,7 @@ class ProtocolJsonTest {
         val o = obj(createAuthResponseJson(success = true))
         assertNull(o["players"])
         assertNull(o["browsers"])
+        assertNull(o["mediaKinds"])
     }
 
     @Test

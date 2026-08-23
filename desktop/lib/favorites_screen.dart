@@ -110,6 +110,8 @@ class FavoritesScreen extends StatelessWidget {
       playlistBody: item.playlistBody,
       audioUrl: item.audioUrl,
       contentType: item.contentType,
+      declaredMediaKind: item.mediaKind,
+      displayDurationMs: item.displayDurationMs,
     );
   }
 }

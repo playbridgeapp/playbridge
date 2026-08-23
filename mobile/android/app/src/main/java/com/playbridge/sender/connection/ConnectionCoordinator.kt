@@ -83,7 +83,10 @@ class ConnectionCoordinator(
                                                 season = o.optInt("season", -1).takeIf { it >= 0 },
                                                 episode = o.optInt("episode", -1).takeIf { it >= 0 },
                                                 imdbId = o.optString("imdbId", "").ifEmpty { null },
-                                                bingeGroup = o.optString("bingeGroup", "").ifEmpty { null }
+                                                bingeGroup = o.optString("bingeGroup", "").ifEmpty { null },
+                                                mediaKind = o.optString("mediaKind", "video")
+                                                    .takeIf { it in setOf("video", "audio", "image") }
+                                                    ?: "video",
                                             )
                                         )
                                     }
@@ -105,7 +108,10 @@ class ConnectionCoordinator(
                                 state = json.optString("state", "paused"),
                                 positionMs = json.optLong("position", 0L),
                                 durationMs = json.optLong("duration", 0L),
-                                title = json.optString("title", "").ifEmpty { null }
+                                title = json.optString("title", "").ifEmpty { null },
+                                mediaKind = json.optString("mediaKind", "video")
+                                    .takeIf { it in setOf("video", "audio", "image") }
+                                    ?: "video",
                             )
                         }
                         "tracks" -> {

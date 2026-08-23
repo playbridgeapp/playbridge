@@ -66,6 +66,7 @@ pub struct ReceiverConfig {
     pub authorized_tokens: Vec<String>,
     pub players: Vec<String>,
     pub browsers: Vec<String>,
+    pub media_kinds: Vec<String>,
     pub screen_mirror_web_rtc: bool,
     pub advertise: bool,
     pub max_connections: usize,
@@ -84,6 +85,7 @@ impl ReceiverConfig {
             authorized_tokens: Vec::new(),
             players: Vec::new(),
             browsers: Vec::new(),
+            media_kinds: Vec::new(),
             screen_mirror_web_rtc: false,
             advertise: false,
             max_connections: DEFAULT_MAX_CONNECTIONS,
@@ -132,6 +134,34 @@ impl ReceiverCommand {
             _ => Self::Unknown { action, payload },
         }
     }
+}
+
+fn decode_mouse_packet(bytes: &[u8]) -> Option<ReceiverCommand> {
+    if bytes.len() != 9 {
+        return None;
+    }
+    let event = match bytes[0] {
+        0 => "move",
+        1 => "click",
+        2 => "scroll",
+        3 => "down",
+        4 => "up",
+        5 => "zoom",
+        6 => "reset",
+        7 => "rotate",
+        8 => "transform_anchor",
+        _ => return None,
+    };
+    let dx = f32::from_be_bytes(bytes[1..5].try_into().ok()?);
+    let dy = f32::from_be_bytes(bytes[5..9].try_into().ok()?);
+    if !dx.is_finite() || !dy.is_finite() {
+        return None;
+    }
+    Some(ReceiverCommand::Mouse(json!({
+        "event": event,
+        "dx": dx,
+        "dy": dy,
+    })))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -200,6 +230,7 @@ struct Shared {
     fingerprint: String,
     players: Vec<String>,
     browsers: Vec<String>,
+    media_kinds: Vec<String>,
     screen_mirror_web_rtc: bool,
     authorized_tokens: Mutex<HashSet<String>>,
     connections: Mutex<HashMap<u64, ConnectionHandle>>,
@@ -276,6 +307,7 @@ impl ReceiverHost {
             fingerprint: fingerprint.clone(),
             players: config.players.clone(),
             browsers: config.browsers.clone(),
+            media_kinds: config.media_kinds.clone(),
             screen_mirror_web_rtc: config.screen_mirror_web_rtc,
             authorized_tokens: Mutex::new(config.authorized_tokens.iter().cloned().collect()),
             connections: Mutex::new(HashMap::new()),
@@ -597,6 +629,30 @@ where
             incoming = socket.next() => {
                 let Some(incoming) = incoming else { break };
                 let incoming = incoming.map_err(|_| "WebSocket connection failed".to_owned())?;
+                if let Message::Binary(bytes) = &incoming {
+                    if bytes.len() > max_message_bytes {
+                        return Err("receiver message exceeded size limit".into());
+                    }
+                    if authenticated
+                        && let Some(command) = decode_mouse_packet(bytes)
+                    {
+                        let raw = json!({
+                            "type": "command",
+                            "action": "mouse",
+                            "payload": match &command {
+                                ReceiverCommand::Mouse(payload) => payload,
+                                _ => unreachable!(),
+                            },
+                        })
+                        .to_string();
+                        shared.emit(ReceiverEvent::Command {
+                            connection_id: id,
+                            command,
+                            raw,
+                        });
+                    }
+                    continue;
+                }
                 let Message::Text(text) = incoming else { continue };
                 if text.len() > max_message_bytes {
                     return Err("receiver message exceeded size limit".into());
@@ -617,6 +673,7 @@ where
                                 "certFingerprint":shared.fingerprint,
                                 "players":shared.players,
                                 "browsers":shared.browsers,
+                                "mediaKinds":shared.media_kinds,
                                 "screenMirrorWebRtc":shared.screen_mirror_web_rtc,
                             }),
                         ).await?;
@@ -706,6 +763,7 @@ where
                                     cert_fingerprint: Some(shared.fingerprint.clone()),
                                     players: shared.players.clone(),
                                     browsers: shared.browsers.clone(),
+                                    media_kinds: shared.media_kinds.clone(),
                                     screen_mirror_web_rtc: shared.screen_mirror_web_rtc,
                                 },
                             )
@@ -912,6 +970,62 @@ mod tests {
     }
 
     #[test]
+    fn compact_mouse_packets_are_decoded_and_validated() {
+        let mut packet = [0_u8; 9];
+        packet[0] = 5;
+        packet[1..5].copy_from_slice(&1.25_f32.to_be_bytes());
+        assert_eq!(
+            decode_mouse_packet(&packet),
+            Some(ReceiverCommand::Mouse(json!({
+                "event": "zoom",
+                "dx": 1.25,
+                "dy": 0.0,
+            })))
+        );
+
+        packet[0] = 6;
+        packet[1..5].copy_from_slice(&0.0_f32.to_be_bytes());
+        assert_eq!(
+            decode_mouse_packet(&packet),
+            Some(ReceiverCommand::Mouse(json!({
+                "event": "reset",
+                "dx": 0.0,
+                "dy": 0.0,
+            })))
+        );
+
+        packet[0] = 7;
+        packet[1..5].copy_from_slice(&12.5_f32.to_be_bytes());
+        assert_eq!(
+            decode_mouse_packet(&packet),
+            Some(ReceiverCommand::Mouse(json!({
+                "event": "rotate",
+                "dx": 12.5,
+                "dy": 0.0,
+            })))
+        );
+
+        packet[0] = 8;
+        packet[1..5].copy_from_slice(&0.25_f32.to_be_bytes());
+        packet[5..9].copy_from_slice(&0.75_f32.to_be_bytes());
+        assert_eq!(
+            decode_mouse_packet(&packet),
+            Some(ReceiverCommand::Mouse(json!({
+                "event": "transform_anchor",
+                "dx": 0.25,
+                "dy": 0.75,
+            })))
+        );
+
+        packet[0] = 9;
+        assert_eq!(decode_mouse_packet(&packet), None);
+        assert_eq!(decode_mouse_packet(&packet[..8]), None);
+        packet[0] = 0;
+        packet[1..5].copy_from_slice(&f32::NAN.to_be_bytes());
+        assert_eq!(decode_mouse_packet(&packet), None);
+    }
+
+    #[test]
     fn token_digest_is_stable_and_distinct_from_plaintext() {
         let digest = token_digest("secret");
         assert_eq!(
@@ -951,6 +1065,7 @@ mod tests {
         config.preferred_port = 0;
         config.fallback_attempts = 1;
         config.players = vec!["internal_mpv".into()];
+        config.media_kinds = vec!["video".into(), "audio".into(), "image".into()];
         config.screen_mirror_web_rtc = true;
         let host = ReceiverHost::start(config).await.unwrap();
         let mut events = host.subscribe();
@@ -1001,6 +1116,7 @@ mod tests {
         let credentials = pairing
             .decrypt_credentials(&nonce, &ciphertext, Some(&pin))
             .unwrap();
+        assert_eq!(credentials.media_kinds, ["video", "audio", "image"]);
         assert!(credentials.screen_mirror_web_rtc);
         socket
             .send(&SenderFrame::Command {

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
 
 import 'cert_manager.dart';
+import 'media_kind.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
@@ -103,6 +104,7 @@ class ReceiverServer extends ChangeNotifier {
           for (final device in store.pairedDevices) device.token,
         ],
         players: const ['internal_mpv'],
+        mediaKinds: const ['video', 'audio', 'image'],
         screenMirrorWebRtc: true,
       ),
     );
@@ -302,6 +304,21 @@ class ReceiverServer extends ChangeNotifier {
           onPlaybackActivity?.call();
         }
         _handleRemoteKey(key);
+      case MouseCmd(:final event, :final dx, :final dy):
+        if (player.currentMediaKind == MediaKind.image) {
+          switch (event) {
+            case 'move' || 'scroll':
+              player.panImage(dx, dy);
+            case 'zoom':
+              player.zoomImage(dx);
+            case 'transform_anchor':
+              player.setImageTransformAnchor(dx, dy);
+            case 'reset':
+              player.resetImageTransform();
+            case 'rotate':
+              player.rotateImage(dx);
+          }
+        }
       default:
         break;
     }
@@ -446,6 +463,11 @@ class ReceiverServer extends ChangeNotifier {
               ))
           .toList(growable: false),
       contentType: payload.contentTypeOrNull,
+      declaredMediaKind: payload.mediaKindOrNull,
+      displayDurationMs: payload.displayDurationMsOrNull,
+      artist: payload.artistOrNull,
+      album: payload.albumOrNull,
+      artworkUrl: payload.artworkUrlOrNull,
       skipPreplay: skipPreplay,
       enforcePageNetworkPolicy: payload.detectedByOrNull == 'page_cast' ||
           payload.detectedByOrNull == 'linked_page',
@@ -473,6 +495,8 @@ class ReceiverServer extends ChangeNotifier {
       'position': player.positionMs,
       'duration': player.durationMs,
       if (player.currentTitle != null) 'title': player.currentTitle,
+      if (player.currentMediaKind != null)
+        'mediaKind': player.currentMediaKind!.wireValue,
     });
     _broadcastTracksIfChanged();
   }
@@ -480,23 +504,26 @@ class ReceiverServer extends ChangeNotifier {
   String? _lastTracksJson;
 
   void _broadcastTracksIfChanged({bool force = false}) {
+    final exposeTracks = player.currentMediaKind != MediaKind.image;
     final message = <String, Object?>{
       'type': 'tracks',
       'audio': [
-        for (final track in player.audioTrackInfos)
-          {
-            'id': track.id,
-            'name': track.name,
-            'selected': track.selected,
-          },
+        if (exposeTracks)
+          for (final track in player.audioTrackInfos)
+            {
+              'id': track.id,
+              'name': track.name,
+              'selected': track.selected,
+            },
       ],
       'subtitle': [
-        for (final track in player.subtitleTrackInfos)
-          {
-            'id': track.id,
-            'name': track.name,
-            'selected': track.selected,
-          },
+        if (exposeTracks)
+          for (final track in player.subtitleTrackInfos)
+            {
+              'id': track.id,
+              'name': track.name,
+              'selected': track.selected,
+            },
       ],
     };
     final encoded = message.toString();
@@ -513,6 +540,7 @@ class ReceiverServer extends ChangeNotifier {
           {
             'index': index,
             'title': player.queue[index].title,
+            'mediaKind': player.queue[index].mediaKind.wireValue,
             if (player.queue[index].season != null)
               'season': player.queue[index].season,
             if (player.queue[index].episode != null)

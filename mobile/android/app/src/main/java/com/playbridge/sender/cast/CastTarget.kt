@@ -88,11 +88,19 @@ enum class Capability {
  * [headers]) or a `content://` local file — the target/proxy inspects the scheme.
  * For DLNA, web streams and local files are both served through the local proxy.
  */
+enum class MediaKind(val wireValue: String) {
+    VIDEO("video"),
+    AUDIO("audio"),
+    IMAGE("image"),
+}
+
 data class MediaItem(
     val url: String,
     /** Request headers for web streams (Referer/Cookie/User-Agent). Ignored for local files. */
     val headers: Map<String, String> = emptyMap(),
     val mimeType: String? = null,
+    val mediaKind: MediaKind? = null,
+    val displayDurationMs: Long? = null,
     val title: String? = null,
     val artUrl: String? = null,
     val subtitles: List<SubtitleRef> = emptyList(),

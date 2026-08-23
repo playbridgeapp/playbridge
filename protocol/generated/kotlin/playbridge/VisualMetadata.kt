@@ -120,6 +120,39 @@ public class VisualMetadata(
     schemaIndex = 15,
   )
   public val tmdb_id: String? = null,
+  @field:WireField(
+    tag = 17,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    schemaIndex = 16,
+  )
+  public val artist: String? = null,
+  @field:WireField(
+    tag = 18,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    schemaIndex = 17,
+  )
+  public val album: String? = null,
+  @field:WireField(
+    tag = 19,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "albumArtist",
+    schemaIndex = 18,
+  )
+  public val album_artist: String? = null,
+  @field:WireField(
+    tag = 20,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "artworkUrl",
+    schemaIndex = 19,
+  )
+  public val artwork_url: String? = null,
+  @field:WireField(
+    tag = 21,
+    adapter = "com.squareup.wire.ProtoAdapter#INT32",
+    jsonName = "trackNumber",
+    schemaIndex = 20,
+  )
+  public val track_number: Int? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<VisualMetadata, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -173,6 +206,11 @@ public class VisualMetadata(
     if (episode_title != other.episode_title) return false
     if (imdb_id != other.imdb_id) return false
     if (tmdb_id != other.tmdb_id) return false
+    if (artist != other.artist) return false
+    if (album != other.album) return false
+    if (album_artist != other.album_artist) return false
+    if (artwork_url != other.artwork_url) return false
+    if (track_number != other.track_number) return false
     return true
   }
 
@@ -196,6 +234,11 @@ public class VisualMetadata(
       result = result * 37 + (episode_title?.hashCode() ?: 0)
       result = result * 37 + (imdb_id?.hashCode() ?: 0)
       result = result * 37 + (tmdb_id?.hashCode() ?: 0)
+      result = result * 37 + (artist?.hashCode() ?: 0)
+      result = result * 37 + (album?.hashCode() ?: 0)
+      result = result * 37 + (album_artist?.hashCode() ?: 0)
+      result = result * 37 + (artwork_url?.hashCode() ?: 0)
+      result = result * 37 + (track_number?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -219,6 +262,11 @@ public class VisualMetadata(
     if (episode_title != null) result += """episode_title=${sanitize(episode_title)}"""
     if (imdb_id != null) result += """imdb_id=${sanitize(imdb_id)}"""
     if (tmdb_id != null) result += """tmdb_id=${sanitize(tmdb_id)}"""
+    if (artist != null) result += """artist=${sanitize(artist)}"""
+    if (album != null) result += """album=${sanitize(album)}"""
+    if (album_artist != null) result += """album_artist=${sanitize(album_artist)}"""
+    if (artwork_url != null) result += """artwork_url=${sanitize(artwork_url)}"""
+    if (track_number != null) result += """track_number=$track_number"""
     return result.joinToString(prefix = "VisualMetadata{", separator = ", ", postfix = "}")
   }
 
@@ -239,10 +287,15 @@ public class VisualMetadata(
     episode_title: String? = this.episode_title,
     imdb_id: String? = this.imdb_id,
     tmdb_id: String? = this.tmdb_id,
+    artist: String? = this.artist,
+    album: String? = this.album,
+    album_artist: String? = this.album_artist,
+    artwork_url: String? = this.artwork_url,
+    track_number: Int? = this.track_number,
     unknownFields: ByteString = this.unknownFields,
   ): VisualMetadata = VisualMetadata(title, year, rating, runtime, overview, genres, cast, director,
-      backdrop_url, poster_url, logo_url, season, episode, episode_title, imdb_id, tmdb_id,
-      unknownFields)
+      backdrop_url, poster_url, logo_url, season, episode, episode_title, imdb_id, tmdb_id, artist,
+      album, album_artist, artwork_url, track_number, unknownFields)
 
   public companion object {
     @JvmField
@@ -274,6 +327,11 @@ public class VisualMetadata(
         size += ProtoAdapter.STRING.encodedSizeWithTag(14, value.episode_title)
         size += ProtoAdapter.STRING.encodedSizeWithTag(15, value.imdb_id)
         size += ProtoAdapter.STRING.encodedSizeWithTag(16, value.tmdb_id)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(17, value.artist)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(18, value.album)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(19, value.album_artist)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(20, value.artwork_url)
+        size += ProtoAdapter.INT32.encodedSizeWithTag(21, value.track_number)
         return size
       }
 
@@ -296,11 +354,21 @@ public class VisualMetadata(
         ProtoAdapter.STRING.encodeWithTag(writer, 14, value.episode_title)
         ProtoAdapter.STRING.encodeWithTag(writer, 15, value.imdb_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 16, value.tmdb_id)
+        ProtoAdapter.STRING.encodeWithTag(writer, 17, value.artist)
+        ProtoAdapter.STRING.encodeWithTag(writer, 18, value.album)
+        ProtoAdapter.STRING.encodeWithTag(writer, 19, value.album_artist)
+        ProtoAdapter.STRING.encodeWithTag(writer, 20, value.artwork_url)
+        ProtoAdapter.INT32.encodeWithTag(writer, 21, value.track_number)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: VisualMetadata) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.INT32.encodeWithTag(writer, 21, value.track_number)
+        ProtoAdapter.STRING.encodeWithTag(writer, 20, value.artwork_url)
+        ProtoAdapter.STRING.encodeWithTag(writer, 19, value.album_artist)
+        ProtoAdapter.STRING.encodeWithTag(writer, 18, value.album)
+        ProtoAdapter.STRING.encodeWithTag(writer, 17, value.artist)
         ProtoAdapter.STRING.encodeWithTag(writer, 16, value.tmdb_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 15, value.imdb_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 14, value.episode_title)
@@ -338,6 +406,11 @@ public class VisualMetadata(
         var episode_title: String? = null
         var imdb_id: String? = null
         var tmdb_id: String? = null
+        var artist: String? = null
+        var album: String? = null
+        var album_artist: String? = null
+        var artwork_url: String? = null
+        var track_number: Int? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> title = ProtoAdapter.STRING.decode(reader)
@@ -356,6 +429,11 @@ public class VisualMetadata(
             14 -> episode_title = ProtoAdapter.STRING.decode(reader)
             15 -> imdb_id = ProtoAdapter.STRING.decode(reader)
             16 -> tmdb_id = ProtoAdapter.STRING.decode(reader)
+            17 -> artist = ProtoAdapter.STRING.decode(reader)
+            18 -> album = ProtoAdapter.STRING.decode(reader)
+            19 -> album_artist = ProtoAdapter.STRING.decode(reader)
+            20 -> artwork_url = ProtoAdapter.STRING.decode(reader)
+            21 -> track_number = ProtoAdapter.INT32.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -376,6 +454,11 @@ public class VisualMetadata(
           episode_title = episode_title,
           imdb_id = imdb_id,
           tmdb_id = tmdb_id,
+          artist = artist,
+          album = album,
+          album_artist = album_artist,
+          artwork_url = artwork_url,
+          track_number = track_number,
           unknownFields = unknownFields
         )
       }

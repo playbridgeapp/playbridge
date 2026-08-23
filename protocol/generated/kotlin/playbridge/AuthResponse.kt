@@ -16,6 +16,7 @@ import com.squareup.wire.ReverseProtoWriter
 import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
+import com.squareup.wire.`internal`.immutableCopyOf
 import com.squareup.wire.`internal`.sanitize
 import kotlin.Any
 import kotlin.AssertionError
@@ -27,6 +28,7 @@ import kotlin.Long
 import kotlin.Nothing
 import kotlin.String
 import kotlin.Suppress
+import kotlin.collections.List
 import okio.ByteString
 
 public class AuthResponse(
@@ -61,8 +63,43 @@ public class AuthResponse(
     schemaIndex = 3,
   )
   public val cert_fingerprint: String? = null,
+  players: List<String> = emptyList(),
+  browsers: List<String> = emptyList(),
+  @field:WireField(
+    tag = 7,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "screenMirrorWebRtc",
+    schemaIndex = 6,
+  )
+  public val screen_mirror_web_rtc: Boolean? = null,
+  media_kinds: List<String> = emptyList(),
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<AuthResponse, Nothing>(ADAPTER, unknownFields) {
+  @field:WireField(
+    tag = 5,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    label = WireField.Label.REPEATED,
+    schemaIndex = 4,
+  )
+  public val players: List<String> = immutableCopyOf("players", players)
+
+  @field:WireField(
+    tag = 6,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    label = WireField.Label.REPEATED,
+    schemaIndex = 5,
+  )
+  public val browsers: List<String> = immutableCopyOf("browsers", browsers)
+
+  @field:WireField(
+    tag = 8,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    label = WireField.Label.REPEATED,
+    jsonName = "mediaKinds",
+    schemaIndex = 7,
+  )
+  public val media_kinds: List<String> = immutableCopyOf("media_kinds", media_kinds)
+
   @Deprecated(
     message = "Shouldn't be used in Kotlin",
     level = DeprecationLevel.HIDDEN,
@@ -78,6 +115,10 @@ public class AuthResponse(
     if (success != other.success) return false
     if (token != other.token) return false
     if (cert_fingerprint != other.cert_fingerprint) return false
+    if (players != other.players) return false
+    if (browsers != other.browsers) return false
+    if (screen_mirror_web_rtc != other.screen_mirror_web_rtc) return false
+    if (media_kinds != other.media_kinds) return false
     return true
   }
 
@@ -89,6 +130,10 @@ public class AuthResponse(
       result = result * 37 + success.hashCode()
       result = result * 37 + (token?.hashCode() ?: 0)
       result = result * 37 + (cert_fingerprint?.hashCode() ?: 0)
+      result = result * 37 + players.hashCode()
+      result = result * 37 + browsers.hashCode()
+      result = result * 37 + (screen_mirror_web_rtc?.hashCode() ?: 0)
+      result = result * 37 + media_kinds.hashCode()
       super.hashCode = result
     }
     return result
@@ -100,6 +145,10 @@ public class AuthResponse(
     result += """success=$success"""
     if (token != null) result += """token=${sanitize(token)}"""
     if (cert_fingerprint != null) result += """cert_fingerprint=${sanitize(cert_fingerprint)}"""
+    if (players.isNotEmpty()) result += """players=${sanitize(players)}"""
+    if (browsers.isNotEmpty()) result += """browsers=${sanitize(browsers)}"""
+    if (screen_mirror_web_rtc != null) result += """screen_mirror_web_rtc=$screen_mirror_web_rtc"""
+    if (media_kinds.isNotEmpty()) result += """media_kinds=${sanitize(media_kinds)}"""
     return result.joinToString(prefix = "AuthResponse{", separator = ", ", postfix = "}")
   }
 
@@ -108,8 +157,13 @@ public class AuthResponse(
     success: Boolean = this.success,
     token: String? = this.token,
     cert_fingerprint: String? = this.cert_fingerprint,
+    players: List<String> = this.players,
+    browsers: List<String> = this.browsers,
+    screen_mirror_web_rtc: Boolean? = this.screen_mirror_web_rtc,
+    media_kinds: List<String> = this.media_kinds,
     unknownFields: ByteString = this.unknownFields,
-  ): AuthResponse = AuthResponse(type, success, token, cert_fingerprint, unknownFields)
+  ): AuthResponse = AuthResponse(type, success, token, cert_fingerprint, players, browsers,
+      screen_mirror_web_rtc, media_kinds, unknownFields)
 
   public companion object {
     @JvmField
@@ -131,6 +185,10 @@ public class AuthResponse(
         }
         size += ProtoAdapter.STRING.encodedSizeWithTag(3, value.token)
         size += ProtoAdapter.STRING.encodedSizeWithTag(4, value.cert_fingerprint)
+        size += ProtoAdapter.STRING.asRepeated().encodedSizeWithTag(5, value.players)
+        size += ProtoAdapter.STRING.asRepeated().encodedSizeWithTag(6, value.browsers)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(7, value.screen_mirror_web_rtc)
+        size += ProtoAdapter.STRING.asRepeated().encodedSizeWithTag(8, value.media_kinds)
         return size
       }
 
@@ -143,11 +201,19 @@ public class AuthResponse(
         }
         ProtoAdapter.STRING.encodeWithTag(writer, 3, value.token)
         ProtoAdapter.STRING.encodeWithTag(writer, 4, value.cert_fingerprint)
+        ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 5, value.players)
+        ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 6, value.browsers)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 7, value.screen_mirror_web_rtc)
+        ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 8, value.media_kinds)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: AuthResponse) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 8, value.media_kinds)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 7, value.screen_mirror_web_rtc)
+        ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 6, value.browsers)
+        ProtoAdapter.STRING.asRepeated().encodeWithTag(writer, 5, value.players)
         ProtoAdapter.STRING.encodeWithTag(writer, 4, value.cert_fingerprint)
         ProtoAdapter.STRING.encodeWithTag(writer, 3, value.token)
         if (value.success != false) {
@@ -163,12 +229,20 @@ public class AuthResponse(
         var success: Boolean = false
         var token: String? = null
         var cert_fingerprint: String? = null
+        val players = mutableListOf<String>()
+        val browsers = mutableListOf<String>()
+        var screen_mirror_web_rtc: Boolean? = null
+        val media_kinds = mutableListOf<String>()
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
             2 -> success = ProtoAdapter.BOOL.decode(reader)
             3 -> token = ProtoAdapter.STRING.decode(reader)
             4 -> cert_fingerprint = ProtoAdapter.STRING.decode(reader)
+            5 -> players.add(ProtoAdapter.STRING.decode(reader))
+            6 -> browsers.add(ProtoAdapter.STRING.decode(reader))
+            7 -> screen_mirror_web_rtc = ProtoAdapter.BOOL.decode(reader)
+            8 -> media_kinds.add(ProtoAdapter.STRING.decode(reader))
             else -> reader.readUnknownField(tag)
           }
         }
@@ -177,6 +251,10 @@ public class AuthResponse(
           success = success,
           token = token,
           cert_fingerprint = cert_fingerprint,
+          players = players,
+          browsers = browsers,
+          screen_mirror_web_rtc = screen_mirror_web_rtc,
+          media_kinds = media_kinds,
           unknownFields = unknownFields
         )
       }

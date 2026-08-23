@@ -990,5 +990,6 @@ data class PlaylistEpisode(
     val season: Int? = null,
     val episode: Int? = null,
     val imdbId: String? = null,
-    val bingeGroup: String? = null
+    val bingeGroup: String? = null,
+    val mediaKind: String = "video",
 )

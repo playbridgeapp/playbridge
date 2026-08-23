@@ -565,6 +565,7 @@ async fn dashboard_poll(
                     position,
                     duration,
                     title,
+                    ..
                 } = frame
                 {
                     snapshot.state = state;

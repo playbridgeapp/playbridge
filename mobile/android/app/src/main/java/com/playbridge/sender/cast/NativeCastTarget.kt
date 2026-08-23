@@ -46,6 +46,8 @@ class NativeCastTarget(
                     title = media.title,
                     headers = media.headers,
                     content_type = media.mimeType,
+                    media_kind = media.mediaKind?.wireValue,
+                    display_duration_ms = media.displayDurationMs,
                     subtitles = media.subtitles.map { it.url },
                     start_position_ms = media.startPositionMs.takeIf { it > 0 },
                     visual_metadata = media.visualMetadata,

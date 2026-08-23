@@ -34,6 +34,7 @@ private const val TAG = "WebSocketClient"
 
 /** Number of SAS code entries the user gets before the handshake is torn down. */
 private const val MAX_PAIR_ATTEMPTS = 3
+private const val POINTER_FLUSH_INTERVAL_MS = 16L
 
 /**
  * OkHttp-based WebSocket client for connecting to TV
@@ -96,22 +97,20 @@ class WebSocketClient {
     // SAS entries remaining for the current handshake; reset when a fresh challenge arrives.
     @Volatile private var pairingAttemptsLeft: Int = MAX_PAIR_ATTEMPTS
     
-    // Mouse delta accumulation — collapses rapid pointer events into one packet per flush
-    // interval so we're not flooding the TV with a packet per display frame (especially at 120Hz).
-    private var pendingDx = 0f
-    private var pendingDy = 0f
+    // Continuous pointer events are collapsed into at most one packet of each kind per
+    // display frame. Move/scroll deltas add, rotation degrees add, and zoom factors
+    // multiply so batching preserves the gesture's net effect without flooding WSS.
+    private var pendingMoveDx = 0f
+    private var pendingMoveDy = 0f
+    private var pendingScrollDx = 0f
+    private var pendingScrollDy = 0f
+    private var pendingZoomFactor = 1f
+    private var pendingRotationDegrees = 0f
+    private var pendingAnchorX: Float? = null
+    private var pendingAnchorY: Float? = null
     private var mouseFlushScheduled = false
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private val mouseFlushRunnable = Runnable {
-        mouseFlushScheduled = false
-        val dx = pendingDx
-        val dy = pendingDy
-        pendingDx = 0f
-        pendingDy = 0f
-        if (dx != 0f || dy != 0f) {
-            send(com.playbridge.shared.protocol.MousePacket.pack("move", dx, dy))
-        }
-    }
+    private val mouseFlushRunnable = Runnable { flushPendingMouseCommands() }
 
     private data class TvConnectionInfo(
         val ip: String,
@@ -135,6 +134,7 @@ class WebSocketClient {
     data class TvCapabilities(
         val players: List<String>,
         val browsers: List<String>,
+        val mediaKinds: List<String> = emptyList(),
         val screenMirrorWebRtc: Boolean = false,
     )
 
@@ -556,8 +556,10 @@ class WebSocketClient {
     private fun emitCapabilities(json: JsonObject) {
         val players = parseStringArray(json, "players")
         val browsers = parseStringArray(json, "browsers")
+        val mediaKinds = parseStringArray(json, "mediaKinds")
+            .filter { it in setOf("video", "audio", "image") }
         val screenMirrorWebRtc = json["screenMirrorWebRtc"]?.jsonPrimitive?.contentOrNull == "true"
-        val capabilities = TvCapabilities(players, browsers, screenMirrorWebRtc)
+        val capabilities = TvCapabilities(players, browsers, mediaKinds, screenMirrorWebRtc)
         // Always replace the previous receiver's capabilities. Otherwise connecting to an
         // older TV after a capable one can leave screen mirroring incorrectly enabled.
         _tvCapabilitiesState.value = capabilities
@@ -609,20 +611,114 @@ class WebSocketClient {
     }
 
     /**
-     * Sends a mouse command, with automatic batching/throttling for high-frequency "move" events.
+     * Sends a compact pointer command. Continuous gesture updates are coalesced to ~60 Hz;
+     * terminal/discrete commands flush them first so reset, click, and button rotations
+     * cannot overtake the final movement from the gesture.
      */
     fun sendMouseCommand(event: String, dx: Float = 0f, dy: Float = 0f) {
-        if (event == "move") {
-            pendingDx += dx
-            pendingDy += dy
-            if (!mouseFlushScheduled) {
-                mouseFlushScheduled = true
-                mainHandler.postDelayed(mouseFlushRunnable, 16L) // ~60Hz
-            }
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            mainHandler.post { sendMouseCommand(event, dx, dy) }
             return
         }
-        // Immediate send for clicks, scrolls, and up/down events
-        send(com.playbridge.shared.protocol.MousePacket.pack(event, dx, dy))
+        if (!dx.isFinite() || !dy.isFinite()) return
+        when (event) {
+            "move" -> {
+                pendingMoveDx += dx
+                pendingMoveDy += dy
+            }
+            "scroll" -> {
+                pendingScrollDx += dx
+                pendingScrollDy += dy
+            }
+            "zoom" -> {
+                if (dx <= 0f) return
+                pendingZoomFactor = (pendingZoomFactor * dx).coerceIn(0.125f, 8f)
+            }
+            "rotate" -> pendingRotationDegrees += dx
+            "transform_anchor" -> {
+                pendingAnchorX = dx.coerceIn(0f, 1f)
+                pendingAnchorY = dy.coerceIn(0f, 1f)
+            }
+            else -> {
+                flushPendingMouseCommands()
+                sendMousePacket(event, dx, dy)
+                return
+            }
+        }
+        if (!mouseFlushScheduled) {
+            mouseFlushScheduled = true
+            mainHandler.postDelayed(mouseFlushRunnable, POINTER_FLUSH_INTERVAL_MS)
+        }
+    }
+
+    /** Flush the final coalesced update when all fingers leave or a gesture is cancelled. */
+    fun flushMouseCommands() {
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            flushPendingMouseCommands()
+        } else {
+            mainHandler.post { flushPendingMouseCommands() }
+        }
+    }
+
+    /** Finish the transform around its last touch midpoint, then restore center anchoring. */
+    fun endPointerGesture() {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            mainHandler.post { endPointerGesture() }
+            return
+        }
+        flushPendingMouseCommands()
+        // Negative coordinates clear the touch anchor so discrete rotate buttons
+        // continue to pivot around the image's own center.
+        sendMousePacket("transform_anchor", -1f, -1f)
+    }
+
+    private fun flushPendingMouseCommands() {
+        mainHandler.removeCallbacks(mouseFlushRunnable)
+        mouseFlushScheduled = false
+
+        val moveDx = pendingMoveDx
+        val moveDy = pendingMoveDy
+        val scrollDx = pendingScrollDx
+        val scrollDy = pendingScrollDy
+        val zoomFactor = pendingZoomFactor
+        val rotationDegrees = pendingRotationDegrees
+        val anchorX = pendingAnchorX
+        val anchorY = pendingAnchorY
+        pendingMoveDx = 0f
+        pendingMoveDy = 0f
+        pendingScrollDx = 0f
+        pendingScrollDy = 0f
+        pendingZoomFactor = 1f
+        pendingRotationDegrees = 0f
+        pendingAnchorX = null
+        pendingAnchorY = null
+
+        if (anchorX != null && anchorY != null) {
+            sendMousePacket("transform_anchor", anchorX, anchorY)
+        }
+        if (moveDx != 0f || moveDy != 0f) sendMousePacket("move", moveDx, moveDy)
+        if (scrollDx != 0f || scrollDy != 0f) sendMousePacket("scroll", scrollDx, scrollDy)
+        if (zoomFactor != 1f) sendMousePacket("zoom", zoomFactor, 0f)
+        if (rotationDegrees != 0f) sendMousePacket("rotate", rotationDegrees, 0f)
+    }
+
+    private fun sendMousePacket(event: String, dx: Float, dy: Float) {
+        if (!send(com.playbridge.shared.protocol.MousePacket.pack(event, dx, dy))) {
+            Log.w(TAG, "Pointer packet was not queued: event=$event")
+        }
+    }
+
+    private fun clearPendingMouseCommands() {
+        mainHandler.removeCallbacks(mouseFlushRunnable)
+        mouseFlushScheduled = false
+        pendingMoveDx = 0f
+        pendingMoveDy = 0f
+        pendingScrollDx = 0f
+        pendingScrollDy = 0f
+        pendingZoomFactor = 1f
+        pendingRotationDegrees = 0f
+        pendingAnchorX = null
+        pendingAnchorY = null
     }
     
     /**
@@ -689,10 +785,7 @@ class WebSocketClient {
         // Stack trace helps attribute unexpected "User disconnect" (DevicePicker, notif
         // action, pairing dialog, etc.) without guessing from close reason alone.
         Log.i(TAG, "disconnect() (user-initiated)", Throwable("disconnect caller"))
-        mainHandler.removeCallbacks(mouseFlushRunnable)
-        mouseFlushScheduled = false
-        pendingDx = 0f
-        pendingDy = 0f
+        clearPendingMouseCommands()
         isUserDisconnect = true
         clearPairingSecrets()
         webSocket?.close(1000, "User disconnect")
@@ -708,10 +801,7 @@ class WebSocketClient {
      */
     fun softDisconnect(reason: String = "background idle stand-down") {
         Log.i(TAG, "softDisconnect($reason)")
-        mainHandler.removeCallbacks(mouseFlushRunnable)
-        mouseFlushScheduled = false
-        pendingDx = 0f
-        pendingDy = 0f
+        clearPendingMouseCommands()
         // Deliberately do NOT set isUserDisconnect or clearPairingSecrets.
         try {
             webSocket?.close(1000, reason)

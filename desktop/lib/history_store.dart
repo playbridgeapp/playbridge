@@ -13,6 +13,8 @@ class PlayHistoryItem {
     this.audioUrl,
     this.headers,
     this.contentType,
+    this.mediaKind,
+    this.displayDurationMs,
   });
 
   /// Primary play URL (prefer original CDN / session media, not loopback proxy).
@@ -31,6 +33,8 @@ class PlayHistoryItem {
   final Map<String, String>? headers;
 
   final String? contentType;
+  final String? mediaKind;
+  final int? displayDurationMs;
 
   bool get hasSyntheticHandoff =>
       (playlistBody != null && playlistBody!.trim().startsWith('#EXTM3U')) ||
@@ -47,6 +51,8 @@ class PlayHistoryItem {
         if (headers != null && headers!.isNotEmpty) 'headers': headers,
         if (contentType != null && contentType!.isNotEmpty)
           'contentType': contentType,
+        if (mediaKind != null && mediaKind!.isNotEmpty) 'mediaKind': mediaKind,
+        if (displayDurationMs != null) 'displayDurationMs': displayDurationMs,
       };
 
   factory PlayHistoryItem.fromJson(Map<String, dynamic> j) {
@@ -65,6 +71,8 @@ class PlayHistoryItem {
       audioUrl: j['audioUrl'] as String?,
       headers: headers,
       contentType: j['contentType'] as String?,
+      mediaKind: j['mediaKind'] as String?,
+      displayDurationMs: j['displayDurationMs'] as int?,
     );
   }
 }
@@ -105,6 +113,8 @@ class HistoryStore extends ChangeNotifier {
     String? audioUrl,
     Map<String, String>? headers,
     String? contentType,
+    String? mediaKind,
+    int? displayDurationMs,
   }) async {
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool('pb.enable_history') ?? true)) return;
@@ -136,6 +146,8 @@ class HistoryStore extends ChangeNotifier {
         audioUrl: audio != null && audio.isNotEmpty ? audio : null,
         headers: hdrs,
         contentType: contentType?.trim().isEmpty == true ? null : contentType,
+        mediaKind: mediaKind,
+        displayDurationMs: displayDurationMs,
       ),
     );
     if (_items.length > _kMax) _items.removeRange(_kMax, _items.length);

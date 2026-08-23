@@ -26,6 +26,12 @@ class MouseEventType extends $pb.ProtobufEnum {
   static const MouseEventType MOUSE_SCROLL = MouseEventType._(2, _omitEnumNames ? '' : 'MOUSE_SCROLL');
   static const MouseEventType MOUSE_DOWN = MouseEventType._(3, _omitEnumNames ? '' : 'MOUSE_DOWN');
   static const MouseEventType MOUSE_UP = MouseEventType._(4, _omitEnumNames ? '' : 'MOUSE_UP');
+  static const MouseEventType MOUSE_ZOOM = MouseEventType._(5, _omitEnumNames ? '' : 'MOUSE_ZOOM');
+  static const MouseEventType MOUSE_RESET = MouseEventType._(6, _omitEnumNames ? '' : 'MOUSE_RESET');
+  static const MouseEventType MOUSE_ROTATE = MouseEventType._(7, _omitEnumNames ? '' : 'MOUSE_ROTATE');
+  /// dx/dy are normalized viewport coordinates for subsequent zoom/rotation events;
+  /// negative coordinates clear the touch anchor.
+  static const MouseEventType MOUSE_TRANSFORM_ANCHOR = MouseEventType._(8, _omitEnumNames ? '' : 'MOUSE_TRANSFORM_ANCHOR');
 
   static const $core.List<MouseEventType> values = <MouseEventType> [
     MOUSE_MOVE,
@@ -33,9 +39,13 @@ class MouseEventType extends $pb.ProtobufEnum {
     MOUSE_SCROLL,
     MOUSE_DOWN,
     MOUSE_UP,
+    MOUSE_ZOOM,
+    MOUSE_RESET,
+    MOUSE_ROTATE,
+    MOUSE_TRANSFORM_ANCHOR,
   ];
 
-  static final $core.List<MouseEventType?> _byValue = $pb.ProtobufEnum.$_initByValueList(values, 4);
+  static final $core.List<MouseEventType?> _byValue = $pb.ProtobufEnum.$_initByValueList(values, 8);
   static MouseEventType? valueOf($core.int value) =>  value < 0 || value >= _byValue.length ? null : _byValue[value];
 
   const MouseEventType._(super.value, super.name);

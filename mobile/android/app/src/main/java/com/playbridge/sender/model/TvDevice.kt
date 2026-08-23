@@ -25,6 +25,9 @@ data class TvDevice(
     // TvCapabilityOptions. Empty until we've authed with a capability-reporting receiver.
     val players: List<String> = emptyList(),
     val browsers: List<String> = emptyList(),
+    // Per-item media presentations supported by the native receiver. Empty means
+    // a legacy receiver, which the phone treats as video-only.
+    val mediaKinds: List<String> = emptyList(),
     // New protocol-qualified model. Null is retained only so records written by older builds can
     // be decoded and migrated using the legacy booleans below.
     val protocol: CastProtocol? = null,
@@ -49,6 +52,11 @@ data class TvDevice(
             else -> CastProtocol.PLAYBRIDGE
         }
 
+    fun supportsNativeMediaKind(kind: String): Boolean =
+        resolvedProtocol != CastProtocol.PLAYBRIDGE ||
+            kind in mediaKinds ||
+            (mediaKinds.isEmpty() && kind == "video")
+
     val endpointKey: EndpointKey
         get() = EndpointKey(
             protocol = resolvedProtocol,
@@ -70,7 +78,7 @@ data class TvDevice(
     fun toSavedEndpoint(): SavedReceiverEndpoint = SavedReceiverEndpoint(
         endpoint = toReceiverEndpoint(),
         playBridgeCredentials = if (resolvedProtocol == CastProtocol.PLAYBRIDGE) {
-            PlayBridgeCredentials(token, certFingerprint, players, browsers)
+            PlayBridgeCredentials(token, certFingerprint, players, browsers, mediaKinds)
         } else {
             null
         },
@@ -93,6 +101,7 @@ data class TvDevice(
                 certFingerprint = credentials?.certFingerprint,
                 players = credentials?.players.orEmpty(),
                 browsers = credentials?.browsers.orEmpty(),
+                mediaKinds = credentials?.mediaKinds.orEmpty(),
                 protocol = endpoint.protocol,
                 addresses = endpoint.addresses,
                 isDlna = endpoint.protocol == CastProtocol.DLNA,

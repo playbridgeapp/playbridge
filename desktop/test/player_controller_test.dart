@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:playbridge_desktop/media_kind.dart';
 import 'package:playbridge_desktop/player_controller.dart';
 import 'package:playbridge_desktop/player_engine.dart';
 import 'package:playbridge_desktop/stream_proxy_server.dart';
@@ -36,7 +37,13 @@ class _FakeEngine extends PlayerEngine {
 
   @override
   Future<void> open(QueueItem item) async {
+    if (openDelay > Duration.zero) await Future<void>.delayed(openDelay);
     openCount++;
+    lastOpenPlay = true;
+    if (failuresRemaining > 0) {
+      failuresRemaining--;
+      throw StateError('open failed');
+    }
     _state = 'playing';
     notifyListeners();
   }
@@ -99,6 +106,57 @@ void main() {
   });
 
   QueueItem item(int n) => QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n');
+
+  test('mixed queue switches between timed media and static image', () async {
+    final engine = _FakeEngine();
+    final controller = PlayerController(engineForTest: engine);
+    final mixed = [
+      item(1),
+      QueueItem(
+        url: 'https://x/photo.jpg',
+        title: 'Photo',
+        declaredMediaKind: 'image',
+      ),
+      QueueItem(
+        url: 'https://x/song.mp3',
+        title: 'Song',
+        declaredMediaKind: 'audio',
+      ),
+    ];
+
+    await controller.playPlaylist(mixed, 0);
+    expect(controller.currentMediaKind, MediaKind.video);
+    expect(engine.openCount, 1);
+
+    await controller.next();
+    expect(controller.currentMediaKind, MediaKind.image);
+    expect(controller.state, 'paused');
+    expect(engine.stopCount, 1);
+
+    controller.zoomImage(2);
+    controller.panImage(40, -20);
+    controller.rotateImage(90);
+    expect(controller.imageScale, 2);
+    expect(controller.imageOffsetX, 40);
+    expect(controller.imageOffsetY, -20);
+    expect(controller.imageRotationDegrees, 90);
+
+    controller.resetImageTransform();
+    controller.setImageViewportSize(1000, 600);
+    controller.setImageTransformAnchor(0.75, 0.5);
+    controller.zoomImage(2);
+    expect(controller.imageOffsetX, -250);
+    expect(controller.imageOffsetY, 0);
+
+    await controller.next();
+    expect(controller.currentMediaKind, MediaKind.audio);
+    expect(controller.imageScale, 1);
+    expect(controller.imageOffsetX, 0);
+    expect(controller.imageOffsetY, 0);
+    expect(controller.imageRotationDegrees, 0);
+    expect(controller.state, 'playing');
+    expect(engine.openCount, 2);
+  });
 
   test('HLS preselection preference defaults off and can be changed', () {
     final c = PlayerController(engineForTest: _FakeEngine());

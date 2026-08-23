@@ -71,6 +71,13 @@ public class MessageEnvelope(
     schemaIndex = 5,
   )
   public val title: String? = null,
+  @field:WireField(
+    tag = 7,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "mediaKind",
+    schemaIndex = 6,
+  )
+  public val media_kind: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<MessageEnvelope, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -90,6 +97,7 @@ public class MessageEnvelope(
     if (position != other.position) return false
     if (duration != other.duration) return false
     if (title != other.title) return false
+    if (media_kind != other.media_kind) return false
     return true
   }
 
@@ -103,6 +111,7 @@ public class MessageEnvelope(
       result = result * 37 + (position?.hashCode() ?: 0)
       result = result * 37 + (duration?.hashCode() ?: 0)
       result = result * 37 + (title?.hashCode() ?: 0)
+      result = result * 37 + (media_kind?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -116,6 +125,7 @@ public class MessageEnvelope(
     if (position != null) result += """position=$position"""
     if (duration != null) result += """duration=$duration"""
     if (title != null) result += """title=${sanitize(title)}"""
+    if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
     return result.joinToString(prefix = "MessageEnvelope{", separator = ", ", postfix = "}")
   }
 
@@ -126,8 +136,9 @@ public class MessageEnvelope(
     position: Long? = this.position,
     duration: Long? = this.duration,
     title: String? = this.title,
+    media_kind: String? = this.media_kind,
     unknownFields: ByteString = this.unknownFields,
-  ): MessageEnvelope = MessageEnvelope(type, action, state, position, duration, title,
+  ): MessageEnvelope = MessageEnvelope(type, action, state, position, duration, title, media_kind,
       unknownFields)
 
   public companion object {
@@ -150,6 +161,7 @@ public class MessageEnvelope(
         size += ProtoAdapter.INT64.encodedSizeWithTag(4, value.position)
         size += ProtoAdapter.INT64.encodedSizeWithTag(5, value.duration)
         size += ProtoAdapter.STRING.encodedSizeWithTag(6, value.title)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.media_kind)
         return size
       }
 
@@ -162,11 +174,13 @@ public class MessageEnvelope(
         ProtoAdapter.INT64.encodeWithTag(writer, 4, value.position)
         ProtoAdapter.INT64.encodeWithTag(writer, 5, value.duration)
         ProtoAdapter.STRING.encodeWithTag(writer, 6, value.title)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.media_kind)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: MessageEnvelope) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.media_kind)
         ProtoAdapter.STRING.encodeWithTag(writer, 6, value.title)
         ProtoAdapter.INT64.encodeWithTag(writer, 5, value.duration)
         ProtoAdapter.INT64.encodeWithTag(writer, 4, value.position)
@@ -184,6 +198,7 @@ public class MessageEnvelope(
         var position: Long? = null
         var duration: Long? = null
         var title: String? = null
+        var media_kind: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
@@ -192,6 +207,7 @@ public class MessageEnvelope(
             4 -> position = ProtoAdapter.INT64.decode(reader)
             5 -> duration = ProtoAdapter.INT64.decode(reader)
             6 -> title = ProtoAdapter.STRING.decode(reader)
+            7 -> media_kind = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -202,6 +218,7 @@ public class MessageEnvelope(
           position = position,
           duration = duration,
           title = title,
+          media_kind = media_kind,
           unknownFields = unknownFields
         )
       }

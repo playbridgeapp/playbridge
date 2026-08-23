@@ -20,6 +20,8 @@ import 'history_store.dart';
 import 'keyboard_shortcuts_sheet.dart';
 import 'media_kit_initializer.dart';
 import 'media_session_bridge.dart';
+import 'media_kind.dart';
+import 'media_presentation_surface.dart';
 import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
 import 'pairing_store.dart';
@@ -27,7 +29,6 @@ import 'pair_screen.dart';
 import 'playback_osd.dart';
 import 'player_controller.dart';
 import 'player_engine.dart';
-import 'playback_surface.dart';
 import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
 import 'receiver_server.dart';
@@ -473,7 +474,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     final idx = _player.currentIndex;
     final item =
         (idx >= 0 && idx < _player.queue.length) ? _player.queue[idx] : null;
-    if (item == null || item.skipPreplay || !item.hasPrePlayMetadata) return;
+    if (item == null ||
+        item.mediaKind != MediaKind.video ||
+        item.skipPreplay ||
+        !item.hasPrePlayMetadata) {
+      return;
+    }
     _prePlayPrevVolume ??= _player.volume;
     unawaited(_player.setVolume(0));
     setState(() => _prePlayItem = item);
@@ -533,6 +539,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
             audioUrl: item.audioUrl,
             headers: item.originalHeaders ?? item.headers,
             contentType: item.contentType,
+            mediaKind: item.mediaKind.wireValue,
+            displayDurationMs: item.displayDurationMs,
           ));
         }
       }
@@ -1037,7 +1045,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                       screenMirroring,
                                                   child: Container(
                                                     color: Colors.black,
-                                                    child: PlaybackSurface(
+                                                    child:
+                                                        MediaPresentationSurface(
                                                       controller: _player,
                                                       controlsVisible:
                                                           _videoHovered ||
@@ -1092,6 +1101,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                               if (_showingVideo &&
                                                   hasMedia &&
                                                   _showStats.value &&
+                                                  _player.currentMediaKind ==
+                                                      MediaKind.video &&
                                                   _player.engine is MpvEngine)
                                                 Positioned(
                                                   top: 16,
@@ -1751,17 +1762,27 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     final pos =
         (_dragValue ?? p.positionMs.toDouble()).clamp(0.0, dur > 0 ? dur : 1.0);
     final hasDuration = dur > 0;
+    final mediaKind = p.currentMediaKind ?? MediaKind.video;
+    final isImage = mediaKind == MediaKind.image;
+    final keepCompactMusicProgress = mediaKind == MediaKind.audio;
+    final barVisible = widget.visible || keepCompactMusicProgress;
+    final showExpandedControls = widget.visible;
 
     return IgnorePointer(
-      ignoring: !widget.visible,
+      ignoring: !barVisible,
       child: AnimatedOpacity(
         duration: const Duration(milliseconds: 150),
-        opacity: widget.visible ? 1.0 : 0.0,
+        opacity: barVisible ? 1.0 : 0.0,
         child: ClipRect(
           child: BackdropFilter(
             filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
             child: Container(
-              padding: const EdgeInsets.fromLTRB(12, 18, 12, 8),
+              padding: EdgeInsets.fromLTRB(
+                12,
+                showExpandedControls ? 18 : 10,
+                12,
+                showExpandedControls ? 8 : 10,
+              ),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.4),
                 border: Border(
@@ -1771,162 +1792,175 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Scrubber
-                  Row(
-                    children: [
-                      SizedBox(
-                        width: 56,
-                        child: Text(
-                          _fmt(Duration(milliseconds: pos.toInt())),
-                          textAlign: TextAlign.right,
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white70),
+                  // Scrubber / slideshow progress
+                  if (!isImage || hasDuration)
+                    Row(
+                      children: [
+                        SizedBox(
+                          width: 56,
+                          child: Text(
+                            _fmt(Duration(milliseconds: pos.toInt())),
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.white70),
+                          ),
                         ),
-                      ),
-                      Expanded(
-                        child: ExcludeFocus(
-                          child: SliderTheme(
-                            data: SliderTheme.of(context).copyWith(
-                              trackHeight: 3,
-                              thumbShape: const RoundSliderThumbShape(
-                                  enabledThumbRadius: 6),
-                              overlayShape: const RoundSliderOverlayShape(
-                                  overlayRadius: 12),
-                            ),
-                            child: Slider(
-                              min: 0,
-                              max: hasDuration ? dur : 1,
-                              value: pos,
-                              onChanged: hasDuration
-                                  ? (v) => setState(() => _dragValue = v)
-                                  : null,
-                              onChangeEnd: hasDuration
-                                  ? (v) {
-                                      p.seek(Duration(milliseconds: v.toInt()));
-                                      setState(() => _dragValue = null);
-                                    }
-                                  : null,
+                        Expanded(
+                          child: ExcludeFocus(
+                            child: SliderTheme(
+                              data: SliderTheme.of(context).copyWith(
+                                trackHeight: 3,
+                                thumbShape: const RoundSliderThumbShape(
+                                    enabledThumbRadius: 6),
+                                overlayShape: const RoundSliderOverlayShape(
+                                    overlayRadius: 12),
+                              ),
+                              child: Slider(
+                                min: 0,
+                                max: hasDuration ? dur : 1,
+                                value: pos,
+                                onChanged: hasDuration && !isImage
+                                    ? (v) => setState(() => _dragValue = v)
+                                    : null,
+                                onChangeEnd: hasDuration && !isImage
+                                    ? (v) {
+                                        p.seek(
+                                            Duration(milliseconds: v.toInt()));
+                                        setState(() => _dragValue = null);
+                                      }
+                                    : null,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      SizedBox(
-                        width: 56,
-                        child: Text(
-                          _fmt(Duration(milliseconds: p.durationMs)),
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.white70),
+                        SizedBox(
+                          width: 56,
+                          child: Text(
+                            _fmt(Duration(milliseconds: p.durationMs)),
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.white70),
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  // Buttons
-                  Row(
-                    children: [
-                      if (widget.showQueueControls)
+                      ],
+                    ),
+                  // Music collapses to the progress surface instead of disappearing.
+                  if (showExpandedControls)
+                    Row(
+                      children: [
+                        if (widget.showQueueControls)
+                          IconButton(
+                            tooltip: 'Previous',
+                            icon: const Icon(Icons.skip_previous),
+                            onPressed:
+                                p.hasPrevious ? () => p.previous() : null,
+                          ),
                         IconButton(
-                          tooltip: 'Previous',
-                          icon: const Icon(Icons.skip_previous),
-                          onPressed: p.hasPrevious ? () => p.previous() : null,
+                          tooltip: p.state == 'playing' ? 'Pause' : 'Play',
+                          icon: Icon(
+                            p.state == 'playing'
+                                ? Icons.pause
+                                : Icons.play_arrow,
+                          ),
+                          onPressed: !isImage || hasDuration
+                              ? () =>
+                                  p.state == 'playing' ? p.pause() : p.resume()
+                              : null,
                         ),
-                      IconButton(
-                        tooltip: p.state == 'playing' ? 'Pause' : 'Play',
-                        icon: Icon(
-                          p.state == 'playing' ? Icons.pause : Icons.play_arrow,
-                        ),
-                        onPressed: () =>
-                            p.state == 'playing' ? p.pause() : p.resume(),
-                      ),
-                      IconButton(
-                        tooltip: 'Stop',
-                        icon: const Icon(Icons.stop),
-                        onPressed: () => p.stop(),
-                      ),
-                      if (widget.showQueueControls)
                         IconButton(
-                          tooltip: 'Next',
-                          icon: const Icon(Icons.skip_next),
-                          onPressed: p.hasNext ? () => p.next() : null,
+                          tooltip: 'Stop',
+                          icon: const Icon(Icons.stop),
+                          onPressed: () => p.stop(),
                         ),
-                      const SizedBox(width: 12),
-                      if (widget.showQueueControls)
-                        Text(
-                          '${p.currentIndex + 1} / ${p.queue.length}',
-                          style: const TextStyle(color: Colors.white70),
-                        ),
-                      const Spacer(),
-                      if (p.engineType == EngineType.mpvInternal) ...[
-                        if (Platform.isLinux)
-                          _VideoOutputMenuButton(
+                        if (widget.showQueueControls)
+                          IconButton(
+                            tooltip: 'Next',
+                            icon: const Icon(Icons.skip_next),
+                            onPressed: p.hasNext ? () => p.next() : null,
+                          ),
+                        const SizedBox(width: 12),
+                        if (widget.showQueueControls)
+                          Text(
+                            '${p.currentIndex + 1} / ${p.queue.length}',
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                        const Spacer(),
+                        if (p.engineType == EngineType.mpvInternal &&
+                            !isImage) ...[
+                          if (Platform.isLinux && mediaKind == MediaKind.video)
+                            _VideoOutputMenuButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
+                          _AudioMenuButton(
                             player: p,
                             onOpened: widget.onMenuOpened,
                             onClosed: widget.onMenuClosed,
                           ),
-                        _AudioMenuButton(
-                          player: p,
-                          onOpened: widget.onMenuOpened,
-                          onClosed: widget.onMenuClosed,
+                          if (mediaKind == MediaKind.video)
+                            _SubtitleMenuButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
+                        ],
+                        IconButton(
+                          tooltip: p.isCurrentItemProxied
+                              ? 'Switch to direct playback'
+                              : 'Route through proxy',
+                          icon: Icon(
+                            p.isCurrentItemProxied
+                                ? Icons.shield
+                                : Icons.shield_outlined,
+                            color: p.isCurrentItemProxied
+                                ? Colors.tealAccent
+                                : null,
+                          ),
+                          onPressed:
+                              hasMedia && !isImage && !p.proxyToggleInProgress
+                                  ? widget.onToggleProxy
+                                  : null,
                         ),
-                        _SubtitleMenuButton(
-                          player: p,
-                          onOpened: widget.onMenuOpened,
-                          onClosed: widget.onMenuClosed,
+                        if (widget.showQueueControls)
+                          IconButton(
+                            tooltip: widget.playlistOpen
+                                ? 'Hide playlist'
+                                : 'Show playlist',
+                            icon: Icon(
+                              widget.playlistOpen
+                                  ? Icons.playlist_remove
+                                  : Icons.playlist_play,
+                            ),
+                            onPressed: widget.onTogglePlaylist,
+                          ),
+                        if (!isImage)
+                          IconButton(
+                            tooltip: 'Play in external player (mpv/VLC)',
+                            icon: const Icon(Icons.open_in_new),
+                            onPressed: hasMedia
+                                ? () async {
+                                    if (p.state == 'playing') {
+                                      p.pause();
+                                    }
+                                    final currentItem = p.queue[p.currentIndex];
+                                    await _openInExternalPlayer(
+                                        context, currentItem);
+                                  }
+                                : null,
+                          ),
+                        IconButton(
+                          tooltip: widget.isFullScreen
+                              ? 'Exit fullscreen'
+                              : 'Fullscreen',
+                          icon: Icon(
+                            widget.isFullScreen
+                                ? Icons.fullscreen_exit
+                                : Icons.fullscreen,
+                          ),
+                          onPressed: widget.onToggleFullScreen,
                         ),
                       ],
-                      IconButton(
-                        tooltip: p.isCurrentItemProxied
-                            ? 'Switch to direct playback'
-                            : 'Route through proxy',
-                        icon: Icon(
-                          p.isCurrentItemProxied
-                              ? Icons.shield
-                              : Icons.shield_outlined,
-                          color:
-                              p.isCurrentItemProxied ? Colors.tealAccent : null,
-                        ),
-                        onPressed: hasMedia && !p.proxyToggleInProgress
-                            ? widget.onToggleProxy
-                            : null,
-                      ),
-                      if (widget.showQueueControls)
-                        IconButton(
-                          tooltip: widget.playlistOpen
-                              ? 'Hide playlist'
-                              : 'Show playlist',
-                          icon: Icon(
-                            widget.playlistOpen
-                                ? Icons.playlist_remove
-                                : Icons.playlist_play,
-                          ),
-                          onPressed: widget.onTogglePlaylist,
-                        ),
-                      IconButton(
-                        tooltip: 'Play in external player (mpv/VLC)',
-                        icon: const Icon(Icons.open_in_new),
-                        onPressed: hasMedia
-                            ? () async {
-                                if (p.state == 'playing') {
-                                  p.pause();
-                                }
-                                final currentItem = p.queue[p.currentIndex];
-                                await _openInExternalPlayer(
-                                    context, currentItem);
-                              }
-                            : null,
-                      ),
-                      IconButton(
-                        tooltip: widget.isFullScreen
-                            ? 'Exit fullscreen'
-                            : 'Fullscreen',
-                        icon: Icon(
-                          widget.isFullScreen
-                              ? Icons.fullscreen_exit
-                              : Icons.fullscreen,
-                        ),
-                        onPressed: widget.onToggleFullScreen,
-                      ),
-                    ],
-                  ),
+                    ),
                 ],
               ),
             ),

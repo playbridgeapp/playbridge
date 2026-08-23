@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 data class TvCapabilities(
     val players: List<String>,
     val browsers: List<String>,
+    val mediaKinds: List<String> = listOf("video", "audio", "image"),
     val screenMirrorWebRtc: Boolean = true,
 )
 
@@ -31,7 +32,12 @@ object TvCapabilityProvider {
             add("webview") // System WebView — built into the player app, always available.
             if (isGeckoInstalled(context)) add("gecko")
         }
-        return TvCapabilities(players = PLAYERS, browsers = browsers, screenMirrorWebRtc = true)
+        return TvCapabilities(
+            players = PLAYERS,
+            browsers = browsers,
+            mediaKinds = listOf("video", "audio", "image"),
+            screenMirrorWebRtc = true,
+        )
     }
 
     private fun isGeckoInstalled(context: Context): Boolean = try {

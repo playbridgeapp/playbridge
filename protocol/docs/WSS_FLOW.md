@@ -193,7 +193,13 @@ engine/browser absent from those arrays.
 `PlayPayload.headers`, subtitle URLs, media URLs, and bearer tokens may contain credentials. They
 must not be logged. `startPositionMs`, `status.position`, and `status.duration` are milliseconds.
 A one-item cast still uses `playlist`; the legacy `play` action is accepted by some receivers but
-is not part of the canonical sender contract.
+is not part of the canonical sender contract. Each playlist item may independently declare
+`mediaKind` as `video`, `audio`, or `image`; mixed-kind playlists retain one queue and receiver
+`player` context while changing presentation. Omitted kinds are inferred. For images, a positive
+`displayDurationMs` runs a pausable auto-advance timer, while omitted or zero duration keeps the
+image visible until explicit navigation. Receivers advertise supported kinds through
+`auth_response.mediaKinds` and echo the resolved per-item kind in `status` and
+`playlist_status`.
 
 ### Receiver to sender
 

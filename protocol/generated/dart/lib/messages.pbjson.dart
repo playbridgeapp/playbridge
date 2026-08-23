@@ -23,13 +23,19 @@ const MouseEventType$json = {
     {'1': 'MOUSE_SCROLL', '2': 2},
     {'1': 'MOUSE_DOWN', '2': 3},
     {'1': 'MOUSE_UP', '2': 4},
+    {'1': 'MOUSE_ZOOM', '2': 5},
+    {'1': 'MOUSE_RESET', '2': 6},
+    {'1': 'MOUSE_ROTATE', '2': 7},
+    {'1': 'MOUSE_TRANSFORM_ANCHOR', '2': 8},
   ],
 };
 
 /// Descriptor for `MouseEventType`. Decode as a `google.protobuf.EnumDescriptorProto`.
 final $typed_data.Uint8List mouseEventTypeDescriptor = $convert.base64Decode(
     'Cg5Nb3VzZUV2ZW50VHlwZRIOCgpNT1VTRV9NT1ZFEAASDwoLTU9VU0VfQ0xJQ0sQARIQCgxNT1'
-    'VTRV9TQ1JPTEwQAhIOCgpNT1VTRV9ET1dOEAMSDAoITU9VU0VfVVAQBA==');
+    'VTRV9TQ1JPTEwQAhIOCgpNT1VTRV9ET1dOEAMSDAoITU9VU0VfVVAQBBIOCgpNT1VTRV9aT09N'
+    'EAUSDwoLTU9VU0VfUkVTRVQQBhIQCgxNT1VTRV9ST1RBVEUQBxIaChZNT1VTRV9UUkFOU0ZPUk'
+    '1fQU5DSE9SEAg=');
 
 @$core.Deprecated('Use messageEnvelopeDescriptor instead')
 const MessageEnvelope$json = {
@@ -41,6 +47,7 @@ const MessageEnvelope$json = {
     {'1': 'position', '3': 4, '4': 1, '5': 3, '9': 2, '10': 'position', '17': true},
     {'1': 'duration', '3': 5, '4': 1, '5': 3, '9': 3, '10': 'duration', '17': true},
     {'1': 'title', '3': 6, '4': 1, '5': 9, '9': 4, '10': 'title', '17': true},
+    {'1': 'media_kind', '3': 7, '4': 1, '5': 9, '9': 5, '10': 'mediaKind', '17': true},
   ],
   '8': [
     {'1': '_action'},
@@ -48,6 +55,7 @@ const MessageEnvelope$json = {
     {'1': '_position'},
     {'1': '_duration'},
     {'1': '_title'},
+    {'1': '_media_kind'},
   ],
 };
 
@@ -56,8 +64,9 @@ final $typed_data.Uint8List messageEnvelopeDescriptor = $convert.base64Decode(
     'Cg9NZXNzYWdlRW52ZWxvcGUSEgoEdHlwZRgBIAEoCVIEdHlwZRIbCgZhY3Rpb24YAiABKAlIAF'
     'IGYWN0aW9uiAEBEhkKBXN0YXRlGAMgASgJSAFSBXN0YXRliAEBEh8KCHBvc2l0aW9uGAQgASgD'
     'SAJSCHBvc2l0aW9uiAEBEh8KCGR1cmF0aW9uGAUgASgDSANSCGR1cmF0aW9uiAEBEhkKBXRpdG'
-    'xlGAYgASgJSARSBXRpdGxliAEBQgkKB19hY3Rpb25CCAoGX3N0YXRlQgsKCV9wb3NpdGlvbkIL'
-    'CglfZHVyYXRpb25CCAoGX3RpdGxl');
+    'xlGAYgASgJSARSBXRpdGxliAEBEiIKCm1lZGlhX2tpbmQYByABKAlIBVIJbWVkaWFLaW5kiAEB'
+    'QgkKB19hY3Rpb25CCAoGX3N0YXRlQgsKCV9wb3NpdGlvbkILCglfZHVyYXRpb25CCAoGX3RpdG'
+    'xlQg0KC19tZWRpYV9raW5k');
 
 @$core.Deprecated('Use seriesEpisodeRefDescriptor instead')
 const SeriesEpisodeRef$json = {
@@ -97,6 +106,11 @@ const VisualMetadata$json = {
     {'1': 'episode_title', '3': 14, '4': 1, '5': 9, '9': 9, '10': 'episodeTitle', '17': true},
     {'1': 'imdb_id', '3': 15, '4': 1, '5': 9, '9': 10, '10': 'imdbId', '17': true},
     {'1': 'tmdb_id', '3': 16, '4': 1, '5': 9, '9': 11, '10': 'tmdbId', '17': true},
+    {'1': 'artist', '3': 17, '4': 1, '5': 9, '9': 12, '10': 'artist', '17': true},
+    {'1': 'album', '3': 18, '4': 1, '5': 9, '9': 13, '10': 'album', '17': true},
+    {'1': 'album_artist', '3': 19, '4': 1, '5': 9, '9': 14, '10': 'albumArtist', '17': true},
+    {'1': 'artwork_url', '3': 20, '4': 1, '5': 9, '9': 15, '10': 'artworkUrl', '17': true},
+    {'1': 'track_number', '3': 21, '4': 1, '5': 5, '9': 16, '10': 'trackNumber', '17': true},
   ],
   '8': [
     {'1': '_year'},
@@ -111,6 +125,11 @@ const VisualMetadata$json = {
     {'1': '_episode_title'},
     {'1': '_imdb_id'},
     {'1': '_tmdb_id'},
+    {'1': '_artist'},
+    {'1': '_album'},
+    {'1': '_album_artist'},
+    {'1': '_artwork_url'},
+    {'1': '_track_number'},
   ],
 };
 
@@ -124,10 +143,15 @@ final $typed_data.Uint8List visualMetadataDescriptor = $convert.base64Decode(
     'JfdXJsGAogASgJSAVSCXBvc3RlclVybIgBARIeCghsb2dvX3VybBgLIAEoCUgGUgdsb2dvVXJs'
     'iAEBEhsKBnNlYXNvbhgMIAEoBUgHUgZzZWFzb26IAQESHQoHZXBpc29kZRgNIAEoBUgIUgdlcG'
     'lzb2RliAEBEigKDWVwaXNvZGVfdGl0bGUYDiABKAlICVIMZXBpc29kZVRpdGxliAEBEhwKB2lt'
-    'ZGJfaWQYDyABKAlIClIGaW1kYklkiAEBEhwKB3RtZGJfaWQYECABKAlIC1IGdG1kYklkiAEBQg'
-    'cKBV95ZWFyQgkKB19yYXRpbmdCCgoIX3J1bnRpbWVCCwoJX292ZXJ2aWV3Qg8KDV9iYWNrZHJv'
-    'cF91cmxCDQoLX3Bvc3Rlcl91cmxCCwoJX2xvZ29fdXJsQgkKB19zZWFzb25CCgoIX2VwaXNvZG'
-    'VCEAoOX2VwaXNvZGVfdGl0bGVCCgoIX2ltZGJfaWRCCgoIX3RtZGJfaWQ=');
+    'ZGJfaWQYDyABKAlIClIGaW1kYklkiAEBEhwKB3RtZGJfaWQYECABKAlIC1IGdG1kYklkiAEBEh'
+    'sKBmFydGlzdBgRIAEoCUgMUgZhcnRpc3SIAQESGQoFYWxidW0YEiABKAlIDVIFYWxidW2IAQES'
+    'JgoMYWxidW1fYXJ0aXN0GBMgASgJSA5SC2FsYnVtQXJ0aXN0iAEBEiQKC2FydHdvcmtfdXJsGB'
+    'QgASgJSA9SCmFydHdvcmtVcmyIAQESJgoMdHJhY2tfbnVtYmVyGBUgASgFSBBSC3RyYWNrTnVt'
+    'YmVyiAEBQgcKBV95ZWFyQgkKB19yYXRpbmdCCgoIX3J1bnRpbWVCCwoJX292ZXJ2aWV3Qg8KDV'
+    '9iYWNrZHJvcF91cmxCDQoLX3Bvc3Rlcl91cmxCCwoJX2xvZ29fdXJsQgkKB19zZWFzb25CCgoI'
+    'X2VwaXNvZGVCEAoOX2VwaXNvZGVfdGl0bGVCCgoIX2ltZGJfaWRCCgoIX3RtZGJfaWRCCQoHX2'
+    'FydGlzdEIICgZfYWxidW1CDwoNX2FsYnVtX2FydGlzdEIOCgxfYXJ0d29ya191cmxCDwoNX3Ry'
+    'YWNrX251bWJlcg==');
 
 @$core.Deprecated('Use subtitleResourceDescriptor instead')
 const SubtitleResource$json = {
@@ -183,6 +207,8 @@ const PlayPayload$json = {
     {'1': 'start_position_ms', '3': 14, '4': 1, '5': 3, '9': 10, '10': 'startPositionMs', '17': true},
     {'1': 'allowed_private_origins', '3': 15, '4': 3, '5': 9, '10': 'allowedPrivateOrigins'},
     {'1': 'subtitle_resources', '3': 16, '4': 3, '5': 11, '6': '.playbridge.SubtitleResource', '10': 'subtitleResources'},
+    {'1': 'media_kind', '3': 17, '4': 1, '5': 9, '9': 11, '10': 'mediaKind', '17': true},
+    {'1': 'display_duration_ms', '3': 18, '4': 1, '5': 3, '9': 12, '10': 'displayDurationMs', '17': true},
   ],
   '3': [PlayPayload_HeadersEntry$json],
   '8': [
@@ -197,6 +223,8 @@ const PlayPayload$json = {
     {'1': '_visual_metadata'},
     {'1': '_binge_group'},
     {'1': '_start_position_ms'},
+    {'1': '_media_kind'},
+    {'1': '_display_duration_ms'},
   ],
 };
 
@@ -226,12 +254,15 @@ final $typed_data.Uint8List playPayloadDescriptor = $convert.base64Decode(
     'JpbmdlR3JvdXCIAQESLwoRc3RhcnRfcG9zaXRpb25fbXMYDiABKANIClIPc3RhcnRQb3NpdGlv'
     'bk1ziAEBEjYKF2FsbG93ZWRfcHJpdmF0ZV9vcmlnaW5zGA8gAygJUhVhbGxvd2VkUHJpdmF0ZU'
     '9yaWdpbnMSSwoSc3VidGl0bGVfcmVzb3VyY2VzGBAgAygLMhwucGxheWJyaWRnZS5TdWJ0aXRs'
-    'ZVJlc291cmNlUhFzdWJ0aXRsZVJlc291cmNlcxo6CgxIZWFkZXJzRW50cnkSEAoDa2V5GAEgAS'
-    'gJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AUIICgZfdGl0bGVCDwoNX2NvbnRlbnRf'
-    'dHlwZUIOCgxfZGV0ZWN0ZWRfYnlCDgoMX3BsYXllcl9tb2RlQhsKGV9wcmVmZXJyZWRfYXVkaW'
-    '9fbGFuZ3VhZ2VCHgocX3ByZWZlcnJlZF9zdWJ0aXRsZV9sYW5ndWFnZUIYChZfZGVmYXVsdF92'
-    'aWRlb19xdWFsaXR5QhcKFV9tYXhfYml0cmF0ZV9jYXBfbWJwc0ISChBfdmlzdWFsX21ldGFkYX'
-    'RhQg4KDF9iaW5nZV9ncm91cEIUChJfc3RhcnRfcG9zaXRpb25fbXM=');
+    'ZVJlc291cmNlUhFzdWJ0aXRsZVJlc291cmNlcxIiCgptZWRpYV9raW5kGBEgASgJSAtSCW1lZG'
+    'lhS2luZIgBARIzChNkaXNwbGF5X2R1cmF0aW9uX21zGBIgASgDSAxSEWRpc3BsYXlEdXJhdGlv'
+    'bk1ziAEBGjoKDEhlYWRlcnNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCV'
+    'IFdmFsdWU6AjgBQggKBl90aXRsZUIPCg1fY29udGVudF90eXBlQg4KDF9kZXRlY3RlZF9ieUIO'
+    'CgxfcGxheWVyX21vZGVCGwoZX3ByZWZlcnJlZF9hdWRpb19sYW5ndWFnZUIeChxfcHJlZmVycm'
+    'VkX3N1YnRpdGxlX2xhbmd1YWdlQhgKFl9kZWZhdWx0X3ZpZGVvX3F1YWxpdHlCFwoVX21heF9i'
+    'aXRyYXRlX2NhcF9tYnBzQhIKEF92aXN1YWxfbWV0YWRhdGFCDgoMX2JpbmdlX2dyb3VwQhQKEl'
+    '9zdGFydF9wb3NpdGlvbl9tc0INCgtfbWVkaWFfa2luZEIWChRfZGlzcGxheV9kdXJhdGlvbl9t'
+    'cw==');
 
 @$core.Deprecated('Use playlistPayloadDescriptor instead')
 const PlaylistPayload$json = {
@@ -361,9 +392,11 @@ const StatusMessage$json = {
     {'1': 'position', '3': 3, '4': 1, '5': 3, '10': 'position'},
     {'1': 'duration', '3': 4, '4': 1, '5': 3, '10': 'duration'},
     {'1': 'title', '3': 5, '4': 1, '5': 9, '9': 0, '10': 'title', '17': true},
+    {'1': 'media_kind', '3': 6, '4': 1, '5': 9, '9': 1, '10': 'mediaKind', '17': true},
   ],
   '8': [
     {'1': '_title'},
+    {'1': '_media_kind'},
   ],
 };
 
@@ -371,7 +404,8 @@ const StatusMessage$json = {
 final $typed_data.Uint8List statusMessageDescriptor = $convert.base64Decode(
     'Cg1TdGF0dXNNZXNzYWdlEhIKBHR5cGUYASABKAlSBHR5cGUSFAoFc3RhdGUYAiABKAlSBXN0YX'
     'RlEhoKCHBvc2l0aW9uGAMgASgDUghwb3NpdGlvbhIaCghkdXJhdGlvbhgEIAEoA1IIZHVyYXRp'
-    'b24SGQoFdGl0bGUYBSABKAlIAFIFdGl0bGWIAQFCCAoGX3RpdGxl');
+    'b24SGQoFdGl0bGUYBSABKAlIAFIFdGl0bGWIAQESIgoKbWVkaWFfa2luZBgGIAEoCUgBUgltZW'
+    'RpYUtpbmSIAQFCCAoGX3RpdGxlQg0KC19tZWRpYV9raW5k');
 
 @$core.Deprecated('Use contextMessageDescriptor instead')
 const ContextMessage$json = {
@@ -393,13 +427,18 @@ const PlaylistItemInfo$json = {
   '2': [
     {'1': 'index', '3': 1, '4': 1, '5': 5, '10': 'index'},
     {'1': 'title', '3': 2, '4': 1, '5': 9, '10': 'title'},
+    {'1': 'media_kind', '3': 3, '4': 1, '5': 9, '9': 0, '10': 'mediaKind', '17': true},
+  ],
+  '8': [
+    {'1': '_media_kind'},
   ],
 };
 
 /// Descriptor for `PlaylistItemInfo`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List playlistItemInfoDescriptor = $convert.base64Decode(
     'ChBQbGF5bGlzdEl0ZW1JbmZvEhQKBWluZGV4GAEgASgFUgVpbmRleBIUCgV0aXRsZRgCIAEoCV'
-    'IFdGl0bGU=');
+    'IFdGl0bGUSIgoKbWVkaWFfa2luZBgDIAEoCUgAUgltZWRpYUtpbmSIAQFCDQoLX21lZGlhX2tp'
+    'bmQ=');
 
 @$core.Deprecated('Use playlistStatusMessageDescriptor instead')
 const PlaylistStatusMessage$json = {
@@ -443,10 +482,15 @@ const AuthResponse$json = {
     {'1': 'success', '3': 2, '4': 1, '5': 8, '10': 'success'},
     {'1': 'token', '3': 3, '4': 1, '5': 9, '9': 0, '10': 'token', '17': true},
     {'1': 'cert_fingerprint', '3': 4, '4': 1, '5': 9, '9': 1, '10': 'certFingerprint', '17': true},
+    {'1': 'players', '3': 5, '4': 3, '5': 9, '10': 'players'},
+    {'1': 'browsers', '3': 6, '4': 3, '5': 9, '10': 'browsers'},
+    {'1': 'screen_mirror_web_rtc', '3': 7, '4': 1, '5': 8, '9': 2, '10': 'screenMirrorWebRtc', '17': true},
+    {'1': 'media_kinds', '3': 8, '4': 3, '5': 9, '10': 'mediaKinds'},
   ],
   '8': [
     {'1': '_token'},
     {'1': '_cert_fingerprint'},
+    {'1': '_screen_mirror_web_rtc'},
   ],
 };
 
@@ -454,8 +498,11 @@ const AuthResponse$json = {
 final $typed_data.Uint8List authResponseDescriptor = $convert.base64Decode(
     'CgxBdXRoUmVzcG9uc2USEgoEdHlwZRgBIAEoCVIEdHlwZRIYCgdzdWNjZXNzGAIgASgIUgdzdW'
     'NjZXNzEhkKBXRva2VuGAMgASgJSABSBXRva2VuiAEBEi4KEGNlcnRfZmluZ2VycHJpbnQYBCAB'
-    'KAlIAVIPY2VydEZpbmdlcnByaW50iAEBQggKBl90b2tlbkITChFfY2VydF9maW5nZXJwcmludA'
-    '==');
+    'KAlIAVIPY2VydEZpbmdlcnByaW50iAEBEhgKB3BsYXllcnMYBSADKAlSB3BsYXllcnMSGgoIYn'
+    'Jvd3NlcnMYBiADKAlSCGJyb3dzZXJzEjYKFXNjcmVlbl9taXJyb3Jfd2ViX3J0YxgHIAEoCEgC'
+    'UhJzY3JlZW5NaXJyb3JXZWJSdGOIAQESHwoLbWVkaWFfa2luZHMYCCADKAlSCm1lZGlhS2luZH'
+    'NCCAoGX3Rva2VuQhMKEV9jZXJ0X2ZpbmdlcnByaW50QhgKFl9zY3JlZW5fbWlycm9yX3dlYl9y'
+    'dGM=');
 
 @$core.Deprecated('Use pairingRequestMessageDescriptor instead')
 const PairingRequestMessage$json = {

@@ -101,8 +101,11 @@ components:
       contentType: application/octet-stream
       description: |
         Exactly 9 bytes: byte 0 is event type (0 move, 1 click, 2 scroll,
-        3 down, 4 up); bytes 1..4 are dx as IEEE-754 float32 big-endian;
-        bytes 5..8 are dy as IEEE-754 float32 big-endian.
+        3 down, 4 up, 5 zoom, 6 reset, 7 rotate, 8 transform anchor); bytes 1..4
+        are dx as IEEE-754 float32 big-endian (relative scale for zoom, degrees
+        for rotate, normalized x for transform anchor); bytes 5..8 are dy as
+        IEEE-754 float32 big-endian (normalized y for transform anchor). Anchor
+        coordinates are normalized to 0..1; negative x/y clears the touch anchor.
       payload:
         type: string
         format: binary
@@ -349,6 +352,9 @@ components:
           type: array
           items: { type: string }
         screenMirrorWebRtc: { type: boolean, default: false }
+        mediaKinds:
+          type: array
+          items: { enum: [video, audio, image] }
       additionalProperties: false
     PairingRequest:
       deprecated: true
@@ -426,6 +432,9 @@ components:
           type: array
           items: { type: string }
         screenMirrorWebRtc: { type: boolean, default: false }
+        mediaKinds:
+          type: array
+          items: { enum: [video, audio, image] }
       additionalProperties: false
     CommandEnvelope:
       type: object
@@ -637,6 +646,14 @@ components:
           maxItems: 16
           items: { $ref: '#/components/schemas/SubtitleResource' }
           default: []
+        mediaKind:
+          type: [string, 'null']
+          enum: [video, audio, image, null]
+          description: Per-item presentation kind. Null or omitted asks the receiver to infer it.
+        displayDurationMs:
+          type: [integer, 'null']
+          minimum: 0
+          description: For image items, a positive display time enables timed auto-advance; null or zero waits for navigation.
         detectedBy: { type: [string, 'null'] }
         playerMode: { type: [string, 'null'] }
         preferredAudioLanguage: { type: [string, 'null'] }
@@ -707,6 +724,11 @@ components:
         episodeTitle: { type: [string, 'null'] }
         imdbId: { type: [string, 'null'] }
         tmdbId: { type: [string, 'null'] }
+        artist: { type: [string, 'null'] }
+        album: { type: [string, 'null'] }
+        albumArtist: { type: [string, 'null'] }
+        artworkUrl: { type: [string, 'null'] }
+        trackNumber: { type: [integer, 'null'], minimum: 0 }
       additionalProperties: false
     Status:
       type: object
@@ -717,6 +739,7 @@ components:
         position: { type: integer, minimum: 0, description: Milliseconds. }
         duration: { type: integer, minimum: 0, description: Milliseconds; 0 when unknown or live. }
         title: { type: [string, 'null'] }
+        mediaKind: { type: [string, 'null'], enum: [video, audio, image, null] }
       additionalProperties: false
     Context:
       type: object
@@ -780,6 +803,7 @@ components:
         episode: { type: [integer, 'null'], minimum: 0 }
         imdbId: { type: [string, 'null'] }
         bingeGroup: { type: [string, 'null'] }
+        mediaKind: { type: [string, 'null'], enum: [video, audio, image, null] }
       additionalProperties: false
     Tracks:
       type: object
