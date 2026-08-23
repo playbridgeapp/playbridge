@@ -5,6 +5,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [0.13.0] — 2026-08-11 (versionCode 223)
 
+> **Works best together**: Screen mirroring, mixed-media playlists, and the skip pre-play preference are cross-device features introduced in this coordinated release. Use PlayBridge TV Player 0.13.0+ and Desktop 0.13.0+ on the other side for full support.
+
 ### Added
 - **Screen mirroring**: Mirror the phone to compatible PlayBridge TV and Desktop receivers over WebRTC with H.264 video, optional playback audio, orientation-aware sizing, and selectable quality limits. Google Cast and DLNA receivers can receive the same capture as a video-only H.264/MPEG-TS live stream.
 - **Consent-gated page casting**: Cast the page you are browsing to linked TV/Desktop receivers with per-site consent prompts, a dedicated consent settings screen, and richer page media/subtitle metadata shared over the protocol.
