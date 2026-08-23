@@ -7,9 +7,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **WebRTC screen mirroring**: Receive H.264 phone screen mirrors with lifecycle-safe rendering, orientation-aware video, capability advertisement, and validated signaling.
+- **Mixed-media playlists**: Play combined audio/video/image playlists from phone senders with a dedicated presentation surface for image slides.
+- **Page casting playback policy**: Enforce sender page playback and subtitle resource policies when casting linked browser pages.
+- **Skip pre-play preference**: Honor the skip pre-play cast preference when loading casts from senders.
 
 ### Changed
 - **Release optimization**: Enable R8 code and resource optimization for smaller, optimized FOSS and Play release builds.
+- **Compact progress visibility**: Keep the playback progress bar visible in the compact player controls overlay.
+
+### Fixed
+- **Remote pointer input**: Smooth high-frequency pointer input and anchor image transforms to the touch midpoint during remote-control sessions.
 
 ### Security
 - **Persisted pairing tokens**: Store paired-device credentials as SHA-256 digests, migrate compatible legacy records, and refresh active authentication state after pairing changes.
