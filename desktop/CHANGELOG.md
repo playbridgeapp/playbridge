@@ -2,7 +2,9 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.9.0+30] — 2026-08-11
+## [0.13.0+31] — 2026-08-11
+
+> **Works best together**: Screen mirroring, mixed-media playlists, and the skip pre-play preference are cross-device features introduced in this coordinated release. Use PlayBridge Phone 0.13.0+ and TV Player 0.13.0+ on the other side for full support.
 
 ### Added
 - **Android screen mirroring**: Receive H.264 WebRTC screen mirrors from Android phones with lifecycle-safe signaling and correctly fitted portrait or landscape video.
