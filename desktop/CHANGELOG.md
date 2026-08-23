@@ -7,12 +7,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Android screen mirroring**: Receive H.264 WebRTC screen mirrors from Android phones with lifecycle-safe signaling and correctly fitted portrait or landscape video.
 - **Native PlayBridge receiver runtime**: Use the secure Rust-backed TLS/WSS receiver with SAS pairing, persisted credentials, typed commands, and integrated pairing UI.
+- **Mixed-media playlists**: Play combined audio/video/image playlists with a dedicated media presentation surface, plus history and favorites support for playlist items.
+- **Skip pre-play preference**: Honor the sender's skip pre-play cast preference when loading playback requests.
 
 ### Changed
 - **Google Cast sessions**: Use persistent Cast sessions and the shared CAF receiver, with resilient receiver refresh, replacement loads, and serialized media operations.
+- **Page media request policy**: Enforce page-casting network policy through the playback request preparer, receiver server, and stream proxy upstream fetchers.
+- **Compact progress visibility**: Keep the playback progress bar visible in the compact player view.
 
 ### Fixed
 - **Low-latency HLS casting**: Cast demuxed LL-HLS streams through synthetic master playlists so receivers load the selected audio and video renditions reliably.
+- **Remote pointer input**: Smooth high-frequency pointer input and anchor image transforms to the touch midpoint during remote-control sessions.
 
 ## [0.8.1+29] — 2026-07-19
 
