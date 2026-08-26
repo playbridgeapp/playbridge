@@ -51,6 +51,14 @@ Future<String> resolveHlsMaster(
     if (body == null) return url;
     if (!body.contains('#EXTM3U')) return url; // not an HLS playlist at all
 
+    // Keep demuxed masters intact so mpv can expose every audio rendition and
+    // manage video/audio synchronization itself. Collapsing these masters to a
+    // video variant silently discards their EXT-X-MEDIA audio tracks.
+    if (_hasAudioRenditions(body)) {
+      debugPrint('[hls] master has audio renditions, keeping original URL');
+      return url;
+    }
+
     final variants = _parseMaster(body, uri);
     if (variants.isEmpty) {
       return url; // media playlist, or no variants → leave it
@@ -122,6 +130,16 @@ class _Variant {
                   codecs.toLowerCase().contains('hvc1')
               ? 'hevc'
               : 'other';
+}
+
+bool _hasAudioRenditions(String body) {
+  for (final line in const LineSplitter().convert(body)) {
+    final trimmed = line.trim();
+    if (!trimmed.startsWith('#EXT-X-MEDIA:')) continue;
+    final attrs = trimmed.substring('#EXT-X-MEDIA:'.length);
+    if (_attr(attrs, 'TYPE')?.toUpperCase() == 'AUDIO') return true;
+  }
+  return false;
 }
 
 /// Parses `#EXT-X-STREAM-INF` variant entries out of a master playlist.
