@@ -41,7 +41,7 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Project | Path | Notes |
 |---|---|---|
 | Android phone | `mobile/android/` | Kotlin, Compose, GeckoView; Gradle modules `:app` and `:shared` |
-| Android TV | `tv/android/` | Kotlin, TV UI, MPV/VLC; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
+| Android TV | `tv/android/` | Kotlin, TV UI, ExoPlayer/MPV; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
 | Shared Kotlin | `shared/` | KMP protocol and shared playback/domain logic, included by both Android builds |
 | Apple phone | `mobile/apple/` | SwiftUI/Xcode sender; optional Cast Core Google Cast adapter groundwork |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
