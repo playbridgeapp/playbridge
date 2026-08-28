@@ -47,3 +47,19 @@ data class Progress(
 
 /** Thrown by a strategy when the controller signals pause — distinct from cancel. */
 class DownloadPausedException : Exception("Download paused by user")
+
+/**
+ * Android 15+ caps `dataSync` foreground services at 6 hours, then crashes with
+ * `ForegroundServiceDidNotStopInTimeException` unless the FGS stops immediately.
+ * The worker pauses slightly before that so WorkManager can tear the FGS down
+ * and the user can resume.
+ */
+internal object DownloadForegroundLimits {
+    const val PLATFORM_DATA_SYNC_LIMIT_MS = 6L * 60 * 60 * 1000
+    const val DATA_SYNC_BUDGET_MS = 5L * 60 * 60 * 1000 + 45L * 60 * 1000
+
+    fun appliesTo(sdkInt: Int): Boolean = sdkInt >= 35
+}
+
+internal fun shouldKeepDownloadPaused(status: String, pauseRequested: Boolean): Boolean =
+    status == DownloadStatus.PAUSED.name || pauseRequested

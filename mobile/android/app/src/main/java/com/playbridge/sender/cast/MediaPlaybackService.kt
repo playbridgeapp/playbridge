@@ -358,6 +358,20 @@ class MediaPlaybackService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTimeout(startId: Int) {
+        handleForegroundTimeout(startId, fgsType = 0)
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        handleForegroundTimeout(startId, fgsType)
+    }
+
+    private fun handleForegroundTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "FGS timeout startId=$startId type=$fgsType — stopping")
+        MediaControlChannel.tryEmit(MediaControlChannel.Action.STOP)
+        stopSelf()
+    }
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         // App swiped from recents: the UI is gone but the process (and Gecko) may keep
         // playing with no way to control it. Stop media and go away instead of leaving

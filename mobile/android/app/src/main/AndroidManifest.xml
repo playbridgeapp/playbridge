@@ -97,11 +97,14 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|connectedDevice|mediaProjection|microphone" />
 
-        <!-- Phone-hosted browser receiver page (LAN HTTP/WS while casting to a TV browser). -->
+        <!-- Phone-hosted browser receiver page (LAN HTTP/WS while casting to a TV browser).
+             connectedDevice: this is a long-lived LAN session with a TV browser, not a
+             time-limited transfer. dataSync FGS is capped at 6 hours on Android 15+ and
+             crashes with ForegroundServiceDidNotStopInTimeException if the host stays on. -->
         <service
             android:name=".cast.browser.BrowserReceiverHostService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- Phase-1 download engine: give WorkManager's foreground service the dataSync
              type so DownloadWorker.setForeground() is allowed on Android 14+ (targetSdk 36). -->

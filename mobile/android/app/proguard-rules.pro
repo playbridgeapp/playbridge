@@ -17,6 +17,11 @@
     org.mozilla.geckoview.GeckoSession geckoSession;
 }
 
+# SnakeYAML derives logger names from Class.getPackage(). R8 otherwise moves these
+# classes into the default package, where Android 16 returns null and GeckoRuntime
+# crashes during startup in DebugConfig.fromFile(). Members may still be optimized.
+-keepnames class org.yaml.snakeyaml.**
+
 # Mozilla Nimbus can report through the optional Glean telemetry runtime.
 # PlayBridge does not package or initialize Glean.
 -dontwarn mozilla.telemetry.glean.Glean
