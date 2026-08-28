@@ -26,6 +26,12 @@ import org.koin.core.component.KoinComponent
 /**
  * Keeps the process alive while the phone hosts the browser receiver page
  * (LAN HTTP + WS on 8770–8779). Notification offers a Stop action.
+ *
+ * Uses [ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE] rather than
+ * `dataSync`: the host is a long-lived LAN session with a TV browser, and
+ * Android 15+ kills `dataSync` FGS after 6 hours with
+ * `ForegroundServiceDidNotStopInTimeException` unless [onTimeout] calls
+ * [stopSelf] immediately.
  */
 class BrowserReceiverHostService : Service(), KoinComponent {
     private val repository: BrowserReceiverRepository by inject()
@@ -41,10 +47,9 @@ class BrowserReceiverHostService : Service(), KoinComponent {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
-                scope.launch {
-                    repository.stopHost()
-                    stopSelf()
-                }
+                // stopSelf first so a slow native teardown cannot miss an FGS deadline.
+                stopSelf()
+                repository.stopHostAsync()
                 return START_NOT_STICKY
             }
         }
@@ -53,7 +58,7 @@ class BrowserReceiverHostService : Service(), KoinComponent {
         val notification = buildNotification(url, port)
         try {
             val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
             } else {
                 0
             }
@@ -80,6 +85,23 @@ class BrowserReceiverHostService : Service(), KoinComponent {
             }
         }
         return START_STICKY
+    }
+
+    // API 34 shortService timeout. API 35+ also invokes the two-arg overload below.
+    override fun onTimeout(startId: Int) {
+        handleForegroundTimeout(startId, fgsType = 0)
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        handleForegroundTimeout(startId, fgsType)
+    }
+
+    private fun handleForegroundTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "FGS timeout startId=$startId type=$fgsType — stopping host")
+        // Android 15+ crashes with ForegroundServiceDidNotStopInTimeException unless
+        // stopSelf runs immediately. Host teardown uses the process-wide repo scope.
+        stopSelf()
+        repository.stopHostAsync()
     }
 
     override fun onDestroy() {

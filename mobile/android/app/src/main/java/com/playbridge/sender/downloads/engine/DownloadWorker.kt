@@ -11,16 +11,20 @@ import android.webkit.MimeTypeMap
 import androidx.core.app.NotificationCompat
 import androidx.work.CoroutineWorker
 import androidx.work.ForegroundInfo
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.await
 import com.playbridge.sender.R
 import com.playbridge.sender.data.downloads.DownloadDao
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.Dispatchers
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
 import java.util.concurrent.atomic.AtomicReference
@@ -52,7 +56,16 @@ class DownloadWorker(
         }
 
         val dir = DownloadPaths.dirFor(applicationContext, id)
-        val controller = DownloadController(dir).also { it.start() }
+        val controller = DownloadController(dir)
+        // WorkManager re-enqueues a worker stopped by an FGS timeout. Do not let that
+        // replacement execution clear the pause marker and silently resume the download.
+        if (shouldKeepDownloadPaused(entity.status, controller.isPauseRequested())) {
+            if (entity.status != DownloadStatus.PAUSED.name) {
+                dao.updateStatus(id, DownloadStatus.PAUSED.name)
+            }
+            return Result.success()
+        }
+        controller.start()
 
         runCatching { setForeground(foregroundInfo(request.title)) }
             .onFailure { Log.w(TAG, "setForeground failed (continuing): ${it.message}") }
@@ -68,10 +81,23 @@ class DownloadWorker(
                     delay(PROGRESS_INTERVAL_MS)
                 }
             }
+            // Android 15+ kills dataSync FGS after 6h. Pause first so WorkManager can stop
+            // in time and the user can resume; otherwise the process crashes with
+            // ForegroundServiceDidNotStopInTimeException.
+            val budget = if (DownloadForegroundLimits.appliesTo(Build.VERSION.SDK_INT)) {
+                launch {
+                    delay(DownloadForegroundLimits.DATA_SYNC_BUDGET_MS)
+                    Log.w(TAG, "dataSync FGS budget reached — pausing download $id")
+                    controller.requestPause()
+                }
+            } else {
+                null
+            }
 
             try {
                 val file = strategy.download(request, dir, controller) { latest.set(it) }
                 ticker.cancel()
+                budget?.cancel()
 
                 dao.updateStatus(id, DownloadStatus.MERGING.name) // published == "finalizing"
                 val displayName = buildDisplayName(request, file)
@@ -89,25 +115,47 @@ class DownloadWorker(
                 dao.markDone(id, publishedUri)
                 Result.success()
             } catch (e: DownloadPausedException) {
-                ticker.cancel()
                 dao.updateStatus(id, DownloadStatus.PAUSED.name)
                 Result.success() // paused is a clean stop, not a failure; resume re-enqueues
             } catch (e: CancellationException) {
-                ticker.cancel()
                 if (controller.isCancelRequested()) {
                     dir.deleteRecursively()
                     dao.delete(id)
+                    Result.success()
+                } else if (
+                    Build.VERSION.SDK_INT >= 31 &&
+                    stopReason == WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT
+                ) {
+                    Log.w(TAG, "Download $id paused (foreground service timeout)")
+                    pauseAfterForegroundTimeout(id, controller)
                     Result.success()
                 } else {
                     throw e // genuine coroutine/system cancellation — preserve structured concurrency
                 }
             } catch (e: Throwable) {
-                ticker.cancel()
                 Log.e(TAG, "Download $id failed", e)
                 dao.markFailed(id, e.message ?: e.javaClass.simpleName)
                 Result.failure()
+            } finally {
+                ticker.cancel()
+                budget?.cancel()
             }
         }
+    }
+
+    private suspend fun pauseAfterForegroundTimeout(
+        downloadId: String,
+        controller: DownloadController,
+    ) = withContext(NonCancellable) {
+        // WorkManager normally re-enqueues work stopped by an FGS timeout. Cancel this exact
+        // request so PAUSED remains durable; resume() will create a fresh request explicitly.
+        controller.requestPause()
+        runCatching {
+            WorkManager.getInstance(applicationContext).cancelWorkById(id).await()
+        }.onFailure { error ->
+            Log.w(TAG, "Could not cancel timed-out work $downloadId: ${error.message}")
+        }
+        dao.updateStatus(downloadId, DownloadStatus.PAUSED.name)
     }
 
     // --- foreground notification ---

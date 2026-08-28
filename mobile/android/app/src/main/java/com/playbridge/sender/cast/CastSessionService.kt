@@ -202,6 +202,19 @@ class CastSessionService : Service(), KoinComponent {
         return START_STICKY
     }
 
+    override fun onTimeout(startId: Int) {
+        handleForegroundTimeout(startId, fgsType = 0)
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        handleForegroundTimeout(startId, fgsType)
+    }
+
+    private fun handleForegroundTimeout(startId: Int, fgsType: Int) {
+        Log.w(TAG, "FGS timeout startId=$startId type=$fgsType — stopping")
+        stopSelf()
+    }
+
     private fun startForegroundWithType(
         info: CastSessionManager.SessionInfo,
         playing: Boolean,

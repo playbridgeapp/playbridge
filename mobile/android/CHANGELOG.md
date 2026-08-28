@@ -3,6 +3,13 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.1] — 2026-08-28 (versionCode 224)
+
+### Fixed
+- **Android 16 startup**: Preserve SnakeYAML package names during R8 optimization so GeckoView no longer crashes while initializing its debug configuration on Android 16 devices, including 16 KB page-size lab devices.
+- **Foreground-service timeouts**: Classify the long-lived phone-hosted browser receiver as a connected-device session and stop app-owned foreground services immediately when Android reports a timeout.
+- **Long downloads**: Pause Android 15+ downloads before the `dataSync` foreground-service limit and keep timeout-paused work from being automatically re-enqueued.
+
 ## [0.13.0] — 2026-08-11 (versionCode 223)
 
 ### Added

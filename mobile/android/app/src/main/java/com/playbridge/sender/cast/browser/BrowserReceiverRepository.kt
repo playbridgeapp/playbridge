@@ -75,6 +75,11 @@ class BrowserReceiverRepository(
         }
     }
 
+    /** Stop the host without tying teardown to a caller coroutine (FGS timeout / Stop action). */
+    fun stopHostAsync() {
+        scope.launch { stopHost() }
+    }
+
     suspend fun stopHost(): Result<Unit> = mutex.withLock {
         _state.update { it.copy(busy = true, lastError = null) }
         return try {
