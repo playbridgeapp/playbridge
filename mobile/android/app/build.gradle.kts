@@ -103,10 +103,6 @@ val googleCastApplicationId = providers.gradleProperty("PLAYBRIDGE_GOOGLE_CAST_A
         applicationId
     }
 
-val buildingAppBundle = gradle.startParameter.taskNames.any { taskName ->
-    taskName.substringAfterLast(':').contains("bundle", ignoreCase = true)
-}
-
 android {
     namespace = "com.playbridge.sender"
     buildFeatures {
@@ -159,8 +155,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Disabled until release-only reflection paths have dedicated coverage.
+            isMinifyEnabled = false
+            isShrinkResources = false
             signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -198,9 +195,7 @@ android {
 
     splits {
         abi {
-            // AGP cannot combine optimized resource shrinking, APK splits, and bundles.
-            // Keep split APKs for FOSS assembly; Play bundles perform their own ABI splits.
-            isEnable = !buildingAppBundle
+            isEnable = true
             reset()
             include("armeabi-v7a", "arm64-v8a")
             isUniversalApk = true
