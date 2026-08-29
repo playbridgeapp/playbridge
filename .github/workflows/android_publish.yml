@@ -89,14 +89,14 @@ jobs:
           tracks: beta
           status: completed
 
-      - name: Publish TV Player to Play Store (alpha)
+      - name: Publish TV Player to Play Store (open testing)
         if: inputs.product == 'tv-player'
         uses: r0adkll/upload-google-play@v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.player
           releaseFiles: dist/*.aab
-          tracks: alpha
+          tracks: beta
           status: completed
 
   publish-github:
