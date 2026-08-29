@@ -3,6 +3,11 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Player [0.13.1] — 2026-08-29 (versionCode 229)
+
+### Fixed
+- **Release protocol stability**: Disable R8 code and resource shrinking to preserve the shared Wire protocol reflection surface used for pairing and playback commands.
+
 ## Player [0.13.0] — 2026-08-11 (versionCode 228)
 
 > **Works best together**: Screen mirroring, mixed-media playlists, and the skip pre-play preference are cross-device features introduced in this coordinated release. Use PlayBridge Phone 0.13.0+ and Desktop 0.13.0+ on the other side for full support.

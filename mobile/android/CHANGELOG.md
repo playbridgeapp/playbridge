@@ -3,6 +3,11 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.2] — 2026-08-29 (versionCode 225)
+
+### Fixed
+- **Release connection stability**: Disable R8 code and resource shrinking after release-only reflection failures broke Wire protocol serialization during receiver connections and pairing.
+
 ## [0.13.1] — 2026-08-28 (versionCode 224)
 
 ### Fixed
