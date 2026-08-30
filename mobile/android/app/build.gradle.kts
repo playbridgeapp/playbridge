@@ -62,7 +62,7 @@ abstract class StripGeckoViewWebRtcClasses : DefaultTask() {
                     while (true) {
                         val entry = jarInput.nextEntry ?: break
                         if (entry.isDirectory ||
-                            (isGeckoView && entry.name.startsWith("org/webrtc/"))
+                            (isGeckoView && isDuplicateGeckoWebRtcClass(entry.name))
                         ) {
                             continue
                         }
@@ -73,6 +73,16 @@ abstract class StripGeckoViewWebRtcClasses : DefaultTask() {
                 }
             }
         }
+    }
+
+    // GeckoView ships Google WebRTC plus Gecko-only JNI camera glue under
+    // org/webrtc/videoengine. Drop the overlapping org.webrtc types so the
+    // patched M150 runtime is the single copy, but keep videoengine — Gecko
+    // native getUserMedia FindClass()es VideoCaptureDeviceInfoAndroid and
+    // SIGSEGVs in libxul if it is missing.
+    private fun isDuplicateGeckoWebRtcClass(entryName: String): Boolean {
+        return entryName.startsWith("org/webrtc/") &&
+            !entryName.startsWith("org/webrtc/videoengine/")
     }
 
     private fun writeEntry(
@@ -142,13 +152,15 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    val storePw = System.getenv("PLAYBRIDGE_STORE_PASSWORD") ?: findProperty("PLAYBRIDGE_STORE_PASSWORD")?.toString()
+    val keyPw = System.getenv("PLAYBRIDGE_KEY_PASSWORD") ?: findProperty("PLAYBRIDGE_KEY_PASSWORD")?.toString()
+    val keyAliasProp = System.getenv("PLAYBRIDGE_KEY_ALIAS") ?: findProperty("PLAYBRIDGE_KEY_ALIAS")?.toString()
+
     signingConfigs {
         create("release") {
             storeFile = file("../../keystore/release.jks").absoluteFile
-            val storePw = System.getenv("PLAYBRIDGE_STORE_PASSWORD") ?: findProperty("PLAYBRIDGE_STORE_PASSWORD")?.toString()
-            val keyPw = System.getenv("PLAYBRIDGE_KEY_PASSWORD") ?: findProperty("PLAYBRIDGE_KEY_PASSWORD")?.toString()
             storePassword = storePw
-            keyAlias = System.getenv("PLAYBRIDGE_KEY_ALIAS") ?: findProperty("PLAYBRIDGE_KEY_ALIAS")?.toString()
+            keyAlias = keyAliasProp
             keyPassword = if (keyPw.isNullOrBlank()) storePw else keyPw
         }
     }
@@ -158,7 +170,11 @@ android {
             // Disabled until release-only reflection paths have dedicated coverage.
             isMinifyEnabled = false
             isShrinkResources = false
-            signingConfig = signingConfigs.getByName("release")
+            signingConfig = if (storePw.isNullOrBlank()) {
+                signingConfigs.getByName("debug")
+            } else {
+                signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -289,7 +305,8 @@ dependencies {
     implementation(libs.moz.ui.icons)
 
     // GeckoView also bundles upstream org.webrtc classes. The release scoped-artifact
-    // transform keeps PlayBridge's patched M150 runtime as the single packaged copy.
+    // transform keeps PlayBridge's patched M150 runtime as the single packaged copy
+    // of overlapping types, while preserving Gecko's org.webrtc.videoengine JNI classes.
     implementation(libs.geckoview.omni)
 
     testImplementation(libs.junit)
