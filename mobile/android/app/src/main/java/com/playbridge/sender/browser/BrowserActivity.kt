@@ -912,8 +912,14 @@ class BrowserActivity : ComponentActivity() {
                     return@setContent
                 }
 
-                // No spinner — just return and let the background show through while sessions init
-                return@setContent
+                // First launch / restore: nothing to keep on screen yet.
+                if (!tabsRestoredOrReady.value) {
+                    return@setContent
+                }
+                // Selected tab session is still being created (new tab, hibernate
+                // restore). Do NOT tear down chrome, connection dialogs, or
+                // page-cast callbacks — remounting them is what makes the
+                // connections/cast-to picker pop open on every new tab.
             }
 
             // UI state variables — keyed to selectedTabId so they reset when switching tabs
@@ -1818,7 +1824,7 @@ class BrowserActivity : ComponentActivity() {
                             linkedPageCastCoordinator.supersedeIfActive()
                             if (connectionViewModel.webSocketClient.send(cmd)) {
                                 connectionCoordinator.startLocalPlaybackSession(null, null, null) // browser content
-                                tabManager.pauseMedia(session)
+                                session?.let { tabManager.pauseMedia(it) }
                                 if (autoSwitchToRemote) {
                                     connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createContextQueryJson())
                                     currentScreen = Screen.Remote
@@ -2008,7 +2014,7 @@ class BrowserActivity : ComponentActivity() {
             )
 
             // Register navigation observer & GeckoSession delegates
-            SessionObserverSetup(
+            if (session != null) SessionObserverSetup(
                 session = session,
                 selectedTab = selectedTab,
                 store = store,
@@ -2107,7 +2113,7 @@ class BrowserActivity : ComponentActivity() {
                                             urlBarTapped = false
                                         },
                                         onNavigate = { url ->
-                                            session.loadUrl(url)
+                                            session?.loadUrl(url)
                                             isEditing = false
                                         },
                                         onMagnetDetected = { magnet ->
@@ -2293,7 +2299,7 @@ class BrowserActivity : ComponentActivity() {
                                     ) {
                                         // 1. Back Button
                                         IconButton(
-                                            onClick = { session.goBack() },
+                                            onClick = { session?.goBack() },
                                             enabled = browserCanGoBack
                                         ) {
                                             Icon(
@@ -2305,7 +2311,7 @@ class BrowserActivity : ComponentActivity() {
 
                                         // 2. Forward Button
                                         IconButton(
-                                            onClick = { session.goForward() },
+                                            onClick = { session?.goForward() },
                                             enabled = browserCanGoForward
                                         ) {
                                             Icon(
@@ -2316,7 +2322,7 @@ class BrowserActivity : ComponentActivity() {
                                         }
 
                                          IconButton(
-                                             onClick = { if (isLoading) session.stopLoading() else session.reload() }
+                                             onClick = { if (isLoading) session?.stopLoading() else session?.reload() }
                                          ) {
                                              Icon(
                                                  imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
