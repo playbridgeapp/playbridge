@@ -3,7 +3,7 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.13.3] — 2026-08-29 (versionCode 226)
 
 ### Fixed
 - **In-app browser WebRTC**: Keep GeckoView's `org.webrtc.videoengine` JNI classes when stripping duplicate WebRTC types, so sites that use getUserMedia no longer crash the release app.
