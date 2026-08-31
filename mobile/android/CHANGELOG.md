@@ -3,6 +3,11 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.4] — 2026-08-31 (versionCode 227)
+
+### Fixed
+- **New-tab connection modal**: Keep the in-app browser UI mounted when a new tab is selected before its Gecko session exists, so the connections / Cast to picker no longer reopens on New Tab or Open in new tab.
+
 ## [0.13.3] — 2026-08-29 (versionCode 226)
 
 ### Fixed
