@@ -40,7 +40,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -162,7 +162,7 @@ internal fun DiscoverGrid(
         return
     }
 
-    val isNearEnd by remember {
+    val isNearEnd by remember(gridState) {
         derivedStateOf {
             val totalItems = gridState.layoutInfo.totalItemsCount
             val lastVisibleItemIndex = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -170,20 +170,47 @@ internal fun DiscoverGrid(
         }
     }
 
+    // Perf: ALL alternates movie/TV pages (via preferMovies) so TV rows can't stall
+    // forever behind an endless movie feed. No time gate: isLoadingMore* already
+    // prevents double-fire, and a gate can stall the effect when TMDB is fast —
+    // the flag flip restarts the effect while still gated, then completion
+    // restarts it while still gated, and isNearEnd never retriggers.
+    var preferMovies by remember { mutableStateOf(true) }
     LaunchedEffect(isNearEnd, isLoadingMoreMovies, hasMoreMovies, isLoadingMoreTvShows, hasMoreTvShows) {
         if (isNearEnd) {
             when (selectedMediaType) {
                 LibraryMediaType.MOVIE -> {
-                    if (!isLoadingMoreMovies && hasMoreMovies) onLoadMoreMovies()
+                    if (!isLoadingMoreMovies && hasMoreMovies) {
+                        onLoadMoreMovies()
+                    }
                 }
                 LibraryMediaType.TV_SHOW -> {
-                    if (!isLoadingMoreTvShows && hasMoreTvShows) onLoadMoreTvShows()
+                    if (!isLoadingMoreTvShows && hasMoreTvShows) {
+                        onLoadMoreTvShows()
+                    }
                 }
                 LibraryMediaType.ALL -> {
-                    // Try loading both if we hit the bottom
-                    if (!isLoadingMoreMovies && hasMoreMovies) onLoadMoreMovies()
-                    if (!isLoadingMoreTvShows && hasMoreTvShows) onLoadMoreTvShows()
+                    val moviesTurn = preferMovies || !hasMoreTvShows || isLoadingMoreTvShows
+                    if (moviesTurn && !isLoadingMoreMovies && hasMoreMovies) {
+                        preferMovies = false
+                        onLoadMoreMovies()
+                    } else if (!isLoadingMoreTvShows && hasMoreTvShows) {
+                        preferMovies = true
+                        onLoadMoreTvShows()
+                    }
                 }
+            }
+        }
+    }
+
+    // Perf: memoized outside the grid DSL — remember() is illegal inside
+    // LazyVerticalGrid scope; rebuild only when pages append.
+    val mixedAll = remember(movies, tvShows) {
+        val maxLen = maxOf(movies.size, tvShows.size)
+        buildList {
+            for (i in 0 until maxLen) {
+                if (i < movies.size) add(Pair(movies[i], true))
+                if (i < tvShows.size) add(Pair(tvShows[i], false))
             }
         }
     }
@@ -198,14 +225,11 @@ internal fun DiscoverGrid(
     ) {
 
         if (selectedMediaType == LibraryMediaType.ALL) {
-            val maxLen = maxOf(movies.size, tvShows.size)
-            val mixed = buildList {
-                for (i in 0 until maxLen) {
-                    if (i < movies.size) add(Pair(movies[i], true))
-                    if (i < tvShows.size) add(Pair(tvShows[i], false))
-                }
-            }
-            gridItems(mixed) { pair ->
+            gridItems(
+                mixedAll,
+                key = { (item, isMovie) -> if (isMovie) "m:${(item as TmdbMovie).id}" else "t:${(item as TmdbTvShow).id}" },
+                contentType = { "poster" },
+            ) { pair ->
                 if (pair.second) {
                     val movie = pair.first as TmdbMovie
                     PosterCard(
@@ -235,7 +259,7 @@ internal fun DiscoverGrid(
             }
         } else if (selectedMediaType == LibraryMediaType.MOVIE) {
             if (hasMovies) {
-                gridItems(movies) { item ->
+                gridItems(movies, key = { it.id }, contentType = { "poster" }) { item ->
                     PosterCard(
                         posterUrl = item.posterUrl,
                         title = item.title,
@@ -254,7 +278,7 @@ internal fun DiscoverGrid(
             }
         } else if (selectedMediaType == LibraryMediaType.TV_SHOW) {
             if (hasTvShows) {
-                gridItems(tvShows) { item ->
+                gridItems(tvShows, key = { it.id }, contentType = { "poster" }) { item ->
                     PosterCard(
                         posterUrl = item.posterUrl,
                         title = item.name,
@@ -275,6 +299,10 @@ internal fun DiscoverGrid(
     }
 }
 
+/** Stable fallback key for mixed-type rows. Callers with stable ids should pass key= explicitly. */
+private fun itemKey(posterUrl: String?, title: String): String =
+    posterUrl?.let { "p:$it" } ?: "t:$title"
+
 @Composable
 internal fun <T> MediaRow(
     title: String,
@@ -287,12 +315,14 @@ internal fun <T> MediaRow(
     year: (T) -> String,
     rating: (T) -> String,
     badgeText: (T) -> String? = { null },
+    key: ((T) -> Any)? = null,
     onLoadMore: () -> Unit = {},
     isLoadingMore: Boolean = false,
-    hasMore: Boolean = true
+    // Perf: default false — static rows must not trigger pagination callbacks.
+    hasMore: Boolean = false
 ) {
 
-    val isNearEnd by remember {
+    val isNearEnd by remember(listState) {
         derivedStateOf {
             val totalItems = listState.layoutInfo.totalItemsCount
             val lastVisibleItemIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
@@ -320,7 +350,11 @@ internal fun <T> MediaRow(
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(items) { item ->
+            items(
+                items,
+                key = key ?: { item -> itemKey(posterUrl(item), displayTitle(item)) },
+                contentType = { "poster" },
+            ) { item ->
                 PosterCard(
                     posterUrl = posterUrl(item),
                     title = displayTitle(item),
@@ -379,7 +413,10 @@ internal fun PosterCard(
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(posterUrl)
-                        .crossfade(true)
+                        // No explicit .size(): AsyncImage auto-resolves the layout size
+                        // in pixels (density-aware). A hardcoded px size decodes too
+                        // small on high-density screens and upscales = blurry.
+                        .crossfade(false)
                         .build(),
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
@@ -604,7 +641,10 @@ internal fun AddonSearchResultItem(
             ) {
                 if (item.poster != null) {
                     AsyncImage(
-                        model = item.poster,
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(item.poster)
+                            .crossfade(false)
+                            .build(),
                         contentDescription = item.name,
                         contentScale = ContentScale.Crop,
                         placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
@@ -801,7 +841,7 @@ internal fun AddonMediaRow(
             contentPadding = PaddingValues(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            items(row.items) { item ->
+            items(row.items, key = { it.id }, contentType = { "poster" }) { item ->
                 PosterCard(
                     posterUrl = item.poster,
                     title = item.name,
@@ -881,7 +921,7 @@ internal fun SearchHistoryList(
                 }
             }
         }
-        items(history) { item ->
+        items(history, key = { it.query }, contentType = { "history" }) { item ->
             SearchHistoryItem(
                 query = item.query,
                 onClick = { onQueryClick(item.query) },
@@ -1017,7 +1057,7 @@ internal fun LibraryFilterSheet(
     activeFilterCount: Int,
     onDismiss: () -> Unit,
 ) {
-    val filters by viewModel.filters.collectAsState()
+    val filters by viewModel.filters.collectAsStateWithLifecycle()
 
     val selectedMediaType = filters.mediaType
     val selectedSort = filters.sort
@@ -1036,12 +1076,12 @@ internal fun LibraryFilterSheet(
     val selectedWatchRegion = filters.watchRegion
     val selectedProviders = filters.selectedProviders
     val selectedMonetization = filters.selectedMonetization
-    val watchProviders by viewModel.watchProviders.collectAsState()
+    val watchProviders by viewModel.watchProviders.collectAsStateWithLifecycle()
     val selectedCertification = filters.certification
     val includeAdult = filters.includeAdult
     val selectedKeywords = filters.selectedKeywords
-    val keywordResults by viewModel.keywordResults.collectAsState()
-    val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsState()
+    val keywordResults by viewModel.keywordResults.collectAsStateWithLifecycle()
+    val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsStateWithLifecycle()
     val selectedReleaseTypes = filters.selectedReleaseTypes
     val selectedTvStatuses = filters.selectedTvStatuses
     val selectedTvTypes = filters.selectedTvTypes
@@ -1332,7 +1372,11 @@ internal fun LibraryFilterSheet(
                                 leadingIcon = provider.logoUrl?.let { url ->
                                     {
                                         AsyncImage(
-                                            model = url,
+                                            model = ImageRequest.Builder(LocalContext.current)
+                                                .data(url)
+                                                .size(96)
+                                                .crossfade(false)
+                                                .build(),
                                             contentDescription = null,
                                             modifier = Modifier.size(FilterChipDefaults.IconSize).clip(RoundedCornerShape(4.dp))
                                         )

@@ -89,61 +89,46 @@ fun DashboardScreen(
             .fillMaxSize()
             .background(surfaceColor)
     ) {
-        // ── Animated Ambient Mesh Background ─────────────────────────────────
-        val infiniteBgTransition = rememberInfiniteTransition(label = "mesh_bg")
-        val animatedAngle1 by infiniteBgTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 2f * Math.PI.toFloat(),
-            animationSpec = infiniteRepeatable(
-                animation = tween(28000, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "angle1"
-        )
-        val animatedAngle2 by infiniteBgTransition.animateFloat(
-            initialValue = 0f,
-            targetValue = 2f * Math.PI.toFloat(),
-            animationSpec = infiniteRepeatable(
-                animation = tween(42000, easing = LinearEasing),
-                repeatMode = RepeatMode.Restart
-            ),
-            label = "angle2"
-        )
+        // ── Static Ambient Mesh Background ───────────────────────────────────
+        // Perf: was two infinite angle clocks redrawing a full-screen Canvas + new
+        // radial-gradient Brushes every frame. Static blobs cost one composition.
+        val staticBlob1 = remember(primaryColor) {
+            Brush.radialGradient(
+                colors = listOf(
+                    primaryColor.copy(alpha = 0.12f),
+                    primaryColor.copy(alpha = 0.04f),
+                    Color.Transparent
+                ),
+            )
+        }
+        val staticBlob2 = remember(secondaryColor) {
+            Brush.radialGradient(
+                colors = listOf(
+                    secondaryColor.copy(alpha = 0.10f),
+                    secondaryColor.copy(alpha = 0.03f),
+                    Color.Transparent
+                ),
+            )
+        }
 
         Canvas(modifier = Modifier.fillMaxSize()) {
             val width = size.width
             val height = size.height
 
             // Drift Blob 1 (Top-Right-ish)
-            val dx1 = width * 0.6f + (width * 0.15f) * cos(animatedAngle1)
-            val dy1 = height * 0.25f + (height * 0.1f) * sin(animatedAngle1)
+            val dx1 = width * 0.6f
+            val dy1 = height * 0.25f
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        primaryColor.copy(alpha = 0.12f),
-                        primaryColor.copy(alpha = 0.04f),
-                        Color.Transparent
-                    ),
-                    center = Offset(dx1, dy1),
-                    radius = width * 0.8f
-                ),
+                brush = staticBlob1,
                 center = Offset(dx1, dy1),
                 radius = width * 0.8f
             )
 
             // Drift Blob 2 (Bottom-Left-ish)
-            val dx2 = width * 0.4f + (width * 0.12f) * cos(animatedAngle2 + Math.PI.toFloat())
-            val dy2 = height * 0.7f + (height * 0.08f) * sin(animatedAngle2)
+            val dx2 = width * 0.4f
+            val dy2 = height * 0.7f
             drawCircle(
-                brush = Brush.radialGradient(
-                    colors = listOf(
-                        secondaryColor.copy(alpha = 0.10f),
-                        secondaryColor.copy(alpha = 0.03f),
-                        Color.Transparent
-                    ),
-                    center = Offset(dx2, dy2),
-                    radius = width * 0.7f
-                ),
+                brush = staticBlob2,
                 center = Offset(dx2, dy2),
                 radius = width * 0.7f
             )
@@ -271,21 +256,11 @@ fun DashboardScreen(
                     horizontalArrangement = Arrangement.Center
                 ) {
                     if (isConnected) {
-                        val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                        val pulseAlpha by infiniteTransition.animateFloat(
-                            initialValue = 0.4f,
-                            targetValue = 1f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(1000),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "dotPulse"
-                        )
                         Box(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(accent.copy(alpha = pulseAlpha))
+                                .background(accent)
                         )
                     } else {
                         Box(
@@ -539,6 +514,8 @@ private fun DashboardCard(
     tall: Boolean,
     onClick: () -> Unit
 ) {
+    // Perf: single entrance animation (alpha + offset) instead of 4 concurrent
+    // per-card anims (cardAlpha/cardTranslateY/pressScale/activeScale).
     val cardAlpha by animateFloatAsState(
         targetValue = if (visible) 1f else 0f,
         animationSpec = tween(400, delayMillis = animDelay),
@@ -550,22 +527,15 @@ private fun DashboardCard(
         label = "cardTranslateY"
     )
 
-    // Tactile press scale response
+    // Tactile press scale response (no separate active-scale spring).
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val pressScale by animateFloatAsState(
         targetValue = if (isPressed) 0.95f else 1f,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = 400f),
+        animationSpec = tween(150),
         label = "pressScale"
     )
-
-    // Active state scale enhancement
-    val activeScale by animateFloatAsState(
-        targetValue = if (isActive) 1.02f else 1f,
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 200f),
-        label = "activeScale"
-    )
-    val finalScale = pressScale * activeScale
+    val finalScale = pressScale
 
     val height = if (tall) 150.dp else 120.dp
 
@@ -723,21 +693,11 @@ private fun DashboardCard(
                         .padding(horizontal = 6.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val infiniteActiveTransition = rememberInfiniteTransition(label = "active_badge")
-                    val badgeDotAlpha by infiniteActiveTransition.animateFloat(
-                        initialValue = 0.4f,
-                        targetValue = 1f,
-                        animationSpec = infiniteRepeatable(
-                            animation = tween(800),
-                            repeatMode = RepeatMode.Reverse
-                        ),
-                        label = "badgeDotAlpha"
-                    )
                     Box(
                         modifier = Modifier
                             .size(4.dp)
                             .clip(CircleShape)
-                            .background(Color.White.copy(alpha = badgeDotAlpha))
+                            .background(Color.White)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(

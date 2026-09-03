@@ -917,9 +917,6 @@ private fun PlayerScreen(
     // stays in STATE_BUFFERING (seen on Samsung with local content:// MP4s).
     var hasRenderedFrame by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
-    var positionMs by remember { mutableLongStateOf(0L) }
-    var durationMs by remember { mutableLongStateOf(0L) }
-    var bufferedMs by remember { mutableLongStateOf(0L) }
 
     // Controls / scrubbing
     var controlsVisible by remember { mutableStateOf(true) }
@@ -963,14 +960,14 @@ private fun PlayerScreen(
 
     // (Background toggle state is hoisted — the activity shares backgroundMode directly.)
 
-    // Precision AB Loop segment repeat
-    LaunchedEffect(abStartMs, abEndMs) {
-        if (abStartMs != null && abEndMs != null) {
-            while (true) {
+    // Precision AB Loop segment repeat — only while playing, 200ms cadence.
+    LaunchedEffect(abStartMs, abEndMs, isPlaying) {
+        if (abStartMs != null && abEndMs != null && isPlaying) {
+            while (isPlaying) {
                 if (player.currentPosition >= abEndMs!!) {
                     player.seekTo(abStartMs!!)
                 }
-                delay(100)
+                delay(200)
             }
         }
     }
@@ -1028,11 +1025,22 @@ private fun PlayerScreen(
 
     fun markInteraction() { interactionTick++ }
 
+    // Poll position/buffer while not actively scrubbing/seeking.
+    // Perf: MutableLongState holders — Compose tracks .longValue reads per-composable,
+    // so the 400ms tick recomposes only readers (SeekProgressRow, HUDs, stats below).
+    val playbackProgress = remember { mutableLongStateOf(0L) }
+    val playbackBuffered = remember { mutableLongStateOf(0L) }
+    val playbackDuration = remember { mutableLongStateOf(0L) }
+    // Snapshot aliases for event handlers (seekBy, drag end, scrub end) — reads below
+    // in SeekProgressRow/HUDs/stats use the holders directly for scoped recomposition.
+    // (Local `val x get()` properties are illegal here — this is a @Composable function
+    // body, not a class — so call sites below read the holders directly.)
+
     fun seekBy(deltaMs: Long) {
         val d = player.duration.coerceAtLeast(0)
         val target = (player.currentPosition + deltaMs).coerceIn(0, if (d > 0) d else Long.MAX_VALUE)
         player.seekTo(target)
-        positionMs = target
+        playbackProgress.longValue = target
     }
 
     fun togglePlay() {
@@ -1070,7 +1078,7 @@ private fun PlayerScreen(
                 if (state == Player.STATE_READY) {
                     errorMessage = null
                     val d = player.duration
-                    if (d > 0) durationMs = d
+                    if (d > 0) playbackDuration.longValue = d
                 }
                 // End of the current item. In lazy mode advance to (and resolve) the next
                 // episode; otherwise this is the end of all content, so exit.
@@ -1121,15 +1129,14 @@ private fun PlayerScreen(
     LaunchedEffect(Unit) {
         while (true) {
             if (!isScrubbing && dragMode != DragMode.SEEK) {
-                positionMs = player.currentPosition
-                bufferedMs = player.bufferedPosition
+                playbackProgress.longValue = player.currentPosition
+                playbackBuffered.longValue = player.bufferedPosition
                 val d = player.duration
-                if (d > 0) durationMs = d
+                if (d > 0) playbackDuration.longValue = d
             }
             delay(400)
         }
     }
-
     // Auto-hide controls a few seconds after the last interaction while playing.
     LaunchedEffect(controlsVisible, isPlaying, interactionTick, dragMode) {
         if (controlsVisible && isPlaying && dragMode == DragMode.NONE) {
@@ -1214,7 +1221,7 @@ private fun PlayerScreen(
                         onDragEnd = {
                             if (dragMode == DragMode.SEEK) {
                                 player.seekTo(seekPreviewMs)
-                                positionMs = seekPreviewMs
+                                playbackProgress.longValue = seekPreviewMs
                             }
                             dragMode = DragMode.NONE
                         },
@@ -1233,7 +1240,7 @@ private fun PlayerScreen(
                             }
                             when (dragMode) {
                                 DragMode.SEEK -> {
-                                    val d = durationMs
+                                    val d = playbackDuration.longValue
                                     if (d > 0) {
                                         val delta = ((accDx / size.width) * SEEK_RANGE_MS).toLong()
                                         seekPreviewMs = (seekStartMs + delta).coerceIn(0, d)
@@ -1274,6 +1281,15 @@ private fun PlayerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
+                    // Perf: pinch-zoom transform on the outer Box, not the AndroidView —
+                    // per-gesture-frame TextureView re-layout dropped frames. Lambda
+                    // overload applies values at draw time without recomposing.
+                    .graphicsLayer {
+                        scaleX = scale
+                        scaleY = scale
+                        translationX = offset.x
+                        translationY = offset.y
+                    }
                     .pointerInput(isPanZoomEnabled) {
                         if (isPanZoomEnabled) {
                             detectTransformGestures { centroid, pan, zoom, rotation ->
@@ -1315,7 +1331,7 @@ private fun PlayerScreen(
                         }
                     },
                     update = { view ->
-                        view.resizeMode = resizeMode
+                        if (view.resizeMode != resizeMode) view.resizeMode = resizeMode
                         if (view.player !== player) {
                             view.player = player
                             ensurePrepared(player)
@@ -1323,12 +1339,6 @@ private fun PlayerScreen(
                     },
                     modifier = Modifier
                         .fillMaxSize()
-                        .graphicsLayer(
-                            scaleX = scale,
-                            scaleY = scale,
-                            translationX = offset.x,
-                            translationY = offset.y
-                        )
                 )
             }
 
@@ -1394,7 +1404,7 @@ private fun PlayerScreen(
                     label = "${(brightness * 100).roundToInt()}%",
                     alignment = Alignment.CenterEnd
                 )
-                DragMode.SEEK -> SeekHud(seekDeltaMs, seekPreviewMs, durationMs)
+                DragMode.SEEK -> SeekHud(seekDeltaMs, seekPreviewMs, playbackDuration.longValue)
                 DragMode.NONE -> {}
             }
 
@@ -1432,8 +1442,8 @@ private fun PlayerScreen(
                     player = player,
                     activeVideoFormat = activeVideoFormat,
                     activeAudioFormat = activeAudioFormat,
-                    positionMs = positionMs,
-                    bufferedMs = bufferedMs,
+                    positionMs = playbackProgress.longValue,
+                    bufferedMs = playbackBuffered.longValue,
                     speed = speed,
                     onClose = { showStats = false }
                 )
@@ -1483,12 +1493,14 @@ private fun PlayerScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(
-                            Brush.verticalGradient(
-                                0f to Color.Black.copy(alpha = 0.5f),
-                                0.25f to Color.Transparent,
-                                0.75f to Color.Transparent,
-                                1f to Color.Black.copy(alpha = 0.6f)
-                            )
+                            remember {
+                                Brush.verticalGradient(
+                                    0f to Color.Black.copy(alpha = 0.5f),
+                                    0.25f to Color.Transparent,
+                                    0.75f to Color.Transparent,
+                                    1f to Color.Black.copy(alpha = 0.6f)
+                                )
+                            }
                         )
                 ) {
                     // Top bar: back, title, and a translucent action pill.
@@ -1882,30 +1894,25 @@ private fun PlayerScreen(
 
                         Spacer(Modifier.height(4.dp))
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            val shownPos = if (isScrubbing) (scrubFraction * durationMs).toLong() else positionMs
-                            Text(formatTime(shownPos), color = Color.White, style = MaterialTheme.typography.labelMedium)
-                            SeekBar(
-                                fraction = if (durationMs > 0) (shownPos.toFloat() / durationMs) else 0f,
-                                bufferedFraction = if (durationMs > 0) (bufferedMs.toFloat() / durationMs) else 0f,
-                                onScrubStart = { isScrubbing = true; markInteraction() },
-                                onScrub = { scrubFraction = it; markInteraction() },
-                                onScrubEnd = {
-                                    if (durationMs > 0) {
-                                        val target = (it * durationMs).toLong()
-                                        player.seekTo(target)
-                                        positionMs = target
-                                    }
-                                    isScrubbing = false
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                            Text(formatTime(durationMs), color = Color.White, style = MaterialTheme.typography.labelMedium)
-                        }
+                        // Perf: isolated so the 400ms position ticker recomposes only
+                        // this row — the old inline reads pulled the whole overlay.
+                        SeekProgressRow(
+                            position = playbackProgress,
+                            buffered = playbackBuffered,
+                            duration = playbackDuration,
+                            isScrubbing = isScrubbing,
+                            scrubFraction = scrubFraction,
+                            onScrubStart = { isScrubbing = true; markInteraction() },
+                            onScrub = { scrubFraction = it; markInteraction() },
+                            onScrubEnd = {
+                                if (playbackDuration.longValue > 0) {
+                                    val target = (it * playbackDuration.longValue).toLong()
+                                    player.seekTo(target)
+                                    playbackProgress.longValue = target
+                                }
+                                isScrubbing = false
+                            },
+                        )
                     }
                 }
             }
@@ -2057,6 +2064,45 @@ private fun GlassControl(
         contentAlignment = Alignment.Center
     ) {
         IconButton(onClick = onClick, enabled = enabled, modifier = Modifier.matchParentSize()) { content() }
+    }
+}
+
+/**
+ * Position ticker isolation: the 400ms positionMs/bufferedMs/durationMs reads happen
+ * only inside this row, so ticks recompose the time labels + bar — not the overlay.
+ * Callers must pass the MutableLongState holders (not snapshot Longs) so the reads
+ * stay scoped to this composable.
+ */
+@Composable
+private fun SeekProgressRow(
+    position: androidx.compose.runtime.MutableLongState,
+    buffered: androidx.compose.runtime.MutableLongState,
+    duration: androidx.compose.runtime.MutableLongState,
+    isScrubbing: Boolean,
+    scrubFraction: Float,
+    onScrubStart: () -> Unit,
+    onScrub: (Float) -> Unit,
+    onScrubEnd: (Float) -> Unit,
+) {
+    val positionMs = position.longValue
+    val bufferedMs = buffered.longValue
+    val durationMs = duration.longValue
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        val shownPos = if (isScrubbing) (scrubFraction * durationMs).toLong() else positionMs
+        Text(formatTime(shownPos), color = Color.White, style = MaterialTheme.typography.labelMedium)
+        SeekBar(
+            fraction = if (durationMs > 0) (shownPos.toFloat() / durationMs) else 0f,
+            bufferedFraction = if (durationMs > 0) (bufferedMs.toFloat() / durationMs) else 0f,
+            onScrubStart = onScrubStart,
+            onScrub = onScrub,
+            onScrubEnd = onScrubEnd,
+            modifier = Modifier.weight(1f)
+        )
+        Text(formatTime(durationMs), color = Color.White, style = MaterialTheme.typography.labelMedium)
     }
 }
 

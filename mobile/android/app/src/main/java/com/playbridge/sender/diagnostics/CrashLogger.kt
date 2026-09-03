@@ -23,7 +23,11 @@ object CrashLogger {
     private const val MAX_FILE_SIZE = 512 * 1024L // 512 KB
 
     @Volatile private var crashFile: File? = null
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    // Perf/correctness: SimpleDateFormat is not thread-safe and write() runs on
+    // arbitrary crashing threads — ThreadLocal confines one instance per thread.
+    private val dateFormat = ThreadLocal.withInitial {
+        SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+    }
 
     fun install(context: Context) {
         val dir = File(context.filesDir, LOG_DIR).apply { mkdirs() }
@@ -57,7 +61,7 @@ object CrashLogger {
         val sw = StringWriter()
         throwable.printStackTrace(PrintWriter(sw))
         val entry = buildString {
-            append("${dateFormat.format(Date())} CRASH [${thread.name}] ")
+            append("${dateFormat.get()?.format(Date())} CRASH [${thread.name}] ")
             append("${throwable.javaClass.name}: ${throwable.message}\n")
             append(sw.toString())
             append("\n")

@@ -41,6 +41,36 @@ interface IptvChannelDao {
     @Query("SELECT * FROM iptv_channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
     suspend fun getForPlaylist(playlistId: Long): List<IptvChannelEntity>
 
+    @Query(
+        "SELECT DISTINCT groupTitle FROM iptv_channels WHERE playlistId = :playlistId " +
+            "AND groupTitle IS NOT NULL AND groupTitle != '' ORDER BY groupTitle ASC",
+    )
+    fun observeGroups(playlistId: Long): Flow<List<String>>
+
+    /**
+     * Perf: DB-side search for large playlists — the detail screen no longer
+     * loads/sorts the full 10k-row table in memory on every probe write.
+     * No LIMIT: playlists are user-browsable end-to-end (2k-20k rows); Room only
+     * re-emits on actual table change and Compose keys rows by id.
+     */
+    @Query(
+        "SELECT * FROM iptv_channels WHERE playlistId = :playlistId " +
+            "AND (:query = '' OR name LIKE '%' || :query || '%') " +
+            "AND (:group IS NULL OR groupTitle = :group) " +
+            "ORDER BY " +
+            "CASE WHEN :activeFirst = 1 THEN " +
+            "CASE probeStatus WHEN 'ACTIVE' THEN 0 WHEN 'DEAD' THEN 2 ELSE 1 END " +
+            "ELSE 0 END, " +
+            "CASE WHEN :activeFirst = 1 AND probeLatencyMs IS NOT NULL THEN probeLatencyMs ELSE 999999999 END ASC, " +
+            "orderIndex ASC",
+    )
+    fun observeFiltered(
+        playlistId: Long,
+        query: String,
+        group: String?,
+        activeFirst: Boolean,
+    ): Flow<List<IptvChannelEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<IptvChannelEntity>)
 

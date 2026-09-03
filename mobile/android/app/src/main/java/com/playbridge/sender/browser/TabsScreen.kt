@@ -28,6 +28,9 @@ import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -476,36 +479,36 @@ fun TabsScreen(
                         listState.firstVisibleItemScrollOffset == 0
                 }
             }
-            // Track the last scroll direction (true = scrolling down)
-            var isScrollingDown by remember { mutableStateOf(true) }
-            val prevIndex = remember { mutableStateOf(0) }
-            val prevOffset = remember { mutableStateOf(0) }
+            // Perf: scroll direction without per-pixel state writes — snapshotFlow
+            // is collected in a LaunchedEffect (not composition), and distinctUntilChanged
+            // means the direction state only flips when index/offset actually change.
+            var isScrollingDown by remember { mutableStateOf(false) }
+            var lastIndex by remember { mutableIntStateOf(0) }
+            var lastOffset by remember { mutableIntStateOf(0) }
             LaunchedEffect(listState) {
-                snapshotFlow {
-                    listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-                }.collect { (index, offset) ->
-                    if (index != prevIndex.value || offset != prevOffset.value) {
-                        isScrollingDown = if (index != prevIndex.value) {
-                            index > prevIndex.value
+                snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+                    .distinctUntilChanged()
+                    .collect { (index, offset) ->
+                        isScrollingDown = if (index != lastIndex) {
+                            index > lastIndex
                         } else {
-                            offset > prevOffset.value
+                            offset >= lastOffset
                         }
-                        prevIndex.value = index
-                        prevOffset.value = offset
+                        lastIndex = index
+                        lastOffset = offset
                     }
-                }
             }
             // Point up at the bottom, down at the top, otherwise follow scroll direction
             val pointUp = isAtBottom || (!isAtTop && !isScrollingDown)
 
-            // Only show the button while scrolling; hide shortly after it stops
-            // (the grace period keeps it tappable for a moment once you stop).
+            // Show while scrolling, with a short grace period so the button stays
+            // tappable for a moment after the finger lifts.
             var showScrollButton by remember { mutableStateOf(false) }
             LaunchedEffect(listState.isScrollInProgress) {
                 if (listState.isScrollInProgress) {
                     showScrollButton = true
                 } else {
-                    delay(1500)
+                    delay(1200)
                     showScrollButton = false
                 }
             }
@@ -736,26 +739,37 @@ private fun TabRowCard(
                     
                     if (isPlaying) {
                         Spacer(modifier = Modifier.width(8.dp))
-                        
-                        val infiniteTransition = rememberInfiniteTransition(label = "audioWaveRow")
-                        val pulseScale by infiniteTransition.animateFloat(
-                            initialValue = 0.85f,
-                            targetValue = 1.15f,
-                            animationSpec = infiniteRepeatable(
-                                animation = tween(600, easing = LinearEasing),
-                                repeatMode = RepeatMode.Reverse
-                            ),
-                            label = "pulse"
-                        )
-                        
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.VolumeUp,
-                            contentDescription = "Playing audio/video",
-                            modifier = Modifier
-                                .size(18.dp)
-                                .scale(pulseScale),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+
+                        // Perf: static icon unless this is the selected + playing tab —
+                        // the old per-row infinite pulse kept every playing row composing.
+                        if (isSelected) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "audioWaveRow")
+                            val pulseScale by infiniteTransition.animateFloat(
+                                initialValue = 0.85f,
+                                targetValue = 1.15f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(600, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Reverse
+                                ),
+                                label = "pulse"
+                            )
+
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Playing audio/video",
+                                modifier = Modifier
+                                    .size(18.dp)
+                                    .scale(pulseScale),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                contentDescription = "Playing audio/video",
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
                     }
                 }
                 

@@ -25,12 +25,22 @@ import androidx.datastore.preferences.preferencesDataStoreFile
 import com.playbridge.sender.data.settings.SettingsRepository
 
 val appModule = module {
-    // 1. OkHttpClient Global Singleton
+    // 1. OkHttpClient Global Singleton.
+    // Perf: raised per-host parallelism so TMDB/addon/IPTV fan-out doesn't queue on
+    // the 5-req/host default and stall Home refresh. Timeouts stay generous (15s):
+    // this client also serves downloads, IPTV M3U fetches, and debrid — a short
+    // global read timeout would fail slow streams, not just catalogs.
     single {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
             .followRedirects(true)
+            .dispatcher(
+                okhttp3.Dispatcher().apply {
+                    maxRequests = 128
+                    maxRequestsPerHost = 16
+                }
+            )
             .build()
     }
 
@@ -204,7 +214,8 @@ val appModule = module {
     }
 
     // 5d. PlaybackProgressTracker — auto-updates watchlist progress from TV playback.
-    //     createdAtStart: it has no injectors; it must exist to observe.
+    //     Eager: it has no UI injector (only PlayerActivity injects it), so lazy
+    //     registration would leave TV/DLNA progress tracking dead on direct casts.
     //     Single-threaded scope: the three transport legs (native/DLNA/in-app) share
     //     non-thread-safe session state (markedKeys/ensuredKeys, threshold arming);
     //     serializing the scope makes their interleaving safe.

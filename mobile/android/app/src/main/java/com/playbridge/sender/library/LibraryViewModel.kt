@@ -35,6 +35,8 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -78,12 +80,11 @@ data class DiscoveryFiltersState(
 
 class LibraryViewModel(
     application: Application,
-    val tmdb: TmdbRepository = TmdbRepository(application),
-    private val database: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
-    private val addonRepository: AddonRepository = AddonRepository(
-        addonDao = database.addonDao(),
-        cacheDir = application.cacheDir
-    )
+    // Perf: no default construction — manual construction used to bypass Koin and
+    // spin up duplicate OkHttp clients/caches per instance.
+    val tmdb: TmdbRepository,
+    private val database: com.playbridge.sender.data.history.HistoryDatabase,
+    private val addonRepository: AddonRepository,
 ) : AndroidViewModel(application) {
     private val watchlistDao = database.watchlistDao()
     private val searchHistoryDao = database.searchHistoryDao()
@@ -273,6 +274,8 @@ class LibraryViewModel(
             }
 
             _catalogRows.value = result
+            // In-memory static cache keeps the full result (disk persist is bounded by
+            // Coil's own caches; truncating here blanked Home on refresh until network).
             catalogCache = result
             catalogCacheTime = System.currentTimeMillis()
             persistCatalogCache(result, catalogCacheTime)
@@ -435,39 +438,63 @@ class LibraryViewModel(
 
     private fun observeNewEpisodes() {
         viewModelScope.launch {
-            watching.collect { watchingItems ->
-                val tvItems = watchingItems.filter { it.mediaType == "tv" }
-                if (tvItems.isEmpty()) {
-                    _newEpisodeTmdbIds.value = emptySet()
-                    return@collect
+            watching
+                // Perf: re-fires on every watchlist write — only recompute when the
+                // set of tracked tv progress pointers actually changed.
+                .map { items ->
+                    items.filter { it.mediaType == "tv" }
+                        .map { Triple(it.tmdbId, it.seasonProgress, it.episodeProgress) }
                 }
-                val ids = mutableSetOf<Int>()
-                tvItems.forEach { entity ->
-                    try {
-                        val userSeason = entity.seasonProgress ?: return@forEach
-                        val userEp    = entity.episodeProgress ?: return@forEach
-
-                        val details = tmdb.getTvDetails(entity.tmdbId) ?: return@forEach
-
-                        val hasAvailable = when (val next = details.nextEpisodeToAir) {
-                            null -> {
-                                val lastAirMs = parseIsoDate(details.lastAirDate ?: return@forEach)
-                                    ?: return@forEach
-                                val referenceMs = entity.startedAt ?: entity.addedAt
-                                lastAirMs > referenceMs
+                .distinctUntilChanged()
+                .collect { pointers ->
+                    if (pointers.isEmpty()) {
+                        _newEpisodeTmdbIds.value = emptySet()
+                        return@collect
+                    }
+                    // Perf: concurrent IO fetches with a 24h details cache, off main.
+                    // Concurrency capped (4) so a 50+ show list doesn't fan out at once.
+                    val detailsSemaphore = kotlinx.coroutines.sync.Semaphore(4)
+                    val ids = withContext(Dispatchers.IO) {
+                        pointers.map { (tmdbId, userSeason, userEp) ->
+                            async<Int?> {
+                                detailsSemaphore.withPermit {
+                                    if (userSeason == null || userEp == null) return@withPermit null
+                                    val details = tvDetailsCached(tmdbId) ?: return@withPermit null
+                                    val hasAvailable = when (val next = details.nextEpisodeToAir) {
+                                        null -> {
+                                            val lastAirMs = parseIsoDate(details.lastAirDate ?: return@withPermit null)
+                                                ?: return@withPermit null
+                                            val referenceMs = watchlist.value
+                                                .find { it.tmdbId == tmdbId }
+                                                ?.let { it.startedAt ?: it.addedAt } ?: 0L
+                                            lastAirMs > referenceMs
+                                        }
+                                        else -> when {
+                                            userSeason < next.seasonNumber -> true
+                                            userSeason == next.seasonNumber -> userEp < next.episodeNumber - 1
+                                            else -> false
+                                        }
+                                    }
+                                    if (hasAvailable) tmdbId else null
+                                }
                             }
-                            else -> when {
-                                userSeason < next.seasonNumber -> true
-                                userSeason == next.seasonNumber -> userEp < next.episodeNumber - 1
-                                else -> false
-                            }
-                        }
-
-                        if (hasAvailable) ids.add(entity.tmdbId)
-                    } catch (_: Exception) { }
+                        }.awaitAll().filterNotNull().toSet()
+                    }
+                    _newEpisodeTmdbIds.value = ids
                 }
-                _newEpisodeTmdbIds.value = ids
-            }
+        }
+    }
+
+    /** 24h in-memory cache for TV details used by new-episode detection. */
+    private val tvDetailsCache = java.util.concurrent.ConcurrentHashMap<Int, Pair<Long, com.playbridge.sender.data.library.TmdbTvDetails>>()
+
+    private suspend fun tvDetailsCached(tmdbId: Int): com.playbridge.sender.data.library.TmdbTvDetails? {
+        val now = System.currentTimeMillis()
+        tvDetailsCache[tmdbId]?.let { (at, details) ->
+            if (now - at < 24 * 60 * 60 * 1000L) return details
+        }
+        return runCatching { tmdb.getTvDetails(tmdbId) }.getOrNull()?.also {
+            tvDetailsCache[tmdbId] = now to it
         }
     }
 
@@ -782,28 +809,24 @@ class LibraryViewModel(
     }
 
     // ---------------------------------------------------------------------------
-    // Tracking — per-status flows
+    // Tracking — per-status flows (derived from the single getAll() collector so one
+    // DB write doesn't re-emit 6 flows).
     // ---------------------------------------------------------------------------
 
-    val watching: StateFlow<List<WatchlistEntity>> =
-        watchlistDao.getByStatus(WatchlistStatus.WATCHING.value)
+    private fun byStatus(status: WatchlistStatus): StateFlow<List<WatchlistEntity>> =
+        watchlist
+            .map { list -> list.filter { it.status == status.value } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val planToWatch: StateFlow<List<WatchlistEntity>> =
-        watchlistDao.getByStatus(WatchlistStatus.PLAN_TO_WATCH.value)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val watching: StateFlow<List<WatchlistEntity>> = byStatus(WatchlistStatus.WATCHING)
 
-    val completed: StateFlow<List<WatchlistEntity>> =
-        watchlistDao.getByStatus(WatchlistStatus.COMPLETED.value)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val planToWatch: StateFlow<List<WatchlistEntity>> = byStatus(WatchlistStatus.PLAN_TO_WATCH)
 
-    val onHold: StateFlow<List<WatchlistEntity>> =
-        watchlistDao.getByStatus(WatchlistStatus.ON_HOLD.value)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val completed: StateFlow<List<WatchlistEntity>> = byStatus(WatchlistStatus.COMPLETED)
 
-    val dropped: StateFlow<List<WatchlistEntity>> =
-        watchlistDao.getByStatus(WatchlistStatus.DROPPED.value)
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val onHold: StateFlow<List<WatchlistEntity>> = byStatus(WatchlistStatus.ON_HOLD)
+
+    val dropped: StateFlow<List<WatchlistEntity>> = byStatus(WatchlistStatus.DROPPED)
 
     init {
         checkConfigAndLoadInitialData()

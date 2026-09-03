@@ -3,9 +3,7 @@ package com.playbridge.sender.downloads
 import android.content.Context
 import android.content.Intent
 import android.widget.Toast
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -85,6 +83,8 @@ fun DownloadsScreen(onBack: () -> Unit) {
     val downloads by repository.observe().collectAsStateWithLifecycle(initialValue = emptyList())
 
     // Derive per-item download speed from successive Room emissions (worker ticks ~1s).
+    // Perf: plain map keyed off the downloads snapshot — recomputed only when Room
+    // emits, no state writes inside derivedStateOf.
     val speedTracker = remember { mutableMapOf<String, Pair<Long, Long>>() }
     val speeds = remember(downloads) {
         downloads.associate { e ->
@@ -267,9 +267,9 @@ private fun ActiveCard(
     val indeterminate = item.status == DownloadStatus.MERGING.name ||
         item.status == DownloadStatus.QUEUED.name ||
         item.totalBytes <= 0
-    val target = if (item.totalBytes > 0) (item.bytesDownloaded.toFloat() / item.totalBytes).coerceIn(0f, 1f) else 0f
-    val fraction by animateFloatAsState(targetValue = target, animationSpec = tween(450), label = "progress")
-    val barColor by animateColorAsState(accent.color, label = "barColor")
+    // Perf: raw fraction — the 1s Room tick restarted a 450ms tween continuously.
+    val fraction = if (item.totalBytes > 0) (item.bytesDownloaded.toFloat() / item.totalBytes).coerceIn(0f, 1f) else 0f
+    val barColor = accent.color
 
     Surface(
         shape = RoundedCornerShape(20.dp),
@@ -383,6 +383,13 @@ private fun RoundAction(icon: ImageVector, desc: String, tint: Color, onClick: (
 /** Custom rounded-cap progress with a soft gradient fill (or a pulsing track when indeterminate). */
 @Composable
 private fun GradientBar(fraction: Float, color: Color, indeterminate: Boolean) {
+    // Perf: entrance animates once; progress ticks drive the raw fraction directly.
+    var appeared by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { appeared = true }
+    val entrance by animateFloatAsState(
+        targetValue = if (appeared) 1f else 0f,
+        label = "barEntrance",
+    )
     Box(
         Modifier
             .fillMaxWidth()
@@ -400,7 +407,7 @@ private fun GradientBar(fraction: Float, color: Color, indeterminate: Boolean) {
             Box(
                 Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(fraction)
+                    .fillMaxWidth(fraction * entrance)
                     .clip(CircleShape)
                     .background(Brush.horizontalGradient(listOf(color, color.copy(alpha = 0.65f)))),
             )

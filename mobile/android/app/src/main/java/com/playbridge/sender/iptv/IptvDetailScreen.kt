@@ -44,12 +44,14 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -66,7 +68,6 @@ import com.playbridge.sender.data.collection.CollectionItemKind
 import com.playbridge.sender.data.collection.CollectionSource
 import com.playbridge.sender.data.iptv.IptvChannelEntity
 import com.playbridge.sender.data.iptv.IptvProbeStatus
-import com.playbridge.sender.data.iptv.IptvSortRules
 import com.playbridge.sender.data.iptv.decodeHeaders
 import com.playbridge.sender.player.PlayerLauncher
 import kotlinx.coroutines.launch
@@ -84,32 +85,41 @@ fun IptvDetailScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
 
-    val channels by viewModel.channelsFor(playlistId).collectAsState(initial = emptyList())
-    val activeFirst by viewModel.activeFirst.collectAsState()
-    val probeProgress by viewModel.probeProgress.collectAsState()
-    val updatingId by viewModel.updatingPlaylistId.collectAsState()
+    var query by remember { mutableStateOf("") }
+    var searchActive by remember { mutableStateOf(false) }
+    var selectedGroup by remember { mutableStateOf<String?>(null) } // null = All
+    // Perf: debounce the DB-side search query so each keystroke doesn't re-query.
+    var debouncedQuery by remember { mutableStateOf("") }
+    LaunchedEffect(query) {
+        kotlinx.coroutines.delay(300)
+        debouncedQuery = query
+    }
+    // Perf: memoize the channel flow — recreating snapshotFlows per recomposition
+    // would restart the Room collector on every probe tick/menu toggle.
+    val channelsFlow = remember(playlistId) {
+        viewModel.channelsFiltered(
+            playlistId,
+            snapshotFlow { debouncedQuery },
+            snapshotFlow { selectedGroup },
+        )
+    }
+    val channels by channelsFlow.collectAsStateWithLifecycle(initialValue = emptyList())
+    val activeFirst by viewModel.activeFirst.collectAsStateWithLifecycle()
+    var menuOpen by remember { mutableStateOf(false) }
+    var addToCollection by remember { mutableStateOf<IptvChannelEntity?>(null) }
+
+    val probeProgress by viewModel.probeProgress.collectAsStateWithLifecycle()
+    val updatingId by viewModel.updatingPlaylistId.collectAsStateWithLifecycle()
 
     val playlist = viewModel.playlistById(playlistId)
     val title = playlist?.name ?: "Channels"
     val updating = updatingId == playlistId
     val probing = probeProgress?.let { it.playlistId == playlistId && it.isRunning } == true
 
-    var query by remember { mutableStateOf("") }
-    var searchActive by remember { mutableStateOf(false) }
-    var selectedGroup by remember { mutableStateOf<String?>(null) } // null = All
-    var menuOpen by remember { mutableStateOf(false) }
-    var addToCollection by remember { mutableStateOf<IptvChannelEntity?>(null) }
+    val groups by viewModel.groupsFor(playlistId).collectAsStateWithLifecycle(initialValue = emptyList())
 
-    val groups = remember(channels) {
-        channels.mapNotNull { it.groupTitle?.takeIf { g -> g.isNotBlank() } }.distinct().sorted()
-    }
-
-    val visible = remember(channels, query, selectedGroup, activeFirst) {
-        val byGroup = if (selectedGroup == null) channels else channels.filter { it.groupTitle == selectedGroup }
-        val byQuery = if (query.isBlank()) byGroup
-        else byGroup.filter { it.name.contains(query, ignoreCase = true) }
-        IptvSortRules.sortChannels(byQuery, activeFirst)
-    }
+    // Sorting/filtering already applied DB-side (query + group + active-first).
+    val visible = channels
 
     fun castChannel(channel: IptvChannelEntity) {
         val headers = decodeHeaders(channel.headersJson)

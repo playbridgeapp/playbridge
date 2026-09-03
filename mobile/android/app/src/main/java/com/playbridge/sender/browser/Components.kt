@@ -352,11 +352,21 @@ object Components {
 
         // Configure Coil with explicit memory + disk cache so poster images survive
         // screen rotations (memory) and app restarts (disk) without re-downloading.
+        // Perf: global crossfade is OFF — every grid rebind would otherwise animate.
+        // Detail/hero screens opt in per-request.
+        val activityManager = appContext.getSystemService(android.content.Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+        val lowRam = activityManager?.isLowRamDevice == true
         Coil.setImageLoader(
             ImageLoader.Builder(appContext)
                 .memoryCache {
                     MemoryCache.Builder(appContext)
-                        .maxSizePercent(0.20) // 20% of available RAM
+                        .apply {
+                            if (lowRam) {
+                                maxSizeBytes(32 * 1024 * 1024)
+                            } else {
+                                maxSizePercent(0.15)
+                            }
+                        }
                         .build()
                 }
                 .diskCache {
@@ -365,7 +375,7 @@ object Components {
                         .maxSizeBytes(150L * 1024 * 1024) // 150 MB
                         .build()
                 }
-                .crossfade(true)
+                .crossfade(false)
                 .build()
         )
         

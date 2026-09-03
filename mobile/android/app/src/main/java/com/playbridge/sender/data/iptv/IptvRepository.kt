@@ -46,6 +46,16 @@ class IptvRepository(
     fun observePlaylists() = playlistDao.observeAll()
     fun observeChannels(playlistId: Long) = channelDao.observeForPlaylist(playlistId)
 
+    fun observeGroups(playlistId: Long) = channelDao.observeGroups(playlistId)
+
+    /** Perf: DB-side filtered channel flow for the detail screen. */
+    fun observeChannelsFiltered(
+        playlistId: Long,
+        query: String,
+        group: String?,
+        activeFirst: Boolean,
+    ) = channelDao.observeFiltered(playlistId, query, group, activeFirst)
+
     /** Add a playlist and immediately parse + cache its channels. Returns the new id. */
     suspend fun addPlaylist(name: String, source: String, sourceType: String): Long {
         val now = System.currentTimeMillis()

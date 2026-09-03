@@ -23,7 +23,7 @@ import com.playbridge.sender.data.nuvio.NuvioScraperEntity
 
 @Database(
     entities = [HistoryEntity::class, BookmarkEntity::class, TabEntity::class, InstalledAddonEntity::class, CommandHistoryEntity::class, WatchlistEntity::class, SearchHistoryEntity::class, PlaybackResumeEntity::class, IptvPlaylistEntity::class, IptvChannelEntity::class, CollectionEntity::class, CollectionItemEntity::class, DownloadEntity::class, NuvioScraperEntity::class],
-    version = 22
+    version = 23
 )
 abstract class HistoryDatabase : RoomDatabase() {
     abstract fun historyDao(): HistoryDao

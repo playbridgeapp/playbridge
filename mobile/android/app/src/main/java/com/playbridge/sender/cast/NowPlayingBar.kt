@@ -3,7 +3,6 @@ package com.playbridge.sender.cast
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -188,12 +187,10 @@ fun NowPlayingBar(
             }
 
             // Thin progress line hugging the bottom edge while media is loaded.
+            // Perf: position ticks at ~1Hz, so no tween (it would never settle) —
+            // drive the bar directly off the raw fraction.
             if (isPlaying && progress != null) {
-                val animatedProgress by animateFloatAsState(
-                    targetValue = progress.coerceIn(0f, 1f),
-                    animationSpec = tween(600, easing = LinearEasing),
-                    label = "miniBarProgress",
-                )
+                val directProgress = progress.coerceIn(0f, 1f)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -202,7 +199,7 @@ fun NowPlayingBar(
                 ) {
                     Box(
                         modifier = Modifier
-                            .fillMaxWidth(animatedProgress)
+                            .fillMaxWidth(directProgress)
                             .fillMaxHeight()
                             .background(content),
                     )

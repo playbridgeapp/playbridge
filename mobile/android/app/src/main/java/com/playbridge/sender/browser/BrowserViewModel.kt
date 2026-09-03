@@ -15,7 +15,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -37,11 +40,18 @@ class BrowserViewModel(
     private val _editUrl = MutableStateFlow("")
     val editUrl: StateFlow<String> = _editUrl.asStateFlow()
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class, kotlinx.coroutines.FlowPreview::class)
     val suggestions: StateFlow<List<HistoryEntity>> = _editUrl
+        // Perf: every keystroke hit Room with a LIKE '%%' full scan — debounce and
+        // skip unchanged queries. Short queries emit emptyList downstream so the
+        // suggestion list clears when the user backspaces.
+        .debounce(300)
+        .distinctUntilChanged()
         .flatMapLatest { query ->
-            historyDao.search(query)
+            if (query.length >= 2) historyDao.search(query)
+            else kotlinx.coroutines.flow.flowOf(emptyList())
         }
+        .flowOn(Dispatchers.IO)
         .stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),

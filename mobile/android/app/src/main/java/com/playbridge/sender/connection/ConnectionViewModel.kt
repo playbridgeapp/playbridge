@@ -37,12 +37,14 @@ import java.util.UUID
 
 class ConnectionViewModel(
     application: Application,
-    val webSocketClient: WebSocketClient = WebSocketClient(),
-    private val connectionStore: ConnectionStore = ConnectionStore(application),
-    private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase = DatabaseProvider.getDatabase(application),
+    // Perf: no default construction — manual construction used to bypass Koin and
+    // spin up duplicate OkHttp clients / DB instances per instance.
+    val webSocketClient: WebSocketClient,
+    private val connectionStore: ConnectionStore,
+    private val commandHistoryDb: com.playbridge.sender.data.history.HistoryDatabase,
     val castSessionManager: CastSessionManager,
     private val discoveryRepository: ReceiverDiscoveryRepository,
-    private val networkStatusRepository: NetworkStatusRepository = NetworkStatusRepository(application),
+    private val networkStatusRepository: NetworkStatusRepository,
 ) : AndroidViewModel(application) {
 
     private val TAG = "ConnectionViewModel"

@@ -756,7 +756,10 @@ internal fun DetectedMediaItemDetailed(
             Spacer(Modifier.height(10.dp))
             if (kind == DetectedMediaKind.IMAGE) {
                 AsyncImage(
-                    model = media.url,
+                    model = coil.request.ImageRequest.Builder(LocalContext.current)
+                        .data(media.url)
+                        .crossfade(false)
+                        .build(),
                     contentDescription = title,
                     modifier = Modifier
                         .fillMaxWidth()

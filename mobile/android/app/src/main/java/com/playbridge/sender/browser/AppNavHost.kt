@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.playbridge.sender.connection.ConnectionCoordinator
@@ -191,36 +192,25 @@ fun AppNavHost(
     val addonDao: AddonDao = koinInject()
     val settingsRepository: SettingsRepository = koinInject()
     val linkedPageCastCoordinator: LinkedPageCastCoordinator = koinInject()
-    val linkedPageCastState by linkedPageCastCoordinator.uiState.collectAsState()
+    val linkedPageCastState by linkedPageCastCoordinator.uiState.collectAsStateWithLifecycle()
 
-    // 2. Collect Live Flows / Collected states locally
-    val connectionState by connectionViewModel.connectionState.collectAsState()
-    val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
-    val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsState()
-    val externalStatus by connectionViewModel.externalStatus.collectAsState()
-    val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsState()
-    val castSessionState by connectionViewModel.castSessionState.collectAsState()
-    val castRoute by connectionViewModel.route.collectAsState()
+    // 2. Collect Live Flows / Collected states locally.
+    // Perf: only connection-level state is collected at the host root. High-frequency
+    // per-second TV tickers (tvPlayback, tvPlaylistState, tracks, nowPlaying*) are collected
+    // locally inside the Remote branch and the NowPlayingBar so ticks don't recompose the
+    // whole AnimatedContent + current screen.
+    val connectionState by connectionViewModel.connectionState.collectAsStateWithLifecycle()
+    val tvDevice by connectionViewModel.tvDevice.collectAsStateWithLifecycle(initialValue = null)
+    val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsStateWithLifecycle()
+    val castRoute by connectionViewModel.route.collectAsStateWithLifecycle()
     // Authoritative routing intent — reactive so screens follow device-picker changes live.
-    val routeTargetsTv by connectionViewModel.routeTargetsTv.collectAsState()
-    val allHistory by historyDao.getAll().collectAsState(initial = emptyList())
-    val installedAddons by addonDao.getAll().collectAsState(initial = emptyList())
-
-    // 3. TV Playback/Playlist states from Coordinator
-    val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsState()
-    val tvPlaylistState by connectionCoordinator.tvPlaylistState.collectAsState()
-    val tvPlayback by connectionCoordinator.tvPlayback.collectAsState()
-    val tvVideoTracks by connectionCoordinator.tvVideoTracks.collectAsState()
-    val tvAudioTracks by connectionCoordinator.tvAudioTracks.collectAsState()
-    val tvSubtitleTracks by connectionCoordinator.tvSubtitleTracks.collectAsState()
-    val tvPlayerSettings by connectionCoordinator.tvPlayerSettings.collectAsState()
-    val nowPlayingTvId by connectionCoordinator.nowPlayingTvId.collectAsState()
-    val nowPlayingSeason by connectionCoordinator.nowPlayingSeason.collectAsState()
-    val nowPlayingEpisodeStart by connectionCoordinator.nowPlayingEpisodeStart.collectAsState()
+    val routeTargetsTv by connectionViewModel.routeTargetsTv.collectAsStateWithLifecycle()
+    val allHistory by historyDao.getAll().collectAsStateWithLifecycle(initialValue = emptyList())
+    val installedAddons by addonDao.getAll().collectAsStateWithLifecycle(initialValue = emptyList())
 
     val context = LocalContext.current
 
-    val installedUserScripts by connectionCoordinator.installedUserScripts.collectAsState()
+    val installedUserScripts by connectionCoordinator.installedUserScripts.collectAsStateWithLifecycle()
     var showUserScripts by remember { mutableStateOf(false) }
 
     // Picks any .js file from the phone and ships it to the TV as a user script (e.g. the
@@ -268,7 +258,7 @@ fun AppNavHost(
         )
     }
 
-    val tvUserAgentState by connectionCoordinator.tvUserAgentState.collectAsState()
+    val tvUserAgentState by connectionCoordinator.tvUserAgentState.collectAsStateWithLifecycle()
     var showTvUserAgent by remember { mutableStateOf(false) }
 
     if (showTvUserAgent) {
@@ -306,12 +296,12 @@ fun AppNavHost(
     val clipboardManager = LocalClipboardManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    val preferredAudioLang by settingsRepository.preferredAudioLang.collectAsState(initial = "")
-    val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
-    val defaultVideoQuality by settingsRepository.defaultVideoQuality.collectAsState(initial = "Auto")
-    val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
-    val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
-    val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
+    val preferredAudioLang by settingsRepository.preferredAudioLang.collectAsStateWithLifecycle(initialValue = "")
+    val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsStateWithLifecycle(initialValue = "")
+    val defaultVideoQuality by settingsRepository.defaultVideoQuality.collectAsStateWithLifecycle(initialValue = "Auto")
+    val maxBitrateCapMbps by settingsRepository.maxBitrateCapMbps.collectAsStateWithLifecycle(initialValue = 0.0)
+    val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsStateWithLifecycle(initialValue = true)
+    val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsStateWithLifecycle(initialValue = "tv")
     val selectedTab = store.state.tabs.find { it.id == store.state.selectedTabId }
     // Persistent UI-scoped scroll states for the Library screen inside AppNavHost
     val libraryMainListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
@@ -335,7 +325,7 @@ fun AppNavHost(
     // Device picker opened from the idle cast bar (rendered once at the host level so
     // it survives screen transitions in the AnimatedContent below).
     var showDevicePicker by remember { mutableStateOf(false) }
-    val linkedDevicePickerRequest by Components.linkedDevicePickerRequests.collectAsState()
+    val linkedDevicePickerRequest by Components.linkedDevicePickerRequests.collectAsStateWithLifecycle()
     var handledLinkedDevicePickerRequest by rememberSaveable { mutableLongStateOf(0L) }
     var linkedPickerVisible by remember { mutableStateOf(false) }
     var linkedPickerCompleted by remember { mutableStateOf(false) }
@@ -391,7 +381,12 @@ fun AppNavHost(
     AnimatedContent(
         targetState = currentScreen,
         transitionSpec = {
-            if (targetState == Screen.Tabs && initialState == Screen.Browser) {
+            // Perf: heavy destinations (Gecko AndroidView, poster grids, blurred detail)
+            // keep two full trees alive during the transition — fade only, no slide.
+            val heavy = initialState.isHeavyScreen() || targetState.isHeavyScreen()
+            if (heavy) {
+                fadeIn(animationSpec = tween(250)) togetherWith fadeOut(animationSpec = tween(250))
+            } else if (targetState == Screen.Tabs && initialState == Screen.Browser) {
                 slideInVertically { height -> height } + fadeIn() togetherWith
                         slideOutVertically { height -> -height } + fadeOut()
             } else if (targetState == Screen.Browser && initialState == Screen.Tabs) {
@@ -477,7 +472,7 @@ fun AppNavHost(
                                 }
                             )
                     ) {
-                        if (currentScreen == Screen.Browser && session != null) {
+                        if (targetScreen == Screen.Browser && session != null) {
                             browserViewContent(session) { url ->
                                 onContextMenuUrlChange(url)
                             }
@@ -602,7 +597,7 @@ fun AppNavHost(
                                                             AsyncImage(
                                                                 model = ImageRequest.Builder(context)
                                                                     .data(faviconUrl)
-                                                                    .crossfade(true)
+                                                                    .crossfade(false)
                                                                     .build(),
                                                                 contentDescription = "Site icon",
                                                                 modifier = Modifier.size(28.dp)
@@ -719,7 +714,7 @@ fun AppNavHost(
                                     }
                                 } else {
                                     LazyColumn(modifier = Modifier.fillMaxSize()) {
-                                        items(suggestions) { historyItem ->
+                                        items(suggestions, key = { it.url }, contentType = { "history" }) { historyItem ->
                                             ListItem(
                                                 headlineContent = {
                                                     Text(
@@ -771,7 +766,7 @@ fun AppNavHost(
                     BackHandler { onScreenChange(Screen.Dashboard) }
                     val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(context)
                     val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
-                    val commandHistory by commandHistoryFlow.collectAsState(initial = emptyList())
+                    val commandHistory by commandHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
                     CastHistoryScreen(
                         historyItems = commandHistory,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
@@ -927,12 +922,27 @@ fun AppNavHost(
                     BackHandler {
                         onScreenChange(remoteReturnScreen)
                     }
+                    // Perf: high-frequency TV tickers collected locally so per-second
+                    // position updates recompose only this branch, not the whole host.
+                    val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
+                    val tvPlaylistState by connectionCoordinator.tvPlaylistState.collectAsStateWithLifecycle()
+                    val tvPlayback by connectionCoordinator.tvPlayback.collectAsStateWithLifecycle()
+                    val tvVideoTracks by connectionCoordinator.tvVideoTracks.collectAsStateWithLifecycle()
+                    val tvAudioTracks by connectionCoordinator.tvAudioTracks.collectAsStateWithLifecycle()
+                    val tvSubtitleTracks by connectionCoordinator.tvSubtitleTracks.collectAsStateWithLifecycle()
+                    val tvPlayerSettings by connectionCoordinator.tvPlayerSettings.collectAsStateWithLifecycle()
+                    val nowPlayingTvId by connectionCoordinator.nowPlayingTvId.collectAsStateWithLifecycle()
+                    val nowPlayingSeason by connectionCoordinator.nowPlayingSeason.collectAsStateWithLifecycle()
+                    val nowPlayingEpisodeStart by connectionCoordinator.nowPlayingEpisodeStart.collectAsStateWithLifecycle()
+                    val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
+                    val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsStateWithLifecycle()
                     val external = activeExternalDevice
                     val remoteTimeline = resolveRemoteTimeline(
                         activeContext = tvActiveContext,
                         playback = tvPlayback,
                         playerSettings = tvPlayerSettings,
                     )
+                    val externalCapabilities by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
                     if (external != null) {
                         RemoteControlScreen(
                             activeContext = "player",
@@ -968,7 +978,7 @@ fun AppNavHost(
                                 else -> "paused"
                             },
                             externalProtocolLabel = external.resolvedProtocol.displayName,
-                            externalCapabilities = castSessionState.capabilities,
+                            externalCapabilities = externalCapabilities.capabilities,
                             isLive = externalStatus?.isLive == true,
                             positionMs = externalStatus?.positionMs ?: 0L,
                             durationMs = externalStatus?.durationMs ?: 0L,
@@ -1123,7 +1133,7 @@ fun AppNavHost(
                     )
                 }
                 Screen.Library -> {
-                    val selectedTabVal by libraryViewModel.selectedTab.collectAsState()
+                    val selectedTabVal by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
                     BackHandler {
                         if (selectedTabVal != 0) {
                             libraryViewModel.setSelectedTab(0)
@@ -1733,7 +1743,7 @@ fun AppNavHost(
             // Note: excluded on Dashboard (overlays the "Exit" button) and on Connection
             // (the device picker lives there already).
             // Hide on Library Addons tab so the bar doesn't overlay addon management.
-            val libSelectedTab by libraryViewModel.selectedTab.collectAsState()
+            val libSelectedTab by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
             val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
             val showNowPlayingBar = ((targetScreen == Screen.Browser && linkedPageCastState.active) ||
                 targetScreen == Screen.Library ||
@@ -1745,92 +1755,21 @@ fun AppNavHost(
                 targetScreen == Screen.Collections ||
                 targetScreen is Screen.CollectionDetail) && !libraryAddonsTab
             if (showNowPlayingBar) {
-                val externalActive = activeExternalDevice != null
-                // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even
-                // though the status poll keeps reporting a (STOPPED) status.
-                val externalState = externalStatus?.state
-                val externalStopped = externalState == PlaybackState.STOPPED ||
-                    externalState == PlaybackState.IDLE ||
-                    externalState == PlaybackState.ERROR
-                val externalHasMedia = externalActive && externalMediaTitle != null && !externalStopped
-                val wsConnected = connectionState is WebSocketClient.ConnectionState.Connected
-                val nativeSelected = castRoute is CastSessionManager.Route.NativeTv
-                val nativePlaying = tvActiveContext == "player" && wsConnected && nativeSelected
-                val playing = externalHasMedia || nativePlaying
-
-                // Pause + progress for the bar: freeze the equalizer while paused and
-                // drive the bottom progress line off the live status snapshots.
-                val paused =
-                    if (externalActive) externalState == PlaybackState.PAUSED
-                    else tvPlayback?.state == "paused"
-                val playbackProgress = when {
-                    externalActive -> externalStatus?.takeIf { it.durationMs > 0 }
-                        ?.let { it.positionMs.toFloat() / it.durationMs }
-                    else -> tvPlayback?.takeIf { it.durationMs > 0 }
-                        ?.let { it.positionMs.toFloat() / it.durationMs }
-                }
-
-                val deviceName = activeExternalDevice?.name ?: if (nativeSelected) tvDevice?.name else null
-                val protocolName = activeExternalDevice?.resolvedProtocol?.displayName
-                    ?: CastProtocol.PLAYBRIDGE.displayName.takeIf { nativeSelected }
-                val leadingIcon = when {
-                    externalActive -> Icons.Default.Cast
-                    nativeSelected && wsConnected -> Icons.Default.Tv
-                    else -> Icons.Default.Smartphone
-                }
-
-                val primaryText: String
-                val secondaryText: String?
-                when {
-                    playing -> {
-                        primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
-                        secondaryText = linkedPageCastState.controllerName?.let {
-                            "Controlled by $it · on ${deviceName ?: "TV"}"
-                        } ?: "on ${deviceName ?: "TV"}" +
-                            protocolName?.let { " · $it" }.orEmpty()
-                    }
-                    externalActive || (nativeSelected && wsConnected) -> {
-                        primaryText = deviceName ?: "TV"
-                        secondaryText = protocolName?.let { "$it · Ready to cast" } ?: "Ready to cast"
-                    }
-                    else -> {
-                        primaryText = "This Device"
-                        secondaryText = "Tap to cast to a device"
-                    }
-                }
-
-                NowPlayingBar(
-                    primaryText = primaryText,
-                    secondaryText = secondaryText,
-                    leadingIcon = leadingIcon,
-                    onClick = {
-                        if (playing) {
-                            if (!externalActive) {
-                                connectionViewModel.webSocketClient.send(
-                                    com.playbridge.shared.protocol.createContextQueryJson()
-                                )
-                            }
-                            onScreenChange(Screen.Remote)
-                        } else {
-                            // Idle → choose / switch the cast destination.
-                            showDevicePicker = true
-                        }
-                    },
-                    isPlaying = playing,
-                    isPaused = paused,
-                    progress = if (playing) playbackProgress else null,
-                    showTvIcon = playing,
-                    onTvIconClick = {
-                        showDevicePicker = true
-                    },
-                    onUnlinkClick = if (linkedPageCastState.active) {
-                        { linkedPageCastCoordinator.unlink("unlinked") }
-                    } else {
-                        null
-                    },
-                    // Poster-matched accent on the library detail screen (the old FAB's
-                    // dynamic styling); FAB-like primaryContainer elsewhere.
+                NowPlayingBarHost(
+                    connectionViewModel = connectionViewModel,
+                    connectionCoordinator = connectionCoordinator,
+                    connectionState = connectionState,
+                    tvDevice = tvDevice,
+                    activeExternalDevice = activeExternalDevice,
+                    castRoute = castRoute,
+                    linkedPageCastControllerName = linkedPageCastState.controllerName,
+                    linkedPageCastActive = linkedPageCastState.active,
                     accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
+                    showDevicePicker = { showDevicePicker = true },
+                    onOpenRemote = {
+                        onScreenChange(Screen.Remote)
+                    },
+                    onUnlink = { linkedPageCastCoordinator.unlink("unlinked") },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         // Clear the system navigation bar, plus the Library's bottom
@@ -1860,6 +1799,121 @@ fun AppNavHost(
             },
         )
     }
+}
+
+/**
+ * Cast mini-bar host. Collects the high-frequency TV/external playback tickers locally so
+ * per-second position updates recompose only this small subtree, not the whole [AppNavHost].
+ */
+@Composable
+private fun NowPlayingBarHost(
+    connectionViewModel: ConnectionViewModel,
+    connectionCoordinator: ConnectionCoordinator,
+    connectionState: WebSocketClient.ConnectionState,
+    tvDevice: TvDevice?,
+    activeExternalDevice: TvDevice?,
+    castRoute: CastSessionManager.Route,
+    linkedPageCastControllerName: String?,
+    linkedPageCastActive: Boolean,
+    accentColor: androidx.compose.ui.graphics.Color?,
+    showDevicePicker: () -> Unit,
+    onOpenRemote: () -> Unit,
+    onUnlink: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
+    val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsStateWithLifecycle()
+    val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
+    val tvPlayback by connectionCoordinator.tvPlayback.collectAsStateWithLifecycle()
+    val externalActive = activeExternalDevice != null
+    // A stopped/ended/errored renderer (incl. after Stop) is not "playing", even
+    // though the status poll keeps reporting a (STOPPED) status.
+    val externalState = externalStatus?.state
+    val externalStopped = externalState == PlaybackState.STOPPED ||
+        externalState == PlaybackState.IDLE ||
+        externalState == PlaybackState.ERROR
+    val externalHasMedia = externalActive && externalMediaTitle != null && !externalStopped
+    val wsConnected = connectionState is WebSocketClient.ConnectionState.Connected
+    val nativeSelected = castRoute is CastSessionManager.Route.NativeTv
+    val nativePlaying = tvActiveContext == "player" && wsConnected && nativeSelected
+    val playing = externalHasMedia || nativePlaying
+
+    // Pause + progress for the bar: freeze the equalizer while paused and
+    // drive the bottom progress line off the live status snapshots.
+    val paused =
+        if (externalActive) externalState == PlaybackState.PAUSED
+        else tvPlayback?.state == "paused"
+    val playbackProgress = when {
+        externalActive -> externalStatus?.takeIf { it.durationMs > 0 }
+            ?.let { it.positionMs.toFloat() / it.durationMs }
+        else -> tvPlayback?.takeIf { it.durationMs > 0 }
+            ?.let { it.positionMs.toFloat() / it.durationMs }
+    }
+
+    val resolvedDeviceName = activeExternalDevice?.name
+        ?: if (nativeSelected) tvDevice?.name else null
+    val protocolName = activeExternalDevice?.resolvedProtocol?.displayName
+        ?: CastProtocol.PLAYBRIDGE.displayName.takeIf { nativeSelected }
+    val leadingIcon = when {
+        externalActive -> Icons.Default.Cast
+        nativeSelected && wsConnected -> Icons.Default.Tv
+        else -> Icons.Default.Smartphone
+    }
+
+    val primaryText: String
+    val secondaryText: String?
+    when {
+        playing -> {
+            primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
+            secondaryText = linkedPageCastControllerName?.let {
+                "Controlled by $it · on ${resolvedDeviceName ?: "TV"}"
+            } ?: "on ${resolvedDeviceName ?: "TV"}" +
+                protocolName?.let { " · $it" }.orEmpty()
+        }
+        externalActive || (nativeSelected && wsConnected) -> {
+            primaryText = resolvedDeviceName ?: "TV"
+            secondaryText = protocolName?.let { "$it · Ready to cast" } ?: "Ready to cast"
+        }
+        else -> {
+            primaryText = "This Device"
+            secondaryText = "Tap to cast to a device"
+        }
+    }
+
+    NowPlayingBar(
+        primaryText = primaryText,
+        secondaryText = secondaryText,
+        leadingIcon = leadingIcon,
+        onClick = {
+            if (playing) {
+                if (!externalActive) {
+                    connectionViewModel.webSocketClient.send(
+                        com.playbridge.shared.protocol.createContextQueryJson()
+                    )
+                }
+                onOpenRemote()
+            } else {
+                // Idle → choose / switch the cast destination.
+                showDevicePicker()
+            }
+        },
+        isPlaying = playing,
+        isPaused = paused,
+        progress = if (playing) playbackProgress else null,
+        showTvIcon = playing,
+        onTvIconClick = {
+            showDevicePicker()
+        },
+        onUnlinkClick = if (linkedPageCastActive) {
+            { onUnlink() }
+        } else {
+            null
+        },
+        // Poster-matched accent on the library detail screen (the old FAB's
+        // dynamic styling); FAB-like primaryContainer elsewhere.
+        accentColor = accentColor,
+        modifier = modifier,
+    )
 }
 
 /**

@@ -104,7 +104,11 @@ class ConnectionCoordinator(
                             )
                         }
                         "status" -> {
-                            tvPlayback.value = TvPlaybackStatus(
+                            // Perf: dedupe identical ticks — the TV status cadence (~1/s)
+                            // otherwise emits a distinct object per tick and recomposes
+                            // every collector. Raw ms precision kept so progress bars
+                            // glide instead of jumping in 1s steps.
+                            val next = TvPlaybackStatus(
                                 state = json.optString("state", "paused"),
                                 positionMs = json.optLong("position", 0L),
                                 durationMs = json.optLong("duration", 0L),
@@ -113,6 +117,7 @@ class ConnectionCoordinator(
                                     .takeIf { it in setOf("video", "audio", "image") }
                                     ?: "video",
                             )
+                            if (next != tvPlayback.value) tvPlayback.value = next
                         }
                         "tracks" -> {
                             fun parseTracks(arr: org.json.JSONArray?): List<MediaTrack> =

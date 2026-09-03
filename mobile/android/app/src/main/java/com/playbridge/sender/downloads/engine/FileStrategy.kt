@@ -158,10 +158,11 @@ class FileStrategy(
         }
         copied.set(chunks.sumOf { if (it.part.exists()) it.part.length() else 0L })
 
-        val dispatcher = Dispatchers.IO.limitedParallelism(n)
+        // Perf: shared bounded dispatcher (process-wide cap of 8) instead of a
+        // per-download limitedParallelism pool contending on the OkHttp pool.
         val jobs = mutableListOf<Job>()
         for (c in chunks) {
-            jobs += launch(dispatcher) {
+            jobs += launch(DownloadDispatchers.segments) {
                 val expected = c.end - c.start + 1
                 val have = if (c.part.exists()) c.part.length() else 0L
                 if (have >= expected) return@launch

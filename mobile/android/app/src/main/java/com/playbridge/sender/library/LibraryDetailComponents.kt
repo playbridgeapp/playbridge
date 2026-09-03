@@ -50,6 +50,7 @@ import androidx.palette.graphics.Palette
 import com.playbridge.sender.data.library.*
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -104,26 +105,53 @@ internal fun BackdropSection(
                 }
         ) {
             if (backdropUrl != null) {
-                AsyncImage(
-                    model = ImageRequest.Builder(context)
+                // Perf: one-shot palette extraction per URL — runs on Default and
+                // reports the color once, so rebinds/recompositions don't re-extract.
+                // The display load stays full-res (HARDWARE ok). Palette gets its own
+                // tiny software request (160px, allowHardware(false)) so it never
+                // copies/scales a full-res bitmap on the heap.
+                val backdropRequest = remember(backdropUrl) {
+                    ImageRequest.Builder(context)
                         .data(backdropUrl)
                         .crossfade(true)
-                        .allowHardware(false) // Required for Palette extraction
-                        .build(),
-                    onSuccess = { result ->
-                        val bitmap = (result.result.drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
-                        if (bitmap != null) {
-                            Palette.from(bitmap).generate { palette ->
-                                // Try to get a light vibrant or just vibrant color
-                                val swatch = palette?.lightVibrantSwatch ?: palette?.vibrantSwatch ?: palette?.dominantSwatch
-                                swatch?.let {
-                                    val extracted = Color(it.rgb)
-                                    // Make it significantly lighter (40% towards white)
-                                    onColorExtracted(lerp(extracted, Color.White, 0.4f))
+                        .build()
+                }
+                val paletteRequest = remember(backdropUrl) {
+                    ImageRequest.Builder(context)
+                        .data(backdropUrl)
+                        .size(160)
+                        .allowHardware(false)
+                        .build()
+                }
+                var extractionDone by remember(backdropUrl) { mutableStateOf(false) }
+                val imageLoader = coil.Coil.imageLoader(context)
+                LaunchedEffect(paletteRequest) {
+                    if (!extractionDone) {
+                        runCatching {
+                            // Decode + Palette.generate() on Default; only the
+                            // onColorExtracted snapshot write hops back to Main
+                            // (LaunchedEffect scope) — snapshot state must not be
+                            // written from a background thread.
+                            val swatch = withContext(kotlinx.coroutines.Dispatchers.Default) {
+                                val req = paletteRequest.newBuilder(context).build()
+                                val drawable = imageLoader.execute(req).drawable
+                                val bitmap = (drawable as? android.graphics.drawable.BitmapDrawable)?.bitmap
+                                    ?: return@withContext null
+                                Palette.from(bitmap).generate()?.let {
+                                    it.lightVibrantSwatch ?: it.vibrantSwatch ?: it.dominantSwatch
                                 }
+                            } ?: return@runCatching
+                            swatch.let {
+                                val extracted = Color(it.rgb)
+                                // Make it significantly lighter (40% towards white)
+                                onColorExtracted(lerp(extracted, Color.White, 0.4f))
                             }
+                            extractionDone = true
                         }
-                    },
+                    }
+                }
+                AsyncImage(
+                    model = backdropRequest,
                     contentDescription = title,
                     contentScale = ContentScale.Crop,
                     placeholder = ColorPainter(MaterialTheme.colorScheme.surfaceVariant),
@@ -151,7 +179,9 @@ internal fun BackdropSection(
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(logoUrl)
-                        .crossfade(true)
+                        // Layout is fillMaxWidth(0.7f) x 130dp — let Coil resolve the
+                        // density-aware target instead of a hardcoded px size.
+                        .crossfade(false)
                         .build(),
                     contentDescription = title,
                     contentScale = ContentScale.Fit,
@@ -511,7 +541,13 @@ internal fun WatchProvidersSheet(
                             modifier = Modifier.size(48.dp)
                         ) {
                             AsyncImage(
-                                model = provider.logoUrl,
+                                model = provider.logoUrl?.let { url ->
+                                    ImageRequest.Builder(LocalContext.current)
+                                        .data(url)
+                                        .size(192)
+                                        .crossfade(false)
+                                        .build()
+                                },
                                 contentDescription = provider.providerName,
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -818,7 +854,12 @@ internal fun EpisodeItem(
             ) {
                 if (episode.thumbnail != null) {
                     AsyncImage(
-                        model = episode.thumbnail,
+                        model = episode.thumbnail?.let { url ->
+                            ImageRequest.Builder(LocalContext.current)
+                                .data(url)
+                                .crossfade(false)
+                                .build()
+                        },
                         contentDescription = episode.title,
                         contentScale = ContentScale.Crop,
                         placeholder = ColorPainter(themeColor.copy(alpha = 0.1f)),
@@ -1038,19 +1079,28 @@ data class ResolutionState(
 
 @Composable
 fun TranslucentBackground(backdropUrl: String?, dominantColor: Color? = null) {
+    // Perf: memoize the downsampled request per URL so dominantColor ticks don't
+    // re-decode/re-blur; blur reduced 100dp -> 32dp.
+    val context = LocalContext.current
+    val request = remember(backdropUrl) {
+        backdropUrl?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .size(400, 225) // blurred — no need for full resolution
+                .memoryCacheKey(it)
+                .crossfade(false)
+                .build()
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
-        if (backdropUrl != null) {
+        if (request != null) {
             AsyncImage(
-                model = ImageRequest.Builder(LocalContext.current)
-                    .data(backdropUrl)
-                    .size(400, 225) // blurred — no need for full resolution
-                    .crossfade(true)
-                    .build(),
+                model = request,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .blur(100.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                    .blur(32.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
             )
             // Apply a uniform dark tint that retains the vibrant color of the blurred backdrop
             Box(
@@ -1103,7 +1153,7 @@ internal fun CastCarousel(
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            items(members) { member ->
+            items(members, key = { "${it.name}|${it.character}|${it.photo}" }, contentType = { "cast" }) { member ->
                 Column(
                     modifier = Modifier.width(80.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
@@ -1117,7 +1167,12 @@ internal fun CastCarousel(
                     ) {
                         if (member.photo != null) {
                             AsyncImage(
-                                model = member.photo,
+                                model = member.photo?.let { url ->
+                                    ImageRequest.Builder(LocalContext.current)
+                                        .data(url)
+                                        .crossfade(false)
+                                        .build()
+                                },
                                 contentDescription = member.name,
                                 contentScale = ContentScale.Crop,
                                 placeholder = ColorPainter(themeColor.copy(alpha = 0.1f)),
