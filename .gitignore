@@ -113,6 +113,10 @@ docs/local/
 mobile/android/store/icon_variants/_generated/
 mobile/android/store/icon_variants/*.svg
 
+# Local MemPalace palace mapping (mine/init output)
+entities.json
+mempalace.yaml
+
 # Local AI, agent, and custom environment configurations
 # Track shared Agent Skills under .agents/skills/ (Codex/Grok and other SKILL.md clients).
 # Keep other local agent state private.
