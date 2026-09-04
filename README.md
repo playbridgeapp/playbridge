@@ -256,6 +256,7 @@ Comprehensive project documentation is available:
 - **[Contributing](CONTRIBUTING.md)**: Setup instructions and contribution guidelines.
 - **[Security Policy](SECURITY.md)**: Security considerations and vulnerability reporting.
 - **[WSS Protocol Flow](protocol/docs/WSS_FLOW.md)**: Discovery, TLS pinning, SAS pairing, authentication, commands, status events, and compatibility rules. See also the machine-readable [AsyncAPI contract](protocol/asyncapi.yaml).
+- **[Feature Gap Matrix](docs/FEATURE_GAPS.md)**: Code-backed sender/receiver parity (shipped / partial / stub / absent). Product matrices above stay marketing-facing.
 
 ### Cast demo page
 

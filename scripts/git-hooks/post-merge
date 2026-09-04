@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+branch="$(git symbolic-ref --short HEAD 2>/dev/null || exit 0)"
+[[ "$branch" == "main" ]] || exit 0
+
+repo="$(git rev-parse --show-toplevel)"
+log="$repo/.git/mempalace-refresh.log"
+echo "MemPalace: refreshing playbridge wing in background (log: $log)"
+nohup "$repo/scripts/mempalace-refresh.sh" >>"$log" 2>&1 &
+disown || true
