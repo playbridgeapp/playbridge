@@ -47,15 +47,9 @@ interface IptvChannelDao {
     )
     fun observeGroups(playlistId: Long): Flow<List<String>>
 
-    /**
-     * Perf: DB-side search for large playlists — the detail screen no longer
-     * loads/sorts the full 10k-row table in memory on every probe write.
-     * No LIMIT: playlists are user-browsable end-to-end (2k-20k rows); Room only
-     * re-emits on actual table change and Compose keys rows by id.
-     */
+    /** Group filtering and ordering stay in SQL; Unicode name matching runs in Kotlin. */
     @Query(
         "SELECT * FROM iptv_channels WHERE playlistId = :playlistId " +
-            "AND (:query = '' OR name LIKE '%' || :query || '%') " +
             "AND (:group IS NULL OR groupTitle = :group) " +
             "ORDER BY " +
             "CASE WHEN :activeFirst = 1 THEN " +
@@ -66,7 +60,6 @@ interface IptvChannelDao {
     )
     fun observeFiltered(
         playlistId: Long,
-        query: String,
         group: String?,
         activeFirst: Boolean,
     ): Flow<List<IptvChannelEntity>>

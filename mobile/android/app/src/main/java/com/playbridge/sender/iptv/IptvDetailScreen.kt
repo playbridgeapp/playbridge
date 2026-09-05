@@ -118,7 +118,7 @@ fun IptvDetailScreen(
 
     val groups by viewModel.groupsFor(playlistId).collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // Sorting/filtering already applied DB-side (query + group + active-first).
+    // Sorting/filtering already applied by the repository (query + group + active-first).
     val visible = channels
 
     fun castChannel(channel: IptvChannelEntity) {

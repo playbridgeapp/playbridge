@@ -197,8 +197,12 @@ class LibraryViewModel(
                 }
             }
 
-            val cached = catalogCache
-            if (cached != null) _catalogRows.value = cached  // show cache immediately
+            // Normalize older caches, including the fallback used if refresh fails.
+            val cached = catalogCache?.map { row ->
+                row.copy(items = mergeUniquePage(emptyList(), row.items) { it.id })
+            }
+            catalogCache = cached
+            if (cached != null) _catalogRows.value = cached
 
             // Only hit the network when forced, or when the cache is missing/stale.
             val intervalMs = refreshIntervalMs()
@@ -249,7 +253,7 @@ class LibraryViewModel(
                     }.getOrDefault(emptyList())
 
                     mutex.withLock {
-                        ordered[index] = ordered[index].copy(items = items, isLoading = false)
+                        ordered[index] = ordered[index].copy(items = mergeUniquePage(emptyList(), items) { it.id }, isLoading = false)
                         if (showProgressive) emitOrdered()
                     }
                 }
@@ -390,7 +394,7 @@ class LibraryViewModel(
 
             updateCatalogRow(addonBaseUrl, type, catalogId) { existing ->
                 existing.copy(
-                    items = existing.items + newItems,
+                    items = mergeUniquePage(existing.items, newItems) { it.id },
                     isLoadingMore = false,
                     currentSkip = nextSkip,
                     hasMore = newItems.isNotEmpty()
@@ -751,14 +755,14 @@ class LibraryViewModel(
             val mediaType = f.mediaType
 
             if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.MOVIE) {
-                _discoveredMovies.value = tmdb.discoverMovies(page = 1, filters = movieFilters(f)).results
+                _discoveredMovies.value = mergeUniquePage(emptyList(), tmdb.discoverMovies(page = 1, filters = movieFilters(f)).results) { it.id }
             } else {
                 _discoveredMovies.value = emptyList()
                 _hasMoreDiscoveredMovies.value = false
             }
 
             if (mediaType == LibraryMediaType.ALL || mediaType == LibraryMediaType.TV_SHOW) {
-                _discoveredTvShows.value = tmdb.discoverTvShows(page = 1, filters = tvFilters(f)).results
+                _discoveredTvShows.value = mergeUniquePage(emptyList(), tmdb.discoverTvShows(page = 1, filters = tvFilters(f)).results) { it.id }
             } else {
                 _discoveredTvShows.value = emptyList()
                 _hasMoreDiscoveredTvShows.value = false
@@ -777,7 +781,7 @@ class LibraryViewModel(
                 val nextPage = discoveredMoviesPage + 1
                 val newMovies = tmdb.discoverMovies(page = nextPage, filters = movieFilters())
                 if (newMovies.results.isNotEmpty()) {
-                    _discoveredMovies.value = _discoveredMovies.value + newMovies.results
+                    _discoveredMovies.value = mergeUniquePage(_discoveredMovies.value, newMovies.results) { it.id }
                     discoveredMoviesPage = nextPage
                 } else {
                     _hasMoreDiscoveredMovies.value = false
@@ -797,7 +801,7 @@ class LibraryViewModel(
                 val nextPage = discoveredTvShowsPage + 1
                 val newTvShows = tmdb.discoverTvShows(page = nextPage, filters = tvFilters())
                 if (newTvShows.results.isNotEmpty()) {
-                    _discoveredTvShows.value = _discoveredTvShows.value + newTvShows.results
+                    _discoveredTvShows.value = mergeUniquePage(_discoveredTvShows.value, newTvShows.results) { it.id }
                     discoveredTvShowsPage = nextPage
                 } else {
                     _hasMoreDiscoveredTvShows.value = false

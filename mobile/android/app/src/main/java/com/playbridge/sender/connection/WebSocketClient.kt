@@ -63,13 +63,8 @@ class WebSocketClient {
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
-    // Perf: _messages is buffered + tryEmit so a slow collector never backpressures
-    // the OkHttp websocket callback path. play/playlist/status snapshots are periodic —
-    // dropping a stale tick is safe; credentials/capabilities below use suspending
-    // emit() and are never dropped. Coordinator is process-lifetime, so a 64-deep
-    // buffer only overflows if collection stalls entirely.
-    private val _messages = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 64)
-    val messages = _messages.asSharedFlow()
+    private val messageBus = WebSocketMessageBus()
+    val messages = messageBus.messages
 
     private val _newCredentials = MutableSharedFlow<IssuedCredentials>(replay = 0, extraBufferCapacity = 64)
     val newCredentials = _newCredentials.asSharedFlow()
@@ -437,7 +432,7 @@ class WebSocketClient {
                     }
                 }
 
-                _messages.tryEmit(text)
+                messageBus.publish(text)
             }
             
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

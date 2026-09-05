@@ -8,6 +8,8 @@ import com.playbridge.shared.player.IptvChannel
 import com.playbridge.shared.player.M3uParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
@@ -48,13 +50,15 @@ class IptvRepository(
 
     fun observeGroups(playlistId: Long) = channelDao.observeGroups(playlistId)
 
-    /** Perf: DB-side filtered channel flow for the detail screen. */
+    /** SQL handles group/order; Kotlin preserves literal Unicode case-insensitive search. */
     fun observeChannelsFiltered(
         playlistId: Long,
         query: String,
         group: String?,
         activeFirst: Boolean,
-    ) = channelDao.observeFiltered(playlistId, query, group, activeFirst)
+    ) = channelDao.observeFiltered(playlistId, group, activeFirst)
+        .map { channels -> IptvSearchRules.filter(channels, query) }
+        .flowOn(Dispatchers.Default)
 
     /** Add a playlist and immediately parse + cache its channels. Returns the new id. */
     suspend fun addPlaylist(name: String, source: String, sourceType: String): Long {

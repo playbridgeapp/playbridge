@@ -65,7 +65,7 @@ class IptvViewModel(
         repository.observeChannels(playlistId)
 
     /**
-     * Perf: DB-side filtered channel flow — search/group/active-first handled in SQL
+     * Filtered channel flow — group/active-first handled in SQL, name search off main
      * so large playlists don't sort fully in memory. Room still re-runs the query
      * on every probe UPDATE; the trailing debounce below only drops Compose
      * emissions so per-channel writes don't rebuild the LazyColumn per channel.
