@@ -94,6 +94,9 @@ class HistoryStore(private val context: Context) {
         thumbnailUrl: String? = null,
         playbackContext: PlaybackContext? = null,
     ) {
+        if (com.playbridge.shared.protocol.decodePlaylistPayloadJson(payloadJson)
+                ?.items?.any { it.skip_history == true } == true
+        ) return
         val logKey = historyLogKey(id)
         if (url.isBlank() || payloadJson.isBlank()) {
             FileLogger.w(

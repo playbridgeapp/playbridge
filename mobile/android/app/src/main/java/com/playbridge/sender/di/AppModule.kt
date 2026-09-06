@@ -1,5 +1,6 @@
 package com.playbridge.sender.di
 
+import com.playbridge.sender.cast.CastHistorySettings
 import com.playbridge.sender.connection.ConnectionStore
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
@@ -117,7 +118,8 @@ val appModule = module {
     }
 
     // 4. WebSocket client, persistence, and the process-wide Rust discovery owner
-    single { WebSocketClient() }
+    single { CastHistorySettings(androidContext()) }
+    single { WebSocketClient(get()) }
     single { ConnectionStore(androidContext()) }
     single {
         com.playbridge.sender.connection.ReceiverDiscoveryRepository(

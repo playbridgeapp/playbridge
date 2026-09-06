@@ -330,4 +330,22 @@ class PlayerViewModelTest {
         vm.next() // triggers saveCurrentProgress internally
         assertEquals(123_000, resumeStore.loadPosition(directPayload.url))
     }
+    @Test
+    fun `private cast preserves existing progress and later public cast saves again`() = runTest(testDispatcher) {
+        resumeStore.savePosition(directPayload.url, 42_000)
+        vm.onPayload(directPayload.copy(skip_history = true))
+        engine.emitState(PlaybackState.Playing)
+        engine.emitPosition(123_000)
+        engine.emitDuration(300_000)
+        vm.next()
+        assertEquals(42_000, resumeStore.loadPosition(directPayload.url))
+
+        vm.onPayload(directPayload)
+        engine.emitState(PlaybackState.Playing)
+        engine.emitPosition(150_000)
+        engine.emitDuration(300_000)
+        vm.next()
+        assertEquals(150_000, resumeStore.loadPosition(directPayload.url))
+    }
+
 }

@@ -36,6 +36,7 @@ class QueueItem {
     this.playlistBody,
     this.audioUrl,
     this.skipPreplay = false,
+    this.skipHistory = false,
     this.enforcePageNetworkPolicy = false,
     this.allowedPrivateOrigins = const [],
   });
@@ -72,6 +73,9 @@ class QueueItem {
 
   /// Suppress the initial presentation screen without discarding visual metadata.
   final bool skipPreplay;
+
+  /// Sender requests no receiver history for this item, including after rerouting.
+  final bool skipHistory;
 
   /// Untrusted webpage media must remain behind the receiver-side proxy so
   /// every manifest, segment, subtitle, and redirect uses its network policy.

@@ -654,6 +654,10 @@ components:
           type: [integer, 'null']
           minimum: 0
           description: For image items, a positive display time enables timed auto-advance; null or zero waits for navigation.
+        skipHistory:
+          type: [boolean, 'null']
+          default: false
+          description: When true, supporting receivers must not persist this cast in playback history, resume progress, or captured history artwork. A playlist containing any such item must not be persisted in full. Omitted or false preserves receiver defaults. Older receivers may ignore this field.
         detectedBy: { type: [string, 'null'] }
         playerMode: { type: [string, 'null'] }
         preferredAudioLanguage: { type: [string, 'null'] }

@@ -368,7 +368,7 @@ class TvSenderController extends ChangeNotifier {
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
   Future<bool> castVideo(PlayPayload video) async {
-    final ok = await _transport.castVideo(video);
+    final ok = await _transport.castVideo(_withHistoryPreference(video));
     if (ok) {
       _castingTitle =
           video.hasTitle() && video.title.isNotEmpty ? video.title : null;
@@ -377,8 +377,24 @@ class TvSenderController extends ChangeNotifier {
     return ok;
   }
 
-  Future<bool> castPlaylist(PlaylistPayload playlist) =>
-      _transport.castPlaylist(playlist);
+  PlayPayload _withHistoryPreference(PlayPayload item) {
+    if (!_identity.preventReceiverHistory ||
+        _transport.protocol != TvProtocol.playBridge) {
+      return item;
+    }
+    return PlayPayload()
+      ..mergeFromMessage(item)
+      ..skipHistory = true;
+  }
+
+  Future<bool> castPlaylist(PlaylistPayload playlist) {
+    final outgoing = PlaylistPayload()..mergeFromMessage(playlist);
+    final items = playlist.items.map(_withHistoryPreference).toList();
+    outgoing.items
+      ..clear()
+      ..addAll(items);
+    return _transport.castPlaylist(outgoing);
+  }
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
   /// optional request [headers] (Referer / cookies / auth) and a [title].
@@ -491,7 +507,8 @@ class TvSenderController extends ChangeNotifier {
     return await castVideo(payload);
   }
 
-  Future<bool> queueAdd(PlayPayload item) => _transport.queueAdd(item);
+  Future<bool> queueAdd(PlayPayload item) =>
+      _transport.queueAdd(_withHistoryPreference(item));
 
   Future<bool> playlistJump(int index) => _transport.playlistJump(index);
 

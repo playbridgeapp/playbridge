@@ -53,6 +53,7 @@ class BrowserActivity : ComponentActivity() {
     private var canGoBack = false
     private var currentUrl: String? = null
     private var explicitlyClosing = false
+    private var replacedByAnotherMode = false
 
     // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
     private var isDragging = false
@@ -449,6 +450,13 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun handleBrowserControlCommand(action: String?) {
+        if (action == "dismiss") {
+            // The replacement owns the context; teardown must not announce idle.
+            replacedByAnotherMode = true
+            engine?.pauseForBackground()
+            finish()
+            return
+        }
         Log.d(TAG, "Browser control: $action")
         when (action) {
             "refresh" -> engine?.reload()
@@ -564,6 +572,7 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (isFinishing || replacedByAnotherMode) return
         engine?.resumeAfterBackground()
     }
 
@@ -576,7 +585,7 @@ class BrowserActivity : ComponentActivity() {
         // Notify the player app's ServerService that the browser session has ended so it can
         // reset activeContext to "idle".
         try {
-            if (explicitlyClosing || isFinishing) {
+            if (!replacedByAnotherMode && (explicitlyClosing || isFinishing)) {
                 val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
                     setPackage("com.playbridge.player")
                 }

@@ -574,6 +574,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     $core.Iterable<SubtitleResource>? subtitleResources,
     $core.String? mediaKind,
     $fixnum.Int64? displayDurationMs,
+    $core.bool? skipHistory,
   }) {
     final result = create();
     if (url != null) result.url = url;
@@ -594,6 +595,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     if (subtitleResources != null) result.subtitleResources.addAll(subtitleResources);
     if (mediaKind != null) result.mediaKind = mediaKind;
     if (displayDurationMs != null) result.displayDurationMs = displayDurationMs;
+    if (skipHistory != null) result.skipHistory = skipHistory;
     return result;
   }
 
@@ -621,6 +623,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     ..pc<SubtitleResource>(16, _omitFieldNames ? '' : 'subtitleResources', $pb.PbFieldType.PM, subBuilder: SubtitleResource.create)
     ..aOS(17, _omitFieldNames ? '' : 'mediaKind')
     ..aInt64(18, _omitFieldNames ? '' : 'displayDurationMs')
+    ..aOB(19, _omitFieldNames ? '' : 'skipHistory')
     ..hasRequiredFields = false
   ;
 
@@ -792,6 +795,16 @@ class PlayPayload extends $pb.GeneratedMessage {
   $core.bool hasDisplayDurationMs() => $_has(17);
   @$pb.TagNumber(18)
   void clearDisplayDurationMs() => $_clearField(18);
+
+  /// Do not persist receiver history, resume progress, or captured history artwork.
+  @$pb.TagNumber(19)
+  $core.bool get skipHistory => $_getBF(18);
+  @$pb.TagNumber(19)
+  set skipHistory($core.bool value) => $_setBool(18, value);
+  @$pb.TagNumber(19)
+  $core.bool hasSkipHistory() => $_has(18);
+  @$pb.TagNumber(19)
+  void clearSkipHistory() => $_clearField(19);
 }
 
 class PlaylistPayload extends $pb.GeneratedMessage {

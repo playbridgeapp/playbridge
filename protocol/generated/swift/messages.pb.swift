@@ -571,6 +571,16 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   /// Clears the value of `displayDurationMs`. Subsequent reads from it will return its default value.
   mutating func clearDisplayDurationMs() {_uniqueStorage()._displayDurationMs = nil}
 
+  /// Do not persist receiver history, resume progress, or captured history artwork.
+  var skipHistory: Bool {
+    get {_storage._skipHistory ?? false}
+    set {_uniqueStorage()._skipHistory = newValue}
+  }
+  /// Returns true if `skipHistory` has been explicitly set.
+  var hasSkipHistory: Bool {_storage._skipHistory != nil}
+  /// Clears the value of `skipHistory`. Subsequent reads from it will return its default value.
+  mutating func clearSkipHistory() {_uniqueStorage()._skipHistory = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -1440,7 +1450,7 @@ nonisolated extension Playbridge_SubtitleResource: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0\u{3}skip_history\0")
 
   fileprivate class _StorageClass {
     var _url: String = String()
@@ -1461,6 +1471,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
     var _subtitleResources: [Playbridge_SubtitleResource] = []
     var _mediaKind: String? = nil
     var _displayDurationMs: Int64? = nil
+    var _skipHistory: Bool? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1489,6 +1500,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       _subtitleResources = source._subtitleResources
       _mediaKind = source._mediaKind
       _displayDurationMs = source._displayDurationMs
+      _skipHistory = source._skipHistory
     }
   }
 
@@ -1525,6 +1537,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         case 16: try { try decoder.decodeRepeatedMessageField(value: &_storage._subtitleResources) }()
         case 17: try { try decoder.decodeSingularStringField(value: &_storage._mediaKind) }()
         case 18: try { try decoder.decodeSingularInt64Field(value: &_storage._displayDurationMs) }()
+        case 19: try { try decoder.decodeSingularBoolField(value: &_storage._skipHistory) }()
         default: break
         }
       }
@@ -1591,6 +1604,9 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       try { if let v = _storage._displayDurationMs {
         try visitor.visitSingularInt64Field(value: v, fieldNumber: 18)
       } }()
+      try { if let v = _storage._skipHistory {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 19)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1618,6 +1634,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         if _storage._subtitleResources != rhs_storage._subtitleResources {return false}
         if _storage._mediaKind != rhs_storage._mediaKind {return false}
         if _storage._displayDurationMs != rhs_storage._displayDurationMs {return false}
+        if _storage._skipHistory != rhs_storage._skipHistory {return false}
         return true
       }
       if !storagesAreEqual {return false}

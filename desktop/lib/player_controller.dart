@@ -751,6 +751,7 @@ class PlayerController extends ChangeNotifier {
         album: item.album,
         artworkUrl: item.artworkUrl,
         skipPreplay: item.skipPreplay,
+        skipHistory: item.skipHistory,
         // Keep demuxed LL-HLS handoff across proxy toggles.
         playlistBody: item.playlistBody,
         audioUrl: item.audioUrl,
@@ -809,6 +810,7 @@ class PlayerController extends ChangeNotifier {
         album: item.album,
         artworkUrl: item.artworkUrl,
         skipPreplay: item.skipPreplay,
+        skipHistory: item.skipHistory,
         playlistBody: item.playlistBody,
         audioUrl: proxiedAudio,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,

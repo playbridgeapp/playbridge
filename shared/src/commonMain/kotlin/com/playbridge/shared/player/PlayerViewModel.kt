@@ -355,6 +355,7 @@ class PlayerViewModel(
 
     private suspend fun saveCurrentProgress() {
         val payload = currentPayload ?: return
+        if (payload.skip_history == true) return
         val pos = position.value
         val dur = duration.value
         if (dur > 0 && pos > 0) {

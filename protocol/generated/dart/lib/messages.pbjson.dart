@@ -209,6 +209,7 @@ const PlayPayload$json = {
     {'1': 'subtitle_resources', '3': 16, '4': 3, '5': 11, '6': '.playbridge.SubtitleResource', '10': 'subtitleResources'},
     {'1': 'media_kind', '3': 17, '4': 1, '5': 9, '9': 11, '10': 'mediaKind', '17': true},
     {'1': 'display_duration_ms', '3': 18, '4': 1, '5': 3, '9': 12, '10': 'displayDurationMs', '17': true},
+    {'1': 'skip_history', '3': 19, '4': 1, '5': 8, '9': 13, '10': 'skipHistory', '17': true},
   ],
   '3': [PlayPayload_HeadersEntry$json],
   '8': [
@@ -225,6 +226,7 @@ const PlayPayload$json = {
     {'1': '_start_position_ms'},
     {'1': '_media_kind'},
     {'1': '_display_duration_ms'},
+    {'1': '_skip_history'},
   ],
 };
 
@@ -256,13 +258,14 @@ final $typed_data.Uint8List playPayloadDescriptor = $convert.base64Decode(
     '9yaWdpbnMSSwoSc3VidGl0bGVfcmVzb3VyY2VzGBAgAygLMhwucGxheWJyaWRnZS5TdWJ0aXRs'
     'ZVJlc291cmNlUhFzdWJ0aXRsZVJlc291cmNlcxIiCgptZWRpYV9raW5kGBEgASgJSAtSCW1lZG'
     'lhS2luZIgBARIzChNkaXNwbGF5X2R1cmF0aW9uX21zGBIgASgDSAxSEWRpc3BsYXlEdXJhdGlv'
-    'bk1ziAEBGjoKDEhlYWRlcnNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCV'
-    'IFdmFsdWU6AjgBQggKBl90aXRsZUIPCg1fY29udGVudF90eXBlQg4KDF9kZXRlY3RlZF9ieUIO'
-    'CgxfcGxheWVyX21vZGVCGwoZX3ByZWZlcnJlZF9hdWRpb19sYW5ndWFnZUIeChxfcHJlZmVycm'
-    'VkX3N1YnRpdGxlX2xhbmd1YWdlQhgKFl9kZWZhdWx0X3ZpZGVvX3F1YWxpdHlCFwoVX21heF9i'
-    'aXRyYXRlX2NhcF9tYnBzQhIKEF92aXN1YWxfbWV0YWRhdGFCDgoMX2JpbmdlX2dyb3VwQhQKEl'
-    '9zdGFydF9wb3NpdGlvbl9tc0INCgtfbWVkaWFfa2luZEIWChRfZGlzcGxheV9kdXJhdGlvbl9t'
-    'cw==');
+    'bk1ziAEBEiYKDHNraXBfaGlzdG9yeRgTIAEoCEgNUgtza2lwSGlzdG9yeYgBARo6CgxIZWFkZX'
+    'JzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AUIICgZf'
+    'dGl0bGVCDwoNX2NvbnRlbnRfdHlwZUIOCgxfZGV0ZWN0ZWRfYnlCDgoMX3BsYXllcl9tb2RlQh'
+    'sKGV9wcmVmZXJyZWRfYXVkaW9fbGFuZ3VhZ2VCHgocX3ByZWZlcnJlZF9zdWJ0aXRsZV9sYW5n'
+    'dWFnZUIYChZfZGVmYXVsdF92aWRlb19xdWFsaXR5QhcKFV9tYXhfYml0cmF0ZV9jYXBfbWJwc0'
+    'ISChBfdmlzdWFsX21ldGFkYXRhQg4KDF9iaW5nZV9ncm91cEIUChJfc3RhcnRfcG9zaXRpb25f'
+    'bXNCDQoLX21lZGlhX2tpbmRCFgoUX2Rpc3BsYXlfZHVyYXRpb25fbXNCDwoNX3NraXBfaGlzdG'
+    '9yeQ==');
 
 @$core.Deprecated('Use playlistPayloadDescriptor instead')
 const PlaylistPayload$json = {

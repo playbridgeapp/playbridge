@@ -153,6 +153,16 @@ public class PlayPayload(
     schemaIndex = 17,
   )
   public val display_duration_ms: Long? = null,
+  /**
+   * Do not persist receiver history, resume progress, or captured history artwork.
+   */
+  @field:WireField(
+    tag = 19,
+    adapter = "com.squareup.wire.ProtoAdapter#BOOL",
+    jsonName = "skipHistory",
+    schemaIndex = 18,
+  )
+  public val skip_history: Boolean? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlayPayload, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -228,6 +238,7 @@ public class PlayPayload(
     if (subtitle_resources != other.subtitle_resources) return false
     if (media_kind != other.media_kind) return false
     if (display_duration_ms != other.display_duration_ms) return false
+    if (skip_history != other.skip_history) return false
     return true
   }
 
@@ -253,6 +264,7 @@ public class PlayPayload(
       result = result * 37 + subtitle_resources.hashCode()
       result = result * 37 + (media_kind?.hashCode() ?: 0)
       result = result * 37 + (display_duration_ms?.hashCode() ?: 0)
+      result = result * 37 + (skip_history?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -282,6 +294,7 @@ public class PlayPayload(
     if (subtitle_resources.isNotEmpty()) result += """subtitle_resources=$subtitle_resources"""
     if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
     if (display_duration_ms != null) result += """display_duration_ms=$display_duration_ms"""
+    if (skip_history != null) result += """skip_history=$skip_history"""
     return result.joinToString(prefix = "PlayPayload{", separator = ", ", postfix = "}")
   }
 
@@ -304,11 +317,13 @@ public class PlayPayload(
     subtitle_resources: List<SubtitleResource> = this.subtitle_resources,
     media_kind: String? = this.media_kind,
     display_duration_ms: Long? = this.display_duration_ms,
+    skip_history: Boolean? = this.skip_history,
     unknownFields: ByteString = this.unknownFields,
   ): PlayPayload = PlayPayload(url, title, headers, content_type, subtitles, detected_by,
       player_mode, preferred_audio_language, preferred_subtitle_language, default_video_quality,
       max_bitrate_cap_mbps, visual_metadata, binge_group, start_position_ms,
-      allowed_private_origins, subtitle_resources, media_kind, display_duration_ms, unknownFields)
+      allowed_private_origins, subtitle_resources, media_kind, display_duration_ms, skip_history,
+      unknownFields)
 
   public companion object {
     @JvmField
@@ -347,6 +362,7 @@ public class PlayPayload(
             value.subtitle_resources)
         size += ProtoAdapter.STRING.encodedSizeWithTag(17, value.media_kind)
         size += ProtoAdapter.INT64.encodedSizeWithTag(18, value.display_duration_ms)
+        size += ProtoAdapter.BOOL.encodedSizeWithTag(19, value.skip_history)
         return size
       }
 
@@ -371,11 +387,13 @@ public class PlayPayload(
         SubtitleResource.ADAPTER.asRepeated().encodeWithTag(writer, 16, value.subtitle_resources)
         ProtoAdapter.STRING.encodeWithTag(writer, 17, value.media_kind)
         ProtoAdapter.INT64.encodeWithTag(writer, 18, value.display_duration_ms)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 19, value.skip_history)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlayPayload) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.BOOL.encodeWithTag(writer, 19, value.skip_history)
         ProtoAdapter.INT64.encodeWithTag(writer, 18, value.display_duration_ms)
         ProtoAdapter.STRING.encodeWithTag(writer, 17, value.media_kind)
         SubtitleResource.ADAPTER.asRepeated().encodeWithTag(writer, 16, value.subtitle_resources)
@@ -417,6 +435,7 @@ public class PlayPayload(
         val subtitle_resources = mutableListOf<SubtitleResource>()
         var media_kind: String? = null
         var display_duration_ms: Long? = null
+        var skip_history: Boolean? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> url = ProtoAdapter.STRING.decode(reader)
@@ -437,6 +456,7 @@ public class PlayPayload(
             16 -> subtitle_resources.add(SubtitleResource.ADAPTER.decode(reader))
             17 -> media_kind = ProtoAdapter.STRING.decode(reader)
             18 -> display_duration_ms = ProtoAdapter.INT64.decode(reader)
+            19 -> skip_history = ProtoAdapter.BOOL.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -459,6 +479,7 @@ public class PlayPayload(
           subtitle_resources = subtitle_resources,
           media_kind = media_kind,
           display_duration_ms = display_duration_ms,
+          skip_history = skip_history,
           unknownFields = unknownFields
         )
       }
