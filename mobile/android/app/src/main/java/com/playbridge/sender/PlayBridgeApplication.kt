@@ -6,7 +6,10 @@ import com.playbridge.sender.data.backup.BackupTrigger
 import com.playbridge.sender.diagnostics.CrashLogger
 import com.playbridge.sender.di.appModule
 import com.playbridge.sender.util.ProcessUtil
+import com.playbridge.sender.BuildConfig
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.launch
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
@@ -34,7 +37,7 @@ class PlayBridgeApplication : Application() {
 
         // Initialize Koin DI Container
         startKoin {
-            androidLogger(Level.INFO)
+            androidLogger(if (BuildConfig.DEBUG) Level.INFO else Level.NONE)
             androidContext(this@PlayBridgeApplication)
             modules(appModule)
         }
@@ -42,8 +45,16 @@ class PlayBridgeApplication : Application() {
         // Start backup trigger
         BackupTrigger(this, applicationScope).start()
 
-        // Remove any leftover self-update APK from a previous session (cacheDir/updates).
-        com.playbridge.sender.update.ApkInstaller.cleanupStaleApks(this)
+        // Perf: Room init + stale-APK cleanup do file IO — off the main thread so
+        // cold start isn't blocked on DB verification / cacheDir scans.
+        applicationScope.launch(Dispatchers.IO) {
+            runCatching {
+                com.playbridge.sender.data.history.DatabaseProvider.getDatabase(this@PlayBridgeApplication)
+            }
+            runCatching {
+                com.playbridge.sender.update.ApkInstaller.cleanupStaleApks(this@PlayBridgeApplication)
+            }
+        }
     }
 
     companion object {

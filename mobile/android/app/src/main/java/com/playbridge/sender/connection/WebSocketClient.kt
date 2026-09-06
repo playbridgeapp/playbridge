@@ -63,16 +63,16 @@ class WebSocketClient {
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
     
-    private val _messages = MutableSharedFlow<String>(replay = 0)
-    val messages = _messages.asSharedFlow()
+    private val messageBus = WebSocketMessageBus()
+    val messages = messageBus.messages
 
-    private val _newCredentials = MutableSharedFlow<IssuedCredentials>(replay = 0)
+    private val _newCredentials = MutableSharedFlow<IssuedCredentials>(replay = 0, extraBufferCapacity = 64)
     val newCredentials = _newCredentials.asSharedFlow()
 
     // Players/browsers the TV reports at auth. Emitted on *every* successful auth
     // (incl. reconnect with an existing token, where no new credentials are issued),
     // so it's a separate channel from [newCredentials].
-    private val _tvCapabilities = MutableSharedFlow<TvCapabilities>(replay = 0)
+    private val _tvCapabilities = MutableSharedFlow<TvCapabilities>(replay = 0, extraBufferCapacity = 64)
     val tvCapabilities = _tvCapabilities.asSharedFlow()
     private val _tvCapabilitiesState = MutableStateFlow(TvCapabilities(emptyList(), emptyList()))
     val tvCapabilitiesState: StateFlow<TvCapabilities> = _tvCapabilitiesState.asStateFlow()
@@ -432,9 +432,7 @@ class WebSocketClient {
                     }
                 }
 
-                scope.launch {
-                    _messages.emit(text)
-                }
+                messageBus.publish(text)
             }
             
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {

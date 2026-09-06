@@ -2,6 +2,7 @@ package com.playbridge.sender.data.library
 
 import androidx.room.Dao
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -15,7 +16,11 @@ import kotlinx.coroutines.flow.Flow
  *
  * Keys: `"tmdb:<id>"` for movies, `"tmdb:<id>:<season>:<episode>"` for episodes.
  */
-@Entity(tableName = "playback_resume")
+@Entity(
+    tableName = "playback_resume",
+    // Perf: observeForTmdb / observeLatest / GROUP BY tmdbId were full scans.
+    indices = [Index("tmdbId"), Index("updatedAt")],
+)
 data class PlaybackResumeEntity(
     @PrimaryKey val contentKey: String,
     val tmdbId: Int,

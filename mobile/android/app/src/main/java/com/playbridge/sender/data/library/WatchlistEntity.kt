@@ -1,9 +1,14 @@
 package com.playbridge.sender.data.library
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "watchlist")
+@Entity(
+    tableName = "watchlist",
+    // Perf: getByStatus filtered on this column without an index.
+    indices = [Index("status")],
+)
 data class WatchlistEntity(
     @PrimaryKey val tmdbId: Int,
     val mediaType: String,          // "movie" or "tv"

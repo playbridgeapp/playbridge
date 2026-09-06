@@ -77,14 +77,14 @@ class HlsStrategy(
         }
 
         // 2. Download segments in parallel (resume skips ones already present).
+        // Perf: shared bounded dispatcher — see FileStrategy.
         val total = media.segments.size
         val done = AtomicInteger(0)
         val bytes = AtomicLong(0L)
-        val dispatcher = Dispatchers.IO.limitedParallelism(PARALLELISM)
         val jobs = mutableListOf<Job>()
         media.segments.forEachIndexed { index, segUrl ->
             val target = File(segDir, "seg_%05d.%s".format(index, ext))
-            jobs += launch(dispatcher) {
+            jobs += launch(DownloadDispatchers.segments) {
                 val written = segDownloader.download(segUrl, target, "HLS-seg")
                 val n = done.incrementAndGet()
                 val totalBytes = bytes.addAndGet(written)

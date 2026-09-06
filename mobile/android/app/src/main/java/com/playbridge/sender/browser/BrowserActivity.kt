@@ -31,7 +31,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -56,6 +55,7 @@ import androidx.compose.material3.ripple
 import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -186,50 +186,23 @@ fun AnimatedMenuItem(
     onClick: (() -> Unit)? = null,
     content: @Composable (onClick: () -> Unit) -> Unit
 ) {
-    val alpha = remember { Animatable(0f) }
-    val slide = remember { Animatable(50f) } // start 50px down
-    val scale = remember { Animatable(1f) }
-    val scope = rememberCoroutineScope()
-
+    // Perf: single AnimatedVisibility entrance — the old 3x Animatable per row plus
+    // the 150ms click delay kept N concurrent tweens alive and delayed taps.
+    var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        val delay = index * 30L // 30ms stagger
-        kotlinx.coroutines.delay(delay)
-        launch {
-            alpha.animateTo(
-                1f,
-                animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing)
-            )
-        }
-        launch {
-            slide.animateTo(
-                0f,
-                animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing)
-            )
-        }
+        kotlinx.coroutines.delay(index * 30L) // 30ms stagger
+        visible = true
     }
 
-    val wrappedOnClick: () -> Unit = {
-        if (onClick != null) {
-            scope.launch {
-                launch {
-                    scale.animateTo(0.95f, tween(100))
-                    scale.animateTo(1f, tween(100))
-                }
-                kotlinx.coroutines.delay(150) // Wait for animation and ripple
-                onClick()
-            }
-        }
-    }
-
-    Box(
-        modifier = Modifier.graphicsLayer {
-            this.alpha = alpha.value
-            this.translationY = slide.value
-            this.scaleX = scale.value
-            this.scaleY = scale.value
-        }
+    AnimatedVisibility(
+        visible = visible,
+        enter = slideInVertically(
+            initialOffsetY = { 50 },
+            animationSpec = tween(durationMillis = 300, easing = LinearOutSlowInEasing)
+        ) + fadeIn(animationSpec = tween(durationMillis = 300)),
+        exit = fadeOut(),
     ) {
-        content(wrappedOnClick)
+        content({ onClick?.invoke() })
     }
 }
 
@@ -649,15 +622,15 @@ class BrowserActivity : ComponentActivity() {
             if (!showTvWarning) {
                 com.playbridge.sender.update.UpdateGate(updateChecker)
             }
-            val connectionState by connectionViewModel.connectionState.collectAsState()
-            val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsState()
-            val castRoute by connectionViewModel.route.collectAsState()
+            val connectionState by connectionViewModel.connectionState.collectAsStateWithLifecycle()
+            val activeExternalDevice by connectionViewModel.activeExternalDevice.collectAsStateWithLifecycle()
+            val castRoute by connectionViewModel.route.collectAsStateWithLifecycle()
             val scope = rememberCoroutineScope()
 
             // Suggestions State
             var isEditing by remember { mutableStateOf(false) }
             var editUrl by remember { mutableStateOf("") }
-            val suggestions by browserViewModel.suggestions.collectAsState()
+            val suggestions by browserViewModel.suggestions.collectAsStateWithLifecycle()
             // URL bar tap panel state (Chrome-like panel shown before user types)
             var urlBarTapped by remember { mutableStateOf(false) }
             var urlPanelClipboard by remember { mutableStateOf<String?>(null) }
@@ -673,7 +646,7 @@ class BrowserActivity : ComponentActivity() {
             }
 
             // Connection ViewModel State
-            val tvDevice by connectionViewModel.tvDevice.collectAsState(initial = null)
+            val tvDevice by connectionViewModel.tvDevice.collectAsStateWithLifecycle(initialValue = null)
 
             // Session and navigation state from BrowserStore
             val store = Components.store
@@ -941,12 +914,12 @@ class BrowserActivity : ComponentActivity() {
 
             val composeScope = rememberCoroutineScope()
             // User preferences via SettingsRepository
-            val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
-            val maxAliveTabs by settingsRepository.maxAliveTabs.collectAsState(initial = 5)
-            val userAgentPreset by settingsRepository.userAgentPreset.collectAsState(initial = UserAgentPresets.DEFAULT_ID)
-            val customUserAgents by settingsRepository.customUserAgents.collectAsState(initial = emptyList())
-            val userAgentOverride by remember(userAgentPreset, customUserAgents) {
-                derivedStateOf { UserAgentPresets.resolve(userAgentPreset, customUserAgents) }
+            val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsStateWithLifecycle(initialValue = true)
+            val maxAliveTabs by settingsRepository.maxAliveTabs.collectAsStateWithLifecycle(initialValue = 5)
+            val userAgentPreset by settingsRepository.userAgentPreset.collectAsStateWithLifecycle(initialValue = UserAgentPresets.DEFAULT_ID)
+            val customUserAgents by settingsRepository.customUserAgents.collectAsStateWithLifecycle(initialValue = emptyList())
+            val userAgentOverride = remember(userAgentPreset, customUserAgents) {
+                UserAgentPresets.resolve(userAgentPreset, customUserAgents)
             }
 
             LaunchedEffect(maxAliveTabs) {
@@ -970,12 +943,12 @@ class BrowserActivity : ComponentActivity() {
                 }
             }
 
-            val preferredAudioLang by settingsRepository.preferredAudioLang.collectAsState(initial = "")
-            val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
-            val defaultVideoQuality by settingsRepository.defaultVideoQuality.collectAsState(initial = "Auto")
-            val maxBitrateCapMbpsFlow by settingsRepository.maxBitrateCapMbps.collectAsState(initial = 0.0)
+            val preferredAudioLang by settingsRepository.preferredAudioLang.collectAsStateWithLifecycle(initialValue = "")
+            val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsStateWithLifecycle(initialValue = "")
+            val defaultVideoQuality by settingsRepository.defaultVideoQuality.collectAsStateWithLifecycle(initialValue = "Auto")
+            val maxBitrateCapMbpsFlow by settingsRepository.maxBitrateCapMbps.collectAsStateWithLifecycle(initialValue = 0.0)
             val maxBitrateCapMbps = maxBitrateCapMbpsFlow.takeIf { it > 0.0 }
-            val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsState(initial = "tv")
+            val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsStateWithLifecycle(initialValue = "tv")
             var pendingPageCast by remember { mutableStateOf<PendingPageCast?>(null) }
             var pendingLinkedPageCast by remember { mutableStateOf<PendingLinkedPageCast?>(null) }
             var pendingLinkedOperation by remember { mutableStateOf<PendingLinkedOperation?>(null) }
@@ -1583,7 +1556,7 @@ class BrowserActivity : ComponentActivity() {
                 )
             }
 
-            val detectVideosEnabled by settingsRepository.detectVideos.collectAsState(initial = true)
+            val detectVideosEnabled by settingsRepository.detectVideos.collectAsStateWithLifecycle(initialValue = true)
             // Detection messages now arrive via native messaging (Components.processMessage),
             // so the setting is enforced there rather than at the old hash-signal parse site.
             LaunchedEffect(detectVideosEnabled) {
@@ -1650,7 +1623,7 @@ class BrowserActivity : ComponentActivity() {
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
             var pendingContentPayload by remember { mutableStateOf<playbridge.PlayPayload?>(null) }
 
-            val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsState()
+            val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
             // Keep the revision as an explicit Compose input. DetectedVideo contains mutable probe
             // fields, so a copied List can remain structurally equal even though its ranking changed.
             val detectedMediaRevision = VideoDetector.processingVersion
@@ -3035,7 +3008,7 @@ class BrowserActivity : ComponentActivity() {
                 // across the reconnect retry cycle so the user sees progress and can bail
                 // out: the primary action plays on this device; staying keeps trying.
                 val state = connectionState
-                val reconnect by connectionViewModel.reconnectStatus.collectAsState()
+                val reconnect by connectionViewModel.reconnectStatus.collectAsStateWithLifecycle()
                 val isPairingState = state is WebSocketClient.ConnectionState.WaitingForCodeInput ||
                     state is WebSocketClient.ConnectionState.VerifyingCode
                 if (state is WebSocketClient.ConnectionState.Connecting ||
@@ -3209,13 +3182,20 @@ class BrowserActivity : ComponentActivity() {
 
     @Composable
     fun BrowserView(session: EngineSession, onLongPressLink: (String) -> Unit) {
+        // Isolated so parent recompositions (browserState/currentUrl/isEditing ticks)
+        // don't re-measure the full-screen Gecko view: this subtree reads nothing
+        // but the persistent store. See GeckoBrowserView below.
+        GeckoBrowserView()
+    }
+
+    @Composable
+    private fun GeckoBrowserView() {
         // ONE persistent GeckoEngineView for all tabs (Fenix-style):
         // SessionFeature/EngineViewPresenter observes the store and renders
         // whatever tab is selected — creating engine sessions on demand,
         // releasing the view for crashed tabs, and re-rendering on session
         // changes. No more per-tab view recreation (the old `key(session)`
         // AndroidView), which caused surface churn on every tab switch.
-        // `session` is unused for rendering but kept for callsite compatibility.
         val featureHolder = remember { arrayOfNulls<mozilla.components.feature.session.SessionFeature>(1) }
         AndroidView(
             modifier = Modifier

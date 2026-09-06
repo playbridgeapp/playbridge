@@ -41,6 +41,29 @@ interface IptvChannelDao {
     @Query("SELECT * FROM iptv_channels WHERE playlistId = :playlistId ORDER BY orderIndex ASC")
     suspend fun getForPlaylist(playlistId: Long): List<IptvChannelEntity>
 
+    @Query(
+        "SELECT DISTINCT groupTitle FROM iptv_channels WHERE playlistId = :playlistId " +
+            "AND groupTitle IS NOT NULL AND groupTitle != '' ORDER BY groupTitle ASC",
+    )
+    fun observeGroups(playlistId: Long): Flow<List<String>>
+
+    /** Group filtering and ordering stay in SQL; Unicode name matching runs in Kotlin. */
+    @Query(
+        "SELECT * FROM iptv_channels WHERE playlistId = :playlistId " +
+            "AND (:group IS NULL OR groupTitle = :group) " +
+            "ORDER BY " +
+            "CASE WHEN :activeFirst = 1 THEN " +
+            "CASE probeStatus WHEN 'ACTIVE' THEN 0 WHEN 'DEAD' THEN 2 ELSE 1 END " +
+            "ELSE 0 END, " +
+            "CASE WHEN :activeFirst = 1 AND probeLatencyMs IS NOT NULL THEN probeLatencyMs ELSE 999999999 END ASC, " +
+            "orderIndex ASC",
+    )
+    fun observeFiltered(
+        playlistId: Long,
+        group: String?,
+        activeFirst: Boolean,
+    ): Flow<List<IptvChannelEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<IptvChannelEntity>)
 

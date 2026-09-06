@@ -75,9 +75,21 @@ class DownloadWorker(
         return coroutineScope {
             val latest = AtomicReference(Progress(entity.bytesDownloaded, entity.totalBytes))
             val ticker = launch {
+                var lastWrittenBytes = entity.bytesDownloaded
+                var lastWrittenPercent = -1
                 while (isActive) {
                     val p = latest.get()
-                    dao.updateProgress(id, p.downloadedBytes, p.totalBytes, DownloadStatus.RUNNING.name)
+                    // Perf: Room write re-emits observeAll and recomposes DownloadsScreen —
+                    // the 1s delay below already caps writes at 1Hz, so write on any
+                    // movement. (A 64KB gate froze slow connections for seconds.)
+                    val total = p.totalBytes
+                    val percent = if (total > 0) ((p.downloadedBytes * 100) / total).toInt() else -1
+                    val moved = p.downloadedBytes - lastWrittenBytes
+                    if (moved > 0 || percent != lastWrittenPercent) {
+                        dao.updateProgress(id, p.downloadedBytes, p.totalBytes, DownloadStatus.RUNNING.name)
+                        lastWrittenBytes = p.downloadedBytes
+                        lastWrittenPercent = percent
+                    }
                     delay(PROGRESS_INTERVAL_MS)
                 }
             }

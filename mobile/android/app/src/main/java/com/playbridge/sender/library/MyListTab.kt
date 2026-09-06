@@ -26,6 +26,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import androidx.compose.ui.platform.LocalContext
 import com.playbridge.sender.data.library.WatchlistEntity
 import com.playbridge.sender.data.library.WatchlistStatus
 
@@ -207,9 +209,15 @@ private fun TrackingCard(
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
 
-            // Poster image
+            // Poster image (no explicit .size(): AsyncImage resolves layout px,
+            // a hardcoded size decodes too small on high-density screens = blurry).
             AsyncImage(
-                model = entity.posterUrl,
+                model = entity.posterUrl?.let { url ->
+                    ImageRequest.Builder(LocalContext.current)
+                        .data(url)
+                        .crossfade(false)
+                        .build()
+                },
                 contentDescription = entity.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),

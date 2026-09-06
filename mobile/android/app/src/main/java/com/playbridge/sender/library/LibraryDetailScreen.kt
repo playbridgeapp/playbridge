@@ -1127,12 +1127,15 @@ fun LibraryDetailScreen(
                         }
                     }
 
-                    // Episodes list
+                    // Episodes list — stable keys so asc/desc toggle doesn't recreate rows.
                     if (isSeries && hasEpisodes) {
                         val episodes = (addonMeta?.videos?.filter { it.season == selectedSeason } ?: emptyList())
                             .let { if (episodesAscending) it else it.reversed() }
-                        items(episodes.size) { index ->
-                            val episode = episodes[index]
+                        items(
+                            episodes,
+                            key = { "${it.season}x${it.episode}:${it.id}" },
+                            contentType = { "episode" },
+                        ) { episode ->
                             val epNum = episode.episode ?: 0
                             val isEpWatched = tracked?.let { entity ->
                                 if (entity.status != WatchlistStatus.WATCHING.value &&

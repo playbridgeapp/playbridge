@@ -1139,7 +1139,15 @@ fun CastSheet(
                                         Spacer(modifier = Modifier.height(8.dp))
 
                                         AsyncImage(
-                                            model = contentPayload.visual_metadata?.backdrop_url ?: contentPayload.visual_metadata?.poster_url,
+                                            model = (contentPayload.visual_metadata?.backdrop_url
+                                                ?: contentPayload.visual_metadata?.poster_url)?.let { url ->
+                                                coil.request.ImageRequest.Builder(context)
+                                                    .data(url)
+                                                    // Layout is fillMaxWidth x 16/9 — let Coil resolve
+                                                    // the density-aware target instead of fixed px.
+                                                    .crossfade(false)
+                                                    .build()
+                                            },
                                             contentDescription = null,
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -1305,7 +1313,7 @@ fun CastSheet(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(detectedAudio) { audio ->
+                        items(detectedAudio, key = { "audio:${it.url}" }, contentType = { "audio" }) { audio ->
                             DetectedMediaItemDetailed(
                                 media = audio,
                                 kind = DetectedMediaKind.AUDIO,
@@ -1350,7 +1358,7 @@ fun CastSheet(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        items(detectedImages) { image ->
+                        items(detectedImages, key = { "image:${it.url}" }, contentType = { "image" }) { image ->
                             DetectedMediaItemDetailed(
                                 media = image,
                                 kind = DetectedMediaKind.IMAGE,
@@ -1402,7 +1410,7 @@ fun CastSheet(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(combinedSubtitles) { subtitle ->
+                            items(combinedSubtitles, key = { "sub:${it.url}" }, contentType = { "subtitle" }) { subtitle ->
                                 var previewText by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
                                 var isLoadingPreview by remember(subtitle.url) { mutableStateOf(!subtitle.subtitlePreviewChecked) }
 

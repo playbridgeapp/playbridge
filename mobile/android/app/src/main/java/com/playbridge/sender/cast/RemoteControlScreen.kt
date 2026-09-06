@@ -760,7 +760,11 @@ private fun SeekVolumeBar(
     val tick: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
     val thud: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
 
-    val phase by rememberInfiniteTransition(label = "sineWavePhase").animateFloat(
+    // Perf: one wave clock drives both phase + breath; values used only while
+    // there is something to animate (playing, or the user is dragging).
+    val waveActive = isPlaying || dragging
+    val waveTransition = rememberInfiniteTransition(label = "waveClocks")
+    val animatedPhase by waveTransition.animateFloat(
         initialValue = 0f,
         targetValue = (2 * Math.PI).toFloat(),
         animationSpec = infiniteRepeatable(
@@ -769,6 +773,17 @@ private fun SeekVolumeBar(
         ),
         label = "phase"
     )
+    val animatedBreath by waveTransition.animateFloat(
+        initialValue = 0.8f,
+        targetValue = 1.2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "breath"
+    )
+    val phase = if (waveActive) animatedPhase else 0f
+    val breathValue = if (waveActive) animatedBreath else 1f
 
     val targetAmplitude = if (isPlaying && !dragging) 7.dp else 0.dp
     val amplitude by animateDpAsState(targetValue = targetAmplitude, animationSpec = tween(durationMillis = 300), label = "amplitude")
@@ -920,15 +935,8 @@ private fun SeekVolumeBar(
 
                 // Slow "breathing" of the wave height so the motion feels organic rather
                 // than a fixed-height ripple; layered with the phase scroll below.
-                val breath by rememberInfiniteTransition(label = "waveBreath").animateFloat(
-                    initialValue = 0.8f,
-                    targetValue = 1.2f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(durationMillis = 2600, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "breath"
-                )
+                // Perf: static (breathValue) when the wave is idle.
+                val breath = breathValue
 
                 Canvas(modifier = Modifier.fillMaxWidth().height(24.dp)) {
                     val width = size.width

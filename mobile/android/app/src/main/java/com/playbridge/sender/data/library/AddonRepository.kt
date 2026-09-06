@@ -90,9 +90,17 @@ class AddonRepository(
     private val kitsuCache = java.util.concurrent.ConcurrentHashMap<String, String>()
     private val ioScope = CoroutineScope(Dispatchers.IO)
     private val diskJson = Json { ignoreUnknownKeys = true }
+    // Guards readers/writers until the disk cache finishes loading — a write
+    // racing the load would persist an empty map and wipe the disk cache.
+    private val cacheReady = kotlinx.coroutines.CompletableDeferred<Unit>()
 
     init {
-        loadCacheFromDisk()
+        // Perf: disk cache load does file IO + JSON on the constructing thread —
+        // defer to IO and guard readers until loaded.
+        ioScope.launch {
+            loadCacheFromDisk()
+            cacheReady.complete(Unit)
+        }
         seedDefaultAddons()
     }
 
@@ -129,6 +137,9 @@ class AddonRepository(
     private fun saveCacheToDisk() {
         val file = cacheDir?.let { File(it, CACHE_FILE_NAME) } ?: return
         ioScope.launch {
+            // Don't persist until the load finished — otherwise an early write
+            // snapshots an empty map and wipes the disk cache.
+            cacheReady.await()
             try {
                 val persisted = PersistedCache(entries = HashMap(streamCache))
                 file.writeText(diskJson.encodeToString(persisted))

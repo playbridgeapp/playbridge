@@ -41,7 +41,7 @@ import androidx.compose.material3.*
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -198,39 +198,39 @@ private fun LibraryScreenContent(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     // Check if API key is configured (only needed for Browse/search)
-    val isConfigured by viewModel.isConfigured.collectAsState()
+    val isConfigured by viewModel.isConfigured.collectAsStateWithLifecycle()
 
     // Addon catalog rows — collected early so the ambient backdrop can derive from them
-    val catalogRows by viewModel.catalogRows.collectAsState()
+    val catalogRows by viewModel.catalogRows.collectAsStateWithLifecycle()
 
     // Ambient backdrop derived from addon catalog rows (helper is non-composable
     // so Modifier.background() cannot shadow the StremioMetaPreview.background property).
     val activeHeroBackdropUrl = remember(catalogRows) { firstAddonBackdropUrl(catalogRows) }
 
     // Search state
-    val searchQuery by viewModel.searchQuery.collectAsState()
-    val isSearching by viewModel.isSearching.collectAsState()
-    val isSearchLoading by viewModel.isSearchLoading.collectAsState()
-    val addonSearchGroups by viewModel.addonSearchGroups.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
+    val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val isSearchLoading by viewModel.isSearchLoading.collectAsStateWithLifecycle()
+    val addonSearchGroups by viewModel.addonSearchGroups.collectAsStateWithLifecycle()
     val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items }.distinctBy { it.id } }
-    val searchHistory by viewModel.searchHistory.collectAsState()
+    val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
 
 
 
     // Discovery state - Collected from a single unified filters StateFlow
-    val filters by viewModel.filters.collectAsState()
+    val filters by viewModel.filters.collectAsStateWithLifecycle()
 
     val selectedGenres = filters.selectedGenres
     val excludedGenres = filters.excludedGenres
     val matchAllGenres = filters.matchAllGenres
 
-    val discoveredMovies by viewModel.discoveredMovies.collectAsState()
-    val isLoadingMoreDiscoveredMovies by viewModel.isLoadingMoreDiscoveredMovies.collectAsState()
-    val hasMoreDiscoveredMovies by viewModel.hasMoreDiscoveredMovies.collectAsState()
+    val discoveredMovies by viewModel.discoveredMovies.collectAsStateWithLifecycle()
+    val isLoadingMoreDiscoveredMovies by viewModel.isLoadingMoreDiscoveredMovies.collectAsStateWithLifecycle()
+    val hasMoreDiscoveredMovies by viewModel.hasMoreDiscoveredMovies.collectAsStateWithLifecycle()
 
-    val discoveredTvShows by viewModel.discoveredTvShows.collectAsState()
-    val isLoadingMoreDiscoveredTvShows by viewModel.isLoadingMoreDiscoveredTvShows.collectAsState()
-    val hasMoreDiscoveredTvShows by viewModel.hasMoreDiscoveredTvShows.collectAsState()
+    val discoveredTvShows by viewModel.discoveredTvShows.collectAsStateWithLifecycle()
+    val isLoadingMoreDiscoveredTvShows by viewModel.isLoadingMoreDiscoveredTvShows.collectAsStateWithLifecycle()
+    val hasMoreDiscoveredTvShows by viewModel.hasMoreDiscoveredTvShows.collectAsStateWithLifecycle()
 
     val selectedMediaType = filters.mediaType
     val selectedSort = filters.sort
@@ -246,18 +246,18 @@ private fun LibraryScreenContent(
     val selectedWatchRegion = filters.watchRegion
     val selectedProviders = filters.selectedProviders
     val selectedMonetization = filters.selectedMonetization
-    val watchProviders by viewModel.watchProviders.collectAsState()
+    val watchProviders by viewModel.watchProviders.collectAsStateWithLifecycle()
     val selectedCertification = filters.certification
     val selectedReleaseTypes = filters.selectedReleaseTypes
     val selectedTvStatuses = filters.selectedTvStatuses
     val selectedTvTypes = filters.selectedTvTypes
     val selectedKeywords = filters.selectedKeywords
-    val keywordResults by viewModel.keywordResults.collectAsState()
-    val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsState()
+    val keywordResults by viewModel.keywordResults.collectAsStateWithLifecycle()
+    val isSearchingKeywords by viewModel.isSearchingKeywords.collectAsStateWithLifecycle()
     val includeAdult = filters.includeAdult
 
-    val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsState()
-    val selectedTab by viewModel.selectedTab.collectAsState()
+    val isDiscoveryLoading by viewModel.isDiscoveryLoading.collectAsStateWithLifecycle()
+    val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
 
     // Home tab: which addon is selected in the filter chip row (null = All)
     var selectedAddonFilter by remember { mutableStateOf<String?>(null) }
@@ -301,10 +301,10 @@ private fun LibraryScreenContent(
     var trackingTarget by remember { mutableStateOf<TrackingTarget?>(null) }
 
     // Per-status lists for My List tab
-    val watchlistAll by viewModel.watchlist.collectAsState()
+    val watchlistAll by viewModel.watchlist.collectAsStateWithLifecycle()
 
     // New episode detection
-    val newEpisodeTmdbIds by viewModel.newEpisodeTmdbIds.collectAsState()
+    val newEpisodeTmdbIds by viewModel.newEpisodeTmdbIds.collectAsStateWithLifecycle()
 
     // Badge counts every non-default filter that's currently active.
     val activeFilterCount = listOf(
@@ -502,33 +502,28 @@ private fun LibraryScreenContent(
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Dynamic Ambient Background behind TopAppBar
+            // Dynamic Ambient Background behind TopAppBar.
+            // Perf: single static-blurred image, no AnimatedContent crossfade (two
+            // full-width blurred bitmaps alive at once dropped frames on scroll).
             if (selectedTab == 0 && !isSearching) {
                 Box(modifier = Modifier.fillMaxWidth().height(350.dp)) {
-                    AnimatedContent(
-                        targetState = activeHeroBackdropUrl,
-                        transitionSpec = {
-                            fadeIn(tween(800)) togetherWith fadeOut(tween(800))
-                        },
-                        label = "HeroAmbientBackground"
-                    ) { targetUrl ->
-                        if (targetUrl != null) {
-                            AsyncImage(
-                                model = ImageRequest.Builder(LocalContext.current)
-                                    .data(targetUrl)
-                                    .size(400, 225) // blurred — no need for full resolution
-                                    .crossfade(true)
-                                    .build(),
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .alpha(0.6f)
-                                    .blur(60.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
-                            )
-                        } else {
-                            Box(modifier = Modifier.fillMaxSize())
-                        }
+                    if (activeHeroBackdropUrl != null) {
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(activeHeroBackdropUrl)
+                                .size(400, 225) // blurred — no need for full resolution
+                                .memoryCacheKey(activeHeroBackdropUrl)
+                                .crossfade(false)
+                                .build(),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .alpha(0.6f)
+                                .blur(24.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded)
+                        )
+                    } else {
+                        Box(modifier = Modifier.fillMaxSize())
                     }
                     
                     // Gradient overlay applies persistently on top of the changing images
@@ -545,8 +540,8 @@ private fun LibraryScreenContent(
             }
         }
 
-        val watchlist by viewModel.watchlist.collectAsState()
-        val lastWatchedByTitle by viewModel.lastWatchedByTitle.collectAsState()
+        val watchlist by viewModel.watchlist.collectAsStateWithLifecycle()
+        val lastWatchedByTitle by viewModel.lastWatchedByTitle.collectAsStateWithLifecycle()
 
         // TrackingSheet — shown when a media card is long-pressed
         trackingTarget?.let { target ->
@@ -653,7 +648,7 @@ private fun LibraryScreenContent(
                                 label = { Text("All") }
                             )
                         }
-                        items(addonSources) { addonName ->
+                        items(addonSources, key = { it }, contentType = { "chip" }) { addonName ->
                             FilterChip(
                                 selected = selectedSearchSource == addonName,
                                 onClick = { selectedSearchSource = addonName },
@@ -801,7 +796,7 @@ private fun LibraryScreenContent(
                                         label = { Text("All") }
                                     )
                                 }
-                                items(addonNames) { name ->
+                                items(addonNames, key = { it }, contentType = { "chip" }) { name ->
                                     FilterChip(
                                         selected = selectedAddonFilter == name,
                                         onClick = { selectedAddonFilter = name },
@@ -845,6 +840,7 @@ private fun LibraryScreenContent(
                                 badgeText = { item ->
                                     if (item.mediaType == "tv" && newEpisodeTmdbIds.contains(item.tmdbId)) "New Episode" else null
                                 },
+                                key = { "cw:${it.mediaType}:${it.tmdbId}" },
                                 hasMore = false,
                                 isLoadingMore = false,
                                 onLoadMore = {}

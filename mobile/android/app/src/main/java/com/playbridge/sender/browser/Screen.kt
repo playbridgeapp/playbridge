@@ -30,6 +30,13 @@ sealed class Screen {
     object Collections : Screen()
     data class CollectionDetail(val collectionId: Long) : Screen()
 
+    /** Heavy destinations that keep large view/image trees alive — transitions use fade only. */
+    fun isHeavyScreen(): Boolean = when (this) {
+        Browser, Library, DebridLibrary -> true
+        is LibraryDetail, is IptvDetail -> true
+        else -> false
+    }
+
     companion object {
         /**
          * Saver so the current screen survives Activity recreation (e.g. the shell being

@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalTextStyle
@@ -18,6 +19,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -242,9 +244,15 @@ fun DynamicColorTheme(
     // dispose→re-extract→reseed flicker loop. So always render through the body,
     // falling back to the inherited app scheme when there's no seed.
     val inherited = MaterialTheme.colorScheme
-    val target = remember(seedColor, theme, inherited) {
+    // Perf: quantize the seed so tiny per-frame palette jitter doesn't recompute the
+    // HCT scheme, and key the remember on (quantized seed, theme) only — never on the
+    // full animated ColorScheme, which changes every animation frame and would loop.
+    // Note: Color.value packs the color-space id in the low 32 bits — quantize the
+    // sRGB ARGB int instead so all four channels actually participate.
+    val seedKey = seedColor?.let { (it.toArgb().toLong() and 0xFFF0F0F0L) } ?: 0L
+    val target = remember(seedKey, theme) {
         if (seedColor == null) {
-            inherited
+            null
         } else {
             val scheme = dynamicColorScheme(
                 seedColor = seedColor,
@@ -253,7 +261,7 @@ fun DynamicColorTheme(
             )
             if (theme == AppTheme.AMOLED) scheme.pureBlack(true) else scheme
         }
-    }
+    } ?: inherited
     ExpressiveThemeBody(target, content)
 }
 
@@ -264,11 +272,14 @@ private fun ExpressiveThemeBody(
 ) {
     // Expressive motion — the source of the fluid ripples, container morphs and
     // transition timing that give the app its "smooth" feel.
-    val motionScheme = MotionScheme.expressive()
+    // Perf: created once — MotionScheme construction on every recomposition churns.
+    val motionScheme = remember { MotionScheme.expressive() }
 
     // Crossfade every colour slot instead of snapping, so theme changes and
     // art-seeded dynamic colours animate smoothly.
-    val colorScheme = animateColorScheme(targetColorScheme, motionScheme.defaultEffectsSpec())
+    // Perf: a short fixed tween — the expressive default spring is longer/heavier,
+    // and this body runs on every palette tick.
+    val colorScheme = animateColorScheme(targetColorScheme, tween(300))
 
     MaterialExpressiveTheme(
         colorScheme = colorScheme,

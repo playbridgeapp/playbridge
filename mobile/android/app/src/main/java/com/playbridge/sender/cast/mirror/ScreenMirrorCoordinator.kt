@@ -84,6 +84,8 @@ class ScreenMirrorCoordinator(
         val isActive: Boolean get() = phase == Phase.STARTING || phase == Phase.CONNECTING || phase == Phase.MIRRORING
     }
 
+    // Intentionally process-lifetime: single Koin singleton, one thread per process.
+    // quit() is never called — stopInternal() releases tracks/factory per session.
     private val worker = HandlerThread("PB-ScreenMirror").apply { start() }
     private val handler = Handler(worker.looper)
     private val _state = MutableStateFlow(State())

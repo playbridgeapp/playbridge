@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -55,9 +57,47 @@ class IptvViewModel(
     private val _probeProgress = MutableStateFlow<ProbeProgress?>(null)
     val probeProgress: StateFlow<ProbeProgress?> = _probeProgress.asStateFlow()
 
+    /** Distinct group names for the group filter chips (cheap SQL, not full rows). */
+    fun groupsFor(playlistId: Long): Flow<List<String>> = repository.observeGroups(playlistId)
+
     /** Raw cached channels for a playlist (screen applies search + active-first ordering). */
     fun channelsFor(playlistId: Long): Flow<List<IptvChannelEntity>> =
         repository.observeChannels(playlistId)
+
+    /**
+     * Filtered channel flow — group/active-first handled in SQL, name search off main
+     * so large playlists don't sort fully in memory. Room still re-runs the query
+     * on every probe UPDATE; the trailing debounce below only drops Compose
+     * emissions so per-channel writes don't rebuild the LazyColumn per channel.
+     * First emission per filter set is immediate (no first-paint/search delay);
+     * only follow-up re-emissions (probe ticks) are debounced 500ms.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun channelsFiltered(
+        playlistId: Long,
+        query: Flow<String>,
+        group: Flow<String?>,
+    ): Flow<List<IptvChannelEntity>> =
+        combine(query, group, activeFirst) { q, g, af -> Triple(q, g, af) }
+            .distinctUntilChanged()
+            .flatMapLatest { (q, g, af) ->
+                kotlinx.coroutines.flow.channelFlow {
+                    var first = true
+                    var pending: kotlinx.coroutines.Job? = null
+                    repository.observeChannelsFiltered(playlistId, q, g, af).collect { v ->
+                        if (first) {
+                            first = false
+                            send(v)
+                        } else {
+                            pending?.cancel()
+                            pending = launch {
+                                kotlinx.coroutines.delay(500)
+                                send(v)
+                            }
+                        }
+                    }
+                }
+            }
 
     fun playlistById(id: Long): IptvPlaylistEntity? = playlists.value.find { it.id == id }
 
@@ -83,8 +123,19 @@ class IptvViewModel(
 
     fun probe(playlistId: Long, force: Boolean = false) = viewModelScope.launch {
         _probeProgress.value = ProbeProgress(playlistId, 0, 0)
+        // Perf: probe callback fires per channel (up to 10k) — throttle so each
+        // write doesn't recompose the detail screen and re-filter the full list.
+        var lastEmit = 0L
+        var lastDone = -1
         repository.probe(playlistId, force) { done, total ->
-            _probeProgress.value = ProbeProgress(playlistId, done, total)
+            val now = System.currentTimeMillis()
+            val pct = if (total > 0) (done * 100) / total else 0
+            val lastPct = (lastDone * 100) / total.coerceAtLeast(1)
+            if (done == total || now - lastEmit >= 500 || pct - lastPct >= 5) {
+                lastEmit = now
+                lastDone = done
+                _probeProgress.value = ProbeProgress(playlistId, done, total)
+            }
         }
         _probeProgress.value = null
     }

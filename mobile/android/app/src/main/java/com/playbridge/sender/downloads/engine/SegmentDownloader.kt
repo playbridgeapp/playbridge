@@ -22,8 +22,18 @@ class SegmentDownloader(
     private val controller: DownloadController,
 ) {
 
-    /** @return bytes written (0 if skipped because already present). */
+    /**
+     * @return bytes written (0 if skipped because already present).
+     * No dispatcher hop here: callers run on DownloadDispatchers.segments
+     * (limitedParallelism(8)) and hopping to unbounded Dispatchers.IO would
+     * defeat the concurrency cap. Runs blocking OkHttp/file IO — callers must
+     * already be off the main thread (guaranteed by the download strategies).
+     */
     suspend fun download(url: String, target: File, tag: String): Long {
+        return downloadInternal(url, target, tag)
+    }
+
+    private suspend fun downloadInternal(url: String, target: File, tag: String): Long {
         if (target.exists() && target.length() > 0) {
             return target.length()
         }
