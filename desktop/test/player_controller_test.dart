@@ -255,12 +255,14 @@ void main() {
     final headers = {'User-Agent': 'Test browser'};
 
     await c.playItem(
-      QueueItem(url: directUrl, title: 'Stream', headers: headers),
+      QueueItem(
+          url: directUrl, title: 'Stream', headers: headers, skipHistory: true),
     );
     expect(c.isCurrentItemProxied, isFalse);
 
     expect(await c.toggleProxy(), isTrue);
     expect(c.isCurrentItemProxied, isTrue);
+    expect(c.queue.single.skipHistory, isTrue);
     expect(c.queue.single.originalUrl, directUrl);
     expect(c.queue.single.originalHeaders, headers);
     expect(c.queue.single.startPositionMs, isNull);
@@ -268,6 +270,7 @@ void main() {
 
     expect(await c.toggleProxy(), isTrue);
     expect(c.isCurrentItemProxied, isFalse);
+    expect(c.queue.single.skipHistory, isTrue);
     expect(c.queue.single.url, directUrl);
     expect(c.queue.single.headers, headers);
     expect(engine.lastSeekMs, 250);

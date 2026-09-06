@@ -91,6 +91,8 @@ message PlayPayload {
   // For image items only. Positive values auto-advance after this display time;
   // omitted or zero keeps the image visible until explicit navigation.
   optional int64 display_duration_ms = 18 [json_name = "displayDurationMs"];
+  // Do not persist receiver history, resume progress, or captured history artwork.
+  optional bool skip_history = 19 [json_name = "skipHistory"];
 }
 
 message PlaylistPayload {

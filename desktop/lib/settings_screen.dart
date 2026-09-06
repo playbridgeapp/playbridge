@@ -311,13 +311,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.history,
               title: 'Save Cast History',
               subtitle:
-                  'Keep track of recently played videos and your progress.',
+                  'Keep recently played media on this Desktop. Casts requesting no history are always excluded.',
               trailing: Switch(
                 value: widget.store.enableHistory,
                 onChanged: (v) async {
                   await widget.store.setEnableHistory(v);
                   if (mounted) setState(() {});
                   widget.onSettingsChanged?.call();
+                },
+              ),
+            ),
+
+            _Section('Sending'),
+            _Tile(
+              icon: Icons.history_toggle_off,
+              title: 'Prevent receiver cast history',
+              subtitle:
+                  'Keep new casts out of history on updated PlayBridge Android TV and Desktop receivers. Existing history stays unchanged.',
+              trailing: Switch(
+                value: widget.store.preventReceiverHistory,
+                onChanged: (value) async {
+                  await widget.store.setPreventReceiverHistory(value);
+                  if (mounted) setState(() {});
                 },
               ),
             ),

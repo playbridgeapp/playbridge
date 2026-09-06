@@ -1434,7 +1434,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         val thumbnailUrl = visualMetadata?.backdrop_url
             ?: visualMetadata?.poster_url
             ?: historyThumbnailStore.existingUrl(historyId)
-        currentHistoryId = historyId
+        currentHistoryId = historyId.takeUnless { items.any { it.skip_history == true } }
         currentHistoryHasThumbnail = thumbnailUrl != null
         resetHistoryThumbnailCaptureClock()
         progressManager.setCurrentMedia(
@@ -2288,6 +2288,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     }
 
     private fun handleControl(command: String?) {
+        // Mode switches must also finish a host still waiting for its renderer to bind.
+        if (command == "stop") {
+            finishPlaybackSession()
+            return
+        }
         if (currentMediaKind == MediaKind.IMAGE) {
             val currentSession = session ?: return
             when (command) {
@@ -2308,7 +2313,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     controlsViewModel.showControls(full = true, playing = false)
                 }
                 "toggle" -> handleControl(if (imageTimerRunning) "pause" else "play")
-                "stop" -> finishPlaybackSession()
             }
             broadcastCurrentState()
             return
@@ -2353,11 +2357,6 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     controlsViewModel.setPlaying(true)
                     runCatching { renderer.play(currentSession.sessionId) }
                 }
-            }
-            command == "stop" -> {
-                finishingSession = true
-                runCatching { renderer.stop(currentSession.sessionId) }
-                finish()
             }
             command?.startsWith("seek_to:") == true -> command
                 .removePrefix("seek_to:")

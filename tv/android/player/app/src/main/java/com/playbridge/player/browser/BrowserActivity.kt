@@ -58,6 +58,7 @@ class BrowserActivity : ComponentActivity() {
     private var canGoBack = false
     private var currentUrl: String? = null
     private var explicitlyClosing = false
+    private var replacedByAnotherMode = false
 
     // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
     private var isDragging = false
@@ -871,6 +872,13 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun handleBrowserControlCommand(action: String?) {
+        if (action == "dismiss") {
+            // The replacement owns the context; teardown must not announce idle.
+            replacedByAnotherMode = true
+            engine?.pauseForBackground()
+            finish()
+            return
+        }
         Log.d(TAG, "Browser control: $action")
         // Absolute seek from the phone scrubber (value in ms) — prefix, so handled
         // before the exact-match when below.
@@ -1004,10 +1012,11 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        if (isFinishing || replacedByAnotherMode) return
         engine?.resumeAfterBackground()
         // Claim the server context for the browser whenever we're foregrounded — so a
         // context_query reports "browser" regardless of how this activity was launched,
-        // and we reclaim it after returning from a player launched on top of us.
+        // including when opened directly from TV settings.
         com.playbridge.player.server.ServerService.notifyContextBrowser(this)
     }
 
@@ -1028,7 +1037,7 @@ class BrowserActivity : ComponentActivity() {
         // Reset ServerService.activeContext so PairingScreen can open again after a
         // browser session. Same contract as the external Gecko APK uses.
         try {
-            if (explicitlyClosing || isFinishing) {
+            if (!replacedByAnotherMode && (explicitlyClosing || isFinishing)) {
                 val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
                     setPackage("com.playbridge.player")
                 }

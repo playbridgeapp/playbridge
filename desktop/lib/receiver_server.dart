@@ -267,7 +267,8 @@ class ReceiverServer extends ChangeNotifier {
         onNewMedia?.call();
         unawaited(player.playPlaylist(
           items
-              .map((item) => _toQueueItem(item, skipPreplay: skipPreplay))
+              .map((item) =>
+                  receiverQueueItemFromPayload(item, skipPreplay: skipPreplay))
               .toList(),
           startIndex,
           isRemote: true,
@@ -283,7 +284,8 @@ class ReceiverServer extends ChangeNotifier {
         } else {
           onPlaybackActivity?.call();
         }
-        unawaited(player.queueAdd(_toQueueItem(item), isRemote: true));
+        unawaited(player.queueAdd(receiverQueueItemFromPayload(item),
+            isRemote: true));
       case ScreenMirrorStartCmd():
         onNewMedia?.call();
         unawaited(player.stop());
@@ -443,51 +445,6 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
-  QueueItem _toQueueItem(PlayPayload payload, {bool skipPreplay = false}) {
-    debugLogNetworkRequest(
-      source: 'receiver',
-      url: payload.url,
-      headers: payload.headersOrNull,
-    );
-    return QueueItem(
-      url: payload.url,
-      title: payload.titleOrNull ?? payload.url,
-      headers: payload.headersOrNull,
-      subtitles: payload.subtitlesOrNull,
-      subtitleResources: payload.subtitleResources
-          .map((resource) => SubtitleRequest(
-                url: resource.url,
-                headers: Map.unmodifiable(resource.headers),
-                label: resource.hasLabel() ? resource.label : null,
-                language: resource.hasLanguage() ? resource.language : null,
-              ))
-          .toList(growable: false),
-      contentType: payload.contentTypeOrNull,
-      declaredMediaKind: payload.mediaKindOrNull,
-      displayDurationMs: payload.displayDurationMsOrNull,
-      artist: payload.artistOrNull,
-      album: payload.albumOrNull,
-      artworkUrl: payload.artworkUrlOrNull,
-      skipPreplay: skipPreplay,
-      enforcePageNetworkPolicy: payload.detectedByOrNull == 'page_cast' ||
-          payload.detectedByOrNull == 'linked_page',
-      allowedPrivateOrigins: payload.allowedPrivateOrigins,
-      startPositionMs: payload.startPositionMsOrNull,
-      bingeGroup: payload.bingeGroupOrNull,
-      season: payload.seasonOrNull,
-      episode: payload.episodeOrNull,
-      imdbId: payload.imdbIdOrNull,
-      backdropUrl: payload.backdropUrlOrNull,
-      posterUrl: payload.posterUrlOrNull,
-      logoUrl: payload.logoUrlOrNull,
-      overview: payload.overviewOrNull,
-      year: payload.yearOrNull,
-      rating: payload.ratingOrNull,
-      runtime: payload.runtimeOrNull,
-      episodeTitle: payload.episodeTitleOrNull,
-    );
-  }
-
   void _broadcastStatus() {
     _runtime?.broadcast({
       'type': 'status',
@@ -557,4 +514,52 @@ class ReceiverServer extends ChangeNotifier {
       'totalCount': player.queue.length,
     });
   }
+}
+
+/// Convert wire media without losing per-cast history policy.
+QueueItem receiverQueueItemFromPayload(PlayPayload payload,
+    {bool skipPreplay = false}) {
+  debugLogNetworkRequest(
+    source: 'receiver',
+    url: payload.url,
+    headers: payload.headersOrNull,
+  );
+  return QueueItem(
+    url: payload.url,
+    title: payload.titleOrNull ?? payload.url,
+    headers: payload.headersOrNull,
+    subtitles: payload.subtitlesOrNull,
+    subtitleResources: payload.subtitleResources
+        .map((resource) => SubtitleRequest(
+              url: resource.url,
+              headers: Map.unmodifiable(resource.headers),
+              label: resource.hasLabel() ? resource.label : null,
+              language: resource.hasLanguage() ? resource.language : null,
+            ))
+        .toList(growable: false),
+    contentType: payload.contentTypeOrNull,
+    declaredMediaKind: payload.mediaKindOrNull,
+    displayDurationMs: payload.displayDurationMsOrNull,
+    artist: payload.artistOrNull,
+    album: payload.albumOrNull,
+    artworkUrl: payload.artworkUrlOrNull,
+    skipPreplay: skipPreplay,
+    skipHistory: payload.skipHistory,
+    enforcePageNetworkPolicy: payload.detectedByOrNull == 'page_cast' ||
+        payload.detectedByOrNull == 'linked_page',
+    allowedPrivateOrigins: payload.allowedPrivateOrigins,
+    startPositionMs: payload.startPositionMsOrNull,
+    bingeGroup: payload.bingeGroupOrNull,
+    season: payload.seasonOrNull,
+    episode: payload.episodeOrNull,
+    imdbId: payload.imdbIdOrNull,
+    backdropUrl: payload.backdropUrlOrNull,
+    posterUrl: payload.posterUrlOrNull,
+    logoUrl: payload.logoUrlOrNull,
+    overview: payload.overviewOrNull,
+    year: payload.yearOrNull,
+    rating: payload.ratingOrNull,
+    runtime: payload.runtimeOrNull,
+    episodeTitle: payload.episodeTitleOrNull,
+  );
 }

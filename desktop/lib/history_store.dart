@@ -115,7 +115,9 @@ class HistoryStore extends ChangeNotifier {
     String? contentType,
     String? mediaKind,
     int? displayDurationMs,
+    bool skipHistory = false,
   }) async {
+    if (skipHistory) return;
     final prefs = await SharedPreferences.getInstance();
     if (!(prefs.getBool('pb.enable_history') ?? true)) return;
     if (url.isEmpty) return;

@@ -530,9 +530,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       if (idx >= 0 && idx < _player.queue.length) {
         final item = _player.queue[idx];
         final historyUrl = item.originalUrl ?? item.url;
-        if (historyUrl != _lastTrackedUrl) {
+        if (item.skipHistory) {
+          _lastTrackedUrl = null;
+        } else if (historyUrl != _lastTrackedUrl) {
           _lastTrackedUrl = historyUrl;
           unawaited(widget.history.addOrBump(
+            skipHistory: item.skipHistory,
             url: historyUrl,
             title: item.title,
             playlistBody: item.playlistBody,

@@ -58,6 +58,7 @@ class PairingStore {
   static const _kAutoFullScreen = 'pb.auto_fullscreen';
   static const _kPauseOnWindowHide = 'pb.pause_on_window_hide';
   static const _kEnableHistory = 'pb.enable_history';
+  static const _kPreventReceiverHistory = 'pb.prevent_receiver_history';
   static const _kPreselectHlsQuality = 'pb.preselect_hls_quality';
   static const _kStreamProxyMode = 'pb.stream_proxy_mode';
   static const _kCastRouteThroughProxy = 'pb.cast_route_through_proxy';
@@ -128,6 +129,13 @@ class PairingStore {
 
   Future<void> setEnableHistory(bool value) =>
       _prefs.setBool(_kEnableHistory, value);
+
+  /// Ask supporting PlayBridge receivers to skip history for new casts.
+  bool get preventReceiverHistory =>
+      _prefs.getBool(_kPreventReceiverHistory) ?? false;
+
+  Future<void> setPreventReceiverHistory(bool value) =>
+      _prefs.setBool(_kPreventReceiverHistory, value);
 
   /// Resolve HLS master playlists to the best compatible rendition before
   /// handing them to mpv. Disabled by default so mpv receives the original

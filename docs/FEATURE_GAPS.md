@@ -20,7 +20,7 @@ Android phone rows describe the **FOSS** flavor unless noted. Play Store builds 
 
 ## How to use this file
 
-- **iOS porting:** close sender holes against Android FOSS.
+- **iOS porting:** close sender holes against Android FOSS, except rows marked intentionally omitted (e.g. Library/addons for App Store approval).
 - **Receiver parity:** close Apple TV / CLI against Android TV + Desktop.
 - **Do not** duplicate rows into the README matrices unless the product claim should change.
 - When a cell changes, update the mark, the note, and the evidence path in the same edit.
@@ -43,8 +43,8 @@ Android phone rows describe the **FOSS** flavor unless noted. Play Store builds 
 | Local files | Y | ~ | iOS serves one file at a time. |
 | IPTV (M3U) | Y | Y | No EPG / Xtream on either phone in this audit. |
 | Collections | ~ | ~ | Both cast one item; no collection-as-playlist. |
-| Library / TMDB / Stremio addons | Y | — | iOS menu “Extensions” is Coming Soon. |
-| Debrid | Y | — | Android Play flavor: hidden. |
+| Library / TMDB / Stremio addons | Y | — | Intentionally omitted on iOS for App Store approval (Guideline 5.2.3: open third-party addons + scrapers + debrid resolvers). Not a porting target. |
+| Debrid | Y | — | Intentionally omitted on iOS for App Store approval (Guideline 5.2.3: torrent/magnet resolvers). Not a porting target. Android Play flavor: hidden. |
 | Downloads | Y | — | Android HLS remux is VOD-only; DASH download is a stub kind. |
 | Ad blocking | Y | Y | Android: uBlock AMO. iOS: EasyList/EasyPrivacy WK rules + picker. Phone README still says “curated list only”. |
 | Remote: transport + D-pad + touchpad | Y | Y | iOS seek bar is display-only; no mouse scroll. |
@@ -101,7 +101,7 @@ Desktop is also a sender (`tv_sender_controller.dart`); that role is out of scop
 
 ## Highest-leverage gaps
 
-1. **iOS sender vs Android:** library/addons, debrid, downloads, DLNA + Google Cast + Roku, screen mirror, volume/keyboard/seek/tracks remote, in-app player, mixed media, stream routing.
+1. **iOS sender vs Android (excluding intentional omissions):** downloads, DLNA + Google Cast + Roku, screen mirror, volume/keyboard/seek/tracks remote, in-app player, mixed media, stream routing.
 2. **Apple TV vs Android TV:** no browser, no WebRTC mirror, no mixed media, no volume remote, no mouse, D-pad incomplete, auth caps advertise `players` only, phone player-settings prefixes ignored.
 3. **Desktop vs Android TV:** no receiver browser (so phone page-cast must stay gated off); phone speed/boost/sub-offset ignored.
 4. **CLI vs Desktop:** same Rust WSS runtime, but no EOF advance, no tracks/subs, no mixed-media or mirror caps, no still watching.

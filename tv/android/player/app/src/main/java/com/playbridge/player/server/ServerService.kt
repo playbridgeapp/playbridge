@@ -492,6 +492,14 @@ class ServerService : Service() {
                 DebugNetworkLogger.urlAndHeaders(TAG, "Browser command", url, null)
 
                 val useGecko = browserMode == "gecko"
+                stopPlayerForBrowser()
+                dismissBrowsers(
+                    exceptPackage = if (useGecko && isGeckoApkInstalled()) {
+                        "com.playbridge.geckoview.plugin"
+                    } else {
+                        packageName
+                    },
+                )
 
                 if (useGecko) {
                     if (isGeckoApkInstalled()) {
@@ -631,6 +639,7 @@ class ServerService : Service() {
                         putExtra(EXTRA_COMMAND, "stop")
                         setPackage(packageName)
                     })
+                    dismissBrowsers()
                     activeContext = "screen_mirror"
                     broadcastContext()
                 }
@@ -885,7 +894,28 @@ class ServerService : Service() {
         }
     }
 
+    /** Remove browser activities from their tasks when another mode takes over. */
+    private fun dismissBrowsers(exceptPackage: String? = null) {
+        for (browserPackage in listOf(packageName, "com.playbridge.geckoview.plugin")) {
+            if (browserPackage == exceptPackage) continue
+            sendBroadcast(Intent(ACTION_BROWSER_CONTROL).apply {
+                setPackage(browserPackage)
+                putExtra(EXTRA_BROWSER_ACTION, "dismiss")
+            })
+        }
+    }
+
+    private fun stopPlayerForBrowser() {
+        sendBroadcast(Intent(ACTION_CONTROL).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_COMMAND, "stop")
+            putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
+        })
+        activePlayerEngine = null
+    }
+
     internal fun setContextPlayerInternal(engine: String? = null) {
+        dismissBrowsers()
         activeContext = "player"
         if (engine != null) activePlayerEngine = engine
         broadcastContext()
@@ -893,6 +923,8 @@ class ServerService : Service() {
     }
 
     internal fun setContextBrowserInternal() {
+        if (activeContext == "player") stopPlayerForBrowser()
+        dismissBrowsers(exceptPackage = packageName)
         activeContext = "browser"
         broadcastContext()
         FileLogger.d(TAG, "activeContext set to browser by activity lifecycle")

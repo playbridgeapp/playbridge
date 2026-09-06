@@ -1,6 +1,8 @@
 package com.playbridge.sender.connection
 
 import android.util.Log
+import com.playbridge.sender.cast.CastHistorySettings
+import com.playbridge.sender.cast.applyCastHistoryPreference
 import com.playbridge.sender.logging.DebugNetworkLogger
 import com.playbridge.shared.protocol.createAuthJson
 import com.playbridge.shared.protocol.createContextQueryJson
@@ -39,7 +41,7 @@ private const val POINTER_FLUSH_INTERVAL_MS = 16L
 /**
  * OkHttp-based WebSocket client for connecting to TV
  */
-class WebSocketClient {
+class WebSocketClient(private val castHistorySettings: CastHistorySettings) {
     
     private val client = OkHttpClient.Builder()
         .dns(LinkLocalDns())
@@ -594,8 +596,11 @@ class WebSocketClient {
             Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
             return false
         }
-        DebugNetworkLogger.command(TAG, message)
-        return ws.send(message)
+        val outgoing = applyCastHistoryPreference(
+            message, castHistorySettings.preventHistory.value,
+        )
+        DebugNetworkLogger.command(TAG, outgoing)
+        return ws.send(outgoing)
     }
 
     fun send(bytes: ByteArray): Boolean {

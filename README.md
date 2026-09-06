@@ -165,8 +165,8 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 | Stream quality selection | ✓ | ✓ | Via the browser extension | HLS quality selection |
 | Subtitle detection and attachment | ✓ | ✓ | — | Detection only; attachment is not relayed to Desktop yet |
 | Local file casting | ✓ | ✓ | ✓, including drag-and-drop and multi-file playlists | — |
-| Library, discovery, and add-ons | ✓ | — | — | — |
-| Debrid integrations | ✓ in supported builds | — | — | — |
+| Library, discovery, and add-ons | ✓ | — (intentionally omitted for App Store approval) | — | — |
+| Debrid integrations | ✓ in supported builds | — (intentionally omitted for App Store approval) | — | — |
 | IPTV and custom collections | ✓ | ✓ | — | — |
 | Downloads | ✓ | — | — | — |
 | Ad blocking | uBlock Origin | WebKit content blocker with EasyList and custom rules | — | — |
@@ -176,6 +176,8 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 | Companion app required | No | No | No | PlayBridge Desktop |
 
 Browser detection depends on what each browser exposes. Protected streams may require captured request headers, and some MSE / blob players cannot be replayed outside their original page.
+
+iPhone / iPad intentionally omits the open Library / add-on ecosystem (third-party Stremio add-ons, JS scrapers) and Debrid integrations — they trigger App Store Guideline 5.2.3. Use the browser, IPTV, collections, and local files instead.
 
 ## Receiver feature matrix
 

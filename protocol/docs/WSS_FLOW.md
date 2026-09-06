@@ -295,3 +295,18 @@ or replacement by a new connection.
   implementation detail.
 - Examples and tests should validate against the AsyncAPI schemas. No protobuf binary encoding is
   used on the WSS transport.
+
+## Receiver cast history preference
+
+A sender may set `skipHistory: true` on each `PlayPayload` in a `playlist` command
+and on the item in `queue_add`. Supporting receivers keep those items out of
+playback history, saved resume progress, and captured history artwork. Because
+history can store the whole queue for replay, a queue containing a marked item
+must not be persisted in full. The flag stays with the item across playback,
+queue navigation, and renderer changes; it does not change pairing or titles.
+
+Omitted or false retains the receiver's normal history policy. Enabling this
+preference affects subsequently sent items, leaves existing history untouched,
+and does not disable sender-side watch tracking. Android TV and Desktop implement this
+preference; older or other receivers may ignore it, so senders must not promise
+history suppression on those receivers.

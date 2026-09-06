@@ -168,6 +168,22 @@ fun TVSettingsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            val castHistorySettings: CastHistorySettings = koinInject()
+            val preventHistory by castHistorySettings.preventHistory.collectAsState()
+            ListItem(
+                headlineContent = { Text("Prevent TV cast history") },
+                supportingContent = {
+                    Text("Keep new casts out of PlayBridge Android TV history and saved playback progress. Requires an updated TV app. Existing history stays unchanged.")
+                },
+                trailingContent = {
+                    Switch(
+                        checked = preventHistory,
+                        onCheckedChange = castHistorySettings::setPreventHistory,
+                    )
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            )
+
             // Auto-switch to Remote
             val autoSwitchToRemote by settingsRepository.autoSwitchToRemote.collectAsState(initial = true)
             ListItem(
