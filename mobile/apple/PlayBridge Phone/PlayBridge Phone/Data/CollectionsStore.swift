@@ -6,14 +6,15 @@ import Combine
 final class CollectionsStore: ObservableObject {
     @Published private(set) var collections: [MediaCollection] = []
 
-    private let fileURL: URL = {
+    private let fileURL: URL
+    private static func defaultFileURL() -> URL {
         let fm = FileManager.default
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("collections.json")
-    }()
+    }
 
-    init() { load() }
+    init(fileURL: URL? = nil) { self.fileURL = fileURL ?? Self.defaultFileURL(); load() }
 
     func collection(_ id: UUID) -> MediaCollection? { collections.first { $0.id == id } }
 
@@ -62,6 +63,15 @@ final class CollectionsStore: ObservableObject {
                                   mimeType: mimeType, sourceTag: sourceTag, order: order)
         collections[idx].items.append(item)
         collections[idx].updatedAt = Date()
+        save()
+    }
+
+    func addLocalItem(to id: UUID, media: PhoneMedia) {
+        guard let index = collections.firstIndex(where: { $0.id == id }),
+              !collections[index].items.contains(where: { $0.libraryItemID == media.id }) else { return }
+        collections[index].items.append(CollectionItem(title: media.title, url: "", sourceTag: "library",
+            order: collections[index].items.count, libraryItemID: media.id))
+        collections[index].updatedAt = Date()
         save()
     }
 

@@ -4,6 +4,7 @@ import SwiftUI
 /// `control` commands), D-pad (`remote` keys), and a touchpad (binary mouse packets).
 struct RemoteControlView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
+    @State private var castVolume = 0.5
     @State private var mode: Mode = .transport
 
     enum Mode: String, CaseIterable, Identifiable {
@@ -15,35 +16,52 @@ struct RemoteControlView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Picker("Mode", selection: $mode) {
-                ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+            if !vm.isExternalReceiver {
+                Picker("Mode", selection: $mode) {
+                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
-
-            switch mode {
-            case .transport: transport
-            case .dpad: dpad
-            case .touchpad: touchpad
+            if vm.isExternalReceiver {
+                transport
+                if vm.externalReceiver?.protocolID == "google_cast" {
+                HStack {
+                    Text("Set volume").font(Theme.font(.caption))
+                    Slider(value: $castVolume, in: 0...1, onEditingChanged: { editing in
+                        if !editing { vm.setCastVolume(castVolume) }
+                    })
+                    .accessibilityLabel("Receiver volume")
+                }
+                    Button("End receiver session") { vm.control("end_receiver") }
+                        .foregroundColor(Theme.danger)
+                }
+            } else {
+                switch mode {
+                case .transport: transport
+                case .dpad: dpad
+                case .touchpad: touchpad
+                }
             }
         }
+        .disabled(!vm.isConnected)
     }
 
     // MARK: - Transport
 
     private var transport: some View {
         HStack(spacing: 14) {
-            controlButton("gobackward.10") { vm.control("seek_back") }
+            controlButton(vm.externalReceiver?.protocolID == "roku" ? "backward.fill" : "gobackward.10") { vm.control("seek_back") }
             controlButton("play.fill") { vm.control("play") }
             controlButton("pause.fill") { vm.control("pause") }
             controlButton("stop.fill") { vm.control("stop") }
-            controlButton("goforward.10") { vm.control("seek_forward") }
+            controlButton(vm.externalReceiver?.protocolID == "roku" ? "forward.fill" : "goforward.10") { vm.control("seek_forward") }
         }
     }
 
     private func controlButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.title2)
+                .font(Theme.font(.title2))
                 .frame(width: 56, height: 56)
                 .foregroundColor(Theme.onSurface)
                 .background(Theme.surfaceContainerHigh)
@@ -59,7 +77,7 @@ struct RemoteControlView: View {
             HStack(spacing: 12) {
                 dpadButton("chevron.left") { vm.remote("dpad_left") }
                 Button { vm.remote("dpad_center") } label: {
-                    Text("OK").font(.headline).foregroundColor(Theme.onPrimary)
+                    Text("OK").font(Theme.font(.headline)).foregroundColor(Theme.onPrimary)
                         .frame(width: 72, height: 72)
                         .background(Theme.ctaGradient)
                         .clipShape(Circle())
@@ -81,7 +99,7 @@ struct RemoteControlView: View {
     private func dpadButton(_ systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.title2)
+                .font(Theme.font(.title2))
                 .frame(width: 72, height: 72)
                 .foregroundColor(Theme.onSurface)
                 .background(Theme.surfaceContainerHigh)
@@ -100,7 +118,7 @@ struct RemoteControlView: View {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(Theme.surfaceContainerLow)
                 Text("Drag to move · tap to click")
-                    .font(.footnote)
+                    .font(Theme.font(.footnote))
                     .foregroundColor(Theme.onSurfaceVariant)
             }
             .frame(height: 240)

@@ -28,13 +28,13 @@ struct DashboardScreen: View {
                     Spacer().frame(height: 60)
 
                     Text("PlayBridge")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(Theme.font(size: 28, weight: .bold, design: .rounded))
                         .foregroundColor(Theme.onSurface)
 
                     Spacer().frame(height: 4)
 
                     Text("CONSOLE HUB")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(Theme.font(size: 10, weight: .bold))
                         .foregroundColor(Theme.primary.opacity(0.7))
                         .tracking(3)
 
@@ -109,8 +109,8 @@ struct DashboardScreen: View {
             // Row 2: Phone Files (live), IPTV
             HStack(spacing: 12) {
                 cardView(
-                    title: "Phone Files",
-                    subtitle: "Cast videos & audio",
+                    title: "Media Library",
+                    subtitle: "Videos, images & audio",
                     systemImage: "folder",
                     gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)],
                     tall: false,
@@ -215,7 +215,7 @@ struct DashboardScreen: View {
                             .fill(Color.white.opacity(0.2))
                             .frame(width: 40, height: 40)
                         Image(systemName: systemImage)
-                            .font(.system(size: 20))
+                            .font(Theme.font(size: 20))
                             .foregroundColor(.white)
                     }
 
@@ -224,12 +224,12 @@ struct DashboardScreen: View {
                     // Text Details
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                            .font(.system(size: tall ? 16 : 13, weight: .semibold))
+                            .font(Theme.font(size: tall ? 16 : 13, weight: .semibold))
                             .foregroundColor(.white)
                             .lineLimit(1)
 
                         Text(subtitle)
-                            .font(.system(size: tall ? 12 : 10))
+                            .font(Theme.font(size: tall ? 12 : 10))
                             .foregroundColor(Color.white.opacity(0.7))
                             .lineLimit(1)
                     }
@@ -256,9 +256,9 @@ struct DashboardScreen: View {
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "power")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(Theme.font(size: 16, weight: .medium))
                 Text("Exit PlayBridge")
-                    .font(.system(size: 15, weight: .medium))
+                    .font(Theme.font(size: 15, weight: .medium))
             }
             .foregroundColor(Theme.danger)
             .padding(.horizontal, 20)
@@ -282,7 +282,7 @@ struct DashboardScreen: View {
                             .fill(Theme.surfaceContainer.opacity(0.5))
                             .frame(width: 40, height: 40)
                         Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .bold))
+                            .font(Theme.font(size: 16, weight: .bold))
                             .foregroundColor(Theme.onSurface.opacity(0.8))
                     }
                 }
@@ -348,7 +348,7 @@ struct StatusPill: View {
                     .animation(isConnected ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default, value: pulse)
 
                 Text(text)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Theme.font(size: 12, weight: .medium))
                     .foregroundColor(isConnected ? (isSecure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)) : Theme.onSurfaceVariant)
                     .lineLimit(1)
             }
@@ -392,7 +392,7 @@ struct ActiveBadge: View {
                 .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
 
             Text("ACTIVE")
-                .font(.system(size: 8, weight: .bold))
+                .font(Theme.font(size: 8, weight: .bold))
                 .foregroundColor(.white)
         }
         .padding(.horizontal, 6)

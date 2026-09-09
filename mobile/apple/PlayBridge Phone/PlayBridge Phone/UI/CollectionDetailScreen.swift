@@ -5,9 +5,13 @@ struct CollectionDetailScreen: View {
 
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var library: PhoneMediaLibrary
+    @EnvironmentObject private var browser: BrowserStore
     @EnvironmentObject private var collections: CollectionsStore
 
     @State private var showAdd = false
+    @State private var localItem: PhoneMedia?
+    var embedded = false
     @State private var toast: String?
 
     private var collection: MediaCollection? { collections.collection(collectionId) }
@@ -33,11 +37,13 @@ struct CollectionDetailScreen: View {
             }
 
             if let toast {
-                Text(toast).font(.system(size: 13, weight: .medium)).foregroundColor(.white)
+                Text(toast).font(Theme.font(size: 13, weight: .medium)).foregroundColor(.white)
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     .background(Capsule().fill(Theme.primaryDim)).padding(.bottom, 24)
             }
         }
+        .sheet(item: $localItem) { item in PhoneMediaDetail(item: item) }
+        .task { library.refreshDownloads(browser.downloads.items); library.refreshPhotos() }
         .sheet(isPresented: $showAdd) {
             AddManualItemSheet(collectionId: collectionId)
         }
@@ -45,16 +51,18 @@ struct CollectionDetailScreen: View {
 
     private func header(_ c: MediaCollection) -> some View {
         HStack(spacing: 12) {
-            Button { nav.navigate(to: .collections) } label: {
-                Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
+            if !embedded {
+                Button { nav.navigate(to: .collections) } label: {
+                    Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
+                }
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(c.name).font(.system(size: 20, weight: .bold)).foregroundColor(Theme.onSurface).lineLimit(1)
-                Text("\(c.itemCount) item\(c.itemCount == 1 ? "" : "s")").font(.system(size: 12)).foregroundColor(Theme.onSurfaceVariant)
+                Text(c.name).font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface).lineLimit(1)
+                Text("\(c.itemCount) item\(c.itemCount == 1 ? "" : "s")").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)
             }
             Spacer()
             Button { showAdd = true } label: {
-                Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.primary)
+                Image(systemName: "plus").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.primary)
             }
         }
     }
@@ -62,9 +70,9 @@ struct CollectionDetailScreen: View {
     private var emptyState: some View {
         VStack(spacing: 12) {
             Spacer()
-            Text("No items yet").font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
+            Text("No items yet").font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
             Text("Add a link here, or use “Add to Collection” from an IPTV channel.")
-                .font(.system(size: 13)).foregroundColor(Theme.onSurfaceVariant).multilineTextAlignment(.center)
+                .font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant).multilineTextAlignment(.center)
             Spacer(); Spacer()
         }
         .frame(maxWidth: .infinity)
@@ -84,11 +92,11 @@ struct CollectionDetailScreen: View {
     private func row(_ item: CollectionItem, in c: MediaCollection) -> some View {
         Button { play(item) } label: {
             HStack(spacing: 10) {
-                Image(systemName: item.sourceTag == "iptv" ? "play.tv" : "link")
-                    .font(.system(size: 15)).foregroundColor(Theme.primary).frame(width: 24)
+                Image(systemName: item.libraryItemID != nil ? "photo.on.rectangle" : (item.sourceTag == "iptv" ? "play.tv" : "link"))
+                    .font(Theme.font(size: 15)).foregroundColor(Theme.primary).frame(width: 24)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.title).font(.system(size: 14)).foregroundColor(Theme.onSurface).lineLimit(1)
-                    Text(host(item.url)).font(.system(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+                    Text(item.title).font(Theme.font(size: 14)).foregroundColor(Theme.onSurface).lineLimit(1)
+                    Text(item.libraryItemID != nil ? "Media Library" : host(item.url)).font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
                 }
                 Spacer()
             }
@@ -105,6 +113,11 @@ struct CollectionDetailScreen: View {
     }
 
     private func play(_ item: CollectionItem) {
+        if let id = item.libraryItemID {
+            guard let media = library.item(id) else { showToast("Media unavailable — check Photos access or import the file again"); return }
+            localItem = media
+            return
+        }
         guard vm.isConnected else { showToast("Not connected — open Connection first"); return }
         vm.castMedia(url: item.url, title: item.title, headers: item.headers, contentType: item.mimeType)
         showToast("Casting \(item.title)")

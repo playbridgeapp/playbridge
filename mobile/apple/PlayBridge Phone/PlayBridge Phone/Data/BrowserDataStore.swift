@@ -36,7 +36,7 @@ enum SearchEngine: String, CaseIterable, Identifiable {
     }
 
     func searchURL(_ query: String) -> String {
-        let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let q = query.addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? query
         switch self {
         case .google:     return "https://www.google.com/search?q=\(q)"
         case .duckduckgo: return "https://duckduckgo.com/?q=\(q)"

@@ -24,7 +24,7 @@ struct DeviceConnectionSheet: View {
 
     /// Saved TVs excluding the currently-connected one (shown in the active card).
     private var others: [PairedDevice] {
-        guard vm.isConnected, let active = vm.pairedDevice else { return vm.savedDevices }
+        guard !vm.isExternalReceiver, vm.isConnected, let active = vm.pairedDevice else { return vm.savedDevices }
         return vm.savedDevices.filter { vm.deviceKey($0) != vm.deviceKey(active) }
     }
 
@@ -39,7 +39,7 @@ struct DeviceConnectionSheet: View {
                     }
 
                     HStack {
-                        Text("Your TVs").font(.headline).foregroundColor(Theme.primary)
+                        Text("Your TVs").font(Theme.font(.headline)).foregroundColor(Theme.primary)
                         Spacer()
                         Button { vm.pingSavedDevices() } label: {
                             Image(systemName: "arrow.clockwise").foregroundColor(Theme.primary)
@@ -49,12 +49,16 @@ struct DeviceConnectionSheet: View {
 
                     if others.isEmpty {
                         Text("No saved TVs. Tap “Set up new TV” to scan your network.")
-                            .font(.subheadline).foregroundColor(Theme.onSurfaceVariant)
+                            .font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
                             .padding(.vertical, 4)
                     } else {
                         ForEach(others.indices, id: \.self) { i in deviceRow(others[i]) }
                     }
 
+                    ExternalReceiverDevicesView(savedOnly: true)
+                    if case .error(let message) = vm.state {
+                        Text(message).foregroundColor(Theme.danger).font(Theme.font(.subheadline))
+                    }
                     setupRow
                 }
                 .padding(20)
@@ -71,20 +75,22 @@ struct DeviceConnectionSheet: View {
 
     private func activeCard(name: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: "tv").font(.system(size: 28)).foregroundColor(Theme.primary)
+            Image(systemName: "tv").font(Theme.font(size: 28)).foregroundColor(Theme.primary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.headline).foregroundColor(Theme.onSurface).lineLimit(1)
-                if let d = vm.pairedDevice {
-                    Text("\(d.ip):\(d.port)").font(.caption).foregroundColor(Theme.onSurfaceVariant)
+                Text(name).font(Theme.font(.headline)).foregroundColor(Theme.onSurface).lineLimit(1)
+                if let cast = vm.externalReceiver {
+                    Text(cast.model).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                } else if let d = vm.pairedDevice {
+                    Text("\(d.ip):\(d.port)").font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
                 }
-                Text("Connected").font(.caption.bold()).foregroundColor(Color(hex: 0x4CAF50))
+                Text("Connected").font(Theme.font(.caption).bold()).foregroundColor(Color(hex: 0x4CAF50))
             }
             Spacer()
             Button {
                 vm.disconnect()
                 dismiss()
             } label: {
-                Text("Disconnect").font(.system(size: 13, weight: .semibold)).foregroundColor(.white)
+                Text("Disconnect").font(Theme.font(size: 13, weight: .semibold)).foregroundColor(.white)
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .background(Theme.danger).cornerRadius(10)
             }
@@ -97,7 +103,7 @@ struct DeviceConnectionSheet: View {
     private var connectingCard: some View {
         HStack(spacing: 12) {
             ProgressView().tint(Theme.primary)
-            Text("Connecting…").font(.subheadline).foregroundColor(Theme.onSurface)
+            Text("Connecting…").font(Theme.font(.subheadline)).foregroundColor(Theme.onSurface)
             Spacer()
             Button("Cancel") { vm.disconnect() }.foregroundColor(Theme.danger)
         }
@@ -113,14 +119,14 @@ struct DeviceConnectionSheet: View {
         } label: {
             HStack(spacing: 12) {
                 ZStack(alignment: .bottomTrailing) {
-                    Image(systemName: "tv").font(.system(size: 20)).foregroundColor(Theme.onSurface).frame(width: 28)
+                    Image(systemName: "tv").font(Theme.font(size: 20)).foregroundColor(Theme.onSurface).frame(width: 28)
                     Circle()
                         .fill(online ? Color(hex: 0x4CAF50) : Theme.onSurfaceVariant.opacity(0.4))
                         .frame(width: 8, height: 8)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(d.name).font(.system(size: 15, weight: .medium)).foregroundColor(Theme.onSurface).lineLimit(1)
-                    Text(online ? "\(d.ip) · online" : d.ip).font(.caption).foregroundColor(Theme.onSurfaceVariant)
+                    Text(d.name).font(Theme.font(size: 15, weight: .medium)).foregroundColor(Theme.onSurface).lineLimit(1)
+                    Text(online ? "\(d.ip) · online" : d.ip).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
                 }
                 Spacer()
                 Button { vm.forget(d) } label: {
@@ -140,10 +146,10 @@ struct DeviceConnectionSheet: View {
             nav.navigate(to: .connection)
         } label: {
             HStack(spacing: 12) {
-                Image(systemName: "plus.circle.fill").font(.system(size: 20)).foregroundColor(Theme.primary).frame(width: 28)
-                Text("Set up new TV").font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.primary)
+                Image(systemName: "plus.circle.fill").font(Theme.font(size: 20)).foregroundColor(Theme.primary).frame(width: 28)
+                Text("Set up new TV").font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.primary)
                 Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundColor(Theme.onSurfaceVariant)
+                Image(systemName: "chevron.right").font(Theme.font(size: 13, weight: .semibold)).foregroundColor(Theme.onSurfaceVariant)
             }
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 14).fill(Theme.surfaceContainer.opacity(0.5)))

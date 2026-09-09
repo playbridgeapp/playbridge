@@ -27,6 +27,25 @@ enum DetectionScript {
         try { window.webkit.messageHandlers.playbridge.postMessage(msg); } catch (e) {}
       }
 
+      // Keep prior streams on SPA navigation, but tell native ranking which
+      // view is current. Only the main frame owns the tab's media lifecycle.
+      var lastPageURL = location.href;
+      function pageChanged() {
+        if (window !== window.top || location.href === lastPageURL) return;
+        lastPageURL = location.href;
+        post({type: 'mediaLifecycle'});
+      }
+      ['pushState', 'replaceState'].forEach(function (name) {
+        var original = history[name];
+        history[name] = function () {
+          var result = original.apply(this, arguments);
+          pageChanged();
+          return result;
+        };
+      });
+      window.addEventListener('popstate', pageChanged);
+      window.addEventListener('hashchange', pageChanged);
+
       function report(url, contentType, detectedBy) {
         if (!url || typeof url !== 'string') return;
         if (url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return;

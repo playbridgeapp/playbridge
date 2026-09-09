@@ -36,17 +36,17 @@ struct RemoteControlScreen: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(serverName).font(.title3.bold()).foregroundColor(Theme.onSurface)
-                    if isSecure { Image(systemName: "lock.fill").font(.caption).foregroundColor(Theme.primary) }
+                    Text(serverName).font(Theme.font(.title3).bold()).foregroundColor(Theme.onSurface)
+                    if isSecure { Image(systemName: "lock.fill").font(Theme.font(.caption)).foregroundColor(Theme.primary) }
                 }
-                Text(statusLine).font(.caption).foregroundColor(Theme.onSurfaceVariant)
+                Text(statusLine).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
             }
             Spacer()
             Button {
                 nav.navigate(to: nav.remoteOrigin ?? nav.lastMainScreen)
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.title2).foregroundColor(Theme.onSurfaceVariant)
+                    .font(Theme.font(.title2)).foregroundColor(Theme.onSurfaceVariant)
             }
         }
         .padding(.top, 8)
@@ -66,7 +66,7 @@ struct RemoteControlScreen: View {
         if let p = vm.coordinator.playback {
             VStack(alignment: .leading, spacing: 12) {
                 Text(p.title ?? "Untitled")
-                    .font(.headline).foregroundColor(Theme.onSurface)
+                    .font(Theme.font(.headline)).foregroundColor(Theme.onSurface)
                     .lineLimit(2)
                 ProgressView(value: progress(p))
                     .tint(Theme.primary)
@@ -77,7 +77,7 @@ struct RemoteControlScreen: View {
                     Spacer()
                     Text(format(ms: p.durationMs)).foregroundColor(Theme.onSurfaceVariant)
                 }
-                .font(.caption)
+                .font(Theme.font(.caption))
             }
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,7 +145,7 @@ struct RemoteControlScreen: View {
     // MARK: - Helpers
 
     private func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased()).font(.caption.bold()).foregroundColor(Theme.onSurfaceVariant)
+        Text(text.uppercased()).font(Theme.font(.caption).bold()).foregroundColor(Theme.onSurfaceVariant)
     }
 
     private func format(ms: Int64) -> String {

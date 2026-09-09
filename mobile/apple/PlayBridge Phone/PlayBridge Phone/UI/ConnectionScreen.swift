@@ -5,6 +5,9 @@ import SwiftUI
 struct ConnectionScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @State private var rokuAddress = ""
+    @State private var showDIAL = false
+    @State private var dlnaLocation = ""
     @State private var manualIP: String = ""
     @State private var pairingCode: String = ""
 
@@ -16,6 +19,10 @@ struct ConnectionScreen: View {
                 pairingCodeSection
                 connectedSection
                 savedSection
+                ExternalReceiverDevicesView()
+                dlnaSection
+                rokuSection
+                dialSection
                 discoveredSection
                 manualSection
             }
@@ -30,6 +37,65 @@ struct ConnectionScreen: View {
         }
     }
 
+    private var rokuSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ExternalReceiverDevicesView(rokuOnly: true)
+            Button("Search Roku again") { vm.rokuBrowser.start() }.disabled(vm.rokuBrowser.isScanning)
+            TextField("Roku IP address", text: $rokuAddress)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+            Button("Connect Roku") {
+                let input = rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let device = DLNABrowser.manualRoku(input) else {
+                    vm.operationError = "Enter a Roku IP address or HTTP address, optionally including its port."
+                    return
+                }
+                vm.connectExternalReceiver(device)
+            }.disabled(rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    private var dialSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Button("Search app receivers (DIAL)") { showDIAL = true; vm.dialBrowser.start() }
+                .disabled(vm.dialBrowser.isScanning)
+            if showDIAL {
+                Text("DIAL finds devices that launch receiver apps. Generic video sending is not supported.")
+                    .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                if vm.dialBrowser.isScanning { ProgressView() }
+                if let error = vm.dialBrowser.error { Text(error).font(Theme.font(.caption)).foregroundColor(Theme.danger) }
+                ForEach(vm.dialBrowser.devices, id: \.identity) { device in
+                    Label(device.name + " · DIAL", systemImage: "tv")
+                }
+                if !vm.dialBrowser.isScanning && vm.dialBrowser.devices.isEmpty {
+                    Text("No app receivers found.").font(Theme.font(.caption))
+                }
+            }
+        }
+    }
+
+    private var dlnaSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ExternalReceiverDevicesView(dlnaOnly: true)
+            Button("Search again") { vm.dlnaBrowser.start() }
+                .disabled(vm.dlnaBrowser.isScanning)
+            TextField("DLNA device description URL", text: $dlnaLocation)
+                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+            Text("Enter the receiver’s UPnP description URL, not a video URL.")
+                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+            Button("Connect DLNA") {
+                let location = dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let device = DLNABrowser.device(from: ["protocol": "Dlna", "id": location, "location": location]) {
+                    vm.connectExternalReceiver(device)
+                } else {
+                    vm.operationError = "Enter a valid HTTP or HTTPS device description URL."
+                }
+            }
+            .disabled(dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
     // MARK: - SAS pairing code
 
     @ViewBuilder private var pairingCodeSection: some View {
@@ -37,12 +103,12 @@ struct ConnectionScreen: View {
         case .waitingForCodeInput(let name, let attemptsLeft, let lastWrong):
             VStack(alignment: .leading, spacing: 12) {
                 Text("Enter the 6-digit code shown on \(name)")
-                    .font(.subheadline)
+                    .font(Theme.font(.subheadline))
                     .foregroundColor(Theme.onSurface)
                 TextField("000000", text: $pairingCode)
                     .keyboardType(.numberPad)
                     .textContentType(.oneTimeCode)
-                    .font(.system(size: 28, weight: .bold, design: .monospaced))
+                    .font(Theme.font(size: 28, weight: .bold, design: .monospaced))
                     .multilineTextAlignment(.center)
                     .foregroundColor(Theme.onSurface)
                     .padding(12)
@@ -55,7 +121,7 @@ struct ConnectionScreen: View {
                     }
                 if lastWrong {
                     Text("Incorrect code — \(attemptsLeft) \(attemptsLeft == 1 ? "try" : "tries") left")
-                        .font(.caption)
+                        .font(Theme.font(.caption))
                         .foregroundColor(Theme.danger)
                 }
                 HStack {
@@ -83,10 +149,10 @@ struct ConnectionScreen: View {
         HStack {
             VStack(alignment: .leading, spacing: 4) {
                 Text("PlayBridge")
-                    .font(.largeTitle.bold())
+                    .font(Theme.font(.largeTitle).bold())
                     .foregroundColor(Theme.onSurface)
                 Text("Connect to your TV")
-                    .font(.subheadline)
+                    .font(Theme.font(.subheadline))
                     .foregroundColor(Theme.onSurfaceVariant)
             }
             Spacer()
@@ -94,7 +160,7 @@ struct ConnectionScreen: View {
                 nav.navigate(to: .dashboard)
             } label: {
                 Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
+                    .font(Theme.font(.title2))
                     .foregroundColor(Theme.onSurfaceVariant)
             }
         }
@@ -129,7 +195,7 @@ struct ConnectionScreen: View {
     private func banner(_ text: String, systemImage: String, tint: Color) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage).foregroundColor(tint)
-            Text(text).font(.subheadline).foregroundColor(Theme.onSurface)
+            Text(text).font(Theme.font(.subheadline)).foregroundColor(Theme.onSurface)
             Spacer(minLength: 0)
         }
         .padding(14)
@@ -161,9 +227,9 @@ struct ConnectionScreen: View {
                                 .frame(width: 7, height: 7)
                         }
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(saved.name).foregroundColor(Theme.onSurface).font(.headline)
+                            Text(saved.name).foregroundColor(Theme.onSurface).font(Theme.font(.headline))
                             Text(online ? "\(saved.ip) · online" : saved.ip)
-                                .foregroundColor(Theme.onSurfaceVariant).font(.caption)
+                                .foregroundColor(Theme.onSurfaceVariant).font(Theme.font(.caption))
                         }
                         Spacer()
                         Button("Connect") { vm.connectSaved(saved) }
@@ -192,7 +258,7 @@ struct ConnectionScreen: View {
             }
             if vm.browser.devices.isEmpty {
                 Text("Searching for receivers on your Wi-Fi…")
-                    .font(.subheadline)
+                    .font(Theme.font(.subheadline))
                     .foregroundColor(Theme.onSurfaceVariant)
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -204,9 +270,9 @@ struct ConnectionScreen: View {
                         HStack {
                             Image(systemName: "tv").foregroundColor(Theme.primary)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(device.name).foregroundColor(Theme.onSurface).font(.headline)
+                                Text(device.name).foregroundColor(Theme.onSurface).font(Theme.font(.headline))
                                 Text("\(device.ip)\(device.wssPort != nil ? "  · secure" : "")")
-                                    .foregroundColor(Theme.onSurfaceVariant).font(.caption)
+                                    .foregroundColor(Theme.onSurfaceVariant).font(Theme.font(.caption))
                             }
                             Spacer()
                             Image(systemName: "chevron.right").foregroundColor(Theme.onSurfaceVariant)
@@ -253,27 +319,31 @@ struct ConnectionScreen: View {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(spacing: 16) {
                         Image(systemName: "tv")
-                            .font(.system(size: 32))
+                            .font(Theme.font(size: 32))
                             .foregroundColor(Theme.primary)
                         
                         VStack(alignment: .leading, spacing: 2) {
                             Text(serverName)
                                 .foregroundColor(Theme.onSurface)
-                                .font(.headline)
+                                .font(Theme.font(.headline))
                             
-                            if let saved = vm.pairedDevice {
+                            if let receiver = vm.externalReceiver {
+                                Text(receiver.protocolName).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                            } else if let saved = vm.pairedDevice {
                                 Text("\(saved.ip):\(secure ? (saved.wssPort != nil ? String(saved.wssPort!) : String(saved.port)) : String(saved.port))")
                                     .foregroundColor(Theme.onSurfaceVariant)
-                                    .font(.caption)
+                                    .font(Theme.font(.caption))
                             }
                             
+                            if !vm.isExternalReceiver {
                             HStack(spacing: 4) {
                                 Image(systemName: secure ? "lock.fill" : "lock.open.fill")
-                                    .font(.system(size: 14))
+                                    .font(Theme.font(size: 14))
                                     .foregroundColor(secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
                                 Text(secure ? "Secure (wss)" : "Not secure (ws)")
-                                    .font(.caption)
+                                    .font(Theme.font(.caption))
                                     .foregroundColor(secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
+                            }
                             }
                         }
                         Spacer()
@@ -287,7 +357,7 @@ struct ConnectionScreen: View {
                                 Image(systemName: "gamecontroller.fill")
                                 Text("Remote Control")
                             }
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(Theme.font(size: 14, weight: .semibold))
                             .foregroundColor(Theme.onPrimary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
@@ -302,7 +372,7 @@ struct ConnectionScreen: View {
                             vm.disconnect()
                         } label: {
                             Text("Disconnect")
-                                .font(.system(size: 14, weight: .semibold))
+                                .font(Theme.font(size: 14, weight: .semibold))
                                 .foregroundColor(.white)
                                 .padding(.horizontal, 14)
                                 .padding(.vertical, 8)
@@ -321,7 +391,7 @@ struct ConnectionScreen: View {
 
     private func sectionTitle(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.caption.bold())
+            .font(Theme.font(.caption).bold())
             .foregroundColor(Theme.onSurfaceVariant)
     }
 }

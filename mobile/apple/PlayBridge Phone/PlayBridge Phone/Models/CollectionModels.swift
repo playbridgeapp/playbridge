@@ -11,6 +11,7 @@ struct CollectionItem: Codable, Identifiable, Hashable {
     var mimeType: String?
     var sourceTag: String?      // "manual" | "iptv"
     var order: Int
+    var libraryItemID: String?
 }
 
 /// A hand-curated, ordered list of playable items. Named `MediaCollection` to

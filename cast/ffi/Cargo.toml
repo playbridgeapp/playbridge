@@ -22,6 +22,13 @@ sender-services-android = [
     "stream-proxy-rust/upstream-jni",
 ]
 
+# Apple phone embed: host URLSession via the same platform-neutral C callbacks.
+sender-services-apple = [
+    "dep:playbridge-browser-receiver",
+    "dep:stream-proxy-rust",
+    "stream-proxy-rust/upstream-jni",
+]
+
 [lib]
 crate-type = ["rlib", "staticlib", "cdylib"]
 
@@ -29,7 +36,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 playbridge-cast-core = { path = "../core" }
 playbridge-cast-receiver = { path = "../receiver" }
 playbridge-browser-receiver = { path = "../../browser-receiver-rust", optional = true }
-# Features selected by sender-services / sender-services-android (no default features).
+# Features selected by the sender-services variants (no default features).
 stream-proxy-rust = { path = "../../stream-proxy-rust", optional = true, default-features = false }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }

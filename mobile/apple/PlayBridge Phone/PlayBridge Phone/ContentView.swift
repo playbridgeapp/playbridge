@@ -48,6 +48,11 @@ struct ContentView: View {
             }
         }
         .tint(Theme.primary)
+        .alert("Couldn’t complete cast action", isPresented: Binding(
+            get: { vm.operationError != nil }, set: { if !$0 { vm.operationError = nil } }
+        )) {
+            Button("OK", role: .cancel) { vm.operationError = nil }
+        } message: { Text(vm.operationError ?? "") }
         .onAppear {
             // Auto-reconnect to a previously paired receiver on launch.
             if vm.pairedDevice != nil, !vm.state.isConnected {

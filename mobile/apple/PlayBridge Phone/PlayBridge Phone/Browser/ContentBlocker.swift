@@ -44,7 +44,10 @@ enum ContentBlocker {
     /// lose that source's cosmetics, never its network blocking.
     @MainActor
     static func compileAll() async -> [WKContentRuleList] {
+        let generation = UUID()
+        navigationGeneration = generation
         guard let store = WKContentRuleListStore.default() else { return [] }
+        var navigationTexts: [String] = []
         var lists: [WKContentRuleList] = []
         var desired: Set<String> = []
         var compiledAnyCustom = false
@@ -52,6 +55,7 @@ enum ContentBlocker {
         for url in filterListURLs {
             // Read + hash off the main thread (lists can be multiple MB).
             guard let loaded = await loadList(getLocalListPath(for: url)) else { continue }
+            navigationTexts.append(loaded.text)
             let result = await compileSource(store: store, baseId: loaded.id, text: loaded.text,
                                              sourceName: url.lastPathComponent)
             desired.formUnion(result.ids)
@@ -74,6 +78,7 @@ enum ContentBlocker {
 
         // Always-on extra rules from the bundled/hosted list (small; safe to read here).
         if let extra = extraListText(), !extra.isEmpty {
+            navigationTexts.append(extra)
             let result = await compileSource(store: store, baseId: cacheIdentifier(for: extra), text: extra,
                                              sourceName: "playbridge-extra")
             desired.formUnion(result.ids)
@@ -120,6 +125,9 @@ enum ContentBlocker {
             }
         }
 
+        let navigationText = navigationTexts.joined(separator: "\n")
+        let parsedNavigationRules = await Task.detached(priority: .utility) { NavigationAdRules(text: navigationText) }.value
+        if navigationGeneration == generation { navigationRules = parsedNavigationRules }
         await pruneStaleRuleLists(store: store, keeping: desired)
         return lists
     }
@@ -205,6 +213,9 @@ enum ContentBlocker {
     /// Throws on the first compilation failure so the UI can surface it.
     @MainActor
     static func forceCompileAll() async throws -> [WKContentRuleList] {
+        let generation = UUID()
+        navigationGeneration = generation
+        var navigationTexts: [String] = []
         lock.lock()
         isPatternsCompiled = false
         compiledBlockPatterns = []
@@ -218,6 +229,7 @@ enum ContentBlocker {
 
         for url in filterListURLs {
             guard let loaded = await loadList(getLocalListPath(for: url)) else { continue }
+            navigationTexts.append(loaded.text)
             // Force a fresh compile rather than trusting any cached list.
             let result = try await forceCompileSource(store: store, baseId: loaded.id, text: loaded.text,
                                                       sourceName: url.lastPathComponent)
@@ -236,6 +248,7 @@ enum ContentBlocker {
 
         // Always-on extra rules from the bundled/hosted list.
         if let extra = extraListText(), !extra.isEmpty {
+            navigationTexts.append(extra)
             let result = try await forceCompileSource(store: store, baseId: cacheIdentifier(for: extra), text: extra,
                                                       sourceName: "playbridge-extra")
             desired.formUnion(result.ids)
@@ -269,6 +282,9 @@ enum ContentBlocker {
             lists.append(builtinList)
         }
 
+        let navigationText = navigationTexts.joined(separator: "\n")
+        let parsedNavigationRules = await Task.detached(priority: .utility) { NavigationAdRules(text: navigationText) }.value
+        if navigationGeneration == generation { navigationRules = parsedNavigationRules }
         await pruneStaleRuleLists(store: store, keeping: desired)
         return lists
     }
@@ -861,25 +877,29 @@ enum ContentBlocker {
         "doubleclick.net", "googlesyndication.com",
     ]
 
+    static func isUserDomainRuleList(_ list: WKContentRuleList) -> Bool {
+        let json = userDomainsJSON()
+        return !json.isEmpty && list.identifier == cacheIdentifier(for: json)
+    }
+
     private static func userDomainsJSON() -> String { domainsBlockJSON(userBlockedDomains()) }
     private static func builtinIframeAdJSON() -> String { domainsBlockJSON(iframeAdDomains) }
 
     /// Blocks each domain as sub-resources (any frame) AND as child-frame documents
     /// (ad iframes), but never the top frame — so navigating to the domain still works.
     private static func domainsBlockJSON(_ domains: [String]) -> String {
-        guard !domains.isEmpty else { return "" }
-        var rules: [[String: Any]] = []
-        for d in domains {
-            let escaped = d.replacingOccurrences(of: ".", with: "\\.")
-            let filter = "^https?://([^/]+\\.)?\(escaped)"
-            rules.append(["trigger": ["url-filter": filter, "resource-type": blockResourceTypes],
-                          "action": ["type": "block"]])
-            rules.append(["trigger": ["url-filter": filter, "resource-type": ["document"], "load-context": ["child-frame"]],
-                          "action": ["type": "block"]])
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: rules),
-              let json = String(data: data, encoding: .utf8) else { return "" }
-        return json
+        BrowserDomainRules.json(domains, resourceTypes: blockResourceTypes)
+    }
+
+    static var userDomainRuleIdentifier: String { cacheIdentifier(for: userDomainsJSON()) }
+
+    @MainActor static func compileUserDomainList() async throws -> WKContentRuleList? {
+        let json = userDomainsJSON()
+        guard !json.isEmpty else { return nil }
+        guard let store = WKContentRuleListStore.default() else { throw NSError(domain: "ContentBlocker", code: -1) }
+        let id = cacheIdentifier(for: json)
+        if let cached = await lookup(store: store, identifier: id) { return cached }
+        return try await compile(store: store, identifier: id, json: json, sourceName: "user-domains")
     }
 
     /// Injected on demand to let the user tap an element to block (uBlock-style picker).
@@ -890,6 +910,11 @@ enum ContentBlocker {
       window.__pb_picker = true;
 
       var target = null, previewing = false, previewEls = [], currentHosts = [];
+      // Intercept taps above the page, including cross-origin iframe contents.
+      var shield = document.createElement('div');
+      shield.id = '__pb_picker_shield';
+      shield.style.cssText = 'position:fixed;inset:0;z-index:2147483645;background:transparent;touch-action:none;';
+      document.documentElement.appendChild(shield);
 
       var hl = document.createElement('div');
       hl.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;background:rgba(85,101,242,0.28);border:2px solid #5565F2;border-radius:3px;';
@@ -913,8 +938,14 @@ enum ContentBlocker {
         + '</div>';
       document.documentElement.appendChild(panel);
 
-      function isUI(el){ return el===hl || el===panel || (el && panel.contains(el)); }
-      function elAt(e){ var t=e.changedTouches?e.changedTouches[0]:(e.touches?e.touches[0]:e); return document.elementFromPoint(t.clientX, t.clientY); }
+      function isUI(el){ return el===shield || el===hl || el===panel || (el && panel.contains(el)); }
+      function elAt(e){
+        var t=e.changedTouches&&e.changedTouches.length?e.changedTouches[0]:(e.touches&&e.touches.length?e.touches[0]:e);
+        shield.style.pointerEvents='none';
+        var el=document.elementFromPoint(t.clientX, t.clientY);
+        shield.style.pointerEvents='auto';
+        return el;
+      }
 
       // Simple, WebKit-compatible selector: #id, or tag.class.class, else tag.
       function sel(el){
@@ -958,39 +989,48 @@ enum ContentBlocker {
       function refresh(){
         if(!target) return;
         var s = sel(target);
-        document.getElementById('pbsel').textContent = s;
-        var n = 0; try { n = document.querySelectorAll(s).length; } catch(_){}
-        document.getElementById('pbcount').textContent = n>1 ? ('matches '+n+' elements') : '';
+        panel.querySelector('#pbsel').textContent = s;
+        var n = 0; try { n = Array.from(document.querySelectorAll(s)).filter(function(el){return !isUI(el);}).length; } catch(_){}
+        panel.querySelector('#pbcount').textContent = n>1 ? ('matches '+n+' elements') : '';
         currentHosts = resourceHosts(target);
-        var srcEl = document.getElementById('pbsrc');
+        var srcEl = panel.querySelector('#pbsrc');
         srcEl.textContent = currentHosts.length ? ('Sources: '+currentHosts.join(', ')) : 'No external source found';
-        var srcBtn = document.getElementById('pbsource');
+        var srcBtn = panel.querySelector('#pbsource');
         if(srcBtn){ srcBtn.style.opacity = currentHosts.length ? '1' : '0.4'; }
         updateHL(target);
         if(previewing) applyPreview();
       }
+      function swallow(e){ e.preventDefault(); e.stopImmediatePropagation(); }
       function cleanup(){
-        window.__pb_picker=false; clearPreview(); hl.remove(); panel.remove();
-        document.removeEventListener('touchmove',hover,true); document.removeEventListener('mousemove',hover,true);
-        document.removeEventListener('click',firstPick,true); document.removeEventListener('touchend',firstPick,true);
+        if(!window.__pb_picker) return;
+        window.__pb_picker=false; window.__pb_picker_cleanup=null;
+        clearPreview(); shield.remove(); hl.remove(); panel.remove();
+        blockedEvents.forEach(function(type){ window.removeEventListener(type,intercept,true); });
+        window.removeEventListener('mousemove',hover,true);
+        // A touch gesture can produce a trailing click after the picker closes.
+        window.addEventListener('click',swallow,true);
+        setTimeout(function(){window.removeEventListener('click',swallow,true);},350);
+        try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickerState', active:false}); }catch(_){}
       }
+      window.__pb_picker_cleanup=cleanup;
       function hover(e){ if(target) return; var el=elAt(e); if(el && !isUI(el)) updateHL(el); }
-      function firstPick(e){
+      function intercept(e){
+        if(isUI(e.target) && e.target!==shield) return;
+        swallow(e);
+        if(e.type==='touchmove' || e.type==='pointermove'){ hover(e); return; }
+        if(e.type!=='click' && e.type!=='touchend') return;
         var el=elAt(e); if(!el || isUI(el)) return;
-        e.preventDefault(); e.stopPropagation();
-        target = el;
-        document.removeEventListener('click',firstPick,true); document.removeEventListener('touchend',firstPick,true);
-        refresh();
+        target=el; refresh();
       }
-
-      document.addEventListener('touchmove',hover,true);
-      document.addEventListener('mousemove',hover,true);
-      document.addEventListener('click',firstPick,true);
-      document.addEventListener('touchend',firstPick,true);
+      // Keep interception installed after selection, during Up/Down/Preview, and
+      // until Block/Cancel. Capture on window precedes page document handlers.
+      var blockedEvents=['pointerdown','pointerup','pointermove','touchstart','touchend','touchmove','mousedown','mouseup','click','auxclick','contextmenu'];
+      blockedEvents.forEach(function(type){window.addEventListener(type,intercept,{capture:true,passive:false});});
+      window.addEventListener('mousemove',hover,true);
 
       panel.addEventListener('click', function(e){
         var id = e.target && e.target.id; if(!id) return;
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); e.stopImmediatePropagation();
         if(id==='pbup'){ if(target && target.parentElement && target.parentElement.tagName!=='HTML'){ target=target.parentElement; refresh(); } }
         else if(id==='pbdown'){ if(target && target.firstElementChild){ target=target.firstElementChild; refresh(); } }
         else if(id==='pbprev'){ previewing=!previewing; e.target.style.background = previewing ? '#5565F2' : '#241D54'; applyPreview(); }
@@ -1056,6 +1096,17 @@ enum ContentBlocker {
         "startappservice.com", "propellerads.com", "popads.net", "exoclick.com", "trafficjunky.com",
         "adsterra.com", "hilltopads.net", "juicyads.com", "onclkds.com",
     ]
+
+    @MainActor private static var navigationGeneration = UUID()
+    @MainActor private static var navigationRules = NavigationAdRules()
+
+    @MainActor static func shouldBlockNavigation(_ url: URL, source: URL?, popup: Bool) -> Bool {
+        guard isEnabled, let host = url.host?.lowercased(),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        if userBlockedDomains().contains(where: { NavigationAdRules.host(host, matches: $0) }) { return true }
+        if let decision = navigationRules.decision(url: url, source: source, popup: popup) { return decision }
+        return iframeAdDomains.contains { NavigationAdRules.host(host, matches: $0) }
+    }
 
     private static var compiledBlockPatterns: [NSRegularExpression] = []
     private static var isPatternsCompiled = false

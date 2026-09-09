@@ -39,17 +39,17 @@ struct IptvScreen: View {
         HStack(spacing: 12) {
             Button { nav.navigate(to: .dashboard) } label: {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(Theme.font(size: 18, weight: .semibold))
                     .foregroundColor(Theme.onSurface)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text("IPTV").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
-                Text("Live channels from your playlists").font(.system(size: 12)).foregroundColor(Theme.onSurfaceVariant)
+                Text("IPTV").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                Text("Live channels from your playlists").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)
             }
             Spacer()
             Button { showAdd = true } label: {
                 Image(systemName: "plus")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(Theme.font(size: 18, weight: .semibold))
                     .foregroundColor(Theme.primary)
             }
         }
@@ -58,14 +58,14 @@ struct IptvScreen: View {
     private var emptyState: some View {
         VStack(spacing: 14) {
             Spacer()
-            Image(systemName: "tv").font(.system(size: 44)).foregroundColor(Theme.onSurfaceVariant)
-            Text("No playlists yet").font(.system(size: 16, weight: .semibold)).foregroundColor(Theme.onSurface)
+            Image(systemName: "tv").font(Theme.font(size: 44)).foregroundColor(Theme.onSurfaceVariant)
+            Text("No playlists yet").font(Theme.font(size: 16, weight: .semibold)).foregroundColor(Theme.onSurface)
             Text("Add an M3U playlist (URL or file) to browse and cast live channels.")
-                .font(.system(size: 13)).foregroundColor(Theme.onSurfaceVariant)
+                .font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant)
                 .multilineTextAlignment(.center).padding(.horizontal, 24)
             Button { showAdd = true } label: {
                 Text("Add IPTV playlist")
-                    .font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
+                    .font(Theme.font(size: 15, weight: .semibold)).foregroundColor(.white)
                     .padding(.horizontal, 20).padding(.vertical, 12)
                     .background(RoundedRectangle(cornerRadius: 14).fill(Theme.primary))
             }
@@ -79,15 +79,15 @@ struct IptvScreen: View {
         Button { nav.navigate(to: .iptvDetail(pl.id)) } label: {
             HStack(spacing: 12) {
                 Image(systemName: pl.sourceType == .url ? "globe" : "doc")
-                    .font(.system(size: 18)).foregroundColor(Theme.primary).frame(width: 26)
+                    .font(Theme.font(size: 18)).foregroundColor(Theme.primary).frame(width: 26)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(pl.name).font(.system(size: 15, weight: .semibold))
+                    Text(pl.name).font(Theme.font(size: 15, weight: .semibold))
                         .foregroundColor(Theme.onSurface).lineLimit(1)
                     Text("\(pl.channelCount) channels • updated \(relative(pl.updatedAt ?? pl.addedAt))")
-                        .font(.system(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+                        .font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+                Image(systemName: "chevron.right").font(Theme.font(size: 13, weight: .semibold))
                     .foregroundColor(Theme.onSurfaceVariant)
             }
             .padding(14)
@@ -153,7 +153,7 @@ struct IptvAddSheet: View {
                 }
 
                 if let errorMessage {
-                    Section { Text(errorMessage).foregroundColor(Theme.danger).font(.system(size: 13)) }
+                    Section { Text(errorMessage).foregroundColor(Theme.danger).font(Theme.font(size: 13)) }
                 }
             }
             .scrollContentBackground(.hidden)

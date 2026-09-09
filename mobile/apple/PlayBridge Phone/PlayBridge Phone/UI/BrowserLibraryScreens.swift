@@ -28,9 +28,9 @@ struct HistoryScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     Button { nav.navigate(to: .browser) } label: {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
+                        Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
                     }
-                    Text("History").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                    Text("History").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
                     if !data.history.isEmpty {
                         Button { confirmClear = true } label: {
@@ -79,9 +79,9 @@ struct BookmarksScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     Button { nav.navigate(to: .browser) } label: {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
+                        Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
                     }
-                    Text("Bookmarks").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                    Text("Bookmarks").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
                 }
                 .padding(20)
@@ -123,9 +123,9 @@ struct BrowserSettingsScreen: View {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
                     Button { nav.navigate(to: .browser) } label: {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
+                        Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
                     }
-                    Text("Browser settings").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                    Text("Browser settings").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
                 }
                 .padding(20)
@@ -144,7 +144,7 @@ struct BrowserSettingsScreen: View {
                             .foregroundColor(Theme.danger)
                     }
                     if let clearedMessage {
-                        Section { Text(clearedMessage).font(.system(size: 13)).foregroundColor(Color(hex: 0x4CAF50)) }
+                        Section { Text(clearedMessage).font(Theme.font(size: 13)).foregroundColor(Color(hex: 0x4CAF50)) }
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -173,16 +173,16 @@ struct BrowserSettingsScreen: View {
 
 private func rowView(title: String, subtitle: String) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: 15)).foregroundColor(Theme.onSurface).lineLimit(1)
-        Text(subtitle).font(.system(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+        Text(title).font(Theme.font(size: 15)).foregroundColor(Theme.onSurface).lineLimit(1)
+        Text(subtitle).font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
     }
 }
 
 private func emptyState(_ text: String, systemImage: String) -> some View {
     VStack(spacing: 12) {
         Spacer()
-        Image(systemName: systemImage).font(.system(size: 40)).foregroundColor(Theme.onSurfaceVariant)
-        Text(text).font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
+        Image(systemName: systemImage).font(Theme.font(size: 40)).foregroundColor(Theme.onSurfaceVariant)
+        Text(text).font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
         Spacer(); Spacer()
     }
     .frame(maxWidth: .infinity)

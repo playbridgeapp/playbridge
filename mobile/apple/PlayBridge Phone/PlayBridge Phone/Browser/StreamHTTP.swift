@@ -53,8 +53,11 @@ enum StreamHTTP {
         do {
             let (data, response) = try await URLSession.shared.data(for: req)
             SenderDebugNetwork.response("StreamHTTP", response: response)
+            StreamDebugTrace.record("Manifest HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0); received \(data.count) bytes")
             return String(data: data, encoding: .utf8)
         } catch {
+            let error = error as NSError
+            StreamDebugTrace.record("Manifest network failure: \(error.domain) code \(error.code)")
             return nil
         }
     }

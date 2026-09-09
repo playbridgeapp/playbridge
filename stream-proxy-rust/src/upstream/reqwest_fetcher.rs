@@ -1,8 +1,8 @@
 //! Reqwest (+ optional FFmpeg AVIO) origin fetch — Docker / Desktop / CLI default.
 
 use super::{
-    validate_http_destination, with_default_upstream_headers, NetworkPolicy, UpstreamConnectFuture,
-    UpstreamFetcher, UpstreamResponse,
+    validate_http_destination, NetworkPolicy, UpstreamConnectFuture, UpstreamFetcher,
+    UpstreamResponse,
 };
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -169,7 +169,7 @@ impl ReqwestUpstreamFetcher {
         network_policy: Option<NetworkPolicy>,
     ) -> Result<UpstreamResponse, String> {
         let initial = reqwest::Url::parse(url).map_err(|_| "invalid upstream URL".to_string())?;
-        let credential_origin = origin(&initial);
+        let credential_url = initial.to_string();
         let mut current = initial;
         for redirect_count in 0..=10 {
             validate_http_destination(current.as_str(), network_policy.as_ref()).await?;
@@ -179,7 +179,7 @@ impl ReqwestUpstreamFetcher {
                 .client_for_policy(network_policy.as_ref(), &current)?
                 .get(current.clone());
             let request_headers =
-                scoped_redirect_headers(headers, origin(&current) == credential_origin);
+                super::redirect_headers(headers, &credential_url, current.as_str());
             for (k, v) in &request_headers {
                 if let (Ok(h_name), Ok(h_val)) = (HeaderName::from_str(k), HeaderValue::from_str(v))
                 {
@@ -248,7 +248,11 @@ impl ReqwestUpstreamFetcher {
         }
 
         if avio_allowed(network_policy.as_ref()) {
-            self.try_avio(current.as_str(), headers).await
+            self.try_avio(
+                current.as_str(),
+                &super::redirect_headers(headers, &credential_url, current.as_str()),
+            )
+            .await
         } else {
             Err("failed to fetch policy-constrained upstream".into())
         }
@@ -259,35 +263,26 @@ impl ReqwestUpstreamFetcher {
         url: &str,
         headers: &HashMap<String, String>,
     ) -> Result<UpstreamResponse, String> {
+        // AVIO supplies bytes, not the origin's HTTP status/Content-Range. Never
+        // invent a 206 from the request's "bytes=..." value: AVPlayer rejects it.
+        if headers.keys().any(|key| key.eq_ignore_ascii_case("range")) {
+            return Err(
+                "upstream HTTP byte-range request failed; AVIO cannot preserve range metadata"
+                    .into(),
+            );
+        }
         #[cfg(feature = "upstream-avio")]
         {
             use crate::avio::get_avio_client;
 
             let avio_client = get_avio_client(self.ffmpeg_path.as_deref());
             if let Some(rx) = avio_client.spawn_stream(url.to_string(), headers.clone(), 30) {
-                let mut out_headers = HeaderMap::new();
-
-                let has_range = headers.keys().any(|k| k.eq_ignore_ascii_case("range"));
-                if has_range {
-                    if let Some(r_val) = headers.get("range").or_else(|| headers.get("Range")) {
-                        if let Ok(hv) = HeaderValue::from_str(r_val) {
-                            out_headers.insert("content-range", hv);
-                        }
-                    }
-                }
-
-                let status = if has_range {
-                    StatusCode::PARTIAL_CONTENT
-                } else {
-                    StatusCode::OK
-                };
-
                 let stream = ReceiverStream::new(rx);
                 let body = Body::from_stream(stream);
 
                 return Ok(UpstreamResponse {
-                    status,
-                    headers: out_headers,
+                    status: StatusCode::OK,
+                    headers: HeaderMap::new(),
                     body,
                 });
             }
@@ -320,47 +315,48 @@ fn avio_allowed(network_policy: Option<&NetworkPolicy>) -> bool {
     network_policy.is_none()
 }
 
-fn origin(url: &reqwest::Url) -> (String, String, Option<u16>) {
-    (
-        url.scheme().to_owned(),
-        url.host_str().unwrap_or_default().to_ascii_lowercase(),
-        url.port_or_known_default(),
-    )
-}
-
-fn scoped_redirect_headers(
-    headers: &HashMap<String, String>,
-    same_origin: bool,
-) -> HashMap<String, String> {
-    if same_origin {
-        return headers.clone();
-    }
-    let range_only = headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("range"))
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
-    with_default_upstream_headers(&range_only)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use reqwest::dns::Resolve;
 
     #[test]
-    fn cross_origin_redirects_drop_page_headers() {
+    fn cross_origin_redirects_preserve_browser_context_not_credentials() {
         let headers = HashMap::from([
             ("Authorization".into(), "Bearer secret".into()),
             ("Cookie".into(), "session=secret".into()),
             ("User-Agent".into(), "Page agent".into()),
             ("Range".into(), "bytes=0-10".into()),
+            (
+                "Referer".into(),
+                "https://page.test/watch?secret=value".into(),
+            ),
         ]);
-        let scoped = scoped_redirect_headers(&headers, false);
+        let scoped = super::super::redirect_headers(
+            &headers,
+            "https://media.test/start",
+            "https://cdn.test/file.mp4",
+        );
         assert!(!scoped.contains_key("Authorization"));
         assert!(!scoped.contains_key("Cookie"));
-        assert_ne!(scoped.get("User-Agent"), Some(&"Page agent".to_string()));
-        assert_eq!(scoped.get("Range"), Some(&"bytes=0-10".to_string()));
+        assert_eq!(scoped.get("User-Agent"), Some(&"Page agent".to_string()));
+        assert_eq!(
+            scoped.get("Referer"),
+            Some(&"https://page.test/".to_string())
+        );
+        assert_eq!(scoped.get("range"), Some(&"bytes=0-10".to_string()));
+    }
+
+    #[tokio::test]
+    async fn avio_does_not_fabricate_partial_content() {
+        let fetcher = ReqwestUpstreamFetcher::new(None);
+        let result = fetcher
+            .try_avio(
+                "https://example.test/video.mp4",
+                &HashMap::from([("Range".into(), "bytes=0-1".into())]),
+            )
+            .await;
+        assert!(result.is_err());
     }
 
     #[test]

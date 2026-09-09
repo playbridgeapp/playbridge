@@ -18,15 +18,22 @@ if ! command -v rustup >/dev/null 2>&1; then
     exit 1
 fi
 
-rustup target add "$device_target" "$sim_arm_target" "$sim_x64_target"
+framework="$output_root/PlayBridgeCastCore.xcframework"
+if [ -e "$framework" ]; then
+    echo "Remove the existing $framework before rebuilding." >&2
+    exit 1
+fi
+
+rustup target add --toolchain stable "$device_target" "$sim_arm_target" "$sim_x64_target"
 
 build_target() {
     target=$1
     env IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+        RUSTC="$(rustup which --toolchain stable rustc)" \
         rustup run stable cargo build \
         --manifest-path "$repo_dir/Cargo.toml" \
         --package playbridge-cast-core-ffi \
-        --release \
+        --release --locked --features sender-services-apple \
         --target "$target"
 }
 
@@ -43,11 +50,6 @@ lipo -create \
     -output "$simulator_library"
 
 mkdir -p "$output_root"
-framework="$output_root/PlayBridgeCastCore.xcframework"
-if [ -e "$framework" ]; then
-    echo "Remove the existing $framework before rebuilding." >&2
-    exit 1
-fi
 xcodebuild -create-xcframework \
     -library "$repo_dir/target/$device_target/release/libplaybridge_cast_core_ffi.a" \
     -headers "$headers_dir" \

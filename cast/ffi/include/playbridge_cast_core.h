@@ -49,7 +49,8 @@ void pb_session_free(const CastSession *session);
 
 /*
  * Optional sender-services ABI. Build with `sender-services` (Desktop: reqwest
- * upstream) or `sender-services-android` (phone: JNI upstream callbacks).
+ * upstream), `sender-services-android` (HttpURLConnection callbacks), or
+ * `sender-services-apple` (URLSession callbacks).
  * Owns one embedded stream proxy and an on-demand browser-receiver host.
  * Commands and events are UTF-8 JSON.
  */
@@ -65,12 +66,14 @@ void pb_sender_services_free(const SenderServices *services);
 /*
  * Android / host origin-fetch callbacks for stream-proxy-rust (upstream-jni).
  * Linked when the native library is built with stream-proxy-rust/upstream-jni
- * (e.g. cast/ffi feature sender-services-android).
+ * (e.g. cast/ffi features sender-services-android or sender-services-apple).
  *
  * open: returns handle > 0 on success; on failure returns 0 and may set *out_error
  *       (free with free_string). On success writes HTTP status and a JSON object
  *       of response headers (content-type, content-length, content-range,
- *       accept-ranges) into *out_response_headers_json (free with free_string).
+ *       accept-ranges, location for 3xx) into *out_response_headers_json
+ *       (free with free_string). Hosts may return redirects without following;
+ *       Rust validates supported redirect hops and scopes their headers.
  * read: >0 bytes, 0 EOF, <0 error (optional *out_error).
  * close: release handle (idempotent preferred).
  * free_string: free host-allocated C strings from open/read.

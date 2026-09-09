@@ -25,7 +25,11 @@ use serde_json::Value;
 uniffi::setup_scaffolding!();
 
 mod receiver_runtime;
-#[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+#[cfg(any(
+    feature = "sender-services",
+    feature = "sender-services-android",
+    feature = "sender-services-apple"
+))]
 mod sender_services;
 
 /// Android-only: JNI trampolines for stream-proxy-rust upstream-jni.

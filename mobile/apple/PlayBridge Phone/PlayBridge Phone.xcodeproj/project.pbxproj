@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA0000000000000000000011 /* ../Native/PlayBridgeCastCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000012 /* ../Native/PlayBridgeCastCore.xcframework */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AA0000000000000000000006 /* PlayBridge Phone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PlayBridge Phone.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA0000000000000000000012 /* ../Native/PlayBridgeCastCore.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = ../Native/PlayBridgeCastCore.xcframework; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -36,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA0000000000000000000011 /* ../Native/PlayBridgeCastCore.xcframework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -47,6 +53,7 @@
 			children = (
 				AA0000000000000000000004 /* PlayBridge Phone */,
 				AA0000000000000000000003 /* Products */,
+				AA0000000000000000000012 /* ../Native/PlayBridgeCastCore.xcframework */,
 			);
 			sourceTree = "<group>";
 		};
@@ -222,6 +229,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PlayBridge Phone/Info.plist";
+				INFOPLIST_KEY_PlayBridgeGoogleCastApplicationID = 30FDC6BC;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -233,7 +241,15 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = "0.3.3-alpha";
-				INFOPLIST_KEY_PlayBridgeGoogleCastApplicationID = 30FDC6BC;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-liconv",
+					"-lresolv",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.PlayBridge-Phone";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -253,6 +269,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "PlayBridge Phone/Info.plist";
+				INFOPLIST_KEY_PlayBridgeGoogleCastApplicationID = 30FDC6BC;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -264,7 +281,15 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = "0.3.3-alpha";
-				INFOPLIST_KEY_PlayBridgeGoogleCastApplicationID = 30FDC6BC;
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-framework",
+					Security,
+					"-framework",
+					SystemConfiguration,
+					"-liconv",
+					"-lresolv",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = "com.playbridge.PlayBridge-Phone";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
