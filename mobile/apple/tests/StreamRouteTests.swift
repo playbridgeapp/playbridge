@@ -32,6 +32,10 @@ final class PhoneSenderServices {
         let config = RemoteProxyConfiguration(baseURL: "https://proxy.test/prefix/", password: "a&b+? secret")
         let proxy = try await router.prepare(url: source, headers: headers, contentType: nil, route: .proxy, configuration: config)
         precondition(proxy.url.host == "proxy.test" && proxy.headers.isEmpty && phoneCalls == 1 && remoteCalls == 1)
+        for result in [direct, phone, proxy] {
+            precondition(result.sourceURL == source && result.sourceHeaders == headers,
+                         "History must retain original sources for all routes")
+        }
         do {
             _ = try await router.prepare(url: source, headers: headers, contentType: nil, route: .proxy, configuration: .init())
             preconditionFailure("Unconfigured proxy must fail")

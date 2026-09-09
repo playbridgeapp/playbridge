@@ -10,6 +10,7 @@ enum AppScreen: Hashable {
     case iptvDetail(UUID)
     case collections
     case collectionDetail(UUID)
+    case castHistory
     case history
     case bookmarks
     case browserSettings

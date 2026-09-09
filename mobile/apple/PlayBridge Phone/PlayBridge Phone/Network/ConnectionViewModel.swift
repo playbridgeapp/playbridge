@@ -22,6 +22,7 @@ final class ConnectionViewModel: ObservableObject {
         if case .connected(let name, _) = state { return name }
         return externalReceiver?.name ?? pairedDevice?.name
     }
+    let castHistory = CastHistoryStore()
     let ws = WebSocketClient()
     let coordinator = ConnectionCoordinator()
 
@@ -361,7 +362,7 @@ final class ConnectionViewModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: nil, headers: [:]); return }
         SenderDebugNetwork.request("Cast output", url: trimmed)
-        ws.send(WireProtocol.singleVideoCommand(url: trimmed, title: title))
+        sendMediaCommand(WireProtocol.singleVideoCommand(url: trimmed, title: title))
     }
 
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
@@ -371,7 +372,7 @@ final class ConnectionViewModel: ObservableObject {
                 do { try await googleCast.load(url: mediaURL, title: title, contentType: contentType) }
                 catch { operationError = "Couldn’t send this file to the connected device. Check the connection and supported media formats." }
             }
-        } else { castMedia(url: url, title: title, contentType: contentType) }
+        } else { ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType)) }
     }
 
     /// Cast an arbitrary media URL with optional request headers (IPTV channels and
@@ -381,7 +382,7 @@ final class ConnectionViewModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: contentType, headers: headers); return }
         SenderDebugNetwork.request("Cast output", url: trimmed, headers: headers)
-        ws.send(WireProtocol.singleVideoCommand(
+        sendMediaCommand(WireProtocol.singleVideoCommand(
             url: trimmed,
             title: title,
             contentType: contentType,
@@ -402,7 +403,7 @@ final class ConnectionViewModel: ObservableObject {
         let url = quality?.url ?? video.url
         let headers = VideoDetector.mediaHeaders(for: video)
         SenderDebugNetwork.request("Browser cast output", url: url, headers: headers)
-        ws.send(WireProtocol.singleVideoCommand(
+        sendMediaCommand(WireProtocol.singleVideoCommand(
             url: url,
             title: video.displayTitle,
             contentType: video.contentType,
@@ -415,12 +416,18 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Retain phone routes beyond sheet dismissal and across queued items.
     func sendRoutedStream(_ media: RoutedStream, video: DetectedVideo, subtitles: [RoutedStream], queue: Bool) async throws {
+        let historyCommand = WireProtocol.singleVideoCommand(
+            url: media.sourceURL ?? video.url, title: video.displayTitle,
+            contentType: video.contentType, subtitles: subtitles.compactMap(\.sourceURL),
+            headers: media.sourceURL == nil ? VideoDetector.mediaHeaders(for: video) : media.sourceHeaders,
+            detectedBy: video.detectedBy)
         if isExternalReceiver {
             guard !queue, subtitles.isEmpty else { throw StreamRoutingError.message("Queueing and external subtitles are not supported by this receiver adapter yet.") }
             let target = destinationID
             try await googleCast.load(url: media.url, title: video.displayTitle, contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType)
             guard destinationID == target, isExternalReceiver, googleCast.state.isConnected else { throw CancellationError() }
             routedStreamRegistrations = [media.registration].compactMap { $0 }
+            recordCast(historyCommand)
             return
         }
         if !queue { routedStreamRegistrations.removeAll() }
@@ -431,7 +438,7 @@ final class ConnectionViewModel: ObservableObject {
                 contentType: video.contentType, subtitles: urls, headers: media.headers, detectedBy: video.detectedBy)
             : WireProtocol.singleVideoCommand(url: media.url.absoluteString, title: video.displayTitle,
                 contentType: video.contentType, subtitles: urls, headers: media.headers, detectedBy: video.detectedBy)
-        ws.send(message)
+        if ws.send(message) { recordCast(historyCommand) }
     }
 
     /// Queue a browser-detected stream.
@@ -440,7 +447,7 @@ final class ConnectionViewModel: ObservableObject {
         let url = quality?.url ?? video.url
         let headers = VideoDetector.mediaHeaders(for: video)
         SenderDebugNetwork.request("Browser queue output", url: url, headers: headers)
-        ws.send(WireProtocol.queueVideoCommand(
+        sendMediaCommand(WireProtocol.queueVideoCommand(
             url: url,
             title: video.displayTitle,
             contentType: video.contentType,
@@ -492,6 +499,7 @@ final class ConnectionViewModel: ObservableObject {
                 try await googleCast.load(url: media.url, title: title, contentType: contentType)
                 guard destinationID == target, isExternalReceiver else { return }
                 routedStreamRegistrations = [media.registration].compactMap { $0 }
+                recordCast(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, headers: headers))
             } catch { if destinationID == target { operationError = error.localizedDescription } }
         }
     }
@@ -499,6 +507,76 @@ final class ConnectionViewModel: ObservableObject {
     func jump(toIndex index: Int) { ws.send(WireProtocol.playlistJumpCommand(index: index)) }
     func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }
     func queryContext() { if !isExternalReceiver { ws.send(WireProtocol.contextQuery()) } }
+
+    private func sendMediaCommand(_ command: String) {
+        guard isConnected else { operationError = "Connect a device before casting."; return }
+        if ws.send(command) { recordCast(command) }
+    }
+
+    private func recordCast(_ command: String) {
+        guard UserDefaults.standard.object(forKey: "cast_save_history") as? Bool ?? true else { return }
+        // Explicit private payloads are never saved. The receiver preference is applied
+        // separately at transport time and does not disable sender-side tracking.
+        castHistory.record(command, receiver: receiverName)
+    }
+
+    @MainActor
+    func replayCast(_ entry: CastHistoryStore.Entry) async {
+        guard isConnected, let items = CastHistoryStore.items(in: entry.command) else {
+            operationError = "Connect a device before replaying this cast."
+            return
+        }
+        let target = destinationID
+        let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
+        let configuration = StreamProxySettingsStore.load()
+        do {
+            if isExternalReceiver && (items.count != 1 || !(items[0]["subtitles"] as? [String] ?? []).isEmpty) {
+                throw StreamRoutingError.message("This receiver does not support replaying playlists or external subtitles.")
+            }
+            var prepared: [[String: Any]] = []
+            var registrations: [PhoneProxyRegistration] = []
+            for original in items {
+                var item = original
+                let media = try await StreamRouteService().prepare(url: original["url"] as! String,
+                    headers: original["headers"] as? [String: String] ?? [:],
+                    contentType: original["contentType"] as? String, route: route, configuration: configuration)
+                item["url"] = media.url.absoluteString
+                item["headers"] = media.headers
+                if let registration = media.registration { registrations.append(registration) }
+                var subtitles: [String] = []
+                for subtitle in original["subtitles"] as? [String] ?? [] {
+                    let routed = try await StreamRouteService().prepare(url: subtitle,
+                        headers: original["headers"] as? [String: String] ?? [:],
+                        contentType: nil, route: route, configuration: configuration)
+                    subtitles.append(routed.url.absoluteString)
+                    if let registration = routed.registration { registrations.append(registration) }
+                }
+                item["subtitles"] = subtitles
+                prepared.append(item)
+            }
+            guard destinationID == target, isConnected else { throw CancellationError() }
+            if isExternalReceiver {
+                let item = prepared[0]
+                try await googleCast.load(url: URL(string: item["url"] as! String)!,
+                    title: item["title"] as? String, contentType: item["contentType"] as? String)
+            } else {
+                let saved = try JSONSerialization.jsonObject(with: Data(entry.command.utf8)) as? [String: Any]
+                var payload = saved?["action"] as? String == "playlist"
+                    ? saved?["payload"] as? [String: Any] ?? [:] : [:]
+                payload["items"] = prepared
+                if payload["startIndex"] == nil { payload["startIndex"] = 0 }
+                let data = try JSONSerialization.data(withJSONObject: [
+                    "type": "command", "action": "playlist", "payload": payload
+                ] as [String: Any])
+                guard ws.send(String(decoding: data, as: UTF8.self)) else { throw CancellationError() }
+            }
+            guard destinationID == target, isConnected else { throw CancellationError() }
+            routedStreamRegistrations = registrations
+            recordCast(entry.command)
+        } catch is CancellationError {
+            operationError = "The receiver connection changed. Try replaying again."
+        } catch { operationError = error.localizedDescription }
+    }
 
     // MARK: - Persistence
 

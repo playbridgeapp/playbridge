@@ -112,7 +112,7 @@ final class WebSocketClient: NSObject, ObservableObject {
     @discardableResult
     func send(_ text: String) -> Bool {
         guard let task else { return false }
-        task.send(.string(text)) { _ in }
+        task.send(.string(WireProtocol.applyingHistoryPreference(text, prevent: UserDefaults.standard.bool(forKey: "cast_prevent_receiver_history")))) { _ in }
         return true
     }
 

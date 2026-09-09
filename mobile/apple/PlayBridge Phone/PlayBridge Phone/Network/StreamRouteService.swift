@@ -31,6 +31,8 @@ struct RoutedStream {
     let url: URL
     let headers: [String: String]
     var registration: PhoneProxyRegistration?
+    var sourceURL: String?
+    var sourceHeaders: [String: String] = [:]
 }
 
 /// Shared by local playback and receiver sends. No route silently falls back
@@ -48,13 +50,17 @@ struct StreamRouteService {
         guard let original = URL(string: url), ["http", "https"].contains(original.scheme?.lowercased() ?? "") else {
             throw StreamRoutingError.message("This stream does not have a playable HTTP or HTTPS URL.")
         }
+        var result: RoutedStream
         switch route {
-        case .direct: return RoutedStream(url: original, headers: headers)
-        case .phone: return try await phone(url, headers, contentType)
+        case .direct: result = RoutedStream(url: original, headers: headers)
+        case .phone: result = try await phone(url, headers, contentType)
         case .proxy:
             _ = try configuration.validatedURL()
-            return try await remote(url, headers, contentType, configuration)
+            result = try await remote(url, headers, contentType, configuration)
         }
+        result.sourceURL = url
+        result.sourceHeaders = headers
+        return result
     }
 }
 

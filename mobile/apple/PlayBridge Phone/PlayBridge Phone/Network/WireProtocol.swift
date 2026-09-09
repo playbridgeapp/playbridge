@@ -8,6 +8,28 @@ import Foundation
 /// Standalone messages (ping/auth/pairing_request) are not wrapped in the command envelope.
 enum WireProtocol {
 
+    /// Apply at the transport boundary so replay and queue additions follow the preference.
+    static func applyingHistoryPreference(_ text: String, prevent: Bool) -> String {
+        guard prevent, let data = text.data(using: .utf8),
+              var command = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              command["type"] as? String == "command",
+              var payload = command["payload"] as? [String: Any] else { return text }
+        switch command["action"] as? String {
+        case "playlist":
+            guard let items = payload["items"] as? [[String: Any]] else { return text }
+            payload["items"] = items.map { item in
+                var marked = item; marked["skipHistory"] = true; return marked
+            }
+        case "queue_add":
+            guard var item = payload["item"] as? [String: Any] else { return text }
+            item["skipHistory"] = true
+            payload["item"] = item
+        default: return text
+        }
+        command["payload"] = payload
+        return encode(command)
+    }
+
     // MARK: - Standalone messages
 
     static func ping() -> String { #"{"type":"ping"}"# }

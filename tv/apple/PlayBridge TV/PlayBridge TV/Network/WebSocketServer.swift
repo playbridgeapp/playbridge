@@ -946,7 +946,7 @@ class WebSocketServer: ObservableObject {
         let url = payload.validURL!  // pre-validated by caller
         print("WebSocket Play: \(payload.titleOrNil ?? "No Title")")
         debugLogNetworkRequest("WebSocket play", url: url, headers: payload.headersOrNil)
-        historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
+        if !payload.skipHistory { historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil) }
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.playlistStore?.clear()
@@ -974,7 +974,7 @@ class WebSocketServer: ObservableObject {
             self.playlistStore?.setPlaylist(items: valid, startIndex: Int(payload.startIndex))
             self.skipPreplayForCurrentRequest = payload.skipPreplay
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
-                self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil)
+                if !first.skipHistory { self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil) }
                 self.currentPlayRequest = first
             }
         }

@@ -307,6 +307,6 @@ queue navigation, and renderer changes; it does not change pairing or titles.
 
 Omitted or false retains the receiver's normal history policy. Enabling this
 preference affects subsequently sent items, leaves existing history untouched,
-and does not disable sender-side watch tracking. Android TV and Desktop implement this
+and does not disable sender-side watch tracking. Android TV, Apple TV, and Desktop implement this
 preference; older or other receivers may ignore it, so senders must not promise
 history suppression on those receivers.

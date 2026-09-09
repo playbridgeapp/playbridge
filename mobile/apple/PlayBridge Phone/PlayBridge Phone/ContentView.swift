@@ -36,6 +36,8 @@ struct ContentView: View {
             case .collectionDetail(let id):
                 CollectionDetailScreen(collectionId: id)
                     .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))
+            case .castHistory:
+                CastHistoryScreen()
             case .history:
                 HistoryScreen()
                     .transition(.asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading)))

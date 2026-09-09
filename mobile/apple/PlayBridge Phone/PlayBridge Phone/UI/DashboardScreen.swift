@@ -147,8 +147,8 @@ struct DashboardScreen: View {
                     systemImage: "clock.arrow.circlepath",
                     gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)],
                     tall: false,
-                    isActive: false,
-                    comingSoon: true
+                    isActive: nav.currentScreen == .castHistory,
+                    action: { nav.navigate(to: .castHistory) }
                 )
             }
         }
