@@ -153,6 +153,16 @@ enum ContentBlocker {
     }
 
     @MainActor func run() async throws {
+        for scheme in ["", ":", "https:", "1http", "http\n", "data", "about", "file"] {
+            try check(BrowserPopupInteraction.originURL(scheme: scheme, host: "example.test", port: 0) == nil,
+                      "Invalid or opaque origin must not crash or receive a popup grant")
+        }
+        try check(BrowserPopupInteraction.originURL(scheme: "https", host: "", port: 0) == nil,
+                  "Opaque origin with no host must be rejected")
+        try check(BrowserPopupInteraction.originURL(scheme: "https", host: "example.test", port: -1) == nil,
+                  "Invalid port must be rejected")
+        try check(BrowserPopupInteraction.originURL(scheme: "HTTPS", host: "example.test", port: 8443)?.absoluteString
+                  == "https://example.test:8443", "Valid frame origin must retain its port")
         try check(UIFont(name: "Poppins-Regular", size: 17) != nil, "Bundled Android font did not register")
         try await verifyFavicons()
         try await verifyJumpDuringScrolling()

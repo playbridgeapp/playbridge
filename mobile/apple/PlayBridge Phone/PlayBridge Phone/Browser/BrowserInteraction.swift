@@ -62,9 +62,20 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
 
     static func originURL(_ frame: WKFrameInfo) -> URL? {
         let origin = frame.securityOrigin
+        return originURL(scheme: origin.protocol, host: origin.host, port: origin.port)
+    }
+
+    static func originURL(scheme: String, host: String, port: Int) -> URL? {
+        // Opaque/sandboxed frames can report an empty security-origin protocol.
+        // Foundation traps on invalid scheme assignments instead of returning nil.
+        // Only web origins can receive a popup grant; never substitute the top page.
+        let scheme = scheme.lowercased()
+        guard ["http", "https"].contains(scheme), !host.isEmpty,
+              (0...65535).contains(port) else { return nil }
         var components = URLComponents()
-        components.scheme = origin.protocol; components.host = origin.host
-        if origin.port != 0 { components.port = origin.port }
+        components.scheme = scheme
+        components.host = host
+        if port != 0 { components.port = port }
         return components.url
     }
 
