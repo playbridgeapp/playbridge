@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Parses TV→phone status messages into observable now-playing state.
 /// Direct port of `connection/ConnectionCoordinator.kt`. Handles the proto-defined messages
@@ -11,6 +12,11 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var subtitleTracks: [MediaTrack] = []
     @Published var playerSpeed: Float = 1.0
     @Published var playerScaling: String = "Fit"
+    @Published var playerIsLive = false
+    @Published var playerIsSeekable = true
+    @Published var speedAvailable = false
+    @Published var scalingAvailable = false
+    @Published var mediaKind = "video"
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
     func handle(_ text: String) {
@@ -29,6 +35,7 @@ final class ConnectionCoordinator: ObservableObject {
             if active == "idle" { clear() }
 
         case "status":
+            mediaKind = json["mediaKind"] as? String ?? "video"
             playback = TvPlaybackStatus(
                 state: json["state"] as? String ?? "paused",
                 positionMs: int64(json["position"]),
@@ -64,6 +71,10 @@ final class ConnectionCoordinator: ObservableObject {
         case "player_settings":
             if let speed = json["speed"] as? Double { playerSpeed = Float(speed) }
             playerScaling = json["scaling"] as? String ?? playerScaling
+            playerIsLive = json["isLive"] as? Bool ?? false
+            playerIsSeekable = json["isSeekable"] as? Bool ?? true
+            speedAvailable = json["speedAvailable"] as? Bool ?? true
+            scalingAvailable = json["scalingAvailable"] as? Bool ?? true
 
         default:
             break
@@ -74,7 +85,7 @@ final class ConnectionCoordinator: ObservableObject {
         guard let arr = value as? [[String: Any]] else { return [] }
         return arr.enumerated().map { (i, o) in
             MediaTrack(
-                id: o["id"] as? String ?? "\(i)",
+                id: (o["id"] as? String) ?? (o["id"] as? NSNumber)?.stringValue ?? "\(i)",
                 name: o["name"] as? String ?? "Track \(i + 1)",
                 selected: o["selected"] as? Bool ?? false
             )
@@ -84,7 +95,7 @@ final class ConnectionCoordinator: ObservableObject {
     private func int64(_ value: Any?) -> Int64 {
         if let n = value as? Int64 { return n }
         if let n = value as? Int { return Int64(n) }
-        if let n = value as? Double { return Int64(n) }
+        if let n = value as? Double { return n.isFinite ? (Int64(exactly: n.rounded(.towardZero)) ?? 0) : 0 }
         if let n = value as? NSNumber { return n.int64Value }
         return 0
     }
@@ -96,5 +107,10 @@ final class ConnectionCoordinator: ObservableObject {
         subtitleTracks = []
         playerSpeed = 1.0
         playerScaling = "Fit"
+        playerIsLive = false
+        playerIsSeekable = true
+        speedAvailable = false
+        scalingAvailable = false
+        mediaKind = "video"
     }
 }

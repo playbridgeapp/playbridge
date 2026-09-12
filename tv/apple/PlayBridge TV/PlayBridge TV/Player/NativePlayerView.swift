@@ -101,6 +101,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
         coordinator.teardown()
+        uiViewController.player = nil
     }
 
     class Coordinator: NSObject, AVPlayerViewControllerDelegate {
@@ -166,6 +167,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
             timeControlObservation = nil
             if let token = timeObserver { player?.removeTimeObserver(token); timeObserver = nil }
             NotificationCenter.default.removeObserver(self)
+            player?.pause()
+            player?.replaceCurrentItem(with: nil)
+            player = nil
         }
 
         deinit { teardown() }
@@ -221,8 +225,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             var json: [String: Any] = [
                 "type": "status",
                 "state": state,
-                "position": Int(max(0, pos) * 1000),
-                "duration": Int(max(0, dur) * 1000),
+                "position": PlaybackTime.milliseconds(pos),
+                "duration": PlaybackTime.milliseconds(dur),
             ]
             if let t = title, !t.isEmpty { json["title"] = t }
             onBroadcast(json)
@@ -326,6 +330,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func seek(to seconds: Double) {
+            guard seconds.isFinite, seconds >= 0 else { return }
             player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600))
         }
 

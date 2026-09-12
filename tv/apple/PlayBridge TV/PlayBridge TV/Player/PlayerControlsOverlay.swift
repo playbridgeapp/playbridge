@@ -372,7 +372,7 @@ struct PlayerControlsOverlay: View {
     }
 
     private func formatTime(_ seconds: Double) -> String {
-        let sec = Int(seconds)
+        let sec = PlaybackTime.seconds(seconds)
         let h = sec / 3600
         let m = (sec % 3600) / 60
         let s = sec % 60

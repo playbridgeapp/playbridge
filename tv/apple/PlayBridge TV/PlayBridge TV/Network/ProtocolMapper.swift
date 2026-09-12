@@ -37,7 +37,11 @@ func debugLogNetworkResponse(
 /// doesn't have to parse strings or unwrap optionals at every consumer.
 extension Playbridge_PlayPayload {
     /// Parsed `URL` from the proto's string `url` field. nil when malformed.
-    var validURL: URL? { URL(string: url) }
+    var validURL: URL? {
+        guard let parsed = URL(string: url), let scheme = parsed.scheme, !scheme.isEmpty else { return nil }
+        if ["http", "https"].contains(scheme.lowercased()), parsed.host?.isEmpty != false { return nil }
+        return parsed
+    }
 
     /// Returns nil for empty headers, matching the legacy `[String: String]?` ergonomic.
     var headersOrNil: [String: String]? { headers.isEmpty ? nil : headers }

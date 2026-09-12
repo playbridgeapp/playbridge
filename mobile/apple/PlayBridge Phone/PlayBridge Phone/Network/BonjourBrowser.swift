@@ -8,6 +8,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
     enum ScanOwner: Hashable {
         case userInterface
         case savedReconnect
+        case savedDevices
     }
 
     @Published private(set) var devices: [DiscoveredDevice] = []

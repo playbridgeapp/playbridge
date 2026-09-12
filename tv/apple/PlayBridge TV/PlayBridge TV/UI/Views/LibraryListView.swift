@@ -43,7 +43,8 @@ struct LibraryListView: View {
                                 if let headers = item.headers {
                                     payload.headers = headers
                                 }
-                                server.currentPlayRequest = payload
+                                if let title = item.title { payload.title = title }
+                                server.handlePlay(payload)
                             }
                         }
                     }

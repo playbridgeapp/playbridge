@@ -127,6 +127,10 @@ enum WireProtocol {
         return envelope(action: "browser", payload: payload)
     }
 
+    static func browserControlCommand(_ action: String) -> String {
+        envelope(action: "browser_control", payload: ["action": action])
+    }
+
     static func controlCommand(_ command: String) -> String {
         envelope(action: "control", payload: ["command": command])
     }

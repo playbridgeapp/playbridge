@@ -299,11 +299,13 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 proxyHeaders["User-Agent"] = Self.browserUA
             }
             let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
-            proxy.start()
             self.proxyServer = proxy
-            debugLogNetworkRequest("VLC proxy upstream", url: url, headers: proxyHeaders)
-            print("VLC Proxy: forwarding through local relay")
-            startMedia(playURL: proxy.localURL, useNativeHeaders: false, viaProxy: true)
+            proxy.start { [weak self, weak proxy] ready in
+                guard let self, let proxy, !self.didRequestStop, self.proxyServer === proxy else { return }
+                guard ready else { self.onExit?(); return }
+                debugLogNetworkRequest("VLC proxy upstream", url: url, headers: proxyHeaders)
+                self.startMedia(playURL: proxy.localURL, useNativeHeaders: false, viaProxy: true)
+            }
         }
 
         /// Create the media and start playback. `useNativeHeaders` adds VLC's native UA/Referer
@@ -404,11 +406,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 proxyHeaders["User-Agent"] = Self.browserUA
             }
             let proxy = VLCProxyServer(targetURL: url, headers: proxyHeaders)
-            proxy.start()
             self.proxyServer = proxy
-            // Keep GLES2 if we'd already switched (AV1); the relay just changes where bytes come from.
-            reloadPlayer(playURL: proxy.localURL, useNativeHeaders: false,
-                         viaProxy: true, forceGLES: didSwitchVout, resumeSec: resumeSec)
+            proxy.start { [weak self, weak proxy] ready in
+                guard let self, let proxy, !self.didRequestStop, self.proxyServer === proxy else { return }
+                guard ready else { self.onExit?(); return }
+                // Preserve the selected video output when falling back to the relay.
+                self.reloadPlayer(playURL: proxy.localURL, useNativeHeaders: false,
+                                  viaProxy: true, forceGLES: self.didSwitchVout, resumeSec: resumeSec)
+            }
         }
 
         /// Tear down the current player and recreate it (optionally on the GLES2 vout), then resume
@@ -850,8 +855,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             var json: [String: Any] = [
                 "type": "status",
                 "state": mediaPlayer.isPlaying ? "playing" : "paused",
-                "position": Int(max(0, playbackState.currentTime) * 1000),
-                "duration": Int(max(0, playbackState.duration) * 1000),
+                "position": PlaybackTime.milliseconds(playbackState.currentTime),
+                "duration": PlaybackTime.milliseconds(playbackState.duration),
             ]
             if let t = mediaTitle, !t.isEmpty { json["title"] = t }
             onBroadcast?(json)

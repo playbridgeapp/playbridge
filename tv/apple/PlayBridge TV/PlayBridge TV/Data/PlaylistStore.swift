@@ -21,7 +21,7 @@ class PlaylistStore: ObservableObject {
     func setPlaylist(items: [Playbridge_PlayPayload], startIndex: Int) {
         print("PlaylistStore: Setting playlist with \(items.count) items, start: \(startIndex)")
         self.items = items
-        self.currentIndex = (startIndex >= 0 && startIndex < items.count) ? startIndex : 0
+        self.currentIndex = (startIndex >= 0 && startIndex < items.count) ? startIndex : (items.isEmpty ? -1 : 0)
         print("PlaylistStore: Updated items count: \(self.items.count), active index: \(self.currentIndex)")
     }
 

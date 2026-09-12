@@ -39,7 +39,9 @@ final class ConnectionViewModel: ObservableObject {
     /// The device we're currently bringing up, so we can persist a full record once paired.
     private var connectingDevice: DiscoveredDevice?
     private var savedReconnectDiscovery: AnyCancellable?
+    private var savedReconnectGeneration: UUID?
     private var savedReconnectTimeout: DispatchWorkItem?
+    private var savedEndpointRefreshTimeout: DispatchWorkItem?
     private static let savedReconnectDiscoveryTimeout: TimeInterval = 10
 
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
@@ -93,6 +95,10 @@ final class ConnectionViewModel: ObservableObject {
         googleCastBrowser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         coordinator.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        browser.$devices
+            .receive(on: RunLoop.main)
+            .sink { [weak self] devices in self?.refreshSavedEndpoints(devices) }
             .store(in: &cancellables)
         browser.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
@@ -179,6 +185,8 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Connect to a specific saved TV from the history list.
     func connectSaved(_ device: PairedDevice) {
+        let current = savedDevices.first { deviceKey($0) == deviceKey(device) } ?? device
+        let device = SavedReceiverEndpoint.refresh(current, from: browser.devices)
         usePlayBridge()
         endSavedReconnectDiscovery()
         pairedDevice = device
@@ -194,6 +202,7 @@ final class ConnectionViewModel: ObservableObject {
             wssPort: device.wssPort,
             certFingerprint: device.certFingerprint
         )
+        beginSavedReconnectDiscovery(for: device)
     }
 
     /// Keep launch reconnect discovery independent of the discovery screen. The stored
@@ -202,6 +211,8 @@ final class ConnectionViewModel: ObservableObject {
     private func beginSavedReconnectDiscovery(for saved: PairedDevice) {
         guard !saved.uuid.isEmpty else { return }
 
+        let generation = UUID()
+        savedReconnectGeneration = generation
         browser.start(owner: .savedReconnect)
         savedReconnectDiscovery = browser.$devices
             .receive(on: RunLoop.main)
@@ -211,7 +222,7 @@ final class ConnectionViewModel: ObservableObject {
                 // cancellable is still being assigned. Defer handling so cleanup can
                 // always cancel the installed subscription and prevent duplicate retries.
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.savedReconnectDiscovery != nil else { return }
+                    guard let self, self.savedReconnectGeneration == generation else { return }
                     self.handleSavedReconnectEndpoint(live, replacing: saved)
                 }
             }
@@ -230,21 +241,12 @@ final class ConnectionViewModel: ObservableObject {
         _ live: DiscoveredDevice,
         replacing saved: PairedDevice
     ) {
-        let endpointChanged = live.ip != saved.ip
-            || live.port != saved.port
-            || live.wssPort != saved.wssPort
+        let refreshed = SavedReceiverEndpoint.refresh(saved, from: [live])
+        guard !SavedReceiverEndpoint.sameAddress(refreshed, saved) else { return }
         endSavedReconnectDiscovery()
-        guard endpointChanged else { return }
-
-        var refreshed = saved
-        refreshed.ip = live.ip
-        refreshed.port = live.port
-        refreshed.name = live.name
-        refreshed.wssPort = live.wssPort
-        // Copying the saved record preserves its token, SPKI pin, capabilities,
-        // last-connected timestamp, and stable receiver UUID.
-        store.savePairedDevice(refreshed)
-        upsertSaved(refreshed)
+        refreshSavedEndpoints([live])
+        // Refresh the next connection without interrupting a healthy active session.
+        guard !ws.state.isConnected else { return }
         pairedDevice = refreshed
         connectingDevice = DiscoveredDevice(
             ip: refreshed.ip,
@@ -266,6 +268,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func endSavedReconnectDiscovery() {
+        savedReconnectGeneration = nil
         savedReconnectTimeout?.cancel()
         savedReconnectTimeout = nil
         savedReconnectDiscovery?.cancel()
@@ -289,14 +292,58 @@ final class ConnectionViewModel: ObservableObject {
         }
     }
 
-    /// Best-effort TCP reachability check of each saved TV, updating `onlineStatus`.
+    /// A bounded Bonjour refresh updates saved UUIDs even in the saved-device sheet.
+    /// External discovery remains confined to the setup/discovery screen.
     func pingSavedDevices() {
-        for d in savedDevices {
-            let key = deviceKey(d)
-            let port = UInt16(d.wssPort ?? d.port)
-            ConnectionViewModel.isReachable(host: d.ip, port: port) { [weak self] ok in
-                DispatchQueue.main.async { self?.onlineStatus[key] = ok }
+        if savedDevices.contains(where: { !$0.uuid.isEmpty }) {
+            if savedEndpointRefreshTimeout == nil { browser.start(owner: .savedDevices) }
+            savedEndpointRefreshTimeout?.cancel()
+            let timeout = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.browser.stop(owner: .savedDevices)
+                self.savedEndpointRefreshTimeout = nil
             }
+            savedEndpointRefreshTimeout = timeout
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: timeout)
+        }
+        refreshSavedEndpoints(browser.devices)
+        savedDevices.forEach(checkReachability)
+    }
+
+    private func refreshSavedEndpoints(_ devices: [DiscoveredDevice]) {
+        let refreshed = savedDevices.map { SavedReceiverEndpoint.refresh($0, from: devices) }
+        let changedAddresses = zip(savedDevices, refreshed).compactMap { old, new in
+            SavedReceiverEndpoint.sameAddress(old, new) ? nil : new
+        }
+        if refreshed != savedDevices {
+            savedDevices = refreshed
+            store.saveSavedDevices(refreshed)
+        }
+        if let current = pairedDevice {
+            let updated = SavedReceiverEndpoint.refresh(current, from: devices)
+            if updated != current {
+                pairedDevice = updated
+                store.savePairedDevice(updated)
+            }
+        }
+        for device in changedAddresses {
+            onlineStatus[deviceKey(device)] = nil
+            checkReachability(device)
+        }
+    }
+
+    private func checkReachability(_ device: PairedDevice) {
+        let key = deviceKey(device)
+        guard let port = UInt16(exactly: device.wssPort ?? device.port), port > 0 else {
+            onlineStatus[key] = false
+            return
+        }
+        Self.isReachable(host: device.ip, port: port) { [weak self] reachable in
+            guard let self,
+                  let current = self.savedDevices.first(where: { self.deviceKey($0) == key }),
+                  SavedReceiverEndpoint.sameAddress(current, device) else { return }
+            // A probe to the previous IP must not overwrite the new endpoint's status.
+            self.onlineStatus[key] = reachable
         }
     }
 
@@ -317,8 +364,8 @@ final class ConnectionViewModel: ObservableObject {
             default: break
             }
         }
-        conn.start(queue: .global(qos: .utility))
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) { finish(false) }
+        conn.start(queue: .main)
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout) { finish(false) }
     }
 
     private func upsertSaved(_ device: PairedDevice) {
@@ -326,7 +373,7 @@ final class ConnectionViewModel: ObservableObject {
         list.removeAll { deviceKey($0) == deviceKey(device) }
         list.insert(device, at: 0)
         store.saveSavedDevices(list)
-        DispatchQueue.main.async { self.savedDevices = list }
+        savedDevices = list
     }
 
     func disconnect() {
@@ -503,6 +550,11 @@ final class ConnectionViewModel: ObservableObject {
             } catch { if destinationID == target { operationError = error.localizedDescription } }
         }
     }
+    func browserControl(_ action: String) {
+        guard isConnected, supportsBrowser else { return }
+        ws.send(WireProtocol.browserControlCommand(action))
+    }
+
     func remote(_ key: String) { ws.send(WireProtocol.remoteCommand(key: key)) }
     func jump(toIndex index: Int) { ws.send(WireProtocol.playlistJumpCommand(index: index)) }
     func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }

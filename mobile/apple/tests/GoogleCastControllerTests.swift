@@ -63,6 +63,15 @@ final class FakeCastSession: GoogleCastSessionTransport {
             "status": ["state": "playing", "position_seconds": 1.25, "duration_seconds": 60]])
         await wait { controller.playback?.positionMs == 1250 }
         precondition(controller.playback?.durationMs == 60000)
+        let seek = Task { try await controller.control("seek_to:12500") }
+        await wait { native.last("seek") != nil }
+        precondition(native.last("seek")?["position_seconds"] as? Double == 12.5)
+        native.acknowledge(native.last("seek")!)
+        try await seek.value
+        do {
+            try await controller.control("seek_to:-1")
+            fatalError("Accepted a negative seek")
+        } catch {}
         let stop = Task { try await controller.control("stop") }
         await wait { native.last("stop") != nil }
         native.acknowledge(native.last("stop")!)

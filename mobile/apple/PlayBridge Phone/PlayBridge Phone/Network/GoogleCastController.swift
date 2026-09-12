@@ -144,6 +144,11 @@ final class GoogleCastController: ObservableObject {
         case "play", "pause", "stop", "end_receiver": payload = ["command": command]
         case "seek_back": payload = ["command": "relative_seek", "forward": false]
         case "seek_forward": payload = ["command": "relative_seek", "forward": true]
+        case let value where value.hasPrefix("seek_to:"):
+            guard let milliseconds = Int64(value.dropFirst("seek_to:".count)), milliseconds >= 0 else {
+                throw StreamRoutingError.message("Invalid seek position.")
+            }
+            payload = ["command": "seek", "position_seconds": Double(milliseconds) / 1000]
         default: throw StreamRoutingError.message("This control is unavailable on this receiver.")
         }
         _ = try await request(payload, expectedGeneration: current)

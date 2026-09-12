@@ -16,31 +16,34 @@ struct PlaybackHistoryItem: Identifiable, Codable, Equatable {
 class HistoryStore: ObservableObject {
     @Published var history: [PlaybackHistoryItem] = []
     private let historyKey = "pb_playback_history"
+    private let defaults: UserDefaults
 
-    init() { loadHistory() }
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        loadHistory()
+    }
 
     func loadHistory() {
-        if let data = UserDefaults.standard.data(forKey: historyKey),
+        if let data = defaults.data(forKey: historyKey),
             let decoded = try? JSONDecoder().decode([PlaybackHistoryItem].self, from: data)
         {
-            DispatchQueue.main.async { self.history = decoded }
+            history = Array(decoded.prefix(100))
         }
     }
 
     func addToHistory(url: URL, title: String?, headers: [String: String]?) {
-        let enableHistory = UserDefaults.standard.object(forKey: "enable_history") as? Bool ?? true
+        let enableHistory = defaults.object(forKey: "enable_history") as? Bool ?? true
         guard enableHistory else { return }
 
+        let isFavorite = history.first(where: { $0.url == url })?.isFavorite ?? false
         let newItem = PlaybackHistoryItem(
-            url: url, title: title ?? "Unknown Media", timestamp: Date(), isFavorite: false,
+            url: url, title: title ?? "Unknown Media", timestamp: Date(), isFavorite: isFavorite,
             headers: headers
         )
-        DispatchQueue.main.async {
-            self.history.removeAll { $0.url == url }
-            self.history.insert(newItem, at: 0)
-            if self.history.count > 100 { self.history = Array(self.history.prefix(100)) }
-            self.saveHistory()
-        }
+        history.removeAll { $0.url == url }
+        history.insert(newItem, at: 0)
+        if history.count > 100 { history = Array(history.prefix(100)) }
+        saveHistory()
     }
 
     func toggleFavorite(item: PlaybackHistoryItem) {
@@ -57,7 +60,7 @@ class HistoryStore: ObservableObject {
 
     private func saveHistory() {
         if let encoded = try? JSONEncoder().encode(history) {
-            UserDefaults.standard.set(encoded, forKey: historyKey)
+            defaults.set(encoded, forKey: historyKey)
         }
     }
 }
