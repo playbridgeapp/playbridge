@@ -219,7 +219,7 @@ async fn run(arguments: Vec<String>) -> Result<(), RunError> {
                 .iter()
                 .any(|value| value == "--help" || value == "-h")
             {
-                println!("{}", usage());
+                println!("{}", mcp::usage());
                 return Ok(());
             }
             mcp::run().await.map_err(RunError::usage)

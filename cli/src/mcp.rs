@@ -22,7 +22,7 @@ PlayBridge casts local files and stream URLs to TVs and receivers on the LAN.
 
 Workflow:
 1. Call discover to list receivers.
-2. Call send with a file path or http(s) URL. Pass device from discover when needed.
+2. Call send with a file path or http(s) URL. Pass the protocol-qualified receiver id from discover when needed. One physical TV may expose multiple protocol endpoints.
 3. Keep the session_id returned by send for every later call.
 4. If send returns error pairing_required, ask the user for the six-digit code shown on the receiver, then call submit_pair_code with that session_id. It waits for the real pairing result.
 5. Use status to inspect playback and control to pause, play, seek, or stop.
@@ -30,6 +30,10 @@ Workflow:
 send.skip_history overrides whether a PlayBridge receiver saves a cast in history. Omit it to use the persisted CLI default.
 
 Do not invent playbridge CLI flags. Use these tools. seek seconds are relative (e.g. 60 or -10).";
+
+pub fn usage() -> &'static str {
+    "PlayBridge MCP Server\n\nUsage:\n  playbridge mcp\n\nRuns a Model Context Protocol server over stdio. Available tools:\n  discover, send, submit_pair_code, status, control\n\nThe server writes MCP messages to stdout; do not use it as an interactive command."
+}
 
 #[derive(Clone)]
 pub struct PlaybridgeMcp {
@@ -53,9 +57,9 @@ struct ToolOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    receivers: Option<Vec<Value>>,
+    receivers: Option<Vec<ReceiverOutput>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    errors: Option<Vec<Value>>,
+    errors: Option<Vec<DiscoveryErrorOutput>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     device: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,9 +75,39 @@ struct ToolOutput {
     #[serde(skip_serializing_if = "Option::is_none")]
     duration_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    capabilities: Option<Value>,
+    capabilities: Option<CapabilitiesOutput>,
     #[serde(skip_serializing_if = "Option::is_none")]
     skip_history: Option<bool>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct ReceiverOutput {
+    id: String,
+    protocol: String,
+    name: String,
+    addresses: Vec<String>,
+    port: Option<u16>,
+    wss_port: Option<u16>,
+    location: Option<String>,
+    uuid: Option<String>,
+    paired: Option<bool>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct DiscoveryErrorOutput {
+    protocol: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct CapabilitiesOutput {
+    play_pause: bool,
+    seek: bool,
+    volume: bool,
+    mute: bool,
+    looping: bool,
+    speed: bool,
+    audio_boost: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -545,6 +579,31 @@ mod tests {
                 .iter()
                 .all(|tool| tool.output_schema.is_some())
         );
+    }
+
+    #[test]
+    fn output_schemas_use_objects_for_every_property() {
+        fn assert_no_boolean_schemas(value: &serde_json::Value, path: &str) {
+            match value {
+                serde_json::Value::Bool(_) => panic!("boolean JSON Schema at {path}"),
+                serde_json::Value::Array(values) => {
+                    for (index, value) in values.iter().enumerate() {
+                        assert_no_boolean_schemas(value, &format!("{path}[{index}]"));
+                    }
+                }
+                serde_json::Value::Object(values) => {
+                    for (key, value) in values {
+                        assert_no_boolean_schemas(value, &format!("{path}.{key}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        for tool in PlaybridgeMcp::tool_router().list_all() {
+            let schema = serde_json::to_value(tool.output_schema.as_ref().unwrap()).unwrap();
+            assert_no_boolean_schemas(&schema, tool.name.as_ref());
+        }
     }
 
     #[tokio::test]

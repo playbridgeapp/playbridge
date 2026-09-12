@@ -70,7 +70,9 @@ receiver (saved with `P` in the dashboard), prints newline-delimited JSON events
 until Ctrl+C so a local-file proxy stays up. If that receiver is unreachable,
 the command discovers LAN devices and either prompts (TTY) or returns
 `"error": "preferred_unreachable"` with a `receivers` list. Pass `--device`
-to select one. Unpaired PlayBridge receivers prompt for the SAS code, or
+to select one. If a name or address matches multiple protocol endpoints, the
+CLI returns `ambiguous_device`; pass the protocol-qualified `id` from discovery.
+Unpaired PlayBridge receivers prompt for the SAS code, or
 accept `--pair-code`. While a JSON send is running, `status --json` reports
 playback and `control pause|play|toggle|stop|seek|volume|mute|speed` drives
 the receiver without the dashboard. `playbridge mcp` is a stdio MCP server

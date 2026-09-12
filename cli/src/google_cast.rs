@@ -12,7 +12,18 @@ use tokio::time::Instant;
 const DEFAULT_PORT: u16 = 8009;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
+pub fn usage() -> &'static str {
+    "Google Cast diagnostics\n\nUsage:\n  playbridge google-cast status (--device <name> | --address <address>) [options]\n  playbridge google-cast launch (--device <name> | --address <address>) [options]\n\nOptions:\n  --port <port>       CastV2 port (default 8009)\n  --timeout <seconds> Timeout from 1 to 300 (default 20)\n  --app-id <id>       Receiver application id for launch\n  --json              Print JSON output\n  -h, --help          Show this help"
+}
+
 pub async fn run_google_cast(arguments: &[String]) -> Result<(), String> {
+    if arguments
+        .iter()
+        .any(|argument| argument == "--help" || argument == "-h")
+    {
+        println!("{}", usage());
+        return Ok(());
+    }
     let command = arguments.first().map(String::as_str);
     if !matches!(command, Some("status" | "launch")) {
         return Err(
@@ -271,7 +282,7 @@ fn preferred_address(receiver: &Receiver) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_options;
+    use super::{parse_options, usage};
 
     #[test]
     fn requires_one_target_selector() {
@@ -298,5 +309,12 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(options.application_id, "PLAY1234");
+    }
+
+    #[test]
+    fn help_describes_google_cast_subcommands() {
+        assert!(usage().contains("google-cast status"));
+        assert!(usage().contains("google-cast launch"));
+        assert!(usage().contains("--app-id"));
     }
 }
