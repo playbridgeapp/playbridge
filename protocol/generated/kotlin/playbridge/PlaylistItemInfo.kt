@@ -51,6 +51,46 @@ public class PlaylistItemInfo(
     schemaIndex = 2,
   )
   public val media_kind: String? = null,
+  @field:WireField(
+    tag = 4,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "itemId",
+    schemaIndex = 3,
+  )
+  public val item_id: String? = null,
+  @field:WireField(
+    tag = 5,
+    adapter = "com.squareup.wire.ProtoAdapter#INT32",
+    schemaIndex = 4,
+  )
+  public val season: Int? = null,
+  @field:WireField(
+    tag = 6,
+    adapter = "com.squareup.wire.ProtoAdapter#INT32",
+    schemaIndex = 5,
+  )
+  public val episode: Int? = null,
+  @field:WireField(
+    tag = 7,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "imdbId",
+    schemaIndex = 6,
+  )
+  public val imdb_id: String? = null,
+  @field:WireField(
+    tag = 8,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "tmdbId",
+    schemaIndex = 7,
+  )
+  public val tmdb_id: String? = null,
+  @field:WireField(
+    tag = 9,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "bingeGroup",
+    schemaIndex = 8,
+  )
+  public val binge_group: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlaylistItemInfo, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -67,6 +107,12 @@ public class PlaylistItemInfo(
     if (index != other.index) return false
     if (title != other.title) return false
     if (media_kind != other.media_kind) return false
+    if (item_id != other.item_id) return false
+    if (season != other.season) return false
+    if (episode != other.episode) return false
+    if (imdb_id != other.imdb_id) return false
+    if (tmdb_id != other.tmdb_id) return false
+    if (binge_group != other.binge_group) return false
     return true
   }
 
@@ -77,6 +123,12 @@ public class PlaylistItemInfo(
       result = result * 37 + index.hashCode()
       result = result * 37 + title.hashCode()
       result = result * 37 + (media_kind?.hashCode() ?: 0)
+      result = result * 37 + (item_id?.hashCode() ?: 0)
+      result = result * 37 + (season?.hashCode() ?: 0)
+      result = result * 37 + (episode?.hashCode() ?: 0)
+      result = result * 37 + (imdb_id?.hashCode() ?: 0)
+      result = result * 37 + (tmdb_id?.hashCode() ?: 0)
+      result = result * 37 + (binge_group?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -87,6 +139,12 @@ public class PlaylistItemInfo(
     result += """index=$index"""
     result += """title=${sanitize(title)}"""
     if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
+    if (item_id != null) result += """item_id=${sanitize(item_id)}"""
+    if (season != null) result += """season=$season"""
+    if (episode != null) result += """episode=$episode"""
+    if (imdb_id != null) result += """imdb_id=${sanitize(imdb_id)}"""
+    if (tmdb_id != null) result += """tmdb_id=${sanitize(tmdb_id)}"""
+    if (binge_group != null) result += """binge_group=${sanitize(binge_group)}"""
     return result.joinToString(prefix = "PlaylistItemInfo{", separator = ", ", postfix = "}")
   }
 
@@ -94,8 +152,15 @@ public class PlaylistItemInfo(
     index: Int = this.index,
     title: String = this.title,
     media_kind: String? = this.media_kind,
+    item_id: String? = this.item_id,
+    season: Int? = this.season,
+    episode: Int? = this.episode,
+    imdb_id: String? = this.imdb_id,
+    tmdb_id: String? = this.tmdb_id,
+    binge_group: String? = this.binge_group,
     unknownFields: ByteString = this.unknownFields,
-  ): PlaylistItemInfo = PlaylistItemInfo(index, title, media_kind, unknownFields)
+  ): PlaylistItemInfo = PlaylistItemInfo(index, title, media_kind, item_id, season, episode,
+      imdb_id, tmdb_id, binge_group, unknownFields)
 
   public companion object {
     @JvmField
@@ -116,6 +181,12 @@ public class PlaylistItemInfo(
           size += ProtoAdapter.STRING.encodedSizeWithTag(2, value.title)
         }
         size += ProtoAdapter.STRING.encodedSizeWithTag(3, value.media_kind)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(4, value.item_id)
+        size += ProtoAdapter.INT32.encodedSizeWithTag(5, value.season)
+        size += ProtoAdapter.INT32.encodedSizeWithTag(6, value.episode)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.imdb_id)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(8, value.tmdb_id)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(9, value.binge_group)
         return size
       }
 
@@ -127,11 +198,23 @@ public class PlaylistItemInfo(
           ProtoAdapter.STRING.encodeWithTag(writer, 2, value.title)
         }
         ProtoAdapter.STRING.encodeWithTag(writer, 3, value.media_kind)
+        ProtoAdapter.STRING.encodeWithTag(writer, 4, value.item_id)
+        ProtoAdapter.INT32.encodeWithTag(writer, 5, value.season)
+        ProtoAdapter.INT32.encodeWithTag(writer, 6, value.episode)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.imdb_id)
+        ProtoAdapter.STRING.encodeWithTag(writer, 8, value.tmdb_id)
+        ProtoAdapter.STRING.encodeWithTag(writer, 9, value.binge_group)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlaylistItemInfo) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 9, value.binge_group)
+        ProtoAdapter.STRING.encodeWithTag(writer, 8, value.tmdb_id)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.imdb_id)
+        ProtoAdapter.INT32.encodeWithTag(writer, 6, value.episode)
+        ProtoAdapter.INT32.encodeWithTag(writer, 5, value.season)
+        ProtoAdapter.STRING.encodeWithTag(writer, 4, value.item_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 3, value.media_kind)
         if (value.title != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 2, value.title)
@@ -145,11 +228,23 @@ public class PlaylistItemInfo(
         var index: Int = 0
         var title: String = ""
         var media_kind: String? = null
+        var item_id: String? = null
+        var season: Int? = null
+        var episode: Int? = null
+        var imdb_id: String? = null
+        var tmdb_id: String? = null
+        var binge_group: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> index = ProtoAdapter.INT32.decode(reader)
             2 -> title = ProtoAdapter.STRING.decode(reader)
             3 -> media_kind = ProtoAdapter.STRING.decode(reader)
+            4 -> item_id = ProtoAdapter.STRING.decode(reader)
+            5 -> season = ProtoAdapter.INT32.decode(reader)
+            6 -> episode = ProtoAdapter.INT32.decode(reader)
+            7 -> imdb_id = ProtoAdapter.STRING.decode(reader)
+            8 -> tmdb_id = ProtoAdapter.STRING.decode(reader)
+            9 -> binge_group = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -157,6 +252,12 @@ public class PlaylistItemInfo(
           index = index,
           title = title,
           media_kind = media_kind,
+          item_id = item_id,
+          season = season,
+          episode = episode,
+          imdb_id = imdb_id,
+          tmdb_id = tmdb_id,
+          binge_group = binge_group,
           unknownFields = unknownFields
         )
       }

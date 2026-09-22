@@ -154,12 +154,37 @@ class PairingStore private constructor(
     /**
      * Authorize and record a paired device without ever persisting the raw token.
      */
-    suspend fun addAuthorizedPairedDevice(device: PairedDevice, token: String) {
+    suspend fun addAuthorizedPairedDevice(
+        device: PairedDevice,
+        token: String,
+        legacyDeviceUUID: String? = null,
+    ) {
         val verifier = hashToken(token)
         dataStore.edit { prefs ->
+            val existingDevices = prefs.decodePairedDevices().filter {
+                (device.deviceUUID.isNotEmpty() && it.deviceUUID == device.deviceUUID) ||
+                    (legacyDeviceUUID != null && it.deviceUUID == legacyDeviceUUID) ||
+                    it.id == device.id
+            }
+            val legacyTokens = prefs.decodeStringSet(AUTHORIZED_TOKENS)
             val verifiers = prefs.decodeStringSet(AUTHORIZED_TOKEN_VERIFIERS)
+            existingDevices.forEach { existing ->
+                if (existing.token.isNotEmpty()) {
+                    legacyTokens.remove(existing.token)
+                    verifiers.remove(hashToken(existing.token))
+                }
+                if (existing.tokenVerifier.isNotEmpty()) {
+                    verifiers.remove(existing.tokenVerifier)
+                }
+            }
+            prefs.writeStringSet(AUTHORIZED_TOKENS, legacyTokens)
             verifiers.add(verifier)
             prefs.writeStringSet(AUTHORIZED_TOKEN_VERIFIERS, verifiers)
+            if (legacyDeviceUUID != null && legacyDeviceUUID != device.deviceUUID) {
+                val devices = prefs.decodePairedDevices()
+                devices.removeAll { it.deviceUUID == legacyDeviceUUID }
+                prefs.writePairedDevices(devices)
+            }
             prefs.upsertPairedDevice(device.copy(token = "", tokenVerifier = verifier))
         }
     }

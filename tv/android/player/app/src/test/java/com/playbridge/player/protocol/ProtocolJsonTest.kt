@@ -67,6 +67,37 @@ class ProtocolJsonTest {
     }
 
     @Test
+    fun authResponseAdvertisesQueueCrudFeatures() {
+        val features = listOf("queue_crud_v1", "stable_item_ids", "command_results")
+        val o = obj(createAuthResponseJson(success = true, features = features))
+        assertEquals(features, o["features"]?.jsonArray?.map { it.jsonPrimitive.content })
+    }
+
+    @Test
+    fun queueCrudCommandsParseStableIdsAndPlaybackGuard() {
+        val add = parseIncomingMessage(
+            """{"type":"command","action":"queue_add","requestId":"r1","payload":{"items":[{"url":"https://example.com/2.mp4","itemId":"item-2"}],"ifPlaybackId":"playback-1"}}""",
+        ) as com.playbridge.shared.protocol.IncomingMessage.QueueAdd
+        assertEquals("item-2", add.payload.items.single().item_id)
+        assertEquals("playback-1", add.payload.if_playback_id)
+
+        val remove = parseIncomingMessage(
+            """{"type":"command","action":"queue_remove","payload":{"itemIds":["item-2"],"ifPlaybackId":"playback-1"}}""",
+        ) as com.playbridge.shared.protocol.IncomingMessage.QueueRemove
+        assertEquals(listOf("item-2"), remove.payload.item_ids)
+
+        val move = parseIncomingMessage(
+            """{"type":"command","action":"queue_move","payload":{"itemId":"item-2","beforeItemId":"item-1"}}""",
+        ) as com.playbridge.shared.protocol.IncomingMessage.QueueMove
+        assertEquals("item-1", move.payload.before_item_id)
+
+        assertTrue(
+            parseIncomingMessage("""{"type":"command","action":"queue_query"}""") is
+                com.playbridge.shared.protocol.IncomingMessage.QueueQuery,
+        )
+    }
+
+    @Test
     fun authResponseIncludesCapabilitiesWhenPresent() {
         val o = obj(createAuthResponseJson(
             success = true,

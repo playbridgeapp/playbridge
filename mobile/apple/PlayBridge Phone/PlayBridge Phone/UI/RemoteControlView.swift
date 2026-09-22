@@ -181,7 +181,7 @@ struct RemoteControlView: View {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 10) {
                             ForEach(playlist.items) { item in
-                                Button { vm.jump(toIndex: item.index) } label: {
+                                Button { vm.jump(to: item) } label: {
                                     VStack(alignment: .leading, spacing: 10) {
                                         Image(systemName: item.index == playlist.currentIndex ? "play.circle.fill" : "play.rectangle")
                                             .font(Theme.font(.title2)).foregroundStyle(Theme.primary)

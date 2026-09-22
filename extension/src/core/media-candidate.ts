@@ -362,7 +362,7 @@ export function isExcludedMediaCandidate(
   detectedBy?: string,
   hlsRole?: HlsRole,
 ): boolean {
-  if (detectedBy === "subtitle_extension") return true;
+  if (detectedBy === "subtitle_extension" || detectedBy === "body_content_subtitle") return true;
   if (SEGMENT_OR_SUB_RE.test(url)) return true;
   const path = url.toLowerCase().split(/[?#]/)[0] ?? "";
   if (path.endsWith(".vtt") || path.endsWith(".srt")) return true;

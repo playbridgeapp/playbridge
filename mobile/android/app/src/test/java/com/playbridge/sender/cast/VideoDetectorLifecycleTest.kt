@@ -1,5 +1,8 @@
 package com.playbridge.sender.cast
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -11,6 +14,64 @@ import org.junit.Test
  * [VideoDetector] singleton isolated between tests.
  */
 class VideoDetectorLifecycleTest {
+
+    @Test
+    fun detectorMasterQualitiesAreImmediatelyRankable() {
+        val message = Json.parseToJsonElement(
+            """
+            {
+              "type": "video_detected",
+              "url": "https://cdn.example/master.m3u8",
+              "contentType": "application/vnd.apple.mpegurl",
+              "detectedBy": "body_content_m3u8",
+              "hlsRole": "master",
+              "mediaKind": "video",
+              "qualities": [
+                {
+                  "resolution": "1080p",
+                  "bandwidth": 5000000,
+                  "averageBandwidth": 4500000,
+                  "url": "https://cdn.example/1080.m3u8",
+                  "codecs": "avc1.640028,mp4a.40.2",
+                  "audioGroupId": "audio",
+                  "frameRate": "23.976"
+                },
+                {
+                  "resolution": "720p",
+                  "bandwidth": 2500000,
+                  "averageBandwidth": null,
+                  "url": "https://cdn.example/720.m3u8",
+                  "codecs": null,
+                  "audioGroupId": null,
+                  "frameRate": null
+                }
+              ]
+            }
+            """.trimIndent(),
+        ).jsonObject
+
+        val qualities = detectorVideoQualities(message["qualities"]?.jsonArray).orEmpty()
+        val video = DetectedVideo(
+            url = "https://cdn.example/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            detectedBy = "body_content_m3u8",
+            hlsRole = "master",
+            qualities = qualities,
+            qualitiesChecked = true,
+            hlsPlaylist = HlsPlaylist(
+                videoQualities = qualities,
+                masterPlaylistUrl = "https://cdn.example/master.m3u8",
+                validation = HlsPlaylistValidation.VALID_MASTER,
+            ),
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            isPlayable = true,
+        )
+
+        assertEquals(2, qualities.size)
+        assertEquals("1080p", qualities.first().resolution)
+        assertEquals(4_500_000L, qualities.first().averageBandwidth)
+        assertTrue(video.castScore() > 700)
+    }
 
     @Test
     fun sameDocumentNavigationBumpsLifecycleForCurrentDocumentOnly() {

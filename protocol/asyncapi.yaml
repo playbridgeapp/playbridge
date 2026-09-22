@@ -287,6 +287,10 @@ components:
         - $ref: '#/components/schemas/PlaylistCommand'
         - $ref: '#/components/schemas/QueueAddCommand'
         - $ref: '#/components/schemas/PlaylistJumpCommand'
+        - $ref: '#/components/schemas/QueueQueryCommand'
+        - $ref: '#/components/schemas/QueueRemoveCommand'
+        - $ref: '#/components/schemas/QueueMoveCommand'
+        - $ref: '#/components/schemas/QueueClearCommand'
         - $ref: '#/components/schemas/ControlCommand'
         - $ref: '#/components/schemas/RemoteCommand'
         - $ref: '#/components/schemas/MouseCommand'
@@ -311,6 +315,7 @@ components:
         - $ref: '#/components/schemas/Status'
         - $ref: '#/components/schemas/Context'
         - $ref: '#/components/schemas/PlaylistStatus'
+        - $ref: '#/components/schemas/CommandResult'
         - $ref: '#/components/schemas/Tracks'
         - $ref: '#/components/schemas/PlayerSettings'
         - $ref: '#/components/schemas/UserScripts'
@@ -355,6 +360,11 @@ components:
         mediaKinds:
           type: array
           items: { enum: [video, audio, image] }
+        features:
+          type: array
+          uniqueItems: true
+          items:
+            enum: [queue_crud_v1, stable_item_ids, command_results]
       additionalProperties: false
     PairingRequest:
       deprecated: true
@@ -435,6 +445,11 @@ components:
         mediaKinds:
           type: array
           items: { enum: [video, audio, image] }
+        features:
+          type: array
+          uniqueItems: true
+          items:
+            enum: [queue_crud_v1, stable_item_ids, command_results]
       additionalProperties: false
     CommandEnvelope:
       type: object
@@ -442,6 +457,7 @@ components:
       properties:
         type: { const: command }
         action: { type: string }
+        requestId: { type: string, minLength: 1, maxLength: 128 }
         payload: { type: object }
     PlaylistCommand:
       allOf:
@@ -460,9 +476,17 @@ components:
             action: { const: queue_add }
             payload:
               type: object
-              required: [item]
+              oneOf:
+                - required: [item]
+                - required: [items]
               properties:
                 item: { $ref: '#/components/schemas/PlayPayload' }
+                items:
+                  type: array
+                  minItems: 1
+                  maxItems: 50
+                  items: { $ref: '#/components/schemas/PlayPayload' }
+                ifPlaybackId: { type: string, minLength: 1, maxLength: 128 }
               additionalProperties: false
     PlaylistJumpCommand:
       allOf:
@@ -473,9 +497,64 @@ components:
             action: { const: playlist_jump }
             payload:
               type: object
-              required: [index]
+              oneOf:
+                - required: [index]
+                - required: [itemId]
               properties:
                 index: { type: integer, minimum: 0 }
+                itemId: { type: string, minLength: 1, maxLength: 128 }
+                ifPlaybackId: { type: string, minLength: 1, maxLength: 128 }
+              additionalProperties: false
+    QueueQueryCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          properties:
+            action: { const: queue_query }
+    QueueRemoveCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: queue_remove }
+            payload:
+              type: object
+              required: [itemIds]
+              properties:
+                itemIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 200
+                  uniqueItems: true
+                  items: { type: string, minLength: 1, maxLength: 128 }
+                ifPlaybackId: { type: string, minLength: 1, maxLength: 128 }
+              additionalProperties: false
+    QueueMoveCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          required: [payload]
+          properties:
+            action: { const: queue_move }
+            payload:
+              type: object
+              required: [itemId]
+              properties:
+                itemId: { type: string, minLength: 1, maxLength: 128 }
+                beforeItemId: { type: [string, 'null'], minLength: 1, maxLength: 128 }
+                ifPlaybackId: { type: string, minLength: 1, maxLength: 128 }
+              additionalProperties: false
+    QueueClearCommand:
+      allOf:
+        - $ref: '#/components/schemas/CommandEnvelope'
+        - type: object
+          properties:
+            action: { const: queue_clear }
+            payload:
+              type: object
+              properties:
+                ifPlaybackId: { type: string, minLength: 1, maxLength: 128 }
               additionalProperties: false
     ControlCommand:
       allOf:
@@ -630,6 +709,7 @@ components:
       required: [url]
       properties:
         url: { type: string, minLength: 1 }
+        itemId: { type: [string, 'null'], minLength: 1, maxLength: 128 }
         title: { type: [string, 'null'] }
         headers:
           type: object
@@ -697,6 +777,7 @@ components:
         items:
           type: array
           minItems: 1
+          maxItems: 200
           items: { $ref: '#/components/schemas/PlayPayload' }
         startIndex: { type: integer, minimum: 0, default: 0 }
         visualMetadata:
@@ -744,6 +825,8 @@ components:
         duration: { type: integer, minimum: 0, description: Milliseconds; 0 when unknown or live. }
         title: { type: [string, 'null'] }
         mediaKind: { type: [string, 'null'], enum: [video, audio, image, null] }
+        playbackId: { type: [string, 'null'] }
+        currentItemId: { type: [string, 'null'] }
       additionalProperties: false
     Context:
       type: object
@@ -793,9 +876,13 @@ components:
         type: { const: playlist_status }
         items:
           type: array
+          maxItems: 200
           items: { $ref: '#/components/schemas/PlaylistStatusItem' }
         currentIndex: { type: integer, minimum: 0 }
         totalCount: { type: integer, minimum: 0 }
+        playbackId: { type: [string, 'null'] }
+        queueRevision: { type: integer, minimum: 0 }
+        currentItemId: { type: [string, 'null'] }
       additionalProperties: false
     PlaylistStatusItem:
       type: object
@@ -803,11 +890,27 @@ components:
       properties:
         index: { type: integer, minimum: 0 }
         title: { type: string }
+        itemId: { type: [string, 'null'] }
         season: { type: [integer, 'null'], minimum: 0 }
         episode: { type: [integer, 'null'], minimum: 0 }
         imdbId: { type: [string, 'null'] }
+        tmdbId: { type: [string, 'null'] }
         bingeGroup: { type: [string, 'null'] }
         mediaKind: { type: [string, 'null'], enum: [video, audio, image, null] }
+      additionalProperties: false
+    CommandResult:
+      type: object
+      required: [type, requestId, ok]
+      properties:
+        type: { const: command_result }
+        requestId: { type: string, minLength: 1, maxLength: 128 }
+        ok: { type: boolean }
+        error:
+          type: [string, 'null']
+          enum: [stale_playback, item_not_found, queue_full, invalid_command, unsupported, no_active_playback, null]
+        message: { type: [string, 'null'], maxLength: 512 }
+        playbackId: { type: [string, 'null'] }
+        queueRevision: { type: [integer, 'null'], minimum: 0 }
       additionalProperties: false
     Tracks:
       type: object

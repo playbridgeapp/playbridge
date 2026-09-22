@@ -1,6 +1,7 @@
 package com.playbridge.sender.connection
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -69,6 +70,31 @@ class ProgressRulesTest {
     @Test
     fun differentTitlesVeto() {
         assertFalse(ProgressRules.titlesMatch("Some Other Movie", "The Boys S1E1"))
+    }
+
+    @Test
+    fun queueReorderDoesNotLookLikePlaybackAdvanceWhenStableItemIsUnchanged() {
+        assertFalse(ProgressRules.receiverItemChanged("episode-2", "episode-2", 1, 3))
+        assertTrue(ProgressRules.receiverItemChanged("episode-2", "episode-3", 1, 1))
+    }
+
+    @Test
+    fun queueIdentityFallsBackToIndexForLegacyReceivers() {
+        assertTrue(ProgressRules.receiverItemChanged(null, null, 1, 2))
+        assertFalse(ProgressRules.receiverItemChanged(null, null, 1, 1))
+    }
+
+    @Test
+    fun knownEpisodeKeepsResumeWhenNextReceiverItemCannotBeIdentified() {
+        assertEquals(
+            ProgressRules.ReceiverAdvanceOutcome.SAVE_RESUME,
+            ProgressRules.receiverAdvanceOutcome(
+                previousIsEpisode = true,
+                advancedForward = false,
+                positionMs = 60_000L,
+                durationMs = 120_000L,
+            ),
+        )
     }
 
     // ── isForwardProgress ───────────────────────────────────────────────────

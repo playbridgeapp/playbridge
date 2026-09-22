@@ -1,9 +1,32 @@
 package com.playbridge.sender.connection
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class QueueBookkeepingTest {
+    @Test
+    fun queueV1RequiresTheCompleteCapabilitySet() {
+        assertFalse(supportsQueueV1(setOf("queue_crud_v1", "command_results")))
+        assertTrue(
+            supportsQueueV1(setOf("queue_crud_v1", "stable_item_ids", "command_results")),
+        )
+    }
+
+    @Test
+    fun receiverAcceptanceControlsLazyQueueCommit() {
+        assertEquals(
+            QueueAppendDecision.COMMIT,
+            queueAppendDecision(QueueCommandResult(ok = true, error = null)),
+        )
+        assertEquals(
+            QueueAppendDecision.STOP_STALE,
+            queueAppendDecision(QueueCommandResult(ok = false, error = "stale_playback")),
+        )
+        assertEquals(QueueAppendDecision.RETRY, queueAppendDecision(null))
+    }
+
 
     @Test
     fun `empty echo leaves known unchanged`() {

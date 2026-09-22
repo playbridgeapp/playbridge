@@ -64,6 +64,37 @@ Related behaviour guide: [`docs/android-video-detection.md`](../../../docs/andro
 
 ## Video / audio / image detection
 
+### Stream workflow diagnostics (debug builds)
+
+Start with the compact `PBStream` tag:
+
+```bash
+adb -s <serial> logcat -v time 'PBStream:D' 'VideoDetector:W' '*:S'
+```
+
+`id` is a short URL hash, stable within and across requests (not guaranteed unique).
+These new diagnostics contain no URL paths, query strings, or header values and are
+written only to debug logcat. Ranking snapshots are deduplicated and limited to eight rows.
+
+- `detect` / `drop`: native ingestion and variant/segment suppression.
+- `background_best` / `background_pass`: immediate scheduling and queued background work.
+- `manifest_request` / `manifest_result`: whether parsing was skipped and whether it found qualities.
+- `thumb_request`, `thumb_cache_hit`, `thumb_owner`, `thumb_join`, `thumb_cooldown`:
+  distinguish cached, coalesced, and suppressed requests.
+- `thumb_decoder_wait` / `thumb_decoder_start`: decoder queue latency.
+- `thumb_hls_playlist` / `thumb_http_failure`: playlist resolution, segment count, and HTTP failure stage.
+- `thumb_cancelled` / `thumb_result`: cancellation, completion, and total elapsed time.
+- `rank`: ordered candidates with base score, validation, detection source, lifecycle,
+  relative age, qualities, and thumbnail state. Final ordering also includes lifecycle
+  and recency bonuses; synthetic handoff rows are promoted first.
+- `sheet_best_changed`: promotion with scroll position and whether the user had browsed the list.
+
+If a thumbnail is missing, follow its `id` from request to result. A `cooldown` means
+the loader did not run; a long decoder wait means queue contention. If the wrong row
+is first, compare `rank` snapshots before sheet opening and after metadata completion.
+The existing verbose `VideoDetector`/`Components` tags remain available to inspect
+the raw extension payload when ingestion itself is suspect.
+
 Tags: `VideoDetector` (+ optional `Components` for the native bridge).
 
 ### All detection activity (recommended starter)
@@ -341,6 +372,13 @@ The phone app also exposes a diagnostics / logcat reader UI (`LogsScreen` / `Log
 ---
 
 ## Rules of thumb
+
+Progressive thumbnail diagnostics under `PBStream` include `thumb_range` (requested
+offset, HTTP status, bytes read, file size and budget stops), `thumb_frame` (up to
+three timestamps and `missing`/`black`/`ready`), and `thumb_extract_failed` or
+`thumb_extract_stopped`. MP4 reads share a 12 MiB / 12 second budget, including
+dark-frame retries at 1, 5 and 10 seconds (clamped for short clips). A decoded
+dark frame is retained if no brighter frame is found within that budget.
 
 1. Prefer **tag filters** (`'VideoDetector:D' '*:S'`) over grepping the entire buffer — less noise, less dropped lines.
 2. Quote every `*:S` and tag that contains shell metacharacters.

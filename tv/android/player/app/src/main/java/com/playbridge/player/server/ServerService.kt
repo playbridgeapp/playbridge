@@ -26,7 +26,10 @@ import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import java.net.Inet4Address
@@ -62,6 +65,10 @@ class ServerService : Service() {
     private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private var pendingPlayerLaunchAfterMpvExit: Runnable? = null
     private var pendingPlayerLaunchGeneration = 0L
+    private val pendingCommandIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val commandResultCache = object : LinkedHashMap<String, String>(256, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 256
+    }
 
     private val _serverInfo = MutableStateFlow<ServerInfo?>(null)
     val serverInfo: StateFlow<ServerInfo?> = _serverInfo.asStateFlow()
@@ -320,6 +327,7 @@ class ServerService : Service() {
                 isTokenAuthorized = { token -> pairingStore.isTokenAuthorized(token) },
                 onPairingApproved = { deviceName, deviceUUID ->
                     val newToken = java.util.UUID.randomUUID().toString()
+                    val receiverUUID = pairingStore.getOrCreateDeviceId()
                     pairingStore.addAuthorizedPairedDevice(
                         com.playbridge.player.model.PairedDevice(
                             id = java.util.UUID.randomUUID().toString(),
@@ -327,8 +335,12 @@ class ServerService : Service() {
                             deviceUUID = deviceUUID,
                         ),
                         newToken,
+                        legacyDeviceUUID = receiverUUID,
                     )
                     newToken
+                },
+                onPairingCompleted = { deviceUUID, approved ->
+                    _pairingCompletions.tryEmit(PairingCompletion(deviceUUID, approved))
                 },
                 tlsDir = tlsDir,
                 // Persist and advertise only after Java-WebSocket confirms the listener
@@ -408,19 +420,8 @@ class ServerService : Service() {
                 // When the phone sends request_pairing, bring the app to the foreground showing
                 // PairingScreen so the user can read the PIN before typing it on the phone.
                 launch {
-                    var lastPairingLaunchMs = 0L
-                    val pairingCooldownMs = 8_000L  // ignore repeat signals within 8 s
-
                     server.connectionAttemptFlow.collect {
                         try {
-                            val now = System.currentTimeMillis()
-
-                            // ── Spam guard ──────────────────────────────────────────────────────────
-                            if (now - lastPairingLaunchMs < pairingCooldownMs) {
-                                FileLogger.d(TAG, "request_pairing ignored — cooldown active (${now - lastPairingLaunchMs} ms ago)")
-                                return@collect
-                            }
-
                             // ── Context guard ────────────────────────────────────────────────────────
                             when (activeContext) {
                                 "player", "external_player" -> {
@@ -432,8 +433,6 @@ class ServerService : Service() {
                                     return@collect
                                 }
                             }
-
-                            lastPairingLaunchMs = now
 
                             overlayWindow.show()
                             val intent = Intent(applicationContext, MainActivity::class.java).apply {
@@ -452,7 +451,47 @@ class ServerService : Service() {
         }
     }
 
-    private fun handleMessage(msg: IncomingMessage) {
+    private fun handleMessage(command: WebSocketServer.RoutedCommand) {
+        val msg = command.message
+        val isQueueV1 = msg is IncomingMessage.QueueAdd || msg is IncomingMessage.PlaylistJump ||
+            msg is IncomingMessage.QueueQuery || msg is IncomingMessage.QueueRemove ||
+            msg is IncomingMessage.QueueMove || msg is IncomingMessage.QueueClear
+        command.requestId?.takeIf { isQueueV1 }?.let { requestId ->
+            val cached = synchronized(commandResultCache) { commandResultCache[requestId] }
+            if (cached != null) {
+                scope.launch { webSocketServer?.sendTo(command.connectionId, cached) }
+                return
+            }
+            if (!pendingCommandIds.add(requestId)) return
+        }
+        if (msg is IncomingMessage.QueueQuery && activeContext != "player") {
+            val pending = PendingQueueCommand(command.connectionId, command.requestId, msg)
+            completeQueueCommand(
+                pending,
+                ok = true,
+                error = null,
+                playbackId = null,
+                queueRevision = 0,
+                playlistStatusJson = org.json.JSONObject().apply {
+                    put("type", "playlist_status")
+                    put("items", org.json.JSONArray())
+                    put("currentIndex", 0)
+                    put("totalCount", 0)
+                    put("queueRevision", 0)
+                }.toString(),
+            )
+            return
+        }
+        if (isQueueV1 && activeContext != "player") {
+            completeQueueCommand(
+                PendingQueueCommand(command.connectionId, command.requestId, msg),
+                ok = false,
+                error = "no_active_playback",
+                playbackId = null,
+                queueRevision = 0,
+            )
+            return
+        }
         val isDebug = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
         if (isDebug && msg !is IncomingMessage.Mouse) {
             // Incoming payloads can contain authenticated stream URLs and Cookie headers.
@@ -662,7 +701,7 @@ class ServerService : Service() {
             is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
-                    webSocketServer?.broadcastStatus(createContextJson(activeContext))
+                    webSocketServer?.sendTo(command.connectionId, createContextJson(activeContext))
                 }
                 // Ask the running player to re-broadcast playlist/tracks/status so a
                 // freshly (re)connected phone can repopulate its remote screen — these
@@ -716,9 +755,19 @@ class ServerService : Service() {
                 }
             }
             is IncomingMessage.QueueAdd -> {
-                val item = msg.payload.item
-                FileLogger.i(TAG, "=== QUEUE_ADD === title: ${item?.title}")
-                if (item != null) {
+                val requestedItems = buildList {
+                    msg.payload.item?.let(::add)
+                    addAll(msg.payload.items)
+                }
+                val item = requestedItems.firstOrNull()
+                FileLogger.i(TAG, "=== QUEUE_ADD === count: ${requestedItems.size}, title: ${item?.title}")
+                if (command.requestId != null || msg.payload.items.isNotEmpty() || msg.payload.if_playback_id != null) {
+                    pendingQueueCommands.add(PendingQueueCommand(command.connectionId, command.requestId, msg))
+                    sendBroadcast(Intent(ACTION_QUEUE_MUTATE).apply {
+                        setPackage(packageName)
+                        putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
+                    })
+                } else if (item != null) {
                     DebugNetworkLogger.urlAndHeaders(TAG, "Queue item", item.url, item.headers)
                     // Buffer the item so the player can drain it even if its receiver isn't registered yet.
                     // The broadcast acts only as a wake signal — the player always reads from pendingQueueItems.
@@ -730,6 +779,14 @@ class ServerService : Service() {
                 }
             }
             is IncomingMessage.PlaylistJump -> {
+                if (command.requestId != null || msg.payload.item_id != null || msg.payload.if_playback_id != null) {
+                    pendingQueueCommands.add(PendingQueueCommand(command.connectionId, command.requestId, msg))
+                    sendBroadcast(Intent(ACTION_QUEUE_MUTATE).apply {
+                        setPackage(packageName)
+                        putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
+                    })
+                    return
+                }
                 FileLogger.i(TAG, "=== PLAYLIST_JUMP === index: ${msg.payload.index}")
                 val intent = Intent(ACTION_PLAYLIST_JUMP).apply {
                     putExtra(EXTRA_PLAYLIST_JUMP_INDEX, msg.payload.index)
@@ -737,6 +794,16 @@ class ServerService : Service() {
                     setPackage(packageName)
                 }
                 sendBroadcast(intent)
+            }
+            is IncomingMessage.QueueQuery,
+            is IncomingMessage.QueueRemove,
+            is IncomingMessage.QueueMove,
+            is IncomingMessage.QueueClear -> {
+                pendingQueueCommands.add(PendingQueueCommand(command.connectionId, command.requestId, msg))
+                sendBroadcast(Intent(ACTION_QUEUE_MUTATE).apply {
+                    setPackage(packageName)
+                    putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
+                })
             }
             is IncomingMessage.Ping -> {
                 // Handled by WebSocketServer
@@ -1177,6 +1244,7 @@ class ServerService : Service() {
         const val EXTRA_SKIP_PREPLAY = "skip_preplay"
         const val ACTION_QUEUE_ADD = "com.playbridge.player.ACTION_QUEUE_ADD"
         const val ACTION_PLAYLIST_JUMP = "com.playbridge.player.ACTION_PLAYLIST_JUMP"
+        const val ACTION_QUEUE_MUTATE = "com.playbridge.player.ACTION_QUEUE_MUTATE"
         // Asks the running player to re-broadcast its now-playing snapshot
         // (playlist/tracks/status) — used to re-sync a freshly (re)connected phone.
         const val ACTION_RESYNC = "com.playbridge.player.ACTION_RESYNC"
@@ -1216,6 +1284,11 @@ class ServerService : Service() {
         // Static flow exposing a pending pairing request so MainActivity can show Allow/Deny UI.
         private val _pendingPairingRequest = MutableStateFlow<WebSocketServer.PairingRequest?>(null)
         val pendingPairingRequest: StateFlow<WebSocketServer.PairingRequest?> = _pendingPairingRequest.asStateFlow()
+
+        data class PairingCompletion(val deviceUUID: String, val approved: Boolean)
+
+        private val _pairingCompletions = MutableSharedFlow<PairingCompletion>(extraBufferCapacity = 1)
+        val pairingCompletions: SharedFlow<PairingCompletion> = _pairingCompletions.asSharedFlow()
 
         fun denyPairing() { _staticInstance?.webSocketServer?.denyPairing() }
 
@@ -1366,6 +1439,57 @@ class ServerService : Service() {
          * The player drains this after registering, and on each ACTION_QUEUE_ADD broadcast.
          */
         val pendingQueueItems = java.util.concurrent.ConcurrentLinkedQueue<playbridge.PlayPayload>()
+
+        data class PendingQueueCommand(
+            val connectionId: Long,
+            val requestId: String?,
+            val message: IncomingMessage,
+        )
+
+        val pendingQueueCommands = java.util.concurrent.ConcurrentLinkedQueue<PendingQueueCommand>()
+
+        fun drainPendingQueueCommands(): List<PendingQueueCommand> {
+            val commands = mutableListOf<PendingQueueCommand>()
+            while (true) commands.add(pendingQueueCommands.poll() ?: break)
+            return commands
+        }
+
+        fun completeQueueCommand(
+            command: PendingQueueCommand,
+            ok: Boolean,
+            error: String?,
+            playbackId: String?,
+            queueRevision: Long,
+            playlistStatusJson: String? = null,
+        ) {
+            val requestId = command.requestId
+            if (requestId == null) {
+                playlistStatusJson?.let { status ->
+                    _staticInstance?.let { service ->
+                        service.scope.launch { service.webSocketServer?.broadcastStatus(status) }
+                    }
+                }
+                return
+            }
+            val result = org.json.JSONObject().apply {
+                put("type", "command_result")
+                put("requestId", requestId)
+                put("ok", ok)
+                error?.let { put("error", it) }
+                playbackId?.let { put("playbackId", it) }
+                put("queueRevision", queueRevision)
+            }.toString()
+            _staticInstance?.let { service ->
+                service.pendingCommandIds.remove(requestId)
+                synchronized(service.commandResultCache) {
+                    service.commandResultCache[requestId] = result
+                }
+                service.scope.launch {
+                    service.webSocketServer?.sendTo(command.connectionId, result)
+                    playlistStatusJson?.let { service.webSocketServer?.broadcastStatus(it) }
+                }
+            }
+        }
 
         /**
          * Atomically drain and return all pending queue items.

@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.net.BindException
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.add
@@ -64,6 +65,7 @@ class WebSocketServer(
     private val port: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
     private val isTokenAuthorized: suspend (String) -> Boolean,
     private val onPairingApproved: suspend (deviceName: String, deviceUUID: String) -> String,
+    private val onPairingCompleted: (deviceUUID: String, approved: Boolean) -> Unit = { _, _ -> },
     // App-private directory for the persisted TLS identity (PKCS12). wss:// is
     // disabled if null.
     private val tlsDir: File? = null,
@@ -76,6 +78,12 @@ class WebSocketServer(
         TvCapabilities(emptyList(), emptyList(), screenMirrorWebRtc = false)
     },
 ) {
+    data class RoutedCommand(
+        val connectionId: Long,
+        val requestId: String?,
+        val message: IncomingMessage,
+    )
+
     data class PairingRequest(
         val deviceName: String,
         val deviceUUID: String,
@@ -107,6 +115,9 @@ class WebSocketServer(
     // wss:// (Java-WebSocket) transport + its authenticated connections.
     private var wssServer: WssTransport? = null
     private val wssClients = ConcurrentHashMap.newKeySet<org.java_websocket.WebSocket>()
+    private val nextConnectionId = AtomicLong(1)
+    private val connectionIds = ConcurrentHashMap<org.java_websocket.WebSocket, Long>()
+    private val connectionsById = ConcurrentHashMap<Long, org.java_websocket.WebSocket>()
 
     // SPKI pin of our TLS cert, sent to senders at pairing. Set when wss starts.
     @Volatile var certFingerprint: String? = null
@@ -125,7 +136,7 @@ class WebSocketServer(
     val connectedClientCount: StateFlow<Int> = _connectedClientCount.asStateFlow()
 
     // Incoming message flow for UI to observe
-    private val _commands = MutableSharedFlow<IncomingMessage>(replay = 0)
+    private val _commands = MutableSharedFlow<RoutedCommand>(replay = 0, extraBufferCapacity = 64)
     val commands = _commands.asSharedFlow()
 
     // Fires when a new device sends pairing_request; ServerService observes this to bring
@@ -191,6 +202,8 @@ class WebSocketServer(
         diagnosticsServer = null
         wssServer = null
         wssClients.clear()
+        connectionIds.clear()
+        connectionsById.clear()
         boundWssPort = null
         certFingerprint = null
         _connectionState.value = ConnectionState.Stopped
@@ -215,6 +228,17 @@ class WebSocketServer(
             } catch (e: Exception) {
                 FileLogger.e(TAG, "Failed to send status (wss)", e)
             }
+        }
+    }
+
+    suspend fun sendTo(connectionId: Long, statusJson: String): Boolean {
+        val connection = connectionsById[connectionId] ?: return false
+        return try {
+            connection.send(statusJson)
+            true
+        } catch (e: Exception) {
+            FileLogger.e(TAG, "Failed to send targeted status (wss)", e)
+            false
         }
     }
 
@@ -376,6 +400,9 @@ class WebSocketServer(
         }
 
         override fun onOpen(conn: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {
+            val connectionId = nextConnectionId.getAndIncrement()
+            connectionIds[conn] = connectionId
+            connectionsById[connectionId] = conn
             FileLogger.i(TAG, "wss connection: ${conn.remoteSocketAddress}")
             val ip = conn.remoteSocketAddress?.address?.hostAddress ?: ""
             val lockoutUntil = lockoutMap[ip]
@@ -386,6 +413,7 @@ class WebSocketServer(
         }
 
         override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) {
+            connectionIds.remove(conn)?.let(connectionsById::remove)
             authed.remove(conn)
             val handshake = inProgressHandshakes.remove(conn)
             if (handshake != null) {
@@ -420,7 +448,20 @@ class WebSocketServer(
                 try {
                     when (val msg = parseIncomingMessage(message)) {
                         is IncomingMessage.Ping -> conn.send(createPongJson())
-                        else -> scope.launch { _commands.emit(msg) }
+                        else -> {
+                            val requestId = runCatching {
+                                val json = org.json.JSONObject(message)
+                                if (!json.has("requestId")) null else json.optString("requestId")
+                            }.getOrNull()
+                            if (requestId != null && (requestId.isBlank() || requestId.length > 128)) {
+                                FileLogger.w(TAG, "Ignoring command with invalid requestId")
+                                return
+                            }
+                            val connectionId = connectionIds[conn] ?: return
+                            if (!_commands.tryEmit(RoutedCommand(connectionId, requestId, msg))) {
+                                FileLogger.w(TAG, "Dropping command because the bounded receiver queue is full")
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     FileLogger.e(TAG, "wss message error", e)
@@ -435,16 +476,18 @@ class WebSocketServer(
             val bytes = ByteArray(message.remaining()).also { message.get(it) }
             if (bytes.size == 9) {
                 val unpacked = com.playbridge.shared.protocol.MousePacket.unpack(bytes) ?: return
-                scope.launch {
-                    _commands.emit(
-                        IncomingMessage.Mouse(
+                val connectionId = connectionIds[conn] ?: return
+                if (!_commands.tryEmit(
+                        RoutedCommand(connectionId, null, IncomingMessage.Mouse(
                             playbridge.MousePayload(
                                 event = unpacked.event,
                                 dx = unpacked.dx,
                                 dy = unpacked.dy,
                             )
-                        )
+                        ))
                     )
+                ) {
+                    FileLogger.w(TAG, "Dropping pointer command because the bounded receiver queue is full")
                 }
             }
         }
@@ -548,6 +591,7 @@ class WebSocketServer(
                                 put("players", buildJsonArray { caps.players.forEach { add(it) } })
                                 put("browsers", buildJsonArray { caps.browsers.forEach { add(it) } })
                                 put("mediaKinds", buildJsonArray { caps.mediaKinds.forEach { add(it) } })
+                                put("features", buildJsonArray { caps.features.forEach { add(it) } })
                                 if (caps.screenMirrorWebRtc) put("screenMirrorWebRtc", true)
                             }.toString().toByteArray()
                             val ciphertext = SasCrypto.aesGcmEncrypt(
@@ -560,12 +604,14 @@ class WebSocketServer(
                         }
                         registerAuthed(conn)
                         inProgressHandshakes.remove(conn)
+                        onPairingCompleted(handshake.deviceUUID, true)
                     } else {
                         if (conn.isOpen) {
                             conn.send(createPairingDeniedJson())
                             conn.close()
                         }
                         recordPairingFailure(ip)
+                        onPairingCompleted(handshake.deviceUUID, false)
                     }
                 } catch (e: Exception) {
                     FileLogger.w(TAG, "Error in pairing approval coroutine", e)
@@ -611,6 +657,7 @@ class WebSocketServer(
                                 browsers = caps.browsers,
                                 mediaKinds = caps.mediaKinds,
                                 screenMirrorWebRtc = caps.screenMirrorWebRtc,
+                                features = caps.features,
                             ))
                         }
                         registerAuthed(conn)

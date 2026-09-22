@@ -56,6 +56,7 @@ internal class ThumbnailRequestCoordinator<K : Any, V : Any>(
     suspend fun run(
         key: K,
         priority: ThumbnailRequestPriority,
+        onEvent: (String) -> Unit = {},
         loader: suspend () -> V?,
     ): V? {
         while (true) {
@@ -76,19 +77,26 @@ internal class ThumbnailRequestCoordinator<K : Any, V : Any>(
             }
 
             when (permit) {
-                ThumbnailPermit.CoolingDown -> return null
-                is ThumbnailPermit.Join -> when (val completion = permit.completion.await()) {
-                    ThumbnailCompletion.Aborted -> continue
-                    is ThumbnailCompletion.Finished -> {
-                        if (completion.value == null &&
-                            priority == ThumbnailRequestPriority.VISIBLE &&
-                            completion.priority == ThumbnailRequestPriority.PREFETCH) {
-                            continue
+                ThumbnailPermit.CoolingDown -> {
+                    onEvent("cooldown")
+                    return null
+                }
+                is ThumbnailPermit.Join -> {
+                    onEvent("join")
+                    when (val completion = permit.completion.await()) {
+                        ThumbnailCompletion.Aborted -> continue
+                        is ThumbnailCompletion.Finished -> {
+                            if (completion.value == null &&
+                                priority == ThumbnailRequestPriority.VISIBLE &&
+                                completion.priority == ThumbnailRequestPriority.PREFETCH) {
+                                continue
+                            }
+                            return completion.value
                         }
-                        return completion.value
                     }
                 }
                 is ThumbnailPermit.Own -> {
+                    onEvent("owner")
                     try {
                         val value = loader()
                         stateMutex.withLock {
@@ -104,6 +112,7 @@ internal class ThumbnailRequestCoordinator<K : Any, V : Any>(
                         }
                         return value
                     } catch (cancelled: CancellationException) {
+                        onEvent("cancelled")
                         // A visible waiter can take ownership instead of inheriting cancellation
                         // from a tab-scoped prefetch that was just invalidated by navigation.
                         withContext(NonCancellable) {

@@ -234,6 +234,7 @@ internal fun VideoItemDetailed(
     val urlInfo = remember(video.url) { parseUrlInfo(video.url) }
     val videoType = remember(video) { getVideoType(video) }
     val timeString = remember(video.timestamp) { formatTimestamp(video.timestamp) }
+    val durationString = remember(video.durationMs) { formatMediaDuration(video.durationMs) }
 
     // File size state - fetch asynchronously
     var fileSize by remember { mutableStateOf(video.fileSize) }
@@ -242,10 +243,9 @@ internal fun VideoItemDetailed(
     var menuExpanded by remember { mutableStateOf(false) }
 
     // HLS Qualities state
-    val isHls = remember(videoType) { videoType == "HLS" }
     val isStream = remember(videoType) { videoType == "HLS" || videoType == "DASH" }
     var qualities by remember { mutableStateOf(video.qualities) }
-    var isLoadingQualities by remember { mutableStateOf(isHls && !video.qualitiesChecked) }
+    var isLoadingQualities by remember { mutableStateOf(isStream && !video.qualitiesChecked) }
 
     // Thumbnail — pre-seed from cache so there's no loading flash if BrowserActivity
     // already completed the background fetch before the sheet was opened.
@@ -254,6 +254,20 @@ internal fun VideoItemDetailed(
     }
     var thumbnailFailed by remember { mutableStateOf(false) }
 
+    // Rows outlive detector object replacements and background probes. Refresh their local
+    // presentation without waiting for lazy disposal/recreation during scrolling.
+    val processingVersion = VideoDetector.processingVersion
+    LaunchedEffect(video, processingVersion) {
+        fileSize = video.fileSize
+        isLoadingSize = !video.fileSizeChecked
+        qualities = video.qualities
+        isLoadingQualities = isStream && !video.qualitiesChecked
+        VideoDetector.getCachedThumbnail(video.url)?.let {
+            thumbnail = it
+            thumbnailFailed = false
+        }
+    }
+
     LaunchedEffect(video.url) {
         if (!video.fileSizeChecked) {
             isLoadingSize = true
@@ -261,7 +275,7 @@ internal fun VideoItemDetailed(
             isLoadingSize = false
         }
 
-        if (isHls && !video.qualitiesChecked) {
+        if (isStream && !video.qualitiesChecked) {
             isLoadingQualities = true
             qualities = VideoDetector.fetchHlsQualities(video)
             isLoadingQualities = false
@@ -320,12 +334,29 @@ internal fun VideoItemDetailed(
                     }
                 }
 
-                // Time detected
-                Text(
-                    text = timeString,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.outline
-                )
+                // Duration followed by time detected.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    durationString?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                        Text(
+                            text = "·",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
+                    Text(
+                        text = timeString,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -414,9 +445,10 @@ internal fun VideoItemDetailed(
 
                 // Additional info row
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     // Content type
                     if (video.contentType != null) {
@@ -465,7 +497,7 @@ internal fun VideoItemDetailed(
 
 
             // Qualities List
-            if (isHls) {
+            if (isStream) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Spacer(modifier = Modifier.height(12.dp))
                 Spacer(modifier = Modifier.height(8.dp))
@@ -485,7 +517,7 @@ internal fun VideoItemDetailed(
                         )
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "Parsing HLS playlist...",
+                            text = "Parsing playlist...",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -965,10 +997,22 @@ fun getTypeIcon(type: String): androidx.compose.ui.graphics.vector.ImageVector {
 
 fun formatTimestamp(timestamp: Long): String {
     return try {
-        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+        val sdf = SimpleDateFormat("h:mm:ss a", Locale.getDefault())
         sdf.format(Date(timestamp))
     } catch (e: Exception) {
         ""
+    }
+}
+
+fun formatMediaDuration(durationMs: Long?): String? {
+    val totalSeconds = durationMs?.takeIf { it > 0L }?.div(1_000L) ?: return null
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return if (hours > 0L) {
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.getDefault(), "%d:%02d", minutes, seconds)
     }
 }
 

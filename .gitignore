@@ -120,6 +120,7 @@ mempalace.yaml
 # Local AI, agent, and custom environment configurations
 # Track shared Agent Skills under .agents/skills/ (Codex/Grok and other SKILL.md clients).
 # Keep other local agent state private.
+.serena/
 .agents/*
 !.agents/skills/
 !.agents/skills/**

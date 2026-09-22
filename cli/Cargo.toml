@@ -1,6 +1,6 @@
 [package]
 name = "playbridge-cast-cli"
-version = "0.2.0"
+version = "0.3.1"
 edition = "2024"
 publish = false
 license = "AGPL-3.0-or-later"
@@ -37,3 +37,4 @@ x509-parser = "0.18"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
 semver = "1"
 tempfile = "3"
+rmcp = { version = "3", default-features = false, features = ["server", "macros", "transport-io"] }

@@ -49,6 +49,17 @@ function hasExtension(url: string, extensions: readonly string[]): boolean {
   return extensions.some((extension) => path.endsWith(extension));
 }
 
+export function isSubtitleUrl(url: string): boolean {
+  return hasExtension(url, SUBTITLE_EXTENSIONS);
+}
+
+export function isSubtitleContentDisposition(value: string): boolean {
+  const lower = value.toLowerCase();
+  return /filename\*?\s*=\s*(?:utf-8''|["'])?[^;"']+\.(?:srt|vtt)(?:["']|;|$)/i.test(
+    lower,
+  );
+}
+
 export function detectedMediaKind(
   url: string,
   contentType = "",
@@ -58,7 +69,7 @@ export function detectedMediaKind(
   if (
     mime.includes("text/vtt") ||
     mime.includes("subrip") ||
-    hasExtension(url, SUBTITLE_EXTENSIONS)
+    isSubtitleUrl(url)
   ) {
     return "subtitle";
   }

@@ -47,6 +47,8 @@ only the external-mpv playback adapter remains CLI-specific.
 playbridge
 playbridge discover
 playbridge send video.mp4
+playbridge send video.mp4 --json
+playbridge send video.mp4 --json --skip-history
 playbridge receiver --name "My Computer"
 playbridge browser video.mp4
 ```
@@ -62,9 +64,80 @@ First-time PlayBridge pairing also stays in the dashboard: compare the six-digit
 code shown there with the receiver, then confirm without leaving the TUI.
 Arrow keys and Vim keys (`h`, `j`, `k`, `l`) are supported; press `?` for the
 complete key guide.
-Machine-readable discovery and low-level diagnostic commands remain available
-for scripts. Interactive workflows require a terminal and always use the
-dashboard.
+Machine-readable commands remain available for scripts and agents. `discover
+--json` lists receivers. `send <file|URL> --json` casts to the preferred
+receiver (saved with `P` in the dashboard), prints newline-delimited JSON events, and waits
+until Ctrl+C so a local-file proxy stays up. If that receiver is unreachable,
+the command discovers LAN devices and either prompts (TTY) or returns
+`"error": "preferred_unreachable"` with a `receivers` list. Pass `--device`
+to select one. If a name or address matches multiple protocol endpoints, the
+CLI returns `ambiguous_device`; pass the protocol-qualified `id` from discovery.
+Unpaired PlayBridge receivers prompt for the SAS code, or
+accept `--pair-code`. While a JSON send is running, `status --json` reports
+playback and `control pause|play|toggle|stop|seek|volume|mute|loop|speed|audio_boost` drives
+the receiver without the dashboard. `playbridge mcp` is a stdio MCP server
+for agents (discovery, rich media/playlist sends, pairing, status, playback,
+queue, browser, and remote control). Every send returns
+a `session_id`; pass it to pairing, status, and control calls so concurrent
+agents cannot affect each other's casts:
+
+```toml
+[mcp_servers.playbridge]
+command = "playbridge"
+args = ["mcp"]
+```
+
+PlayBridge receivers can exclude a cast from playback history. Use
+`--skip-history` for one cast or `--save-history` to explicitly retain it. Set
+the default for CLI and MCP casts with:
+
+```sh
+playbridge config skip-history on
+playbridge config skip-history off
+playbridge config skip-history
+```
+
+The MCP `send` tool accepts an optional `skip_history` boolean; when omitted it
+uses this saved default. Other receiver protocols ignore this PlayBridge-only
+history preference.
+
+For simple casts, pass `target`. For Android-sender parity, pass `items` with
+the PlayBridge media fields, including request `headers`, `contentType`,
+`subtitleResources`, language/quality preferences, `visualMetadata`,
+`startPositionMs`, `mediaKind`, and `displayDurationMs`. Header values are kept
+out of command arguments, logs, and MCP results. A `Referer` is an ordinary
+entry in `headers`:
+
+```json
+{
+  "items": [{
+    "url": "https://cdn.example/video.m3u8",
+    "title": "Episode 1",
+    "headers": {
+      "Referer": "https://example.com/",
+      "User-Agent": "Mozilla/5.0"
+    },
+    "startPositionMs": 120000
+  }],
+  "device": "playbridge:receiver-uuid"
+}
+```
+
+Use `queue_add`, `playlist_jump`, `browser`, `browser_control`, and `remote`
+with the returned `session_id` for PlayBridge-only receiver features. For
+receiver-owned playback started by another app or script, use device-centric
+`get_state`, `queue_add`, `queue_remove`, `queue_move`, `queue_clear`, and
+`playlist_jump`. Queue entries have stable `itemId` values, while `playbackId`
+can be passed as `if_playback_id` to prevent stale automation from changing a
+replacement cast. Device calls connect, authenticate, wait for the receiver's
+correlated command result, and detach without stopping playback. `queue_add`
+accepts up to 50 items per call. Do not pass both `device` and `session_id`.
+`list_paired` returns saved UUID/name metadata without credentials; for legacy
+records that predate saved names, it briefly discovers reachable PlayBridge
+receivers and fills names in that response by exact UUID without rewriting the
+credential files.
+
+Interactive dashboard workflows still require a terminal.
 
 The dashboard adapts to narrow terminals and supports mouse input when enabled.
 It honors `NO_COLOR` and includes dark, light, terminal, and monochrome themes:
@@ -83,6 +156,9 @@ optional. For example:
 theme = "playbridge-dark"
 mouse = true
 unicode = true
+
+[cast]
+skip_history = false
 
 [keys]
 down = ["down", "j"]

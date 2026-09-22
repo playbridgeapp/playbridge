@@ -36,6 +36,9 @@ extension PlayPayloadX on PlayPayload {
   String? get imdbIdOrNull => hasVisualMetadata() && visualMetadata.hasImdbId()
       ? visualMetadata.imdbId
       : null;
+  String? get tmdbIdOrNull => hasVisualMetadata() && visualMetadata.hasTmdbId()
+      ? visualMetadata.tmdbId
+      : null;
 
   String? _vm(
       bool Function(VisualMetadata) has, String Function(VisualMetadata) get) {
@@ -96,13 +99,40 @@ class PlaylistCmd extends Command {
 }
 
 class PlaylistJumpCmd extends Command {
-  final int index;
-  const PlaylistJumpCmd(this.index);
+  final int? index;
+  final String? itemId;
+  final String? ifPlaybackId;
+  const PlaylistJumpCmd({this.index, this.itemId, this.ifPlaybackId});
 }
 
 class QueueAddCmd extends Command {
-  final PlayPayload item;
-  const QueueAddCmd(this.item);
+  final List<PlayPayload> items;
+  final String? ifPlaybackId;
+  const QueueAddCmd(this.items, {this.ifPlaybackId});
+
+  PlayPayload get item => items.single;
+}
+
+class QueueQueryCmd extends Command {
+  const QueueQueryCmd();
+}
+
+class QueueRemoveCmd extends Command {
+  final List<String> itemIds;
+  final String? ifPlaybackId;
+  const QueueRemoveCmd(this.itemIds, {this.ifPlaybackId});
+}
+
+class QueueMoveCmd extends Command {
+  final String itemId;
+  final String? beforeItemId;
+  final String? ifPlaybackId;
+  const QueueMoveCmd(this.itemId, this.beforeItemId, {this.ifPlaybackId});
+}
+
+class QueueClearCmd extends Command {
+  final String? ifPlaybackId;
+  const QueueClearCmd({this.ifPlaybackId});
 }
 
 class ContextQueryCmd extends Command {
@@ -282,13 +312,49 @@ Command parseCommand(String json) {
               skipPreplay: payload?['skipPreplay'] == true,
             );
           case 'playlist_jump':
-            return PlaylistJumpCmd((payload?['index'] ?? 0) as int);
+            return PlaylistJumpCmd(
+              index: payload?['index'] as int?,
+              itemId: payload?['itemId'] as String?,
+              ifPlaybackId: payload?['ifPlaybackId'] as String?,
+            );
           case 'queue_add':
             final item = payload?['item'];
+            final items = payload?['items'];
+            if (items is List) {
+              final parsed = items
+                  .whereType<Map<String, dynamic>>()
+                  .map(_parsePlayPayload)
+                  .toList(growable: false);
+              if (parsed.isNotEmpty) {
+                return QueueAddCmd(parsed,
+                    ifPlaybackId: payload?['ifPlaybackId'] as String?);
+              }
+            }
             if (item is Map<String, dynamic>) {
-              return QueueAddCmd(_parsePlayPayload(item));
+              return QueueAddCmd([_parsePlayPayload(item)],
+                  ifPlaybackId: payload?['ifPlaybackId'] as String?);
             }
             return const UnknownCmd('queue_add_no_item');
+          case 'queue_query':
+            return const QueueQueryCmd();
+          case 'queue_remove':
+            final itemIds = payload?['itemIds'];
+            return itemIds is List && itemIds.whereType<String>().isNotEmpty
+                ? QueueRemoveCmd(itemIds.whereType<String>().toList(),
+                    ifPlaybackId: payload?['ifPlaybackId'] as String?)
+                : const UnknownCmd('queue_remove_no_item_ids');
+          case 'queue_move':
+            final itemId = payload?['itemId'];
+            final beforeItemId = payload?['beforeItemId'];
+            return itemId is String &&
+                    itemId.isNotEmpty &&
+                    (beforeItemId == null || beforeItemId is String)
+                ? QueueMoveCmd(itemId, beforeItemId as String?,
+                    ifPlaybackId: payload?['ifPlaybackId'] as String?)
+                : const UnknownCmd('queue_move_parse_error');
+          case 'queue_clear':
+            return QueueClearCmd(
+                ifPlaybackId: payload?['ifPlaybackId'] as String?);
           case 'screen_mirror_start':
             final sessionId = _screenMirrorSessionId(payload);
             if (sessionId == null || payload?['protocolVersion'] != 1) {
@@ -427,6 +493,7 @@ typedef PlaylistStatusItem = ({
   int? season,
   int? episode,
   String? imdbId,
+  String? tmdbId,
   String? bingeGroup,
 });
 
@@ -443,6 +510,7 @@ String playlistStatusJson({
                 if (e.season != null) 'season': e.season,
                 if (e.episode != null) 'episode': e.episode,
                 if (e.imdbId != null) 'imdbId': e.imdbId,
+                if (e.tmdbId != null) 'tmdbId': e.tmdbId,
                 if (e.bingeGroup != null) 'bingeGroup': e.bingeGroup,
               })
           .toList(),

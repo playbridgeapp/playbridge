@@ -17,6 +17,7 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var speedAvailable = false
     @Published var scalingAvailable = false
     @Published var mediaKind = "video"
+    @Published var lastCommandResult: QueueCommandResult?
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
     func handle(_ text: String) {
@@ -40,7 +41,9 @@ final class ConnectionCoordinator: ObservableObject {
                 state: json["state"] as? String ?? "paused",
                 positionMs: int64(json["position"]),
                 durationMs: int64(json["duration"]),
-                title: (json["title"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                title: (json["title"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                playbackId: nonEmpty(json["playbackId"]),
+                currentItemId: nonEmpty(json["currentItemId"])
             )
 
         case "playlist_status":
@@ -54,14 +57,32 @@ final class ConnectionCoordinator: ObservableObject {
                 var episode: Int? = o["episode"] as? Int
                 if let e = episode, e < 0 { episode = nil }
                 let imdb = (o["imdbId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                let tmdb = (o["tmdbId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 let binge = (o["bingeGroup"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-                episodes.append(PlaylistEpisode(index: index, title: title, season: season,
-                                                episode: episode, imdbId: imdb, bingeGroup: binge))
+                episodes.append(PlaylistEpisode(
+                    index: index, title: title, itemId: nonEmpty(o["itemId"]),
+                    season: season, episode: episode, imdbId: imdb, tmdbId: tmdb,
+                    bingeGroup: binge
+                ))
             }
             playlist = PlaylistUiState(
                 currentIndex: json["currentIndex"] as? Int ?? 0,
                 totalCount: json["totalCount"] as? Int ?? 0,
-                items: episodes
+                items: episodes,
+                playbackId: nonEmpty(json["playbackId"]),
+                currentItemId: nonEmpty(json["currentItemId"]),
+                queueRevision: uint64(json["queueRevision"])
+            )
+
+        case "command_result":
+            guard let requestId = json["requestId"] as? String,
+                  let ok = json["ok"] as? Bool else { return }
+            lastCommandResult = QueueCommandResult(
+                requestId: requestId,
+                ok: ok,
+                error: nonEmpty(json["error"]),
+                playbackId: nonEmpty(json["playbackId"]),
+                queueRevision: json["queueRevision"].map { uint64($0) }
             )
 
         case "tracks":
@@ -100,6 +121,17 @@ final class ConnectionCoordinator: ObservableObject {
         return 0
     }
 
+    private func uint64(_ value: Any?) -> UInt64 {
+        if let n = value as? UInt64 { return n }
+        if let n = value as? Int { return UInt64(max(0, n)) }
+        if let n = value as? NSNumber { return n.uint64Value }
+        return 0
+    }
+
+    private func nonEmpty(_ value: Any?) -> String? {
+        (value as? String).flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     func clear() {
         playback = nil
         playlist = nil
@@ -112,5 +144,6 @@ final class ConnectionCoordinator: ObservableObject {
         speedAvailable = false
         scalingAvailable = false
         mediaKind = "video"
+        lastCommandResult = nil
     }
 }

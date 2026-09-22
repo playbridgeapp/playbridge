@@ -67,6 +67,7 @@ pub struct ReceiverConfig {
     pub players: Vec<String>,
     pub browsers: Vec<String>,
     pub media_kinds: Vec<String>,
+    pub features: Vec<String>,
     pub screen_mirror_web_rtc: bool,
     pub advertise: bool,
     pub max_connections: usize,
@@ -86,6 +87,7 @@ impl ReceiverConfig {
             players: Vec::new(),
             browsers: Vec::new(),
             media_kinds: Vec::new(),
+            features: Vec::new(),
             screen_mirror_web_rtc: false,
             advertise: false,
             max_connections: DEFAULT_MAX_CONNECTIONS,
@@ -102,6 +104,10 @@ pub enum ReceiverCommand {
     Playlist(Value),
     QueueAdd(Value),
     PlaylistJump(Value),
+    QueueQuery,
+    QueueRemove(Value),
+    QueueMove(Value),
+    QueueClear(Value),
     Control(Value),
     Remote(Value),
     Mouse(Value),
@@ -122,6 +128,10 @@ impl ReceiverCommand {
             "playlist" => Self::Playlist(payload),
             "queue_add" => Self::QueueAdd(payload),
             "playlist_jump" => Self::PlaylistJump(payload),
+            "queue_query" => Self::QueueQuery,
+            "queue_remove" => Self::QueueRemove(payload),
+            "queue_move" => Self::QueueMove(payload),
+            "queue_clear" => Self::QueueClear(payload),
             "control" => Self::Control(payload),
             "remote" => Self::Remote(payload),
             "mouse" => Self::Mouse(payload),
@@ -202,6 +212,7 @@ pub enum ReceiverEvent {
     },
     Command {
         connection_id: u64,
+        request_id: Option<String>,
         command: ReceiverCommand,
         raw: String,
     },
@@ -231,6 +242,7 @@ struct Shared {
     players: Vec<String>,
     browsers: Vec<String>,
     media_kinds: Vec<String>,
+    features: Vec<String>,
     screen_mirror_web_rtc: bool,
     authorized_tokens: Mutex<HashSet<String>>,
     connections: Mutex<HashMap<u64, ConnectionHandle>>,
@@ -308,6 +320,7 @@ impl ReceiverHost {
             players: config.players.clone(),
             browsers: config.browsers.clone(),
             media_kinds: config.media_kinds.clone(),
+            features: config.features.clone(),
             screen_mirror_web_rtc: config.screen_mirror_web_rtc,
             authorized_tokens: Mutex::new(config.authorized_tokens.iter().cloned().collect()),
             connections: Mutex::new(HashMap::new()),
@@ -647,6 +660,7 @@ where
                         .to_string();
                         shared.emit(ReceiverEvent::Command {
                             connection_id: id,
+                            request_id: None,
                             command,
                             raw,
                         });
@@ -674,6 +688,7 @@ where
                                 "players":shared.players,
                                 "browsers":shared.browsers,
                                 "mediaKinds":shared.media_kinds,
+                                "features":shared.features,
                                 "screenMirrorWebRtc":shared.screen_mirror_web_rtc,
                             }),
                         ).await?;
@@ -765,6 +780,7 @@ where
                                     browsers: shared.browsers.clone(),
                                     media_kinds: shared.media_kinds.clone(),
                                     screen_mirror_web_rtc: shared.screen_mirror_web_rtc,
+                                    features: shared.features.clone(),
                                 },
                             )
                             .map_err(|_| "pairing confirmation was invalid".to_owned())?;
@@ -789,9 +805,13 @@ where
                         pairing = None;
                     }
                     SenderFrame::Command { action, payload } if authenticated => {
+                        let request_id = serde_json::from_str::<Value>(&text)
+                            .ok()
+                            .and_then(|value| value.get("requestId").and_then(Value::as_str).map(str::to_owned));
                         let command = ReceiverCommand::decode(action, payload);
                         shared.emit(ReceiverEvent::Command {
                             connection_id: id,
+                            request_id,
                             command,
                             raw: text.to_string(),
                         });

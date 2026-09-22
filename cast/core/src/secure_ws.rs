@@ -94,6 +94,25 @@ impl SecureWebSocket {
             .map_err(protocol_error)
     }
 
+    pub async fn send_command(
+        &mut self,
+        action: &str,
+        payload: Option<serde_json::Value>,
+        request_id: Option<&str>,
+    ) -> Result<()> {
+        let mut value = serde_json::json!({ "type": "command", "action": action });
+        if let Some(payload) = payload {
+            value["payload"] = payload;
+        }
+        if let Some(request_id) = request_id {
+            value["requestId"] = serde_json::Value::String(request_id.to_owned());
+        }
+        self.socket
+            .send(Message::Text(value.to_string().into()))
+            .await
+            .map_err(protocol_error)
+    }
+
     pub async fn send_pointer(&mut self, frame: [u8; 9]) -> Result<()> {
         self.socket
             .send(Message::Binary(frame.to_vec().into()))

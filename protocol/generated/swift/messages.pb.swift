@@ -153,6 +153,15 @@ nonisolated struct Playbridge_MessageEnvelope: Sendable {
   /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
   mutating func clearMediaKind() {self._mediaKind = nil}
 
+  var requestID: String {
+    get {_requestID ?? String()}
+    set {_requestID = newValue}
+  }
+  /// Returns true if `requestID` has been explicitly set.
+  var hasRequestID: Bool {self._requestID != nil}
+  /// Clears the value of `requestID`. Subsequent reads from it will return its default value.
+  mutating func clearRequestID() {self._requestID = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -163,6 +172,7 @@ nonisolated struct Playbridge_MessageEnvelope: Sendable {
   fileprivate var _duration: Int64? = nil
   fileprivate var _title: String? = nil
   fileprivate var _mediaKind: String? = nil
+  fileprivate var _requestID: String? = nil
 }
 
 nonisolated struct Playbridge_SeriesEpisodeRef: Sendable {
@@ -581,6 +591,16 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   /// Clears the value of `skipHistory`. Subsequent reads from it will return its default value.
   mutating func clearSkipHistory() {_uniqueStorage()._skipHistory = nil}
 
+  /// Stable receiver queue identity. Receivers assign one when omitted.
+  var itemID: String {
+    get {_storage._itemID ?? String()}
+    set {_uniqueStorage()._itemID = newValue}
+  }
+  /// Returns true if `itemID` has been explicitly set.
+  var hasItemID: Bool {_storage._itemID != nil}
+  /// Clears the value of `itemID`. Subsequent reads from it will return its default value.
+  mutating func clearItemID() {_uniqueStorage()._itemID = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -639,11 +659,23 @@ nonisolated struct Playbridge_QueueAddPayload: Sendable {
   /// Clears the value of `item`. Subsequent reads from it will return its default value.
   mutating func clearItem() {self._item = nil}
 
+  var items: [Playbridge_PlayPayload] = []
+
+  var ifPlaybackID: String {
+    get {_ifPlaybackID ?? String()}
+    set {_ifPlaybackID = newValue}
+  }
+  /// Returns true if `ifPlaybackID` has been explicitly set.
+  var hasIfPlaybackID: Bool {self._ifPlaybackID != nil}
+  /// Clears the value of `ifPlaybackID`. Subsequent reads from it will return its default value.
+  mutating func clearIfPlaybackID() {self._ifPlaybackID = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _item: Playbridge_PlayPayload? = nil
+  fileprivate var _ifPlaybackID: String? = nil
 }
 
 nonisolated struct Playbridge_PlaylistJumpPayload: Sendable {
@@ -653,9 +685,107 @@ nonisolated struct Playbridge_PlaylistJumpPayload: Sendable {
 
   var index: Int32 = 0
 
+  var itemID: String {
+    get {_itemID ?? String()}
+    set {_itemID = newValue}
+  }
+  /// Returns true if `itemID` has been explicitly set.
+  var hasItemID: Bool {self._itemID != nil}
+  /// Clears the value of `itemID`. Subsequent reads from it will return its default value.
+  mutating func clearItemID() {self._itemID = nil}
+
+  var ifPlaybackID: String {
+    get {_ifPlaybackID ?? String()}
+    set {_ifPlaybackID = newValue}
+  }
+  /// Returns true if `ifPlaybackID` has been explicitly set.
+  var hasIfPlaybackID: Bool {self._ifPlaybackID != nil}
+  /// Clears the value of `ifPlaybackID`. Subsequent reads from it will return its default value.
+  mutating func clearIfPlaybackID() {self._ifPlaybackID = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _itemID: String? = nil
+  fileprivate var _ifPlaybackID: String? = nil
+}
+
+nonisolated struct Playbridge_QueueRemovePayload: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var itemIds: [String] = []
+
+  var ifPlaybackID: String {
+    get {_ifPlaybackID ?? String()}
+    set {_ifPlaybackID = newValue}
+  }
+  /// Returns true if `ifPlaybackID` has been explicitly set.
+  var hasIfPlaybackID: Bool {self._ifPlaybackID != nil}
+  /// Clears the value of `ifPlaybackID`. Subsequent reads from it will return its default value.
+  mutating func clearIfPlaybackID() {self._ifPlaybackID = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _ifPlaybackID: String? = nil
+}
+
+nonisolated struct Playbridge_QueueMovePayload: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var itemID: String = String()
+
+  var beforeItemID: String {
+    get {_beforeItemID ?? String()}
+    set {_beforeItemID = newValue}
+  }
+  /// Returns true if `beforeItemID` has been explicitly set.
+  var hasBeforeItemID: Bool {self._beforeItemID != nil}
+  /// Clears the value of `beforeItemID`. Subsequent reads from it will return its default value.
+  mutating func clearBeforeItemID() {self._beforeItemID = nil}
+
+  var ifPlaybackID: String {
+    get {_ifPlaybackID ?? String()}
+    set {_ifPlaybackID = newValue}
+  }
+  /// Returns true if `ifPlaybackID` has been explicitly set.
+  var hasIfPlaybackID: Bool {self._ifPlaybackID != nil}
+  /// Clears the value of `ifPlaybackID`. Subsequent reads from it will return its default value.
+  mutating func clearIfPlaybackID() {self._ifPlaybackID = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _beforeItemID: String? = nil
+  fileprivate var _ifPlaybackID: String? = nil
+}
+
+nonisolated struct Playbridge_QueueClearPayload: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var ifPlaybackID: String {
+    get {_ifPlaybackID ?? String()}
+    set {_ifPlaybackID = newValue}
+  }
+  /// Returns true if `ifPlaybackID` has been explicitly set.
+  var hasIfPlaybackID: Bool {self._ifPlaybackID != nil}
+  /// Clears the value of `ifPlaybackID`. Subsequent reads from it will return its default value.
+  mutating func clearIfPlaybackID() {self._ifPlaybackID = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _ifPlaybackID: String? = nil
 }
 
 nonisolated struct Playbridge_BrowserPayload: Sendable {
@@ -778,12 +908,32 @@ nonisolated struct Playbridge_StatusMessage: Sendable {
   /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
   mutating func clearMediaKind() {self._mediaKind = nil}
 
+  var playbackID: String {
+    get {_playbackID ?? String()}
+    set {_playbackID = newValue}
+  }
+  /// Returns true if `playbackID` has been explicitly set.
+  var hasPlaybackID: Bool {self._playbackID != nil}
+  /// Clears the value of `playbackID`. Subsequent reads from it will return its default value.
+  mutating func clearPlaybackID() {self._playbackID = nil}
+
+  var currentItemID: String {
+    get {_currentItemID ?? String()}
+    set {_currentItemID = newValue}
+  }
+  /// Returns true if `currentItemID` has been explicitly set.
+  var hasCurrentItemID: Bool {self._currentItemID != nil}
+  /// Clears the value of `currentItemID`. Subsequent reads from it will return its default value.
+  mutating func clearCurrentItemID() {self._currentItemID = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _title: String? = nil
   fileprivate var _mediaKind: String? = nil
+  fileprivate var _playbackID: String? = nil
+  fileprivate var _currentItemID: String? = nil
 }
 
 nonisolated struct Playbridge_ContextMessage: Sendable {
@@ -819,11 +969,71 @@ nonisolated struct Playbridge_PlaylistItemInfo: Sendable {
   /// Clears the value of `mediaKind`. Subsequent reads from it will return its default value.
   mutating func clearMediaKind() {self._mediaKind = nil}
 
+  var itemID: String {
+    get {_itemID ?? String()}
+    set {_itemID = newValue}
+  }
+  /// Returns true if `itemID` has been explicitly set.
+  var hasItemID: Bool {self._itemID != nil}
+  /// Clears the value of `itemID`. Subsequent reads from it will return its default value.
+  mutating func clearItemID() {self._itemID = nil}
+
+  var season: Int32 {
+    get {_season ?? 0}
+    set {_season = newValue}
+  }
+  /// Returns true if `season` has been explicitly set.
+  var hasSeason: Bool {self._season != nil}
+  /// Clears the value of `season`. Subsequent reads from it will return its default value.
+  mutating func clearSeason() {self._season = nil}
+
+  var episode: Int32 {
+    get {_episode ?? 0}
+    set {_episode = newValue}
+  }
+  /// Returns true if `episode` has been explicitly set.
+  var hasEpisode: Bool {self._episode != nil}
+  /// Clears the value of `episode`. Subsequent reads from it will return its default value.
+  mutating func clearEpisode() {self._episode = nil}
+
+  var imdbID: String {
+    get {_imdbID ?? String()}
+    set {_imdbID = newValue}
+  }
+  /// Returns true if `imdbID` has been explicitly set.
+  var hasImdbID: Bool {self._imdbID != nil}
+  /// Clears the value of `imdbID`. Subsequent reads from it will return its default value.
+  mutating func clearImdbID() {self._imdbID = nil}
+
+  var tmdbID: String {
+    get {_tmdbID ?? String()}
+    set {_tmdbID = newValue}
+  }
+  /// Returns true if `tmdbID` has been explicitly set.
+  var hasTmdbID: Bool {self._tmdbID != nil}
+  /// Clears the value of `tmdbID`. Subsequent reads from it will return its default value.
+  mutating func clearTmdbID() {self._tmdbID = nil}
+
+  var bingeGroup: String {
+    get {_bingeGroup ?? String()}
+    set {_bingeGroup = newValue}
+  }
+  /// Returns true if `bingeGroup` has been explicitly set.
+  var hasBingeGroup: Bool {self._bingeGroup != nil}
+  /// Clears the value of `bingeGroup`. Subsequent reads from it will return its default value.
+  mutating func clearBingeGroup() {self._bingeGroup = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _mediaKind: String? = nil
+  fileprivate var _itemID: String? = nil
+  fileprivate var _season: Int32? = nil
+  fileprivate var _episode: Int32? = nil
+  fileprivate var _imdbID: String? = nil
+  fileprivate var _tmdbID: String? = nil
+  fileprivate var _bingeGroup: String? = nil
 }
 
 nonisolated struct Playbridge_PlaylistStatusMessage: Sendable {
@@ -839,9 +1049,89 @@ nonisolated struct Playbridge_PlaylistStatusMessage: Sendable {
 
   var totalCount: Int32 = 0
 
+  var playbackID: String {
+    get {_playbackID ?? String()}
+    set {_playbackID = newValue}
+  }
+  /// Returns true if `playbackID` has been explicitly set.
+  var hasPlaybackID: Bool {self._playbackID != nil}
+  /// Clears the value of `playbackID`. Subsequent reads from it will return its default value.
+  mutating func clearPlaybackID() {self._playbackID = nil}
+
+  var queueRevision: Int64 = 0
+
+  var currentItemID: String {
+    get {_currentItemID ?? String()}
+    set {_currentItemID = newValue}
+  }
+  /// Returns true if `currentItemID` has been explicitly set.
+  var hasCurrentItemID: Bool {self._currentItemID != nil}
+  /// Clears the value of `currentItemID`. Subsequent reads from it will return its default value.
+  mutating func clearCurrentItemID() {self._currentItemID = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _playbackID: String? = nil
+  fileprivate var _currentItemID: String? = nil
+}
+
+nonisolated struct Playbridge_CommandResultMessage: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var type: String = String()
+
+  var requestID: String = String()
+
+  var ok: Bool = false
+
+  var error: String {
+    get {_error ?? String()}
+    set {_error = newValue}
+  }
+  /// Returns true if `error` has been explicitly set.
+  var hasError: Bool {self._error != nil}
+  /// Clears the value of `error`. Subsequent reads from it will return its default value.
+  mutating func clearError() {self._error = nil}
+
+  var message: String {
+    get {_message ?? String()}
+    set {_message = newValue}
+  }
+  /// Returns true if `message` has been explicitly set.
+  var hasMessage: Bool {self._message != nil}
+  /// Clears the value of `message`. Subsequent reads from it will return its default value.
+  mutating func clearMessage() {self._message = nil}
+
+  var playbackID: String {
+    get {_playbackID ?? String()}
+    set {_playbackID = newValue}
+  }
+  /// Returns true if `playbackID` has been explicitly set.
+  var hasPlaybackID: Bool {self._playbackID != nil}
+  /// Clears the value of `playbackID`. Subsequent reads from it will return its default value.
+  mutating func clearPlaybackID() {self._playbackID = nil}
+
+  var queueRevision: Int64 {
+    get {_queueRevision ?? 0}
+    set {_queueRevision = newValue}
+  }
+  /// Returns true if `queueRevision` has been explicitly set.
+  var hasQueueRevision: Bool {self._queueRevision != nil}
+  /// Clears the value of `queueRevision`. Subsequent reads from it will return its default value.
+  mutating func clearQueueRevision() {self._queueRevision = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _error: String? = nil
+  fileprivate var _message: String? = nil
+  fileprivate var _playbackID: String? = nil
+  fileprivate var _queueRevision: Int64? = nil
 }
 
 nonisolated struct Playbridge_AuthMessage: Sendable {
@@ -910,6 +1200,8 @@ nonisolated struct Playbridge_AuthResponse: Sendable {
   mutating func clearScreenMirrorWebRtc() {self._screenMirrorWebRtc = nil}
 
   var mediaKinds: [String] = []
+
+  var features: [String] = []
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1083,7 +1375,7 @@ nonisolated extension Playbridge_MouseEventType: SwiftProtobuf._ProtoNameProvidi
 
 nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".MessageEnvelope"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}action\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}action\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0\u{3}request_id\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1098,6 +1390,7 @@ nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftPr
       case 5: try { try decoder.decodeSingularInt64Field(value: &self._duration) }()
       case 6: try { try decoder.decodeSingularStringField(value: &self._title) }()
       case 7: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
+      case 8: try { try decoder.decodeSingularStringField(value: &self._requestID) }()
       default: break
       }
     }
@@ -1129,6 +1422,9 @@ nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftPr
     try { if let v = self._mediaKind {
       try visitor.visitSingularStringField(value: v, fieldNumber: 7)
     } }()
+    try { if let v = self._requestID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 8)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1140,6 +1436,7 @@ nonisolated extension Playbridge_MessageEnvelope: SwiftProtobuf.Message, SwiftPr
     if lhs._duration != rhs._duration {return false}
     if lhs._title != rhs._title {return false}
     if lhs._mediaKind != rhs._mediaKind {return false}
+    if lhs._requestID != rhs._requestID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1450,7 +1747,7 @@ nonisolated extension Playbridge_SubtitleResource: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0\u{3}skip_history\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0\u{3}skip_history\0\u{3}item_id\0")
 
   fileprivate class _StorageClass {
     var _url: String = String()
@@ -1472,6 +1769,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
     var _mediaKind: String? = nil
     var _displayDurationMs: Int64? = nil
     var _skipHistory: Bool? = nil
+    var _itemID: String? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1501,6 +1799,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       _mediaKind = source._mediaKind
       _displayDurationMs = source._displayDurationMs
       _skipHistory = source._skipHistory
+      _itemID = source._itemID
     }
   }
 
@@ -1538,6 +1837,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         case 17: try { try decoder.decodeSingularStringField(value: &_storage._mediaKind) }()
         case 18: try { try decoder.decodeSingularInt64Field(value: &_storage._displayDurationMs) }()
         case 19: try { try decoder.decodeSingularBoolField(value: &_storage._skipHistory) }()
+        case 20: try { try decoder.decodeSingularStringField(value: &_storage._itemID) }()
         default: break
         }
       }
@@ -1607,6 +1907,9 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       try { if let v = _storage._skipHistory {
         try visitor.visitSingularBoolField(value: v, fieldNumber: 19)
       } }()
+      try { if let v = _storage._itemID {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 20)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1635,6 +1938,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         if _storage._mediaKind != rhs_storage._mediaKind {return false}
         if _storage._displayDurationMs != rhs_storage._displayDurationMs {return false}
         if _storage._skipHistory != rhs_storage._skipHistory {return false}
+        if _storage._itemID != rhs_storage._itemID {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -1695,7 +1999,7 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
 
 nonisolated extension Playbridge_QueueAddPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".QueueAddPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}item\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}item\0\u{1}items\0\u{3}if_playback_id\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1704,6 +2008,8 @@ nonisolated extension Playbridge_QueueAddPayload: SwiftProtobuf.Message, SwiftPr
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularMessageField(value: &self._item) }()
+      case 2: try { try decoder.decodeRepeatedMessageField(value: &self.items) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._ifPlaybackID) }()
       default: break
       }
     }
@@ -1717,11 +2023,19 @@ nonisolated extension Playbridge_QueueAddPayload: SwiftProtobuf.Message, SwiftPr
     try { if let v = self._item {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
     } }()
+    if !self.items.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.items, fieldNumber: 2)
+    }
+    try { if let v = self._ifPlaybackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_QueueAddPayload, rhs: Playbridge_QueueAddPayload) -> Bool {
     if lhs._item != rhs._item {return false}
+    if lhs.items != rhs.items {return false}
+    if lhs._ifPlaybackID != rhs._ifPlaybackID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1729,7 +2043,7 @@ nonisolated extension Playbridge_QueueAddPayload: SwiftProtobuf.Message, SwiftPr
 
 nonisolated extension Playbridge_PlaylistJumpPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaylistJumpPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0\u{3}item_id\0\u{3}if_playback_id\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1738,20 +2052,151 @@ nonisolated extension Playbridge_PlaylistJumpPayload: SwiftProtobuf.Message, Swi
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularInt32Field(value: &self.index) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._itemID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._ifPlaybackID) }()
       default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if self.index != 0 {
       try visitor.visitSingularInt32Field(value: self.index, fieldNumber: 1)
     }
+    try { if let v = self._itemID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._ifPlaybackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_PlaylistJumpPayload, rhs: Playbridge_PlaylistJumpPayload) -> Bool {
     if lhs.index != rhs.index {return false}
+    if lhs._itemID != rhs._itemID {return false}
+    if lhs._ifPlaybackID != rhs._ifPlaybackID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_QueueRemovePayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".QueueRemovePayload"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}item_ids\0\u{3}if_playback_id\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedStringField(value: &self.itemIds) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._ifPlaybackID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.itemIds.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.itemIds, fieldNumber: 1)
+    }
+    try { if let v = self._ifPlaybackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_QueueRemovePayload, rhs: Playbridge_QueueRemovePayload) -> Bool {
+    if lhs.itemIds != rhs.itemIds {return false}
+    if lhs._ifPlaybackID != rhs._ifPlaybackID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_QueueMovePayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".QueueMovePayload"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}item_id\0\u{3}before_item_id\0\u{3}if_playback_id\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.itemID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._beforeItemID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._ifPlaybackID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.itemID.isEmpty {
+      try visitor.visitSingularStringField(value: self.itemID, fieldNumber: 1)
+    }
+    try { if let v = self._beforeItemID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._ifPlaybackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_QueueMovePayload, rhs: Playbridge_QueueMovePayload) -> Bool {
+    if lhs.itemID != rhs.itemID {return false}
+    if lhs._beforeItemID != rhs._beforeItemID {return false}
+    if lhs._ifPlaybackID != rhs._ifPlaybackID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_QueueClearPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".QueueClearPayload"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}if_playback_id\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._ifPlaybackID) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._ifPlaybackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_QueueClearPayload, rhs: Playbridge_QueueClearPayload) -> Bool {
+    if lhs._ifPlaybackID != rhs._ifPlaybackID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1933,7 +2378,7 @@ nonisolated extension Playbridge_BrowserControlPayload: SwiftProtobuf.Message, S
 
 nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".StatusMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}state\0\u{1}position\0\u{1}duration\0\u{1}title\0\u{3}media_kind\0\u{3}playback_id\0\u{3}current_item_id\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1947,6 +2392,8 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
       case 4: try { try decoder.decodeSingularInt64Field(value: &self.duration) }()
       case 5: try { try decoder.decodeSingularStringField(value: &self._title) }()
       case 6: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self._playbackID) }()
+      case 8: try { try decoder.decodeSingularStringField(value: &self._currentItemID) }()
       default: break
       }
     }
@@ -1975,6 +2422,12 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     try { if let v = self._mediaKind {
       try visitor.visitSingularStringField(value: v, fieldNumber: 6)
     } }()
+    try { if let v = self._playbackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 7)
+    } }()
+    try { if let v = self._currentItemID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 8)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1985,6 +2438,8 @@ nonisolated extension Playbridge_StatusMessage: SwiftProtobuf.Message, SwiftProt
     if lhs.duration != rhs.duration {return false}
     if lhs._title != rhs._title {return false}
     if lhs._mediaKind != rhs._mediaKind {return false}
+    if lhs._playbackID != rhs._playbackID {return false}
+    if lhs._currentItemID != rhs._currentItemID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2027,7 +2482,7 @@ nonisolated extension Playbridge_ContextMessage: SwiftProtobuf.Message, SwiftPro
 
 nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaylistItemInfo"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0\u{1}title\0\u{3}media_kind\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}index\0\u{1}title\0\u{3}media_kind\0\u{3}item_id\0\u{1}season\0\u{1}episode\0\u{3}imdb_id\0\u{3}tmdb_id\0\u{3}binge_group\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2038,6 +2493,12 @@ nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftP
       case 1: try { try decoder.decodeSingularInt32Field(value: &self.index) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.title) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self._mediaKind) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._itemID) }()
+      case 5: try { try decoder.decodeSingularInt32Field(value: &self._season) }()
+      case 6: try { try decoder.decodeSingularInt32Field(value: &self._episode) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self._imdbID) }()
+      case 8: try { try decoder.decodeSingularStringField(value: &self._tmdbID) }()
+      case 9: try { try decoder.decodeSingularStringField(value: &self._bingeGroup) }()
       default: break
       }
     }
@@ -2057,6 +2518,24 @@ nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftP
     try { if let v = self._mediaKind {
       try visitor.visitSingularStringField(value: v, fieldNumber: 3)
     } }()
+    try { if let v = self._itemID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._season {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 5)
+    } }()
+    try { if let v = self._episode {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._imdbID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 7)
+    } }()
+    try { if let v = self._tmdbID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 8)
+    } }()
+    try { if let v = self._bingeGroup {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 9)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2064,6 +2543,12 @@ nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftP
     if lhs.index != rhs.index {return false}
     if lhs.title != rhs.title {return false}
     if lhs._mediaKind != rhs._mediaKind {return false}
+    if lhs._itemID != rhs._itemID {return false}
+    if lhs._season != rhs._season {return false}
+    if lhs._episode != rhs._episode {return false}
+    if lhs._imdbID != rhs._imdbID {return false}
+    if lhs._tmdbID != rhs._tmdbID {return false}
+    if lhs._bingeGroup != rhs._bingeGroup {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2071,7 +2556,7 @@ nonisolated extension Playbridge_PlaylistItemInfo: SwiftProtobuf.Message, SwiftP
 
 nonisolated extension Playbridge_PlaylistStatusMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaylistStatusMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}items\0\u{3}current_index\0\u{3}total_count\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}items\0\u{3}current_index\0\u{3}total_count\0\u{3}playback_id\0\u{3}queue_revision\0\u{3}current_item_id\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2083,12 +2568,19 @@ nonisolated extension Playbridge_PlaylistStatusMessage: SwiftProtobuf.Message, S
       case 2: try { try decoder.decodeRepeatedMessageField(value: &self.items) }()
       case 3: try { try decoder.decodeSingularInt32Field(value: &self.currentIndex) }()
       case 4: try { try decoder.decodeSingularInt32Field(value: &self.totalCount) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._playbackID) }()
+      case 6: try { try decoder.decodeSingularInt64Field(value: &self.queueRevision) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self._currentItemID) }()
       default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.type.isEmpty {
       try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
     }
@@ -2101,6 +2593,15 @@ nonisolated extension Playbridge_PlaylistStatusMessage: SwiftProtobuf.Message, S
     if self.totalCount != 0 {
       try visitor.visitSingularInt32Field(value: self.totalCount, fieldNumber: 4)
     }
+    try { if let v = self._playbackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+    } }()
+    if self.queueRevision != 0 {
+      try visitor.visitSingularInt64Field(value: self.queueRevision, fieldNumber: 6)
+    }
+    try { if let v = self._currentItemID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 7)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2109,6 +2610,73 @@ nonisolated extension Playbridge_PlaylistStatusMessage: SwiftProtobuf.Message, S
     if lhs.items != rhs.items {return false}
     if lhs.currentIndex != rhs.currentIndex {return false}
     if lhs.totalCount != rhs.totalCount {return false}
+    if lhs._playbackID != rhs._playbackID {return false}
+    if lhs.queueRevision != rhs.queueRevision {return false}
+    if lhs._currentItemID != rhs._currentItemID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_CommandResultMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".CommandResultMessage"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{3}request_id\0\u{1}ok\0\u{1}error\0\u{1}message\0\u{3}playback_id\0\u{3}queue_revision\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.ok) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._error) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._message) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self._playbackID) }()
+      case 7: try { try decoder.decodeSingularInt64Field(value: &self._queueRevision) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 2)
+    }
+    if self.ok != false {
+      try visitor.visitSingularBoolField(value: self.ok, fieldNumber: 3)
+    }
+    try { if let v = self._error {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._message {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+    } }()
+    try { if let v = self._playbackID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
+    } }()
+    try { if let v = self._queueRevision {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 7)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_CommandResultMessage, rhs: Playbridge_CommandResultMessage) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.ok != rhs.ok {return false}
+    if lhs._error != rhs._error {return false}
+    if lhs._message != rhs._message {return false}
+    if lhs._playbackID != rhs._playbackID {return false}
+    if lhs._queueRevision != rhs._queueRevision {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2155,7 +2723,7 @@ nonisolated extension Playbridge_AuthMessage: SwiftProtobuf.Message, SwiftProtob
 
 nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AuthResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}success\0\u{1}token\0\u{3}cert_fingerprint\0\u{1}players\0\u{1}browsers\0\u{3}screen_mirror_web_rtc\0\u{3}media_kinds\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{1}success\0\u{1}token\0\u{3}cert_fingerprint\0\u{1}players\0\u{1}browsers\0\u{3}screen_mirror_web_rtc\0\u{3}media_kinds\0\u{1}features\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2171,6 +2739,7 @@ nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProto
       case 6: try { try decoder.decodeRepeatedStringField(value: &self.browsers) }()
       case 7: try { try decoder.decodeSingularBoolField(value: &self._screenMirrorWebRtc) }()
       case 8: try { try decoder.decodeRepeatedStringField(value: &self.mediaKinds) }()
+      case 9: try { try decoder.decodeRepeatedStringField(value: &self.features) }()
       default: break
       }
     }
@@ -2205,6 +2774,9 @@ nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProto
     if !self.mediaKinds.isEmpty {
       try visitor.visitRepeatedStringField(value: self.mediaKinds, fieldNumber: 8)
     }
+    if !self.features.isEmpty {
+      try visitor.visitRepeatedStringField(value: self.features, fieldNumber: 9)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2217,6 +2789,7 @@ nonisolated extension Playbridge_AuthResponse: SwiftProtobuf.Message, SwiftProto
     if lhs.browsers != rhs.browsers {return false}
     if lhs._screenMirrorWebRtc != rhs._screenMirrorWebRtc {return false}
     if lhs.mediaKinds != rhs.mediaKinds {return false}
+    if lhs.features != rhs.features {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

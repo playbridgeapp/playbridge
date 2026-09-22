@@ -138,6 +138,7 @@ class WebSocketClient(private val castHistorySettings: CastHistorySettings) {
         val browsers: List<String>,
         val mediaKinds: List<String> = emptyList(),
         val screenMirrorWebRtc: Boolean = false,
+        val features: Set<String> = emptySet(),
     )
 
         sealed class ConnectionState {
@@ -559,7 +560,8 @@ class WebSocketClient(private val castHistorySettings: CastHistorySettings) {
         val mediaKinds = parseStringArray(json, "mediaKinds")
             .filter { it in setOf("video", "audio", "image") }
         val screenMirrorWebRtc = json["screenMirrorWebRtc"]?.jsonPrimitive?.contentOrNull == "true"
-        val capabilities = TvCapabilities(players, browsers, mediaKinds, screenMirrorWebRtc)
+        val features = parseStringArray(json, "features").toSet()
+        val capabilities = TvCapabilities(players, browsers, mediaKinds, screenMirrorWebRtc, features)
         // Always replace the previous receiver's capabilities. Otherwise connecting to an
         // older TV after a capable one can leave screen mirroring incorrectly enabled.
         _tvCapabilitiesState.value = capabilities

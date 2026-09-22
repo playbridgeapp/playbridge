@@ -123,6 +123,9 @@ fun CastSheet(
     val castSessionManager: CastSessionManager = org.koin.compose.koinInject()
     // Promote synthetic handoff into a dedicated first row; rank the rest below.
     val rankedVideos = remember(videos, mediaRevision) { buildCastSheetVideos(videos) }
+    LaunchedEffect(videos, mediaRevision) {
+        StreamDiagnostics.ranking("sheet", videos)
+    }
     val playableVideos = remember(rankedVideos, mediaRevision) {
         rankedVideos.filter {
             it.effectiveValidationState != MediaValidationState.FAILED
@@ -224,7 +227,7 @@ fun CastSheet(
     }
 
     // Global selection state — prefer the synthetic row when present.
-    var selectedVideo by remember(playableVideos, detectedAudio, detectedImages) {
+    var selectedVideo by remember {
         mutableStateOf(
             playableVideos.firstOrNull()
                 ?: detectedAudio.firstOrNull()
@@ -237,7 +240,7 @@ fun CastSheet(
     // Validation and thumbnail work can change the ordering after the sheet opens. Keep the
     // selection bound to the current object and offer a non-disruptive jump when a newly
     // verified candidate becomes the best result while the user is farther down the list.
-    LaunchedEffect(mediaRevision) {
+    LaunchedEffect(videos, mediaRevision) {
         val currentUrl = selectedVideo?.url
         selectedVideo = playableVideos.firstOrNull { it.url == currentUrl }
             ?: detectedAudio.firstOrNull { it.url == currentUrl }
@@ -245,11 +248,15 @@ fun CastSheet(
             ?: playableVideos.firstOrNull()
             ?: detectedAudio.firstOrNull()
             ?: detectedImages.firstOrNull()
+        if (selectedVideo?.url != currentUrl) selectedQualityUrl = null
     }
     LaunchedEffect(playableVideos.firstOrNull()?.url) {
         val bestUrl = playableVideos.firstOrNull()?.url
         val previousUrl = previousBestVideoUrl
         if (previousUrl != null && bestUrl != null && bestUrl != previousUrl) {
+            StreamDiagnostics.event("sheet_best_changed") {
+                "from=${StreamDiagnostics.id(previousUrl)} to=${StreamDiagnostics.id(bestUrl)} userBrowsed=$userBrowsedVideoList visibleIndex=${videoListState.firstVisibleItemIndex}"
+            }
             if (!userBrowsedVideoList || videoListState.firstVisibleItemIndex == 0) {
                 // Stable LazyColumn keys intentionally preserve the visible row across reorders.
                 // Override that preservation unless the user deliberately browsed farther down.

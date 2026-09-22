@@ -1,5 +1,34 @@
 # PlayBridge CLI Changelog
 
+## 0.3.1 (2026-09-12)
+
+- Fix MCP output schemas for strict SDK clients, reject ambiguous receiver names
+  with protocol-qualified choices, preserve media filenames as playback titles,
+  and provide dedicated MCP and Google Cast help.
+- Add agent-friendly paired-receiver listing, local credential removal, and
+  standalone SAS pairing without starting media playback.
+- Persist a stable per-installation CLI sender identity with a normalized host
+  display name; safely report malformed local identity and credential records.
+- Add MCP `list_paired`, `forget`, and `pair` tools.
+
+## 0.3.0 (2026-09-12)
+
+- Add `--skip-history` and `--save-history` overrides for PlayBridge casts,
+  MCP `send.skip_history`, and a persisted `config skip-history on|off` default.
+
+- Add `playbridge send|cast <file|URL> --json` to cast to the preferred
+  receiver without the dashboard. Prints newline-delimited JSON events, then waits for
+  Ctrl+C so a local-file proxy stays up. If the preferred receiver is
+  unreachable, discover LAN devices and prompt (TTY) or return
+  `preferred_unreachable` with a `receivers` list for agents. `--device`
+  selects a receiver by id, uuid, name, or address. Unpaired PlayBridge
+  targets prompt for the SAS code or accept `--pair-code`. A successful
+  JSON send is saved as the preferred receiver. An active JSON send exposes
+  `playbridge status --json` and `playbridge control pause|play|toggle|stop|seek|volume|mute|speed`.
+  `playbridge mcp` exposes discover, send, submit_pair_code, status, and control
+  over MCP stdio for AI agents, with structured results, isolated session ids,
+  and pairing calls that wait for the receiver's actual success or failure.
+
 ## 0.2.0 (2026-08-10)
 
 - Make the full-screen dashboard the primary interface for casting, browser

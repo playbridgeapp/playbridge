@@ -34,6 +34,20 @@ class CastHistoryCommandTest {
     }
 
     @Test
+    fun confirmedQueueAddCarriesPrivacyFlagForEveryItem() {
+        val message = createQueueAddCommandJson(
+            items = listOf(
+                PlayPayload(url = "https://example.com/a"),
+                PlayPayload(url = "https://example.com/b"),
+            ),
+            ifPlaybackId = "playback-1",
+        )
+        val decoded = parseIncomingMessage(applyCastHistoryPreference(message, true)) as IncomingMessage.QueueAdd
+        assertEquals("playback-1", decoded.payload.if_playback_id)
+        assertTrue(decoded.payload.items.all { it.skip_history == true })
+    }
+
+    @Test
     fun disabledSettingAndNonMediaCommandsAreUnchanged() {
         val message = createPlaylistCommandJson(PlaylistPayload(items = listOf(PlayPayload(url = "https://example.com/a"))))
         assertEquals(message, applyCastHistoryPreference(message, false))

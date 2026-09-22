@@ -403,6 +403,11 @@ final class ConnectionViewModel: ObservableObject {
     // MARK: - Commands
 
     var isConnected: Bool { state.isConnected }
+    var supportsQueueV1: Bool {
+        let features = Set(pairedDevice?.features ?? [])
+        return ["queue_crud_v1", "stable_item_ids", "command_results"]
+            .allSatisfy(features.contains)
+    }
 
     func cast(urlString: String, title: String? = nil) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -501,7 +506,9 @@ final class ConnectionViewModel: ObservableObject {
             subtitles: subtitles,
             headers: headers,
             detectedBy: video.detectedBy,
-            playerMode: playerMode
+            playerMode: playerMode,
+            playbackId: supportsQueueV1 ? coordinator.playlist?.playbackId : nil,
+            useQueueV1: supportsQueueV1
         ))
     }
 
@@ -556,7 +563,37 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func remote(_ key: String) { ws.send(WireProtocol.remoteCommand(key: key)) }
-    func jump(toIndex index: Int) { ws.send(WireProtocol.playlistJumpCommand(index: index)) }
+    func jump(to item: PlaylistEpisode) {
+        ws.send(WireProtocol.playlistJumpCommand(
+            index: item.index,
+            itemId: supportsQueueV1 ? item.itemId : nil,
+            playbackId: supportsQueueV1 ? coordinator.playlist?.playbackId : nil,
+            useQueueV1: supportsQueueV1
+        ))
+    }
+    func queryQueue() {
+        guard supportsQueueV1 else { queryContext(); return }
+        ws.send(WireProtocol.queueQuery())
+    }
+    func removeFromQueue(itemIds: [String]) {
+        guard supportsQueueV1, !itemIds.isEmpty else { return }
+        ws.send(WireProtocol.queueRemove(
+            itemIds: itemIds,
+            playbackId: coordinator.playlist?.playbackId
+        ))
+    }
+    func moveInQueue(itemId: String, beforeItemId: String?) {
+        guard supportsQueueV1 else { return }
+        ws.send(WireProtocol.queueMove(
+            itemId: itemId,
+            beforeItemId: beforeItemId,
+            playbackId: coordinator.playlist?.playbackId
+        ))
+    }
+    func clearQueue() {
+        guard supportsQueueV1 else { return }
+        ws.send(WireProtocol.queueClear(playbackId: coordinator.playlist?.playbackId))
+    }
     func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }
     func queryContext() { if !isExternalReceiver { ws.send(WireProtocol.contextQuery()) } }
 
@@ -651,6 +688,7 @@ final class ConnectionViewModel: ObservableObject {
         )
         device.players = pairedDevice?.players ?? []
         device.browsers = pairedDevice?.browsers ?? []
+        device.features = pairedDevice?.features
         // Store token alongside the rest of the record (the whole struct lives in the Keychain).
         var stored = device
         stored.setToken(creds.token)
@@ -660,13 +698,16 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func persistCapabilities(_ caps: WebSocketClient.TvCapabilities) {
-        guard !isExternalReceiver else { return }
-        guard var device = pairedDevice else { return }
-        device.players = caps.players
-        device.browsers = caps.browsers
-        store.savePairedDevice(device)
-        upsertSaved(device)
-        DispatchQueue.main.async { self.pairedDevice = device }
+        DispatchQueue.main.async {
+            guard !self.isExternalReceiver else { return }
+            guard var device = self.pairedDevice ?? self.store.loadPairedDevice() else { return }
+            device.players = caps.players
+            device.browsers = caps.browsers
+            device.features = caps.features
+            self.store.savePairedDevice(device)
+            self.upsertSaved(device)
+            self.pairedDevice = device
+        }
     }
 }
 

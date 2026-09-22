@@ -103,7 +103,9 @@ enum WireProtocol {
         subtitles: [String] = [],
         headers: [String: String] = [:],
         detectedBy: String? = nil,
-        playerMode: String? = nil
+        playerMode: String? = nil,
+        playbackId: String? = nil,
+        useQueueV1: Bool = false
     ) -> String {
         var item: [String: Any] = ["url": url]
         if let title, !title.isEmpty { item["title"] = title }
@@ -112,8 +114,12 @@ enum WireProtocol {
         if !headers.isEmpty { item["headers"] = headers }
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
         if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
-        let payload: [String: Any] = ["item": item]
-        return envelope(action: "queue_add", payload: payload)
+        var payload: [String: Any] = useQueueV1 ? ["items": [item]] : ["item": item]
+        if let playbackId { payload["ifPlaybackId"] = playbackId }
+        return envelope(
+            action: "queue_add", payload: payload,
+            requestID: useQueueV1 ? UUID().uuidString : nil
+        )
     }
 
     static func browserCommand(
@@ -139,8 +145,41 @@ enum WireProtocol {
         envelope(action: "remote", payload: ["key": key])
     }
 
-    static func playlistJumpCommand(index: Int) -> String {
-        envelope(action: "playlist_jump", payload: ["index": index])
+    static func playlistJumpCommand(
+        index: Int,
+        itemId: String? = nil,
+        playbackId: String? = nil,
+        useQueueV1: Bool = false
+    ) -> String {
+        var payload: [String: Any] = itemId.map { ["itemId": $0] } ?? ["index": index]
+        if let playbackId { payload["ifPlaybackId"] = playbackId }
+        return envelope(
+            action: "playlist_jump", payload: payload,
+            requestID: useQueueV1 ? UUID().uuidString : nil
+        )
+    }
+
+    static func queueQuery() -> String {
+        envelope(action: "queue_query", payload: [:], requestID: UUID().uuidString)
+    }
+
+    static func queueRemove(itemIds: [String], playbackId: String?) -> String {
+        var payload: [String: Any] = ["itemIds": itemIds]
+        if let playbackId { payload["ifPlaybackId"] = playbackId }
+        return envelope(action: "queue_remove", payload: payload, requestID: UUID().uuidString)
+    }
+
+    static func queueMove(itemId: String, beforeItemId: String?, playbackId: String?) -> String {
+        var payload: [String: Any] = ["itemId": itemId]
+        if let beforeItemId { payload["beforeItemId"] = beforeItemId }
+        if let playbackId { payload["ifPlaybackId"] = playbackId }
+        return envelope(action: "queue_move", payload: payload, requestID: UUID().uuidString)
+    }
+
+    static func queueClear(playbackId: String?) -> String {
+        var payload: [String: Any] = [:]
+        if let playbackId { payload["ifPlaybackId"] = playbackId }
+        return envelope(action: "queue_clear", payload: payload, requestID: UUID().uuidString)
     }
 
     static func mouseCommand(event: String, dx: Float = 0, dy: Float = 0) -> String {
@@ -153,12 +192,16 @@ enum WireProtocol {
 
     // MARK: - Helpers
 
-    private static func envelope(action: String, payload: [String: Any]) -> String {
-        encode([
+    private static func envelope(
+        action: String, payload: [String: Any], requestID: String? = nil
+    ) -> String {
+        var envelope: [String: Any] = [
             "type": "command",
             "action": action,
             "payload": payload,
-        ])
+        ]
+        if let requestID { envelope["requestId"] = requestID }
+        return encode(envelope)
     }
 
     private static func encode(_ object: [String: Any]) -> String {

@@ -9,6 +9,7 @@ import {
   hlsIdentityKey,
   hlsStreamGroupKey,
   isExclusiveBootstrapMaster,
+  isExcludedMediaCandidate,
   isSyntheticHlsDataUrl,
   matchResolvedCastRecord,
   pickCompanionAudio,
@@ -16,6 +17,10 @@ import {
   resolveCastableHlsUrl,
   type MediaCandidate,
 } from "../src/core/media-candidate";
+
+test("extensionless body-detected subtitles cannot become primary video", () => {
+  assert.equal(isExcludedMediaCandidate("https://subs.example/resource/42", "body_content_subtitle"), true);
+});
 import {
   buildSyntheticFromMasterBody,
   preferredSyntheticCastUrl,

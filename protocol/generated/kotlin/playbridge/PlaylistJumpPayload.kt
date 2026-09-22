@@ -16,6 +16,7 @@ import com.squareup.wire.ReverseProtoWriter
 import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
+import com.squareup.wire.`internal`.sanitize
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -36,6 +37,20 @@ public class PlaylistJumpPayload(
     schemaIndex = 0,
   )
   public val index: Int = 0,
+  @field:WireField(
+    tag = 2,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "itemId",
+    schemaIndex = 1,
+  )
+  public val item_id: String? = null,
+  @field:WireField(
+    tag = 3,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "ifPlaybackId",
+    schemaIndex = 2,
+  )
+  public val if_playback_id: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlaylistJumpPayload, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -50,6 +65,8 @@ public class PlaylistJumpPayload(
     if (other !is PlaylistJumpPayload) return false
     if (unknownFields != other.unknownFields) return false
     if (index != other.index) return false
+    if (item_id != other.item_id) return false
+    if (if_playback_id != other.if_playback_id) return false
     return true
   }
 
@@ -58,6 +75,8 @@ public class PlaylistJumpPayload(
     if (result == 0) {
       result = unknownFields.hashCode()
       result = result * 37 + index.hashCode()
+      result = result * 37 + (item_id?.hashCode() ?: 0)
+      result = result * 37 + (if_playback_id?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -66,11 +85,17 @@ public class PlaylistJumpPayload(
   override fun toString(): String {
     val result = mutableListOf<String>()
     result += """index=$index"""
+    if (item_id != null) result += """item_id=${sanitize(item_id)}"""
+    if (if_playback_id != null) result += """if_playback_id=${sanitize(if_playback_id)}"""
     return result.joinToString(prefix = "PlaylistJumpPayload{", separator = ", ", postfix = "}")
   }
 
-  public fun copy(index: Int = this.index, unknownFields: ByteString = this.unknownFields):
-      PlaylistJumpPayload = PlaylistJumpPayload(index, unknownFields)
+  public fun copy(
+    index: Int = this.index,
+    item_id: String? = this.item_id,
+    if_playback_id: String? = this.if_playback_id,
+    unknownFields: ByteString = this.unknownFields,
+  ): PlaylistJumpPayload = PlaylistJumpPayload(index, item_id, if_playback_id, unknownFields)
 
   public companion object {
     @JvmField
@@ -88,6 +113,8 @@ public class PlaylistJumpPayload(
         if (value.index != 0) {
           size += ProtoAdapter.INT32.encodedSizeWithTag(1, value.index)
         }
+        size += ProtoAdapter.STRING.encodedSizeWithTag(2, value.item_id)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(3, value.if_playback_id)
         return size
       }
 
@@ -95,11 +122,15 @@ public class PlaylistJumpPayload(
         if (value.index != 0) {
           ProtoAdapter.INT32.encodeWithTag(writer, 1, value.index)
         }
+        ProtoAdapter.STRING.encodeWithTag(writer, 2, value.item_id)
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.if_playback_id)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlaylistJumpPayload) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.if_playback_id)
+        ProtoAdapter.STRING.encodeWithTag(writer, 2, value.item_id)
         if (value.index != 0) {
           ProtoAdapter.INT32.encodeWithTag(writer, 1, value.index)
         }
@@ -107,14 +138,20 @@ public class PlaylistJumpPayload(
 
       override fun decode(reader: ProtoReader): PlaylistJumpPayload {
         var index: Int = 0
+        var item_id: String? = null
+        var if_playback_id: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> index = ProtoAdapter.INT32.decode(reader)
+            2 -> item_id = ProtoAdapter.STRING.decode(reader)
+            3 -> if_playback_id = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
         return PlaylistJumpPayload(
           index = index,
+          item_id = item_id,
+          if_playback_id = if_playback_id,
           unknownFields = unknownFields
         )
       }

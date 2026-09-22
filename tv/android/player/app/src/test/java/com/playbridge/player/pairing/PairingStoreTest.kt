@@ -70,6 +70,49 @@ class PairingStoreTest {
     }
 
     @Test
+    fun `repairing stable sender UUID replaces device and revokes previous token`() = runTest {
+        val first = PairedDevice(id = "first-id", name = "Old CLI", deviceUUID = "stable-cli")
+        val replacement = PairedDevice(
+            id = "replacement-id",
+            name = "PlayBridge CLI",
+            deviceUUID = "stable-cli",
+        )
+
+        store.addAuthorizedPairedDevice(first, "old-token")
+        store.addAuthorizedPairedDevice(replacement, "new-token")
+
+        val stored = store.pairedDevices.first().single()
+        assertEquals("replacement-id", stored.id)
+        assertEquals("PlayBridge CLI", stored.name)
+        assertFalse(store.isTokenAuthorized("old-token"))
+        assertTrue(store.isTokenAuthorized("new-token"))
+        assertEquals(
+            setOf(store.hashToken("new-token")),
+            storedStringSet(AUTHORIZED_TOKEN_VERIFIERS),
+        )
+    }
+
+    @Test
+    fun `repairing CLI migrates legacy receiver UUID identity`() = runTest {
+        val legacy = PairedDevice(
+            id = "legacy-id",
+            name = "PlayBridge TV",
+            deviceUUID = "receiver-uuid",
+        )
+        store.addAuthorizedPairedDevice(legacy, "legacy-token")
+
+        store.addAuthorizedPairedDevice(
+            PairedDevice(id = "cli-id", name = "PlayBridge CLI", deviceUUID = "cli-uuid"),
+            "new-token",
+            legacyDeviceUUID = "receiver-uuid",
+        )
+
+        assertEquals(listOf("cli-uuid"), store.pairedDevices.first().map { it.deviceUUID })
+        assertFalse(store.isTokenAuthorized("legacy-token"))
+        assertTrue(store.isTokenAuthorized("new-token"))
+    }
+
+    @Test
     fun `legacy authorization migrates token and paired device atomically`() = runTest {
         val token = "legacy-token"
         val device = PairedDevice(

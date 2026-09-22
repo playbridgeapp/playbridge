@@ -1005,7 +1005,10 @@ class LibraryViewModel(
 data class PlaylistUiState(
     val currentIndex: Int = 0,
     val totalCount: Int = 0,
-    val items: List<PlaylistEpisode> = emptyList()
+    val items: List<PlaylistEpisode> = emptyList(),
+    val playbackId: String? = null,
+    val queueRevision: Long = 0,
+    val currentItemId: String? = null,
 )
 
 /** A single entry in the TV's current playlist, synced via playlist_status.
@@ -1019,4 +1022,6 @@ data class PlaylistEpisode(
     val imdbId: String? = null,
     val bingeGroup: String? = null,
     val mediaKind: String = "video",
+    val itemId: String? = null,
+    val tmdbId: String? = null,
 )

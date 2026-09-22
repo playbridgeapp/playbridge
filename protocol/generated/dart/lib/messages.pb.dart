@@ -29,6 +29,7 @@ class MessageEnvelope extends $pb.GeneratedMessage {
     $fixnum.Int64? duration,
     $core.String? title,
     $core.String? mediaKind,
+    $core.String? requestId,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -38,6 +39,7 @@ class MessageEnvelope extends $pb.GeneratedMessage {
     if (duration != null) result.duration = duration;
     if (title != null) result.title = title;
     if (mediaKind != null) result.mediaKind = mediaKind;
+    if (requestId != null) result.requestId = requestId;
     return result;
   }
 
@@ -54,6 +56,7 @@ class MessageEnvelope extends $pb.GeneratedMessage {
     ..aInt64(5, _omitFieldNames ? '' : 'duration')
     ..aOS(6, _omitFieldNames ? '' : 'title')
     ..aOS(7, _omitFieldNames ? '' : 'mediaKind')
+    ..aOS(8, _omitFieldNames ? '' : 'requestId')
     ..hasRequiredFields = false
   ;
 
@@ -136,6 +139,15 @@ class MessageEnvelope extends $pb.GeneratedMessage {
   $core.bool hasMediaKind() => $_has(6);
   @$pb.TagNumber(7)
   void clearMediaKind() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get requestId => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set requestId($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasRequestId() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearRequestId() => $_clearField(8);
 }
 
 class SeriesEpisodeRef extends $pb.GeneratedMessage {
@@ -575,6 +587,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     $core.String? mediaKind,
     $fixnum.Int64? displayDurationMs,
     $core.bool? skipHistory,
+    $core.String? itemId,
   }) {
     final result = create();
     if (url != null) result.url = url;
@@ -596,6 +609,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     if (mediaKind != null) result.mediaKind = mediaKind;
     if (displayDurationMs != null) result.displayDurationMs = displayDurationMs;
     if (skipHistory != null) result.skipHistory = skipHistory;
+    if (itemId != null) result.itemId = itemId;
     return result;
   }
 
@@ -624,6 +638,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     ..aOS(17, _omitFieldNames ? '' : 'mediaKind')
     ..aInt64(18, _omitFieldNames ? '' : 'displayDurationMs')
     ..aOB(19, _omitFieldNames ? '' : 'skipHistory')
+    ..aOS(20, _omitFieldNames ? '' : 'itemId')
     ..hasRequiredFields = false
   ;
 
@@ -805,6 +820,16 @@ class PlayPayload extends $pb.GeneratedMessage {
   $core.bool hasSkipHistory() => $_has(18);
   @$pb.TagNumber(19)
   void clearSkipHistory() => $_clearField(19);
+
+  /// Stable receiver queue identity. Receivers assign one when omitted.
+  @$pb.TagNumber(20)
+  $core.String get itemId => $_getSZ(19);
+  @$pb.TagNumber(20)
+  set itemId($core.String value) => $_setString(19, value);
+  @$pb.TagNumber(20)
+  $core.bool hasItemId() => $_has(19);
+  @$pb.TagNumber(20)
+  void clearItemId() => $_clearField(20);
 }
 
 class PlaylistPayload extends $pb.GeneratedMessage {
@@ -890,9 +915,13 @@ class PlaylistPayload extends $pb.GeneratedMessage {
 class QueueAddPayload extends $pb.GeneratedMessage {
   factory QueueAddPayload({
     PlayPayload? item,
+    $core.Iterable<PlayPayload>? items,
+    $core.String? ifPlaybackId,
   }) {
     final result = create();
     if (item != null) result.item = item;
+    if (items != null) result.items.addAll(items);
+    if (ifPlaybackId != null) result.ifPlaybackId = ifPlaybackId;
     return result;
   }
 
@@ -903,6 +932,8 @@ class QueueAddPayload extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'QueueAddPayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
     ..aOM<PlayPayload>(1, _omitFieldNames ? '' : 'item', subBuilder: PlayPayload.create)
+    ..pc<PlayPayload>(2, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM, subBuilder: PlayPayload.create)
+    ..aOS(3, _omitFieldNames ? '' : 'ifPlaybackId')
     ..hasRequiredFields = false
   ;
 
@@ -933,14 +964,30 @@ class QueueAddPayload extends $pb.GeneratedMessage {
   void clearItem() => $_clearField(1);
   @$pb.TagNumber(1)
   PlayPayload ensureItem() => $_ensure(0);
+
+  @$pb.TagNumber(2)
+  $pb.PbList<PlayPayload> get items => $_getList(1);
+
+  @$pb.TagNumber(3)
+  $core.String get ifPlaybackId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set ifPlaybackId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasIfPlaybackId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearIfPlaybackId() => $_clearField(3);
 }
 
 class PlaylistJumpPayload extends $pb.GeneratedMessage {
   factory PlaylistJumpPayload({
     $core.int? index,
+    $core.String? itemId,
+    $core.String? ifPlaybackId,
   }) {
     final result = create();
     if (index != null) result.index = index;
+    if (itemId != null) result.itemId = itemId;
+    if (ifPlaybackId != null) result.ifPlaybackId = ifPlaybackId;
     return result;
   }
 
@@ -951,6 +998,8 @@ class PlaylistJumpPayload extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'PlaylistJumpPayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
     ..a<$core.int>(1, _omitFieldNames ? '' : 'index', $pb.PbFieldType.O3)
+    ..aOS(2, _omitFieldNames ? '' : 'itemId')
+    ..aOS(3, _omitFieldNames ? '' : 'ifPlaybackId')
     ..hasRequiredFields = false
   ;
 
@@ -979,6 +1028,192 @@ class PlaylistJumpPayload extends $pb.GeneratedMessage {
   $core.bool hasIndex() => $_has(0);
   @$pb.TagNumber(1)
   void clearIndex() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get itemId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set itemId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasItemId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearItemId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get ifPlaybackId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set ifPlaybackId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasIfPlaybackId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearIfPlaybackId() => $_clearField(3);
+}
+
+class QueueRemovePayload extends $pb.GeneratedMessage {
+  factory QueueRemovePayload({
+    $core.Iterable<$core.String>? itemIds,
+    $core.String? ifPlaybackId,
+  }) {
+    final result = create();
+    if (itemIds != null) result.itemIds.addAll(itemIds);
+    if (ifPlaybackId != null) result.ifPlaybackId = ifPlaybackId;
+    return result;
+  }
+
+  QueueRemovePayload._();
+
+  factory QueueRemovePayload.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory QueueRemovePayload.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'QueueRemovePayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..pPS(1, _omitFieldNames ? '' : 'itemIds')
+    ..aOS(2, _omitFieldNames ? '' : 'ifPlaybackId')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  QueueRemovePayload clone() => QueueRemovePayload()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  QueueRemovePayload copyWith(void Function(QueueRemovePayload) updates) => super.copyWith((message) => updates(message as QueueRemovePayload)) as QueueRemovePayload;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static QueueRemovePayload create() => QueueRemovePayload._();
+  @$core.override
+  QueueRemovePayload createEmptyInstance() => create();
+  static $pb.PbList<QueueRemovePayload> createRepeated() => $pb.PbList<QueueRemovePayload>();
+  @$core.pragma('dart2js:noInline')
+  static QueueRemovePayload getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<QueueRemovePayload>(create);
+  static QueueRemovePayload? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<$core.String> get itemIds => $_getList(0);
+
+  @$pb.TagNumber(2)
+  $core.String get ifPlaybackId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set ifPlaybackId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasIfPlaybackId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearIfPlaybackId() => $_clearField(2);
+}
+
+class QueueMovePayload extends $pb.GeneratedMessage {
+  factory QueueMovePayload({
+    $core.String? itemId,
+    $core.String? beforeItemId,
+    $core.String? ifPlaybackId,
+  }) {
+    final result = create();
+    if (itemId != null) result.itemId = itemId;
+    if (beforeItemId != null) result.beforeItemId = beforeItemId;
+    if (ifPlaybackId != null) result.ifPlaybackId = ifPlaybackId;
+    return result;
+  }
+
+  QueueMovePayload._();
+
+  factory QueueMovePayload.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory QueueMovePayload.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'QueueMovePayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'itemId')
+    ..aOS(2, _omitFieldNames ? '' : 'beforeItemId')
+    ..aOS(3, _omitFieldNames ? '' : 'ifPlaybackId')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  QueueMovePayload clone() => QueueMovePayload()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  QueueMovePayload copyWith(void Function(QueueMovePayload) updates) => super.copyWith((message) => updates(message as QueueMovePayload)) as QueueMovePayload;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static QueueMovePayload create() => QueueMovePayload._();
+  @$core.override
+  QueueMovePayload createEmptyInstance() => create();
+  static $pb.PbList<QueueMovePayload> createRepeated() => $pb.PbList<QueueMovePayload>();
+  @$core.pragma('dart2js:noInline')
+  static QueueMovePayload getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<QueueMovePayload>(create);
+  static QueueMovePayload? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get itemId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set itemId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasItemId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearItemId() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get beforeItemId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set beforeItemId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBeforeItemId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBeforeItemId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get ifPlaybackId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set ifPlaybackId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasIfPlaybackId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearIfPlaybackId() => $_clearField(3);
+}
+
+class QueueClearPayload extends $pb.GeneratedMessage {
+  factory QueueClearPayload({
+    $core.String? ifPlaybackId,
+  }) {
+    final result = create();
+    if (ifPlaybackId != null) result.ifPlaybackId = ifPlaybackId;
+    return result;
+  }
+
+  QueueClearPayload._();
+
+  factory QueueClearPayload.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory QueueClearPayload.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'QueueClearPayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'ifPlaybackId')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  QueueClearPayload clone() => QueueClearPayload()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  QueueClearPayload copyWith(void Function(QueueClearPayload) updates) => super.copyWith((message) => updates(message as QueueClearPayload)) as QueueClearPayload;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static QueueClearPayload create() => QueueClearPayload._();
+  @$core.override
+  QueueClearPayload createEmptyInstance() => create();
+  static $pb.PbList<QueueClearPayload> createRepeated() => $pb.PbList<QueueClearPayload>();
+  @$core.pragma('dart2js:noInline')
+  static QueueClearPayload getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<QueueClearPayload>(create);
+  static QueueClearPayload? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get ifPlaybackId => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set ifPlaybackId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasIfPlaybackId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearIfPlaybackId() => $_clearField(1);
 }
 
 class BrowserPayload extends $pb.GeneratedMessage {
@@ -1271,6 +1506,8 @@ class StatusMessage extends $pb.GeneratedMessage {
     $fixnum.Int64? duration,
     $core.String? title,
     $core.String? mediaKind,
+    $core.String? playbackId,
+    $core.String? currentItemId,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -1279,6 +1516,8 @@ class StatusMessage extends $pb.GeneratedMessage {
     if (duration != null) result.duration = duration;
     if (title != null) result.title = title;
     if (mediaKind != null) result.mediaKind = mediaKind;
+    if (playbackId != null) result.playbackId = playbackId;
+    if (currentItemId != null) result.currentItemId = currentItemId;
     return result;
   }
 
@@ -1294,6 +1533,8 @@ class StatusMessage extends $pb.GeneratedMessage {
     ..aInt64(4, _omitFieldNames ? '' : 'duration')
     ..aOS(5, _omitFieldNames ? '' : 'title')
     ..aOS(6, _omitFieldNames ? '' : 'mediaKind')
+    ..aOS(7, _omitFieldNames ? '' : 'playbackId')
+    ..aOS(8, _omitFieldNames ? '' : 'currentItemId')
     ..hasRequiredFields = false
   ;
 
@@ -1367,6 +1608,24 @@ class StatusMessage extends $pb.GeneratedMessage {
   $core.bool hasMediaKind() => $_has(5);
   @$pb.TagNumber(6)
   void clearMediaKind() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get playbackId => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set playbackId($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasPlaybackId() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearPlaybackId() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get currentItemId => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set currentItemId($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasCurrentItemId() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearCurrentItemId() => $_clearField(8);
 }
 
 class ContextMessage extends $pb.GeneratedMessage {
@@ -1433,11 +1692,23 @@ class PlaylistItemInfo extends $pb.GeneratedMessage {
     $core.int? index,
     $core.String? title,
     $core.String? mediaKind,
+    $core.String? itemId,
+    $core.int? season,
+    $core.int? episode,
+    $core.String? imdbId,
+    $core.String? tmdbId,
+    $core.String? bingeGroup,
   }) {
     final result = create();
     if (index != null) result.index = index;
     if (title != null) result.title = title;
     if (mediaKind != null) result.mediaKind = mediaKind;
+    if (itemId != null) result.itemId = itemId;
+    if (season != null) result.season = season;
+    if (episode != null) result.episode = episode;
+    if (imdbId != null) result.imdbId = imdbId;
+    if (tmdbId != null) result.tmdbId = tmdbId;
+    if (bingeGroup != null) result.bingeGroup = bingeGroup;
     return result;
   }
 
@@ -1450,6 +1721,12 @@ class PlaylistItemInfo extends $pb.GeneratedMessage {
     ..a<$core.int>(1, _omitFieldNames ? '' : 'index', $pb.PbFieldType.O3)
     ..aOS(2, _omitFieldNames ? '' : 'title')
     ..aOS(3, _omitFieldNames ? '' : 'mediaKind')
+    ..aOS(4, _omitFieldNames ? '' : 'itemId')
+    ..a<$core.int>(5, _omitFieldNames ? '' : 'season', $pb.PbFieldType.O3)
+    ..a<$core.int>(6, _omitFieldNames ? '' : 'episode', $pb.PbFieldType.O3)
+    ..aOS(7, _omitFieldNames ? '' : 'imdbId')
+    ..aOS(8, _omitFieldNames ? '' : 'tmdbId')
+    ..aOS(9, _omitFieldNames ? '' : 'bingeGroup')
     ..hasRequiredFields = false
   ;
 
@@ -1496,6 +1773,60 @@ class PlaylistItemInfo extends $pb.GeneratedMessage {
   $core.bool hasMediaKind() => $_has(2);
   @$pb.TagNumber(3)
   void clearMediaKind() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get itemId => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set itemId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasItemId() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearItemId() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.int get season => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set season($core.int value) => $_setSignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasSeason() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearSeason() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.int get episode => $_getIZ(5);
+  @$pb.TagNumber(6)
+  set episode($core.int value) => $_setSignedInt32(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasEpisode() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearEpisode() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get imdbId => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set imdbId($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasImdbId() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearImdbId() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.String get tmdbId => $_getSZ(7);
+  @$pb.TagNumber(8)
+  set tmdbId($core.String value) => $_setString(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasTmdbId() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearTmdbId() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.String get bingeGroup => $_getSZ(8);
+  @$pb.TagNumber(9)
+  set bingeGroup($core.String value) => $_setString(8, value);
+  @$pb.TagNumber(9)
+  $core.bool hasBingeGroup() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearBingeGroup() => $_clearField(9);
 }
 
 class PlaylistStatusMessage extends $pb.GeneratedMessage {
@@ -1504,12 +1835,18 @@ class PlaylistStatusMessage extends $pb.GeneratedMessage {
     $core.Iterable<PlaylistItemInfo>? items,
     $core.int? currentIndex,
     $core.int? totalCount,
+    $core.String? playbackId,
+    $fixnum.Int64? queueRevision,
+    $core.String? currentItemId,
   }) {
     final result = create();
     if (type != null) result.type = type;
     if (items != null) result.items.addAll(items);
     if (currentIndex != null) result.currentIndex = currentIndex;
     if (totalCount != null) result.totalCount = totalCount;
+    if (playbackId != null) result.playbackId = playbackId;
+    if (queueRevision != null) result.queueRevision = queueRevision;
+    if (currentItemId != null) result.currentItemId = currentItemId;
     return result;
   }
 
@@ -1523,6 +1860,9 @@ class PlaylistStatusMessage extends $pb.GeneratedMessage {
     ..pc<PlaylistItemInfo>(2, _omitFieldNames ? '' : 'items', $pb.PbFieldType.PM, subBuilder: PlaylistItemInfo.create)
     ..a<$core.int>(3, _omitFieldNames ? '' : 'currentIndex', $pb.PbFieldType.O3)
     ..a<$core.int>(4, _omitFieldNames ? '' : 'totalCount', $pb.PbFieldType.O3)
+    ..aOS(5, _omitFieldNames ? '' : 'playbackId')
+    ..aInt64(6, _omitFieldNames ? '' : 'queueRevision')
+    ..aOS(7, _omitFieldNames ? '' : 'currentItemId')
     ..hasRequiredFields = false
   ;
 
@@ -1572,6 +1912,151 @@ class PlaylistStatusMessage extends $pb.GeneratedMessage {
   $core.bool hasTotalCount() => $_has(3);
   @$pb.TagNumber(4)
   void clearTotalCount() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get playbackId => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set playbackId($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasPlaybackId() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearPlaybackId() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $fixnum.Int64 get queueRevision => $_getI64(5);
+  @$pb.TagNumber(6)
+  set queueRevision($fixnum.Int64 value) => $_setInt64(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasQueueRevision() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearQueueRevision() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get currentItemId => $_getSZ(6);
+  @$pb.TagNumber(7)
+  set currentItemId($core.String value) => $_setString(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasCurrentItemId() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearCurrentItemId() => $_clearField(7);
+}
+
+class CommandResultMessage extends $pb.GeneratedMessage {
+  factory CommandResultMessage({
+    $core.String? type,
+    $core.String? requestId,
+    $core.bool? ok,
+    $core.String? error,
+    $core.String? message,
+    $core.String? playbackId,
+    $fixnum.Int64? queueRevision,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (requestId != null) result.requestId = requestId;
+    if (ok != null) result.ok = ok;
+    if (error != null) result.error = error;
+    if (message != null) result.message = message;
+    if (playbackId != null) result.playbackId = playbackId;
+    if (queueRevision != null) result.queueRevision = queueRevision;
+    return result;
+  }
+
+  CommandResultMessage._();
+
+  factory CommandResultMessage.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory CommandResultMessage.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'CommandResultMessage', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'type')
+    ..aOS(2, _omitFieldNames ? '' : 'requestId')
+    ..aOB(3, _omitFieldNames ? '' : 'ok')
+    ..aOS(4, _omitFieldNames ? '' : 'error')
+    ..aOS(5, _omitFieldNames ? '' : 'message')
+    ..aOS(6, _omitFieldNames ? '' : 'playbackId')
+    ..aInt64(7, _omitFieldNames ? '' : 'queueRevision')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CommandResultMessage clone() => CommandResultMessage()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  CommandResultMessage copyWith(void Function(CommandResultMessage) updates) => super.copyWith((message) => updates(message as CommandResultMessage)) as CommandResultMessage;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static CommandResultMessage create() => CommandResultMessage._();
+  @$core.override
+  CommandResultMessage createEmptyInstance() => create();
+  static $pb.PbList<CommandResultMessage> createRepeated() => $pb.PbList<CommandResultMessage>();
+  @$core.pragma('dart2js:noInline')
+  static CommandResultMessage getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<CommandResultMessage>(create);
+  static CommandResultMessage? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get type => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set type($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get requestId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set requestId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasRequestId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearRequestId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.bool get ok => $_getBF(2);
+  @$pb.TagNumber(3)
+  set ok($core.bool value) => $_setBool(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasOk() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearOk() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get error => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set error($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasError() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearError() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get message => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set message($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasMessage() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearMessage() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get playbackId => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set playbackId($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(6)
+  $core.bool hasPlaybackId() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearPlaybackId() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $fixnum.Int64 get queueRevision => $_getI64(6);
+  @$pb.TagNumber(7)
+  set queueRevision($fixnum.Int64 value) => $_setInt64(6, value);
+  @$pb.TagNumber(7)
+  $core.bool hasQueueRevision() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearQueueRevision() => $_clearField(7);
 }
 
 class AuthMessage extends $pb.GeneratedMessage {
@@ -1642,6 +2127,7 @@ class AuthResponse extends $pb.GeneratedMessage {
     $core.Iterable<$core.String>? browsers,
     $core.bool? screenMirrorWebRtc,
     $core.Iterable<$core.String>? mediaKinds,
+    $core.Iterable<$core.String>? features,
   }) {
     final result = create();
     if (type != null) result.type = type;
@@ -1652,6 +2138,7 @@ class AuthResponse extends $pb.GeneratedMessage {
     if (browsers != null) result.browsers.addAll(browsers);
     if (screenMirrorWebRtc != null) result.screenMirrorWebRtc = screenMirrorWebRtc;
     if (mediaKinds != null) result.mediaKinds.addAll(mediaKinds);
+    if (features != null) result.features.addAll(features);
     return result;
   }
 
@@ -1669,6 +2156,7 @@ class AuthResponse extends $pb.GeneratedMessage {
     ..pPS(6, _omitFieldNames ? '' : 'browsers')
     ..aOB(7, _omitFieldNames ? '' : 'screenMirrorWebRtc')
     ..pPS(8, _omitFieldNames ? '' : 'mediaKinds')
+    ..pPS(9, _omitFieldNames ? '' : 'features')
     ..hasRequiredFields = false
   ;
 
@@ -1744,6 +2232,9 @@ class AuthResponse extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(8)
   $pb.PbList<$core.String> get mediaKinds => $_getList(7);
+
+  @$pb.TagNumber(9)
+  $pb.PbList<$core.String> get features => $_getList(8);
 }
 
 /// Phone → TV on first connection (no saved token). TV shows Allow/Deny prompt.

@@ -17,7 +17,11 @@ final class WebSocketClient: NSObject, ObservableObject {
     var onCapabilities: ((TvCapabilities) -> Void)?
 
     struct IssuedCredentials { let token: String; let certFingerprint: String? }
-    struct TvCapabilities { let players: [String]; let browsers: [String] }
+    struct TvCapabilities {
+        let players: [String]
+        let browsers: [String]
+        let features: [String]
+    }
 
     // MARK: - Internals
 
@@ -422,8 +426,9 @@ final class WebSocketClient: NSObject, ObservableObject {
     private func emitCapabilities(_ json: [String: Any]) {
         let players = (json["players"] as? [String]) ?? []
         let browsers = (json["browsers"] as? [String]) ?? []
-        if !players.isEmpty || !browsers.isEmpty {
-            onCapabilities?(TvCapabilities(players: players, browsers: browsers))
+        let features = (json["features"] as? [String]) ?? []
+        if !players.isEmpty || !browsers.isEmpty || !features.isEmpty {
+            onCapabilities?(TvCapabilities(players: players, browsers: browsers, features: features))
         }
     }
 

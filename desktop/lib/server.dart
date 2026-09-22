@@ -795,10 +795,11 @@ class ReceiverServer extends ChangeNotifier {
         ));
         _broadcastPlaylistStatus();
       case PlaylistJumpCmd(:final index):
+        if (index == null) break;
         onNewMedia?.call();
         unawaited(player.jumpTo(index));
         _broadcastPlaylistStatus();
-      case QueueAddCmd(:final item):
+      case QueueAddCmd(:final items):
         if (isPlaybackPromptActive?.call() ?? false) {
           onPromptContinue?.call();
         } else {
@@ -806,7 +807,10 @@ class ReceiverServer extends ChangeNotifier {
         }
         // Appends to the live queue; if idle, starts playback.
         // playlist_status broadcast happens via the queueChanges listener.
-        unawaited(player.queueAdd(_toQueueItem(item), isRemote: true));
+        unawaited(player.queueAddAll(
+          items.map(_toQueueItem).toList(growable: false),
+          isRemote: true,
+        ));
       case ControlCmd(:final command):
         debugPrint('[server] control: $command');
         if (isPlaybackPromptActive?.call() ?? false) {
@@ -939,6 +943,7 @@ class ReceiverServer extends ChangeNotifier {
         season: p.seasonOrNull,
         episode: p.episodeOrNull,
         imdbId: p.imdbIdOrNull,
+        tmdbId: p.tmdbIdOrNull,
         backdropUrl: p.backdropUrlOrNull,
         posterUrl: p.posterUrlOrNull,
         logoUrl: p.logoUrlOrNull,
@@ -957,6 +962,7 @@ class ReceiverServer extends ChangeNotifier {
             season: player.queue[i].season,
             episode: player.queue[i].episode,
             imdbId: player.queue[i].imdbId,
+            tmdbId: player.queue[i].tmdbId,
             bingeGroup: player.queue[i].bingeGroup,
           ),
       ];

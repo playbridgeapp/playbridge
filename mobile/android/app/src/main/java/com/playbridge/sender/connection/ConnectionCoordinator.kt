@@ -7,8 +7,16 @@ import com.playbridge.sender.cast.TvPlayerSettings
 import com.playbridge.sender.library.PlaylistEpisode
 import com.playbridge.sender.library.PlaylistUiState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
+
+data class QueueCommandResult(
+    val ok: Boolean,
+    val error: String?,
+)
 
 /**
  * TV browser User-Agent state, as last reported by the TV: [active] is the name of the
@@ -38,6 +46,7 @@ class ConnectionCoordinator(
     val tvAudioTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
+    private val pendingQueueCommands = ConcurrentHashMap<String, CompletableDeferred<QueueCommandResult>>()
     
     // Names of user scripts currently installed on the TV (for the management UI).
     val installedUserScripts = MutableStateFlow<List<String>>(emptyList())
@@ -87,6 +96,8 @@ class ConnectionCoordinator(
                                                 mediaKind = o.optString("mediaKind", "video")
                                                     .takeIf { it in setOf("video", "audio", "image") }
                                                     ?: "video",
+                                                itemId = o.optString("itemId", "").ifEmpty { null },
+                                                tmdbId = o.optString("tmdbId", "").ifEmpty { null },
                                             )
                                         )
                                     }
@@ -95,7 +106,10 @@ class ConnectionCoordinator(
                             tvPlaylistState.value = PlaylistUiState(
                                 currentIndex = json.optInt("currentIndex", 0),
                                 totalCount = json.optInt("totalCount", 0),
-                                items = episodes
+                                items = episodes,
+                                playbackId = json.optString("playbackId", "").ifEmpty { null },
+                                queueRevision = json.optLong("queueRevision", 0),
+                                currentItemId = json.optString("currentItemId", "").ifEmpty { null },
                             )
                             Log.d(
                                 TAG,
@@ -118,6 +132,17 @@ class ConnectionCoordinator(
                                     ?: "video",
                             )
                             if (next != tvPlayback.value) tvPlayback.value = next
+                        }
+                        "command_result" -> {
+                            val requestId = json.optString("requestId", "")
+                            if (requestId.isNotEmpty()) {
+                                pendingQueueCommands.remove(requestId)?.complete(
+                                    QueueCommandResult(
+                                        ok = json.optBoolean("ok", false),
+                                        error = json.optString("error", "").ifEmpty { null },
+                                    ),
+                                )
+                            }
                         }
                         "tracks" -> {
                             fun parseTracks(arr: org.json.JSONArray?): List<MediaTrack> =
@@ -185,6 +210,23 @@ class ConnectionCoordinator(
                     Log.e(TAG, "Error parsing WebSocket message: ${e.message}", e)
                 }
             }
+        }
+    }
+
+    suspend fun sendConfirmedQueueCommand(
+        requestId: String,
+        command: String,
+        timeoutMs: Long = 8_000L,
+    ): QueueCommandResult? {
+        val deferred = CompletableDeferred<QueueCommandResult>()
+        check(pendingQueueCommands.putIfAbsent(requestId, deferred) == null) {
+            "duplicate queue request id"
+        }
+        return try {
+            if (!webSocketClient.send(command)) return null
+            withTimeoutOrNull(timeoutMs) { deferred.await() }
+        } finally {
+            pendingQueueCommands.remove(requestId, deferred)
         }
     }
 

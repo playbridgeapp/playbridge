@@ -1,11 +1,16 @@
 ---
 name: code-review-graph-workflow
-description: Use an available code-review graph for codebase exploration, debugging, change review, impact analysis, test discovery, and scoped refactoring. Use when structural code relationships or blast radius matter; fall back to focused text and file inspection when graph tools are unavailable or lack coverage.
+description: Use an available code-review graph for high-impact or repository-wide exploration, debugging, change review, impact analysis, test discovery, and scoped refactoring. Use Serena first for localized symbol navigation and references; invoke this workflow when structural relationships, execution flows, or blast radius matter.
 ---
 
 # Code-review graph workflow
 
-Start with `get_minimal_context(task="...")`, then select only the tools needed for the task.
+Use Serena first for localized symbol navigation, references, implementations, and
+diagnostics. Invoke this workflow when the task crosses project boundaries, changes a
+protocol or ABI, needs execution-flow or architecture analysis, reviews regressions,
+or has meaningful blast-radius risk.
+
+Start with `get_minimal_context(task="...")`, then select only the graph tools needed.
 
 If the code-review graph tools are unavailable, continue with repository-native search, focused file inspection, version-control history, and relevant tests.
 
@@ -35,5 +40,12 @@ If the code-review graph tools are unavailable, continue with repository-native 
 - Use rename preview/apply only for a requested rename and review the generated diff.
 - Use dead-code or broad suggestion modes only when the user explicitly requests an audit; do not expand a scoped refactor.
 - Re-run change detection and focused tests after edits.
+
+## Token and complexity policy
+
+- Do not call the graph mechanically for every task.
+- Prefer Serena plus focused reads for a single file, symbol, bug, or localized refactor.
+- Add graph context only when its repository-wide relationships or flow analysis will
+  change the implementation or verification decision.
 
 Use minimal detail initially, but increase detail and tool calls whenever necessary for a sound conclusion. Fall back to `rg` and focused reads for unsupported languages, build files, generated files, exact strings, or stale graph data.

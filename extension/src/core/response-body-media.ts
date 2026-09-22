@@ -1,7 +1,7 @@
 export const DEFAULT_RESPONSE_BODY_SCAN_LIMIT_BYTES = 256 * 1024;
 export const DEFAULT_RESPONSE_BODY_CANDIDATE_LIMIT = 32;
 
-export type ResponseBodyMediaKind = "hls" | "dash";
+export type ResponseBodyMediaKind = "hls" | "dash" | "subtitle";
 
 export interface ResponseBodyMediaCandidate {
   url: string;
@@ -128,6 +128,14 @@ function inferContentType(url: string, hint?: string): string {
 
 function mediaKindFromBody(body: string): ResponseBodyMediaKind | null {
   const trimmed = body.replace(/^\uFEFF/, "").trimStart();
+  if (/^WEBVTT(?:[ \t].*)?(?:\r?\n|$)/i.test(trimmed)) return "subtitle";
+  if (
+    /^(?:\d{1,7}\s*\r?\n\s*)?\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{3}(?:\s|$)/.test(
+      trimmed.slice(0, 8192),
+    )
+  ) {
+    return "subtitle";
+  }
   if (trimmed.startsWith("#EXTM3U")) return "hls";
   const prefix = trimmed.slice(0, 2048);
   if (
@@ -138,6 +146,12 @@ function mediaKindFromBody(body: string): ResponseBodyMediaKind | null {
     return "dash";
   }
   return null;
+}
+
+export function subtitleContentType(body: string): string {
+  return /^\uFEFF?\s*WEBVTT(?:[ \t]|\r?\n|$)/.test(body)
+    ? "text/vtt"
+    : "application/x-subrip";
 }
 
 function decodeUrlEscapes(value: string): string {
@@ -159,6 +173,11 @@ function normalizeCandidateUrl(
 ): string | null {
   const decoded = stripTrailingUrlPunctuation(decodeUrlEscapes(value));
   if (!decoded || decoded.startsWith("blob:") || decoded.startsWith("data:")) {
+    return null;
+  }
+  // Contextual assignments in JavaScript can capture source fragments (e.g. file="&&...").
+  // Relative resources must have a URL-shaped beginning, not merely contain a slash.
+  if (!/^(?:https?:\/\/|\/|\.{1,2}\/|[\w%-])/.test(decoded) || /[\r\n<>]/.test(decoded)) {
     return null;
   }
   const isUrlShaped =

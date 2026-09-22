@@ -35,7 +35,7 @@ use crate::preferred::PreferredDevice;
 
 use self::{config::UiConfig, file_picker::FilePicker, terminal::TerminalSession, theme::Theme};
 
-pub(crate) use config::config_path;
+pub(crate) use config::{config_path, set_skip_history_default, skip_history_default};
 
 pub(crate) fn validate_config(theme_override: Option<&str>) -> Result<(), String> {
     UiConfig::load(theme_override).map(|_| ())
@@ -47,6 +47,7 @@ pub(crate) enum DashboardLaunch {
     Cast {
         source: Option<String>,
         browser: bool,
+        skip_history: Option<bool>,
     },
     Discover {
         protocols: HashSet<ReceiverProtocol>,
@@ -206,6 +207,7 @@ struct App {
     cast_active: bool,
     cast_generation: u64,
     cast_target: Option<String>,
+    cast_skip_history_override: Option<bool>,
     remote: RemoteUiState,
     pairing_device: Option<String>,
     receiver_active: bool,
@@ -245,6 +247,7 @@ impl App {
             cast_active: false,
             cast_generation: 0,
             cast_target: None,
+            cast_skip_history_override: None,
             remote: RemoteUiState::default(),
             pairing_device: None,
             receiver_active: false,
@@ -270,8 +273,13 @@ impl App {
     fn apply_launch(&mut self, launch: DashboardLaunch) {
         match launch {
             DashboardLaunch::Home => {}
-            DashboardLaunch::Cast { source, browser } => {
+            DashboardLaunch::Cast {
+                source,
+                browser,
+                skip_history,
+            } => {
                 self.source = source;
+                self.cast_skip_history_override = skip_history;
                 self.navigate_to(Section::Cast);
                 if browser {
                     self.browser_start_requested = self.source.is_some();
@@ -601,7 +609,12 @@ pub(crate) async fn run_dashboard(
                             let (command_tx, command_rx) = tokio::sync::mpsc::channel(16);
                             let (event_tx, event_rx) = tokio::sync::mpsc::channel(32);
                             cast_future = Some(Box::pin(crate::send::run_dashboard_cast(
-                                source, receiver, generation, command_rx, event_tx,
+                                source,
+                                receiver,
+                                generation,
+                                command_rx,
+                                event_tx,
+                                app.cast_skip_history_override,
                             )));
                             cast_commands = Some(command_tx);
                             cast_events = Some(event_rx);
@@ -3100,11 +3113,13 @@ mod tests {
         app.apply_launch(DashboardLaunch::Cast {
             source: Some("https://example.com/movie.mp4".into()),
             browser: false,
+            skip_history: Some(true),
         });
 
         assert_eq!(app.section, Section::Cast);
         assert_eq!(app.source.as_deref(), Some("https://example.com/movie.mp4"));
         assert_eq!(app.overlay, Overlay::ReceiverPicker);
+        assert_eq!(app.cast_skip_history_override, Some(true));
     }
 
     #[test]
@@ -3113,6 +3128,7 @@ mod tests {
         app.apply_launch(DashboardLaunch::Cast {
             source: Some("https://example.com/movie.mp4".into()),
             browser: true,
+            skip_history: None,
         });
 
         assert_eq!(app.section, Section::Cast);
@@ -3162,6 +3178,8 @@ mod tests {
             title: "Movie".into(),
             position_ms: 5_000,
             duration_ms: 60_000,
+            current_index: None,
+            total_count: None,
             volume: Some(0.5),
             muted: None,
             looping: None,

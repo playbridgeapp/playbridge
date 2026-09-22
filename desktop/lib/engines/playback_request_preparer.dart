@@ -141,6 +141,7 @@ class PlaybackRequestPreparer {
         season: item.season,
         episode: item.episode,
         imdbId: item.imdbId,
+        tmdbId: item.tmdbId,
         backdropUrl: item.backdropUrl,
         posterUrl: item.posterUrl,
         logoUrl: item.logoUrl,

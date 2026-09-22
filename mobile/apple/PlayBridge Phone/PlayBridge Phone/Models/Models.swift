@@ -29,6 +29,7 @@ struct PairedDevice: Codable, Equatable {
     /// player_mode / browser_mode ids the receiver reported at the last auth.
     var players: [String] = []
     var browsers: [String] = []
+    var features: [String]? = nil
     var lastConnected: Date = Date()
 }
 
@@ -65,6 +66,8 @@ struct TvPlaybackStatus: Equatable {
     var positionMs: Int64
     var durationMs: Int64
     var title: String?
+    var playbackId: String? = nil
+    var currentItemId: String? = nil
 }
 
 /// One audio/subtitle track the TV reports (the `tracks` message).
@@ -76,12 +79,14 @@ struct MediaTrack: Identifiable, Equatable {
 
 /// One entry in the TV's playlist (the `playlist_status` message).
 struct PlaylistEpisode: Identifiable, Equatable {
-    var id: Int { index }
+    var id: String { itemId ?? "legacy-\(index)" }
     let index: Int
     let title: String
+    var itemId: String? = nil
     var season: Int? = nil
     var episode: Int? = nil
     var imdbId: String? = nil
+    var tmdbId: String? = nil
     var bingeGroup: String? = nil
 }
 
@@ -89,4 +94,15 @@ struct PlaylistUiState: Equatable {
     var currentIndex: Int
     var totalCount: Int
     var items: [PlaylistEpisode]
+    var playbackId: String? = nil
+    var currentItemId: String? = nil
+    var queueRevision: UInt64 = 0
+}
+
+struct QueueCommandResult: Equatable {
+    let requestId: String
+    let ok: Bool
+    let error: String?
+    let playbackId: String?
+    let queueRevision: UInt64?
 }

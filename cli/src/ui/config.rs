@@ -35,10 +35,17 @@ pub(crate) struct ThemeOverrides {
     pub(crate) error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub(crate) struct CastPreferences {
+    pub(crate) skip_history: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub(crate) struct UiConfig {
     pub(crate) ui: UiPreferences,
+    pub(crate) cast: CastPreferences,
     pub(crate) theme: ThemeOverrides,
     pub(crate) keys: BTreeMap<String, Vec<String>>,
 }
@@ -47,6 +54,7 @@ impl Default for UiConfig {
     fn default() -> Self {
         Self {
             ui: UiPreferences::default(),
+            cast: CastPreferences::default(),
             theme: ThemeOverrides::default(),
             keys: default_keys(),
         }
@@ -76,6 +84,7 @@ impl UiConfig {
 
         let mut config = Self {
             ui: parsed.ui,
+            cast: parsed.cast,
             theme: parsed.theme,
             ..Self::default()
         };
@@ -146,6 +155,16 @@ impl UiConfig {
             .iter()
             .any(|binding| binding.eq_ignore_ascii_case(&key))
     }
+}
+
+pub(crate) fn skip_history_default() -> Result<bool, String> {
+    UiConfig::load(None).map(|config| config.cast.skip_history)
+}
+
+pub(crate) fn set_skip_history_default(skip_history: bool) -> Result<(), String> {
+    let mut config = UiConfig::load(None)?;
+    config.cast.skip_history = skip_history;
+    config.save()
 }
 
 pub(crate) fn config_path() -> Option<PathBuf> {
@@ -238,6 +257,19 @@ mod tests {
         let config = UiConfig::load_from(&path).unwrap();
         assert_eq!(config.keys["down"], ["n"]);
         assert_eq!(config.keys["up"], ["up", "k"]);
+        assert!(!config.cast.skip_history);
+    }
+
+    #[test]
+    fn cast_history_default_round_trips() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.toml");
+        fs::write(&path, "[cast]\nskip_history = true\n").unwrap();
+        let config = UiConfig::load_from(&path).unwrap();
+        assert!(config.cast.skip_history);
+
+        let encoded = toml::to_string(&config).unwrap();
+        assert!(encoded.contains("skip_history = true"));
     }
 
     #[test]

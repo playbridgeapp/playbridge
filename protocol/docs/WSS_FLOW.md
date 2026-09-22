@@ -145,6 +145,9 @@ that outer frame.
 The sender decrypts and validates the bundle, compares `certFingerprint` with the certificate
 actually served by the current WSS connection, then stores token + pin together in platform
 secure storage. A mismatch or authentication failure discards the bundle and closes the socket.
+When pairing succeeds for an existing stable sender `deviceUUID`, the receiver replaces that
+sender's stored device entry and revokes the previously issued token before authorizing the new
+token. Re-pairing must not leave older credentials usable.
 
 ## Reconnection authentication
 
@@ -174,6 +177,10 @@ Most actions use `{"type":"command","action":"...","payload":{...}}`:
 | `playlist` | Every new cast, including a single item | Replaces the live queue and starts at `startIndex` |
 | `queue_add` | Lazy episode resolution or manual queueing | Appends one item without replacing playback |
 | `playlist_jump` | User selects a queued item | Moves playback to the zero-based index |
+| `queue_query` | Reconnect or explicit queue refresh | Returns the current queue snapshot to the requester |
+| `queue_remove` | Remove one or more stable queue items | Removes by `itemId` without replacing playback |
+| `queue_move` | Reorder a stable queue item | Moves by `itemId`, optionally before another item |
+| `queue_clear` | Explicitly clear receiver-owned playback | Clears the active queue |
 | `control` | Player transport, seek, tracks, engine, or presentation setting | Routed to the active player |
 | `remote` | D-pad, back/home, or volume keys | Routed to the active player/browser or system |
 | `mouse` | Low-rate/fallback pointer input | Routed like the compact binary pointer frame |
@@ -208,6 +215,7 @@ image visible until explicit navigation. Receivers advertise supported kinds thr
 | `context` | Active surface changes or a `context_query` arrives |
 | `status` | Playback state/position changes; duration is `0` when unknown/live |
 | `playlist_status` | Queue replacement, append, index change, reconnect, or clear |
+| `command_result` | Targeted acknowledgement or structured rejection of a command carrying `requestId` |
 | `tracks` | Audio/subtitle track list or selection changes |
 | `player_settings` | Speed, adaptive quality ceiling, scaling, boost, subtitle offset, engine, and live capability changes |
 | `user_scripts` / `user_agents` | Response to Android browser administration queries |
@@ -220,6 +228,31 @@ image visible until explicit navigation. Receivers advertise supported kinds thr
 Receivers must tolerate unknown JSON object properties for forward compatibility. Unknown
 message types/actions should be ignored or surfaced diagnostically, not treated as authenticated
 commands. Senders should likewise ignore receiver events they do not understand.
+
+## Shared queue control v1
+
+Receivers advertising `queue_crud_v1`, `stable_item_ids`, and `command_results` treat playback
+as receiver-owned shared state. A WebSocket connection is only a temporary authenticated
+transport: disconnecting does not stop playback, and only an explicit `control/stop` or
+`queue_clear` clears it.
+
+`playlist` creates a new receiver-generated `playbackId`. Queue mutations and navigation preserve
+that ID, assign or retain stable `itemId` values, and advance a monotonic `queueRevision` whenever
+membership, ordering, or the current item changes. New controllers address entries by `itemId`;
+legacy index-based navigation remains accepted.
+
+Long-running automation should include `ifPlaybackId` with queue mutations. The receiver rejects
+the command with `stale_playback` if another controller has replaced playback. Interactive
+controllers may omit the guard when they intentionally operate on whatever is currently playing.
+
+A controller may add a `requestId` to a command. Supporting receivers return exactly one targeted
+`command_result` after applying or rejecting it. Successful mutations are then followed by a
+`playlist_status` broadcast to all authenticated controllers. Receivers should make repeated
+request IDs idempotent for the lifetime of their bounded result cache.
+
+V1 queue snapshots remain complete and compact: at most 200 active items, at most 50 items in one
+batch append, and no media URLs or request headers in status frames. Larger catalogs should lazily
+append a bounded window. Paging and delta snapshots require a future advertised capability.
 
 ## Platform usage matrix
 

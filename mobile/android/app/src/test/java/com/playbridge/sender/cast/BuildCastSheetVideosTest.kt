@@ -6,6 +6,62 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BuildCastSheetVideosTest {
+    @Test
+    fun lateEmptyProbeCannotEraseBodyConfirmedMaster() {
+        val earlyProbe = DetectedVideo(url = "https://cdn.example/master.m3u8")
+        val enriched = earlyProbe.copy(
+            qualities = listOf(VideoQuality("720p", 1_000_000, "https://cdn.example/720.m3u8")),
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+        assertFalse(shouldApplyManifestProbe(earlyProbe, enriched))
+        assertTrue(shouldApplyManifestProbe(enriched, earlyProbe))
+    }
+
+    @Test
+    fun comparatorUsesImmutableSnapshotWhenProbeStateChanges() {
+        val first = DetectedVideo(
+            url = "https://cdn.example/first.mp4",
+            timestamp = 2,
+            lastSeen = 2,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+        val second = DetectedVideo(
+            url = "https://cdn.example/second.mp4",
+            timestamp = 1,
+            lastSeen = 1,
+        )
+        val comparator = castSheetComparator(listOf(first, second))
+
+        first.validationState = MediaValidationState.FAILED
+        second.validationState = MediaValidationState.VERIFIED_PLAYABLE
+
+        assertEquals(listOf(first, second), listOf(second, first).sortedWith(comparator))
+    }
+
+    @Test
+    fun thumbnailCompletion_doesNotChangeStreamRanking() {
+        val newer = DetectedVideo(
+            url = "https://cdn.example/newer.mp4",
+            detectedBy = "content_type",
+            timestamp = 2,
+            lastSeen = 2,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+        val olderWithThumbnail = DetectedVideo(
+            url = "https://cdn.example/older.mp4",
+            detectedBy = "content_type",
+            timestamp = 1,
+            lastSeen = 1,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+            thumbnailState = ThumbnailPreviewState.READY,
+        )
+
+        assertEquals(
+            listOf(newer.url, olderWithThumbnail.url),
+            buildCastSheetVideos(listOf(olderWithThumbnail, newer)).map { it.url },
+        )
+    }
+
 
     @Test
     fun withoutHandoff_ranksNormally() {
@@ -187,6 +243,36 @@ class BuildCastSheetVideosTest {
             thumbnailPrefetchCandidates(listOf(progressive, audio, dash, hls)).map { it.url },
         )
         assertEquals(emptyList<DetectedVideo>(), thumbnailPrefetchCandidates(listOf(hls), limit = 0))
+    }
+
+    @Test
+    fun backgroundStreamProcessing_includesEveryViableVideo() {
+        val progressive = DetectedVideo(
+            url = "https://cdn.example/movie.mp4",
+            timestamp = 3,
+        )
+        val hls = DetectedVideo(
+            url = "https://cdn.example/master.m3u8",
+            contentType = "application/vnd.apple.mpegurl",
+            timestamp = 2,
+            validationState = MediaValidationState.VERIFIED_PLAYABLE,
+        )
+        val failed = DetectedVideo(
+            url = "https://cdn.example/failed.mpd",
+            contentType = "application/dash+xml",
+            validationState = MediaValidationState.FAILED,
+        )
+        val audio = DetectedVideo(
+            url = "https://cdn.example/theme.mp3",
+            contentType = "audio/mpeg",
+        )
+
+        assertEquals(
+            setOf(progressive.url, hls.url),
+            backgroundStreamProcessingCandidates(
+                listOf(progressive, hls, failed, audio),
+            ).map { it.url }.toSet(),
+        )
     }
 
     @Test

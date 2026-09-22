@@ -17,6 +17,7 @@ class QueueItem {
     this.season,
     this.episode,
     this.imdbId,
+    this.tmdbId,
     this.backdropUrl,
     this.posterUrl,
     this.logoUrl,
@@ -93,6 +94,7 @@ class QueueItem {
   final int? season;
   final int? episode;
   final String? imdbId;
+  final String? tmdbId;
 
   // Visual metadata for the pre-play screen (from the payload's VisualMetadata).
   final String? backdropUrl;

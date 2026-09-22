@@ -5,8 +5,23 @@ import {
   attachBoundedResponseBodyScanner,
   scanResponseBodyForMedia,
   shouldInspectResponseBody,
+  subtitleContentType,
   type ResponseBodyStreamFilter,
 } from "../src/core/response-body-media";
+
+test("subtitle content preserves WebVTT versus SRT MIME", () => {
+  assert.equal(subtitleContentType("\uFEFFWEBVTT\r\n\r\n"), "text/vtt");
+  assert.equal(subtitleContentType("1\n00:00:01,000 --> 00:00:02,000\nHello"), "application/x-subrip");
+});
+
+test("JavaScript fragments do not become relative media URLs", () => {
+  const scan = scanResponseBodyForMedia(
+    `const file="&&(a=a.replace(//(?=[A-Za-z]:)/";`,
+    "https://comments.example/_nuxt/app.js",
+    "application/javascript",
+  );
+  assert.deepEqual(scan.embeddedCandidates, []);
+});
 
 test("recognizes extensionless HLS and DASH response bodies", () => {
   assert.equal(
@@ -22,6 +37,33 @@ test("recognizes extensionless HLS and DASH response bodies", () => {
       "https://media.example/playback",
     ).responseKind,
     "dash",
+  );
+});
+
+test("recognizes extensionless WebVTT and SRT response bodies", () => {
+  assert.equal(
+    scanResponseBodyForMedia(
+      "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nHello\n",
+      "https://subs.example/resource/42",
+      "text/plain",
+    ).responseKind,
+    "subtitle",
+  );
+  assert.equal(
+    scanResponseBodyForMedia(
+      "1\r\n00:00:01,250 --> 00:00:03,500\r\nHello\r\n",
+      "https://subs.example/resource/43",
+      "text/plain",
+    ).responseKind,
+    "subtitle",
+  );
+  assert.equal(
+    scanResponseBodyForMedia(
+      "The meeting runs 00:00:01,250 --> 00:00:03,500 tomorrow.",
+      "https://api.example/text",
+      "text/plain",
+    ).responseKind,
+    null,
   );
 });
 

@@ -9,6 +9,7 @@ import com.playbridge.player.ui.components.WrongDeviceDialog
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,6 +32,7 @@ import com.playbridge.player.data.toSafeLogString
 import com.playbridge.player.logging.FileLogger
 import com.playbridge.player.ui.LibraryScreen
 import com.playbridge.player.ui.PairingScreen
+import com.playbridge.player.ui.PairingNavigationState
 import com.playbridge.player.ui.SettingsScreen
 import com.playbridge.player.ui.resumePositionForHistoryItem
 import com.playbridge.player.ui.components.AppSidebar
@@ -59,6 +61,10 @@ class MainActivity : ComponentActivity() {
     @OptIn(ExperimentalTvMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (intent?.action == ServerService.ACTION_OPEN_PAIRING) {
+            requestScreenOnForPairing("onCreate")
+        }
 
         pairingStore = PairingStore(applicationContext)
         historyStore = HistoryStore(applicationContext)
@@ -146,8 +152,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         if (intent.action == ServerService.ACTION_OPEN_PAIRING) {
+            requestScreenOnForPairing("onNewIntent")
             _openPairingRequest.value = true
         }
+    }
+
+    private fun requestScreenOnForPairing(source: String) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setTurnScreenOn(true)
+        } else {
+            @Suppress("DEPRECATION")
+            window.addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+        }
+        FileLogger.i("MainActivity", "$source requested screen on for pairing")
     }
 }
 
@@ -174,6 +191,7 @@ fun MainContent(
     var currentScreen by rememberSaveable { mutableStateOf(Screen.Library) }
     var previousScreen by rememberSaveable { mutableStateOf<Screen?>(null) }
     var isInitialCheckDone by rememberSaveable { mutableStateOf(false) }
+    var pairingNavigationState by remember { mutableStateOf(PairingNavigationState()) }
 
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
@@ -181,9 +199,16 @@ fun MainContent(
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
 
-    // On first launch: show PairingScreen only if no device has ever connected AND onboarding not done.
-    LaunchedEffect(pairedDevices, isOnboardingDone) {
-        if (!isInitialCheckDone) {
+    // Keep explicit pairing navigation and initial destination selection in one ordered effect.
+    // During a cold standby launch, separate effects can race: pairing selects Connect, consumes
+    // its flag, and then the initial destination overwrites it with Library.
+    val shouldOpenPairing by openPairingRequest
+    LaunchedEffect(pairedDevices, isOnboardingDone, shouldOpenPairing) {
+        if (shouldOpenPairing) {
+            currentScreen = Screen.Pairing
+            openPairingRequest.value = false
+            isInitialCheckDone = true
+        } else if (!isInitialCheckDone) {
             currentScreen = if (pairedDevices.isEmpty() && !isOnboardingDone) {
                 Screen.Pairing
             } else {
@@ -194,16 +219,6 @@ fun MainContent(
                 pairingStore.setOnboardingDone(true)
             }
             isInitialCheckDone = true
-        }
-    }
-
-    // Handle background-triggered navigation: a phone started connecting → show PairingScreen
-    // so the user can see the PIN before typing it on the phone.
-    val shouldOpenPairing by openPairingRequest
-    LaunchedEffect(shouldOpenPairing) {
-        if (shouldOpenPairing) {
-            currentScreen = Screen.Pairing
-            openPairingRequest.value = false
         }
     }
 
@@ -229,11 +244,22 @@ fun MainContent(
         }
     }
 
-    // When a phone successfully connects while the PairingScreen is visible, navigate to Library.
-    // (The pairing is done — now let the user see their history/favourites.)
-    LaunchedEffect(connectionState) {
-        if (connectionState is WebSocketServer.ConnectionState.Connected) {
-            if (currentScreen == Screen.Pairing) {
+    // Keep Connect visible for the full SAS request. A separate authenticated sender may
+    // already be connected, so only completion of this exact request may leave the screen.
+    LaunchedEffect(pendingPairingRequest) {
+        pendingPairingRequest?.let { request ->
+            pairingNavigationState = pairingNavigationState.onRequest(request.deviceUUID)
+            currentScreen = Screen.Pairing
+        }
+    }
+    LaunchedEffect(Unit) {
+        ServerService.pairingCompletions.collect { completion ->
+            val transition = pairingNavigationState.onCompletion(
+                deviceUUID = completion.deviceUUID,
+                approved = completion.approved,
+            )
+            pairingNavigationState = transition.state
+            if (transition.openLibrary) {
                 previousScreen = Screen.Pairing
                 currentScreen = Screen.Library
             }

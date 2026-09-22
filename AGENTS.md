@@ -12,7 +12,7 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 |---|---|
 | `release-and-publish` | The user explicitly requests an uprev or release (see also `docs/release.md`) |
 | `commit-and-open-pr` | Commit, push, or create/update a pull request without an implicit uprev |
-| `code-review-graph-workflow` | Explore, debug, review, or refactor using the repository graph |
+| `code-review-graph-workflow` | High-impact exploration, debugging, review, or refactoring where repository-wide relationships or blast radius matter |
 | `android-adb` | Drive a phone/TV device or emulator over ADB (install, launch, input, screenshots, UI dump) |
 
 ### Project specialists
@@ -182,16 +182,26 @@ Phone and TV consume the root `gradle/libs.versions.toml`. Keep GeckoView/Media3
 
 The TV app intentionally permits cleartext stream traffic, including a blanket cleartext base configuration, because direct and torrent streams may use HTTP. Do not “harden” this away without an explicit product decision. Local/private URL checks scope the exceptional TLS behavior in `ContentSniffer.kt`; do not broaden it to public hosts.
 
-## Knowledge graph first
+## Adaptive code exploration
 
-Before Grep/Glob/Read exploration, use the `code-review-graph` MCP tools:
+When the Serena MCP is available, use it as the default code-navigation and
+symbol-analysis tool. Start with its file overviews, symbol lookup, references,
+implementations, and diagnostics; otherwise use `rg` and focused file reads.
+Use focused reads as well for exact text, generated files, or unsupported surfaces.
+
+Use the `code-review-graph` MCP tools when the task involves repository-wide impact,
+cross-project protocol or ABI changes, execution flows, architecture discovery,
+large refactors, regression review, or high-risk debugging:
 
 1. Start with `get_minimal_context` for the task.
-2. Use `detect_changes` for reviews, `semantic_search_nodes` for discovery, and `query_graph` for callers/callees/imports/tests.
+2. Use `detect_changes`, `semantic_search_nodes`, and `query_graph` for discovery and relationships.
 3. Use `get_impact_radius` or `get_affected_flows` when blast radius matters.
-4. Fall back to `rg` and focused file reads when the graph lacks coverage or exact text is required.
+4. Confirm graph results with Serena when available, focused source reads, and relevant tests.
 
-The graph updates through repository hooks. Do not impose fixed tool-call or token quotas when additional evidence is needed.
+Do not invoke both systems mechanically for every task. Use Serena first for local
+work when available, and add the graph when the task's scope or risk justifies it.
+The graph updates through repository hooks; do not impose fixed tool-call or token
+quotas when more evidence is needed.
 
 ## Environment
 

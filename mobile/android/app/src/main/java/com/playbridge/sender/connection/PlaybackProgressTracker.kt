@@ -81,7 +81,10 @@ class PlaybackProgressTracker(
     /** Content keys whose watchlist row was already ensured (add-on-start) this session. */
     private val ensuredKeys = mutableSetOf<String>()
     private var lastPlaylistIndex: Int? = null
+    private var lastReceiverItemId: String? = null
+    private var lastReceiverItem: PlayingItem? = null
     private var sessionTmdbId: Int? = null
+    private var receiverPlaybackId: String? = null
 
     /** Last position/duration observed for the *current* playlist item — consulted on
      *  advance to distinguish "finished" from "user skipped ahead". */
@@ -176,56 +179,88 @@ class PlaybackProgressTracker(
         if (!enabled.value) return
         if (t.context == "idle") {
             resetSession()
+            receiverPlaybackId = null
             return
         }
-        val tmdbId = t.tmdbId ?: return // no identity (e.g. browser video) — track nothing
+        t.playlist?.playbackId?.let { playbackId ->
+            if (receiverPlaybackId != null && receiverPlaybackId != playbackId) resetSession()
+            receiverPlaybackId = playbackId
+        }
+        val items = t.playlist?.items.orEmpty()
+        val index = t.playlist?.currentItemId
+            ?.let { currentId -> items.indexOfFirst { it.itemId == currentId }.takeIf { it >= 0 } }
+            ?: t.playlist?.currentIndex
+            ?: 0
+        val tmdbId = items.getOrNull(index)?.tmdbId?.toIntOrNull()
+            ?: t.tmdbId
+            ?: return // no identity (e.g. browser video) — track nothing
         if (tmdbId <= 0) return
         if (tmdbId != sessionTmdbId) {
             resetSession()
             sessionTmdbId = tmdbId
         }
 
-        val items = t.playlist?.items.orEmpty()
-        val index = t.playlist?.currentIndex ?: 0
+        val current = items.getOrNull(index)
+        val (season, episode) = episodeOf(current?.season, current?.episode, t, index)
+        val currentItem = when {
+            season != null && episode != null ->
+                PlayingItem(tmdbId, "tv", season, episode, current?.title ?: t.playback?.title)
+            t.nowPlayingSeason != null -> null
+            else -> PlayingItem(tmdbId, "movie", null, null, t.playback?.title)
+        }
+        val currentItemId = current?.itemId ?: t.playlist?.currentItemId
 
         // 1. Advance: the TV moved past an item. Mark it watched only if the last
         //    position we saw while it was current was near its end — auto-advance
         //    qualifies, a manual "next episode" mid-episode does not (that one keeps
         //    a resume point at where it was left instead).
-        val prev = lastPlaylistIndex
-        if (prev != null && index != prev) {
-            val passed = items.getOrNull(prev)
-            val (s, e) = episodeOf(passed?.season, passed?.episode, t, prev)
-            if (s != null && e != null) {
-                val item = PlayingItem(tmdbId, "tv", s, e, passed?.title)
-                if (index > prev &&
-                    ProgressRules.finishedOnAdvance(lastObservedPositionMs, lastObservedDurationMs)
-                ) {
-                    markEpisodeWatched(tmdbId, s, e)
-                } else if (lastObservedPositionMs >= MIN_RESUME_POSITION_MS && lastObservedDurationMs > 0) {
-                    saveResume(item, lastObservedPositionMs, lastObservedDurationMs, nativeThrottle)
+        val prevIndex = lastPlaylistIndex
+        val previousItem = lastReceiverItem
+        val itemChanged = ProgressRules.receiverItemChanged(
+            lastReceiverItemId,
+            currentItemId,
+            prevIndex,
+            index,
+        )
+        if (itemChanged) {
+            if (previousItem != null) {
+                val advancedForward = currentItem?.let { advancedForward(previousItem, it) } == true
+                when (ProgressRules.receiverAdvanceOutcome(
+                    previousIsEpisode = previousItem.season != null && previousItem.episode != null,
+                    advancedForward = advancedForward,
+                    positionMs = lastObservedPositionMs,
+                    durationMs = lastObservedDurationMs,
+                )) {
+                    ProgressRules.ReceiverAdvanceOutcome.MARK_WATCHED -> markEpisodeWatched(
+                        previousItem.tmdbId,
+                        previousItem.season!!,
+                        previousItem.episode!!,
+                    )
+
+                    ProgressRules.ReceiverAdvanceOutcome.SAVE_RESUME -> saveResume(
+                        previousItem,
+                        lastObservedPositionMs,
+                        lastObservedDurationMs,
+                        nativeThrottle,
+                    )
+
+                    ProgressRules.ReceiverAdvanceOutcome.NONE -> Unit
                 }
             }
             lastObservedPositionMs = 0L
             lastObservedDurationMs = 0L
         }
         lastPlaylistIndex = index
+        lastReceiverItemId = currentItemId
+        lastReceiverItem = currentItem
 
         // 2. Current item: resume position + watched threshold.
         val pb = t.playback ?: return
-        val current = items.getOrNull(index)
         if (!ProgressRules.titlesMatch(pb.title, current?.title)) return
         if (pb.positionMs > 0) lastObservedPositionMs = pb.positionMs
         if (pb.durationMs > 0) lastObservedDurationMs = pb.durationMs
 
-        val (season, episode) = episodeOf(current?.season, current?.episode, t, index)
-        val item = when {
-            season != null && episode != null ->
-                PlayingItem(tmdbId, "tv", season, episode, current?.title ?: pb.title)
-            // Series whose playlist echo lacks s/e and no fallback — can't identify; skip.
-            t.nowPlayingSeason != null -> return
-            else -> PlayingItem(tmdbId, "movie", null, null, pb.title)
-        }
+        val item = currentItem ?: return
 
         // Playback is reporting → user started watching: ensure a Watching row exists.
         // Skip-ahead catch-up may only fire for the episode the user explicitly sent
@@ -491,6 +526,8 @@ class PlaybackProgressTracker(
         markedKeys.clear()
         ensuredKeys.clear()
         lastPlaylistIndex = null
+        lastReceiverItemId = null
+        lastReceiverItem = null
         sessionTmdbId = null
         lastObservedPositionMs = 0L
         lastObservedDurationMs = 0L
@@ -656,7 +693,7 @@ class PlaybackProgressTracker(
 
     companion object {
         /** Don't create resume points for barely-started playback. */
-        private const val MIN_RESUME_POSITION_MS = 30_000L
+        private const val MIN_RESUME_POSITION_MS = ProgressRules.MIN_RESUME_POSITION_MS
 
         /** Persist at most one position write per this much playback movement. */
         private const val RESUME_SAVE_INTERVAL_MS = 10_000L

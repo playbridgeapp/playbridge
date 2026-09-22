@@ -87,6 +87,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -135,6 +136,7 @@ import androidx.compose.ui.zIndex
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.withContext
 import com.playbridge.sender.data.history.TabEntity
@@ -1829,8 +1831,12 @@ class BrowserActivity : ComponentActivity() {
             // opens; thumbnail decoding is scheduled separately below.
             LaunchedEffect(selectedTabId) {
                 val tabId = selectedTabId ?: return@LaunchedEffect
-                val parsedManifestUrls = mutableSetOf<String>()
-                snapshotFlow { VideoDetector.getVideosForTab(tabId).toList() }.collect { videos ->
+                val parsedManifestUrls = mutableSetOf<Pair<String, Int>>()
+                snapshotFlow {
+                    VideoDetector.processingVersion
+                    VideoDetector.getVideosForTab(tabId).map { it.url to thumbnailEvidenceVersion(it) }
+                }.collect {
+                    val videos = VideoDetector.getVideosForTab(tabId).toList()
                     for (video in videos) {
                         if (!video.isVideo || video.qualitiesChecked) continue
                         val isAdaptiveManifest =
@@ -1838,30 +1844,91 @@ class BrowserActivity : ComponentActivity() {
                                 video.url.contains(".mpd", ignoreCase = true) ||
                                 video.contentType?.contains("mpegurl", ignoreCase = true) == true ||
                                 video.contentType?.contains("dash", ignoreCase = true) == true
-                        if (isAdaptiveManifest && parsedManifestUrls.add(video.url)) {
+                        if (isAdaptiveManifest && parsedManifestUrls.add(video.url to thumbnailEvidenceVersion(video))) {
                             launch { VideoDetector.fetchHlsQualities(video, tabId) }
                         }
                     }
                 }
             }
 
-            // Warm only the two best candidates. collectLatest cancels queued speculative work
-            // when detection/ranking changes or the user navigates; visible sheet rows use a
-            // higher-priority request and can immediately retry a failed prefetch.
+            // Start the current best stream immediately. Pages that discover many streams can keep
+            // changing the full candidate set for several seconds; tying the first thumbnail to
+            // that settling period leaves the top HLS row unfinished when the sheet opens.
             LaunchedEffect(selectedTabId) {
                 val tabId = selectedTabId ?: return@LaunchedEffect
                 snapshotFlow {
                     @Suppress("UNUSED_EXPRESSION")
                     VideoDetector.processingVersion
-                    VideoDetector.getVideosForTab(tabId).toList()
-                }.collectLatest { videos ->
-                    delay(500L)
-                    for (video in thumbnailPrefetchCandidates(videos)) {
-                        if (!VideoDetector.hasThumbnail(video.url)) {
-                            VideoDetector.fetchThumbnail(
-                                video,
-                                priority = ThumbnailRequestPriority.PREFETCH,
-                            )
+                    backgroundStreamProcessingCandidates(VideoDetector.getVideosForTab(tabId))
+                        .firstOrNull()
+                        ?.let { it.url to thumbnailEvidenceVersion(it) }
+                }.distinctUntilChanged().collectLatest { bestCandidate ->
+                    StreamDiagnostics.ranking("background:$tabId", VideoDetector.getVideosForTab(tabId))
+                    StreamDiagnostics.event("background_best") {
+                        "tab=$tabId id=${bestCandidate?.first?.let(StreamDiagnostics::id)} evidence=${bestCandidate?.second}"
+                    }
+                    val bestUrl = bestCandidate?.first
+                    val video = VideoDetector.getVideosForTab(tabId)
+                        .firstOrNull { it.url == bestUrl }
+                        ?: return@collectLatest
+                    if (!VideoDetector.hasThumbnail(video.url)) {
+                        VideoDetector.fetchThumbnail(
+                            video,
+                            priority = ThumbnailRequestPriority.PREFETCH,
+                        )
+                    }
+                }
+            }
+
+            // Enrich every other viable stream while the user is still browsing. The cast sheet uses a
+            // LazyColumn, so leaving this work in each row's LaunchedEffect makes thumbnails and
+            // file metadata appear only after that row is scrolled on screen.
+            //
+            // Observe URL/evidence changes without cancelling an active pass on every detection.
+            // snapshotFlow conflates updates while the collector finishes the current pass.
+            // Thumbnail decoding remains serialized inside VideoDetector and file
+            // probes run in their own sequential lane, keeping memory and request pressure bounded.
+            LaunchedEffect(selectedTabId) {
+                val tabId = selectedTabId ?: return@LaunchedEffect
+                snapshotFlow {
+                    @Suppress("UNUSED_EXPRESSION")
+                    VideoDetector.processingVersion
+                    backgroundStreamProcessingCandidates(VideoDetector.getVideosForTab(tabId))
+                        .map { it.url to thumbnailEvidenceVersion(it) }
+                }.distinctUntilChanged { previous, current ->
+                    previous.toSet() == current.toSet()
+                }.collect {
+                    // Give the immediate best-candidate lane time to absorb late master-body and
+                    // replay-header enrichment before lower-ranked streams occupy the one decoder.
+                    delay(2_000L)
+                    val candidateKeys = backgroundStreamProcessingCandidates(VideoDetector.getVideosForTab(tabId))
+                        .map { it.url }
+                    StreamDiagnostics.event("background_pass") {
+                        "tab=$tabId count=${candidateKeys.size} ids=${candidateKeys.take(8).map(StreamDiagnostics::id)}"
+                    }
+                    coroutineScope {
+                        launch {
+                            // Include the best URL: joining its immediate request is inexpensive,
+                            // and avoids omitting a former best when ranking changes mid-pass.
+                            for (url in candidateKeys) {
+                                val video = VideoDetector.getVideosForTab(tabId).firstOrNull { it.url == url }
+                                    ?: continue
+                                if (!VideoDetector.hasThumbnail(video.url)) {
+                                    VideoDetector.fetchThumbnail(
+                                        video,
+                                        priority = ThumbnailRequestPriority.PREFETCH,
+                                    )
+                                }
+                            }
+                        }
+                        launch {
+                            for (url in candidateKeys) {
+                                val video = VideoDetector.getVideosForTab(tabId).firstOrNull { it.url == url }
+                                    ?: continue
+                                if (!video.fileSizeChecked) {
+                                    VideoDetector.fetchFileSize(video)
+                                }
+                            }
                         }
                     }
                 }

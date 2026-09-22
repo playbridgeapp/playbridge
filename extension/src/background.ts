@@ -1524,7 +1524,23 @@ browser.webRequest.onHeadersReceived.addListener(
             contentType,
           );
 
-          if (scan.responseKind) {
+          if (scan.responseKind === "subtitle") {
+            processAndNotifyVideo(
+              {
+                url: details.url,
+                tabId,
+                contentType: body.replace(/^\uFEFF/, "").trimStart().startsWith("WEBVTT")
+                  ? "text/vtt" : "application/x-subrip",
+                detectedBy: "subtitle_extension",
+                originUrl: details.originUrl ?? "",
+                timestamp: Date.now(),
+                frameId,
+                hlsRole: "not_hls",
+              },
+              tabId,
+              stored?.headers ?? null,
+            );
+          } else if (scan.responseKind) {
             let hlsRole: HlsRole = "not_hls";
             let playlist:
               | ReturnType<typeof HlsParser.parsePlaylistContent>

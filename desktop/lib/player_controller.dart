@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
 import 'media_kind.dart';
 import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
@@ -12,6 +13,9 @@ import 'extension_request_debug_log.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
 class PlayerController extends ChangeNotifier {
+  static const int maxQueueItems = 200;
+  static const int maxQueueBatchItems = 50;
+
   /// [engineForTest] injects a fake engine (unit tests); production leaves it null.
   PlayerController({
     EngineType initialEngine = EngineType.mpvInternal,
@@ -130,7 +134,10 @@ class PlayerController extends ChangeNotifier {
   final ValueNotifier<int> queueChanges = ValueNotifier<int>(0);
 
   final List<QueueItem> _queue = [];
+  final List<String> _queueItemIds = [];
   int _currentIndex = -1;
+  String? _playbackId;
+  int _queueRevision = 0;
 
   /// True while a new item is opening — [PlaybackSurface] paints black over the
   /// VO so a frozen last-frame of the previous item cannot flash (esp. after
@@ -151,6 +158,13 @@ class PlayerController extends ChangeNotifier {
 
   int get currentIndex => _currentIndex;
   List<QueueItem> get queue => List.unmodifiable(_queue);
+  List<String> get queueItemIds => List.unmodifiable(_queueItemIds);
+  String? get playbackId => _playbackId;
+  int get queueRevision => _queueRevision;
+  String? get currentItemId =>
+      _currentIndex >= 0 && _currentIndex < _queueItemIds.length
+          ? _queueItemIds[_currentIndex]
+          : null;
 
   bool get hasPrevious => _currentIndex > 0;
   bool get hasNext => _currentIndex >= 0 && _currentIndex < _queue.length - 1;
@@ -252,6 +266,10 @@ class PlayerController extends ChangeNotifier {
   }) async {
     await _waitForProxyToggle();
     if (items.isEmpty) return;
+    if (items.length > maxQueueItems) {
+      throw ArgumentError.value(
+          items.length, 'items', 'maximum queue size is $maxQueueItems');
+    }
     for (var index = 0; index < items.length; index++) {
       debugLogNetworkRequest(
         source: 'player',
@@ -272,6 +290,11 @@ class PlayerController extends ChangeNotifier {
     _queue
       ..clear()
       ..addAll(prepared);
+    _queueItemIds
+      ..clear()
+      ..addAll(List.generate(prepared.length, (_) => const Uuid().v4()));
+    _playbackId = const Uuid().v4();
+    _queueRevision++;
     _setIndex(startIndex.clamp(0, prepared.length - 1));
     if (isRemote) {
       playRequests.value++;
@@ -289,22 +312,129 @@ class PlayerController extends ChangeNotifier {
   /// starts the item directly (preserves the previous desktop behavior;
   /// Android instead buffers idle queue_adds until the next session).
   Future<void> queueAdd(QueueItem item, {bool isRemote = false}) async {
+    await queueAddAll([item], isRemote: isRemote);
+  }
+
+  Future<bool> queueAddAll(
+    List<QueueItem> items, {
+    bool isRemote = false,
+    String? ifPlaybackId,
+  }) async {
+    if (items.isEmpty) return true;
+    if (items.length > maxQueueBatchItems) return false;
     await _waitForProxyToggle();
+    if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
     if (_currentIndex < 0 || _queue.isEmpty) {
-      await playPlaylist([item], 0, isRemote: isRemote);
-      return;
+      await playPlaylist(items, 0, isRemote: isRemote);
+      return true;
     }
+    if (_queue.length + items.length > maxQueueItems) return false;
+    final targetPlaybackId = _playbackId;
     final mode = store?.streamProxyMode ?? StreamProxyMode.off;
-    final prepared = await PlaybackRequestPreparer.prepare(item, mode);
-    _queue.add(prepared);
+    final prepared = await Future.wait(
+      items.map((item) => PlaybackRequestPreparer.prepare(item, mode)),
+    );
+    if (_playbackId != targetPlaybackId ||
+        (ifPlaybackId != null && ifPlaybackId != _playbackId)) {
+      return false;
+    }
+    if (_queue.length + prepared.length > maxQueueItems) return false;
+    _queue.addAll(prepared);
+    _queueItemIds
+        .addAll(List.generate(prepared.length, (_) => const Uuid().v4()));
+    _queueRevision++;
     queueChanges.value++;
     notifyListeners();
+    return true;
+  }
+
+  Future<bool> jumpToItem(String itemId, {String? ifPlaybackId}) async {
+    await _waitForProxyToggle();
+    if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
+    final index = _queueItemIds.indexOf(itemId);
+    if (index < 0) return false;
+    await _jumpToReady(index);
+    return true;
+  }
+
+  Future<bool> jumpToGuarded(int index, {String? ifPlaybackId}) async {
+    await _waitForProxyToggle();
+    if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
+    if (index < 0 || index >= _queue.length) return false;
+    await _jumpToReady(index);
+    return true;
+  }
+
+  Future<bool> removeQueueItems(Set<String> itemIds,
+      {String? ifPlaybackId}) async {
+    await _waitForProxyToggle();
+    if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
+    if (itemIds.isEmpty || !_queueItemIds.any(itemIds.contains)) return false;
+    if (_queueItemIds.every(itemIds.contains)) {
+      await stop();
+      return true;
+    }
+    final activeId = currentItemId;
+    final oldIndex = _currentIndex;
+    final retained = List.generate(_queue.length, (index) => index)
+        .where((index) => !itemIds.contains(_queueItemIds[index]))
+        .toList(growable: false);
+    final retainedQueue = retained.map((index) => _queue[index]).toList();
+    final retainedIds = retained.map((index) => _queueItemIds[index]).toList();
+    final removedCurrent = activeId != null && itemIds.contains(activeId);
+    _queue
+      ..clear()
+      ..addAll(retainedQueue);
+    _queueItemIds
+      ..clear()
+      ..addAll(retainedIds);
+    _queueRevision++;
+    if (!removedCurrent && activeId != null) {
+      _setIndex(_queueItemIds.indexOf(activeId));
+    } else {
+      _setIndex(oldIndex.clamp(0, _queue.length - 1));
+      await _openCurrentItem();
+    }
+    queueChanges.value++;
+    notifyListeners();
+    return true;
+  }
+
+  Future<bool> moveQueueItem(String itemId, String? beforeItemId,
+      {String? ifPlaybackId}) async {
+    await _waitForProxyToggle();
+    if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
+    final fromIndex = _queueItemIds.indexOf(itemId);
+    if (fromIndex < 0 || beforeItemId == itemId) return false;
+    if (beforeItemId != null && !_queueItemIds.contains(beforeItemId)) {
+      return false;
+    }
+    final activeId = currentItemId;
+    final item = _queue.removeAt(fromIndex);
+    final id = _queueItemIds.removeAt(fromIndex);
+    final toIndex = beforeItemId == null
+        ? _queueItemIds.length
+        : _queueItemIds.indexOf(beforeItemId);
+    _queue.insert(toIndex, item);
+    _queueItemIds.insert(toIndex, id);
+    _currentIndex = activeId == null ? -1 : _queueItemIds.indexOf(activeId);
+    _queueRevision++;
+    indexChanges.value = _currentIndex;
+    queueChanges.value++;
+    notifyListeners();
+    return true;
   }
 
   Future<void> jumpTo(int index) async {
     await _waitForProxyToggle();
+    await _jumpToReady(index);
+  }
+
+  Future<void> _jumpToReady(int index) async {
     if (index < 0 || index >= _queue.length) return;
+    if (index == _currentIndex) return;
     _setIndex(index);
+    _queueRevision++;
     await _openCurrentItem();
   }
 
@@ -613,6 +743,9 @@ class PlayerController extends ChangeNotifier {
     _imageDurationMs = 0;
     await _engine.stop();
     _queue.clear();
+    _queueItemIds.clear();
+    _playbackId = null;
+    _queueRevision++;
     _setIndex(-1);
     _opening = false;
     queueChanges.value++;
@@ -736,6 +869,7 @@ class PlayerController extends ChangeNotifier {
         season: item.season,
         episode: item.episode,
         imdbId: item.imdbId,
+        tmdbId: item.tmdbId,
         backdropUrl: item.backdropUrl,
         posterUrl: item.posterUrl,
         logoUrl: item.logoUrl,
@@ -795,6 +929,7 @@ class PlayerController extends ChangeNotifier {
         season: item.season,
         episode: item.episode,
         imdbId: item.imdbId,
+        tmdbId: item.tmdbId,
         backdropUrl: item.backdropUrl,
         posterUrl: item.posterUrl,
         logoUrl: item.logoUrl,

@@ -39,6 +39,9 @@ class WebSocketServer: ObservableObject {
     private var inProgressHandshakes: [ObjectIdentifier: ConnectionHandshake] = [:]
     private var failedAttempts: [String: Int] = [:]
     private var lockoutUntil: [String: Date] = [:]
+    private var commandResults: [String: [String: Any]] = [:]
+    private var commandResultOrder: [String] = []
+    private var pendingCommandIDs: Set<String> = []
 
     @Published var currentPlayRequest: Playbridge_PlayPayload? {
         didSet {
@@ -448,13 +451,15 @@ class WebSocketServer: ObservableObject {
         connection.viabilityUpdateHandler = nil
         connection.cancel()
         handleHandshakeFailure(for: connection)
-        connectedConnections.removeAll { $0 === connection }
-        connectedCount = connectedConnections.count
-        isAuthenticated = !connectedConnections.isEmpty
-        if pendingPairingRequest?.connection === connection {
-            autoTimeoutWork?.cancel()
-            autoTimeoutWork = nil
-            pendingPairingRequest = nil
+        DispatchQueue.main.async {
+            self.connectedConnections.removeAll(where: { $0 === connection })
+            self.connectedCount = self.connectedConnections.count
+            self.isAuthenticated = !self.connectedConnections.isEmpty
+            if self.pendingPairingRequest?.connection === connection {
+                self.autoTimeoutWork?.cancel()
+                self.autoTimeoutWork = nil
+                self.pendingPairingRequest = nil
+            }
         }
     }
 
@@ -509,7 +514,12 @@ class WebSocketServer: ObservableObject {
             }
         case "command":
             if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
-                handleCommand(action: json["action"] as? String, payload: json["payload"], from: connection)
+                handleCommand(
+                    action: json["action"] as? String,
+                    payload: json["payload"],
+                    requestID: json["requestId"] as? String,
+                    from: connection
+                )
             }
         default:
             break
@@ -725,6 +735,7 @@ class WebSocketServer: ObservableObject {
             var credentials: [String: Any] = [
                 "token": token,
                 "players": Self.capabilityPlayers,
+                "features": Self.capabilityFeatures,
             ]
             if let fp = certFingerprint { credentials["certFingerprint"] = fp }
             let plaintext = try JSONSerialization.data(withJSONObject: credentials)
@@ -781,6 +792,7 @@ class WebSocketServer: ObservableObject {
     /// shows "TV Default" + AVPlayer + VLC + MPV. A concrete choice is honored per cast in
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
     static let capabilityPlayers = ["avplayer", "vlc", "mpv"]
+    static let capabilityFeatures = ["queue_crud_v1", "stable_item_ids", "command_results"]
 
     /// Posted (on main) when the phone sends a `control` command (userInfo["command"]) or a
     /// `remote` key (userInfo["key"]). The active player view observes these.
@@ -793,40 +805,54 @@ class WebSocketServer: ObservableObject {
     /// format. Echoes each item's series context (season/episode/imdbId/bingeGroup) so the
     /// phone can re-attach its lazy episode queue and match watch progress. Always sends —
     /// even when empty — so the phone clears a stale episode list.
-    func broadcastPlaylistStatus() {
+    func broadcastPlaylistStatus(to connection: NWConnection? = nil) {
         guard let store = playlistStore else { return }
         let items: [[String: Any]] = store.items.enumerated().map { index, item in
             var obj: [String: Any] = [
                 "index": index,
                 "title": item.titleOrNil ?? "Item \(index + 1)",
+                "itemId": store.itemIDs[index],
             ]
             if item.hasVisualMetadata {
                 let vm = item.visualMetadata
                 if vm.hasSeason { obj["season"] = Int(vm.season) }
                 if vm.hasEpisode { obj["episode"] = Int(vm.episode) }
                 if vm.hasImdbID { obj["imdbId"] = vm.imdbID }
+                if vm.hasTmdbID { obj["tmdbId"] = vm.tmdbID }
             }
             if item.hasBingeGroup { obj["bingeGroup"] = item.bingeGroup }
             return obj
         }
-        broadcast([
+        var status: [String: Any] = [
             "type": "playlist_status",
             "items": items,
             "currentIndex": store.items.isEmpty ? 0 : max(store.currentIndex, 0),
             "totalCount": store.items.count,
-        ])
+            "queueRevision": store.queueRevision,
+        ]
+        if let playbackID = store.playbackID { status["playbackId"] = playbackID }
+        if let currentItemID = store.currentItemID { status["currentItemId"] = currentItemID }
+        if let connection { send(json: status, to: connection) } else { broadcast(status) }
     }
 
     /// Send a JSON object to every connected client (now-playing status, tracks, context, …).
     func broadcast(_ json: [String: Any]) {
         guard !connectedConnections.isEmpty,
-              let data = try? JSONSerialization.data(withJSONObject: json) else { return }
+              let data = try? JSONSerialization.data(withJSONObject: enriched(json)) else { return }
         let context = NWConnection.ContentContext(
             identifier: "broadcast", metadata: [NWProtocolWebSocket.Metadata(opcode: .text)])
         for connection in connectedConnections {
             connection.send(content: data, contentContext: context, isComplete: true,
                             completion: .contentProcessed({ _ in }))
         }
+    }
+
+    private func enriched(_ json: [String: Any]) -> [String: Any] {
+        guard json["type"] as? String == "status", let store = playlistStore else { return json }
+        var result = json
+        if let playbackID = store.playbackID { result["playbackId"] = playbackID }
+        if let currentItemID = store.currentItemID { result["currentItemId"] = currentItemID }
+        return result
     }
 
     private func handleAuth(_ msg: Playbridge_AuthMessage, from connection: NWConnection) {
@@ -864,6 +890,7 @@ class WebSocketServer: ObservableObject {
                 var response: [String: Any] = ["type": "auth_response", "success": true]
                 if let fp = self.certFingerprint { response["certFingerprint"] = fp }
                 response["players"] = Self.capabilityPlayers
+                response["features"] = Self.capabilityFeatures
                 self.send(json: response, to: connection)
             }
             // Re-sync now-playing for a client that connected mid-playback: context + a nudge
@@ -899,10 +926,28 @@ class WebSocketServer: ObservableObject {
 
     // MARK: - Command Handling
 
-    private func handleCommand(action: String?, payload: Any?, from connection: NWConnection) {
+    private func handleCommand(
+        action: String?,
+        payload: Any?,
+        requestID: String?,
+        from connection: NWConnection
+    ) {
         guard let action = action else {
             print("WebSocket Command Error: missing 'action'")
+            completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             return
+        }
+        if let requestID, let cached = commandResults[requestID] {
+            send(json: cached, to: connection)
+            if action.hasPrefix("queue_") || action == "playlist_jump" {
+                broadcastPlaylistStatus(to: connection)
+            }
+            return
+        }
+        if let requestID, pendingCommandIDs.contains(requestID) { return }
+        if let requestID,
+           action == "playlist_jump" || action.hasPrefix("queue_") {
+            pendingCommandIDs.insert(requestID)
         }
 
         // context_query carries no payload — answer it (player vs idle; Apple TV has no
@@ -914,15 +959,24 @@ class WebSocketServer: ObservableObject {
             }
             return
         }
+        if action == "queue_query" {
+            DispatchQueue.main.async {
+                self.broadcastPlaylistStatus(to: connection)
+                self.completeCommand(requestID, ok: true, to: connection)
+            }
+            return
+        }
 
         guard let payloadObj = payload else {
             print("WebSocket Command Error: missing 'payload' for action \(action)")
+            completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             return
         }
         guard JSONSerialization.isValidJSONObject(payloadObj),
               let payloadData = try? JSONSerialization.data(withJSONObject: payloadObj),
               let payloadJson = String(data: payloadData, encoding: .utf8) else {
             print("WebSocket Command Error: failed to re-encode payload for action \(action)")
+            completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             return
         }
 
@@ -942,21 +996,136 @@ class WebSocketServer: ObservableObject {
                 print("WebSocket Playlist Error: Failed to decode PlaylistPayload")
             }
         case "queue_add":
-            if let p = try? Playbridge_QueueAddPayload(jsonString: payloadJson),
-               p.hasItem, p.item.validURL != nil {
-                let item = p.item
-                DispatchQueue.main.async { self.playlistStore?.addToQueue(item: item) }
+            guard let p = try? Playbridge_QueueAddPayload(jsonString: payloadJson) else {
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                return
+            }
+            let candidates = p.items.isEmpty && p.hasItem ? [p.item] : p.items
+            let valid = candidates.filter { $0.validURL != nil }
+            DispatchQueue.main.async {
+                guard let store = self.playlistStore else { return }
+                guard requestID == nil || store.playbackID != nil else {
+                    self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+                    return
+                }
+                guard self.playbackMatches(p.hasIfPlaybackID ? p.ifPlaybackID : nil, store: store) else {
+                    self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
+                    return
+                }
+                guard !valid.isEmpty, valid.count == candidates.count,
+                      valid.count <= PlaylistStore.maxBatchItems else {
+                    self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                    return
+                }
+                guard store.items.count + valid.count <= PlaylistStore.maxItems else {
+                    self.completeCommand(requestID, ok: false, error: "queue_full", to: connection)
+                    return
+                }
+                _ = store.addToQueue(items: valid)
+                self.completeCommand(requestID, ok: true, to: connection)
+                self.broadcastPlaylistStatus(to: connection)
             }
         case "playlist_jump":
-            if let p = try? Playbridge_PlaylistJumpPayload(jsonString: payloadJson) {
-                DispatchQueue.main.async {
-                    if let req = self.playlistStore?.jumpTo(index: Int(p.index)) {
-                        if !req.skipHistory, let url = req.validURL {
-                            self.historyStore?.addToHistory(url: url, title: req.titleOrNil, headers: req.headersOrNil)
-                        }
-                        self.currentPlayRequest = req
-                    }
+            guard let p = try? Playbridge_PlaylistJumpPayload(jsonString: payloadJson) else {
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                return
+            }
+            DispatchQueue.main.async {
+                guard let store = self.playlistStore, store.playbackID != nil else {
+                    self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+                    return
                 }
+                guard self.playbackMatches(p.hasIfPlaybackID ? p.ifPlaybackID : nil, store: store) else {
+                    self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
+                    return
+                }
+                let req = p.hasItemID
+                    ? store.jumpTo(itemID: p.itemID)
+                    : store.jumpTo(index: Int(p.index))
+                if let req {
+                    if !req.skipHistory, let url = req.validURL {
+                        self.historyStore?.addToHistory(
+                            url: url,
+                            title: req.titleOrNil,
+                            headers: req.headersOrNil
+                        )
+                    }
+                    self.currentPlayRequest = req
+                    self.completeCommand(requestID, ok: true, to: connection)
+                } else {
+                    self.completeCommand(requestID, ok: false, error: "item_not_found", to: connection)
+                }
+                self.broadcastPlaylistStatus(to: connection)
+            }
+        case "queue_remove":
+            guard let p = try? Playbridge_QueueRemovePayload(jsonString: payloadJson) else {
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                return
+            }
+            DispatchQueue.main.async {
+                guard let store = self.playlistStore, store.playbackID != nil else {
+                    self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+                    return
+                }
+                guard self.playbackMatches(p.hasIfPlaybackID ? p.ifPlaybackID : nil, store: store) else {
+                    self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
+                    return
+                }
+                guard !p.itemIds.isEmpty else {
+                    self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                    return
+                }
+                let previousItemID = store.currentItemID
+                if store.remove(itemIDs: Set(p.itemIds)) {
+                    if previousItemID != store.currentItemID {
+                        self.currentPlayRequest = store.currentItem
+                    }
+                    self.completeCommand(requestID, ok: true, to: connection)
+                } else {
+                    self.completeCommand(requestID, ok: false, error: "item_not_found", to: connection)
+                }
+                self.broadcastPlaylistStatus(to: connection)
+            }
+        case "queue_move":
+            guard let p = try? Playbridge_QueueMovePayload(jsonString: payloadJson), !p.itemID.isEmpty else {
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                return
+            }
+            DispatchQueue.main.async {
+                guard let store = self.playlistStore, store.playbackID != nil else {
+                    self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+                    return
+                }
+                guard self.playbackMatches(p.hasIfPlaybackID ? p.ifPlaybackID : nil, store: store) else {
+                    self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
+                    return
+                }
+                let moved = store.move(
+                    itemID: p.itemID,
+                    beforeItemID: p.hasBeforeItemID ? p.beforeItemID : nil
+                )
+                self.completeCommand(requestID, ok: moved,
+                                     error: moved ? nil : "item_not_found", to: connection)
+                self.broadcastPlaylistStatus(to: connection)
+            }
+        case "queue_clear":
+            guard let p = try? Playbridge_QueueClearPayload(jsonString: payloadJson) else {
+                completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                return
+            }
+            DispatchQueue.main.async {
+                guard let store = self.playlistStore, store.playbackID != nil else {
+                    self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+                    return
+                }
+                guard self.playbackMatches(p.hasIfPlaybackID ? p.ifPlaybackID : nil, store: store) else {
+                    self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
+                    return
+                }
+                store.clear()
+                self.currentPlayRequest = nil
+                self.completeCommand(requestID, ok: true, to: connection)
+                self.broadcastPlaylistStatus(to: connection)
             }
         case "control":
             if let p = try? Playbridge_ControlPayload(jsonString: payloadJson), !p.command.isEmpty {
@@ -988,7 +1157,35 @@ class WebSocketServer: ObservableObject {
             }
         default:
             print("Unknown command action: \(action)")
+            completeCommand(requestID, ok: false, error: "unsupported", to: connection)
         }
+    }
+
+    private func playbackMatches(_ expected: String?, store: PlaylistStore) -> Bool {
+        expected == nil || expected == store.playbackID
+    }
+
+    private func completeCommand(
+        _ requestID: String?, ok: Bool, error: String? = nil, to connection: NWConnection
+    ) {
+        guard let requestID else { return }
+        pendingCommandIDs.remove(requestID)
+        var result: [String: Any] = [
+            "type": "command_result",
+            "requestId": requestID,
+            "ok": ok,
+            "queueRevision": playlistStore?.queueRevision ?? 0,
+        ]
+        if let error { result["error"] = error }
+        if let playbackID = playlistStore?.playbackID { result["playbackId"] = playbackID }
+        commandResults[requestID] = result
+        commandResultOrder.removeAll { $0 == requestID }
+        commandResultOrder.append(requestID)
+        if commandResultOrder.count > 256 {
+            let expired = commandResultOrder.removeFirst()
+            commandResults.removeValue(forKey: expired)
+        }
+        send(json: result, to: connection)
     }
 
     func handlePlay(_ payload: Playbridge_PlayPayload) {

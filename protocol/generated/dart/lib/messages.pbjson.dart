@@ -48,6 +48,7 @@ const MessageEnvelope$json = {
     {'1': 'duration', '3': 5, '4': 1, '5': 3, '9': 3, '10': 'duration', '17': true},
     {'1': 'title', '3': 6, '4': 1, '5': 9, '9': 4, '10': 'title', '17': true},
     {'1': 'media_kind', '3': 7, '4': 1, '5': 9, '9': 5, '10': 'mediaKind', '17': true},
+    {'1': 'request_id', '3': 8, '4': 1, '5': 9, '9': 6, '10': 'requestId', '17': true},
   ],
   '8': [
     {'1': '_action'},
@@ -56,6 +57,7 @@ const MessageEnvelope$json = {
     {'1': '_duration'},
     {'1': '_title'},
     {'1': '_media_kind'},
+    {'1': '_request_id'},
   ],
 };
 
@@ -65,8 +67,9 @@ final $typed_data.Uint8List messageEnvelopeDescriptor = $convert.base64Decode(
     'IGYWN0aW9uiAEBEhkKBXN0YXRlGAMgASgJSAFSBXN0YXRliAEBEh8KCHBvc2l0aW9uGAQgASgD'
     'SAJSCHBvc2l0aW9uiAEBEh8KCGR1cmF0aW9uGAUgASgDSANSCGR1cmF0aW9uiAEBEhkKBXRpdG'
     'xlGAYgASgJSARSBXRpdGxliAEBEiIKCm1lZGlhX2tpbmQYByABKAlIBVIJbWVkaWFLaW5kiAEB'
-    'QgkKB19hY3Rpb25CCAoGX3N0YXRlQgsKCV9wb3NpdGlvbkILCglfZHVyYXRpb25CCAoGX3RpdG'
-    'xlQg0KC19tZWRpYV9raW5k');
+    'EiIKCnJlcXVlc3RfaWQYCCABKAlIBlIJcmVxdWVzdElkiAEBQgkKB19hY3Rpb25CCAoGX3N0YX'
+    'RlQgsKCV9wb3NpdGlvbkILCglfZHVyYXRpb25CCAoGX3RpdGxlQg0KC19tZWRpYV9raW5kQg0K'
+    'C19yZXF1ZXN0X2lk');
 
 @$core.Deprecated('Use seriesEpisodeRefDescriptor instead')
 const SeriesEpisodeRef$json = {
@@ -210,6 +213,7 @@ const PlayPayload$json = {
     {'1': 'media_kind', '3': 17, '4': 1, '5': 9, '9': 11, '10': 'mediaKind', '17': true},
     {'1': 'display_duration_ms', '3': 18, '4': 1, '5': 3, '9': 12, '10': 'displayDurationMs', '17': true},
     {'1': 'skip_history', '3': 19, '4': 1, '5': 8, '9': 13, '10': 'skipHistory', '17': true},
+    {'1': 'item_id', '3': 20, '4': 1, '5': 9, '9': 14, '10': 'itemId', '17': true},
   ],
   '3': [PlayPayload_HeadersEntry$json],
   '8': [
@@ -227,6 +231,7 @@ const PlayPayload$json = {
     {'1': '_media_kind'},
     {'1': '_display_duration_ms'},
     {'1': '_skip_history'},
+    {'1': '_item_id'},
   ],
 };
 
@@ -258,14 +263,14 @@ final $typed_data.Uint8List playPayloadDescriptor = $convert.base64Decode(
     '9yaWdpbnMSSwoSc3VidGl0bGVfcmVzb3VyY2VzGBAgAygLMhwucGxheWJyaWRnZS5TdWJ0aXRs'
     'ZVJlc291cmNlUhFzdWJ0aXRsZVJlc291cmNlcxIiCgptZWRpYV9raW5kGBEgASgJSAtSCW1lZG'
     'lhS2luZIgBARIzChNkaXNwbGF5X2R1cmF0aW9uX21zGBIgASgDSAxSEWRpc3BsYXlEdXJhdGlv'
-    'bk1ziAEBEiYKDHNraXBfaGlzdG9yeRgTIAEoCEgNUgtza2lwSGlzdG9yeYgBARo6CgxIZWFkZX'
-    'JzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AUIICgZf'
-    'dGl0bGVCDwoNX2NvbnRlbnRfdHlwZUIOCgxfZGV0ZWN0ZWRfYnlCDgoMX3BsYXllcl9tb2RlQh'
-    'sKGV9wcmVmZXJyZWRfYXVkaW9fbGFuZ3VhZ2VCHgocX3ByZWZlcnJlZF9zdWJ0aXRsZV9sYW5n'
-    'dWFnZUIYChZfZGVmYXVsdF92aWRlb19xdWFsaXR5QhcKFV9tYXhfYml0cmF0ZV9jYXBfbWJwc0'
-    'ISChBfdmlzdWFsX21ldGFkYXRhQg4KDF9iaW5nZV9ncm91cEIUChJfc3RhcnRfcG9zaXRpb25f'
-    'bXNCDQoLX21lZGlhX2tpbmRCFgoUX2Rpc3BsYXlfZHVyYXRpb25fbXNCDwoNX3NraXBfaGlzdG'
-    '9yeQ==');
+    'bk1ziAEBEiYKDHNraXBfaGlzdG9yeRgTIAEoCEgNUgtza2lwSGlzdG9yeYgBARIcCgdpdGVtX2'
+    'lkGBQgASgJSA5SBml0ZW1JZIgBARo6CgxIZWFkZXJzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkS'
+    'FAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AUIICgZfdGl0bGVCDwoNX2NvbnRlbnRfdHlwZUIOCg'
+    'xfZGV0ZWN0ZWRfYnlCDgoMX3BsYXllcl9tb2RlQhsKGV9wcmVmZXJyZWRfYXVkaW9fbGFuZ3Vh'
+    'Z2VCHgocX3ByZWZlcnJlZF9zdWJ0aXRsZV9sYW5ndWFnZUIYChZfZGVmYXVsdF92aWRlb19xdW'
+    'FsaXR5QhcKFV9tYXhfYml0cmF0ZV9jYXBfbWJwc0ISChBfdmlzdWFsX21ldGFkYXRhQg4KDF9i'
+    'aW5nZV9ncm91cEIUChJfc3RhcnRfcG9zaXRpb25fbXNCDQoLX21lZGlhX2tpbmRCFgoUX2Rpc3'
+    'BsYXlfZHVyYXRpb25fbXNCDwoNX3NraXBfaGlzdG9yeUIKCghfaXRlbV9pZA==');
 
 @$core.Deprecated('Use playlistPayloadDescriptor instead')
 const PlaylistPayload$json = {
@@ -295,25 +300,94 @@ const QueueAddPayload$json = {
   '1': 'QueueAddPayload',
   '2': [
     {'1': 'item', '3': 1, '4': 1, '5': 11, '6': '.playbridge.PlayPayload', '10': 'item'},
+    {'1': 'items', '3': 2, '4': 3, '5': 11, '6': '.playbridge.PlayPayload', '10': 'items'},
+    {'1': 'if_playback_id', '3': 3, '4': 1, '5': 9, '9': 0, '10': 'ifPlaybackId', '17': true},
+  ],
+  '8': [
+    {'1': '_if_playback_id'},
   ],
 };
 
 /// Descriptor for `QueueAddPayload`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List queueAddPayloadDescriptor = $convert.base64Decode(
     'Cg9RdWV1ZUFkZFBheWxvYWQSKwoEaXRlbRgBIAEoCzIXLnBsYXlicmlkZ2UuUGxheVBheWxvYW'
-    'RSBGl0ZW0=');
+    'RSBGl0ZW0SLQoFaXRlbXMYAiADKAsyFy5wbGF5YnJpZGdlLlBsYXlQYXlsb2FkUgVpdGVtcxIp'
+    'Cg5pZl9wbGF5YmFja19pZBgDIAEoCUgAUgxpZlBsYXliYWNrSWSIAQFCEQoPX2lmX3BsYXliYW'
+    'NrX2lk');
 
 @$core.Deprecated('Use playlistJumpPayloadDescriptor instead')
 const PlaylistJumpPayload$json = {
   '1': 'PlaylistJumpPayload',
   '2': [
     {'1': 'index', '3': 1, '4': 1, '5': 5, '10': 'index'},
+    {'1': 'item_id', '3': 2, '4': 1, '5': 9, '9': 0, '10': 'itemId', '17': true},
+    {'1': 'if_playback_id', '3': 3, '4': 1, '5': 9, '9': 1, '10': 'ifPlaybackId', '17': true},
+  ],
+  '8': [
+    {'1': '_item_id'},
+    {'1': '_if_playback_id'},
   ],
 };
 
 /// Descriptor for `PlaylistJumpPayload`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List playlistJumpPayloadDescriptor = $convert.base64Decode(
-    'ChNQbGF5bGlzdEp1bXBQYXlsb2FkEhQKBWluZGV4GAEgASgFUgVpbmRleA==');
+    'ChNQbGF5bGlzdEp1bXBQYXlsb2FkEhQKBWluZGV4GAEgASgFUgVpbmRleBIcCgdpdGVtX2lkGA'
+    'IgASgJSABSBml0ZW1JZIgBARIpCg5pZl9wbGF5YmFja19pZBgDIAEoCUgBUgxpZlBsYXliYWNr'
+    'SWSIAQFCCgoIX2l0ZW1faWRCEQoPX2lmX3BsYXliYWNrX2lk');
+
+@$core.Deprecated('Use queueRemovePayloadDescriptor instead')
+const QueueRemovePayload$json = {
+  '1': 'QueueRemovePayload',
+  '2': [
+    {'1': 'item_ids', '3': 1, '4': 3, '5': 9, '10': 'itemIds'},
+    {'1': 'if_playback_id', '3': 2, '4': 1, '5': 9, '9': 0, '10': 'ifPlaybackId', '17': true},
+  ],
+  '8': [
+    {'1': '_if_playback_id'},
+  ],
+};
+
+/// Descriptor for `QueueRemovePayload`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List queueRemovePayloadDescriptor = $convert.base64Decode(
+    'ChJRdWV1ZVJlbW92ZVBheWxvYWQSGQoIaXRlbV9pZHMYASADKAlSB2l0ZW1JZHMSKQoOaWZfcG'
+    'xheWJhY2tfaWQYAiABKAlIAFIMaWZQbGF5YmFja0lkiAEBQhEKD19pZl9wbGF5YmFja19pZA==');
+
+@$core.Deprecated('Use queueMovePayloadDescriptor instead')
+const QueueMovePayload$json = {
+  '1': 'QueueMovePayload',
+  '2': [
+    {'1': 'item_id', '3': 1, '4': 1, '5': 9, '10': 'itemId'},
+    {'1': 'before_item_id', '3': 2, '4': 1, '5': 9, '9': 0, '10': 'beforeItemId', '17': true},
+    {'1': 'if_playback_id', '3': 3, '4': 1, '5': 9, '9': 1, '10': 'ifPlaybackId', '17': true},
+  ],
+  '8': [
+    {'1': '_before_item_id'},
+    {'1': '_if_playback_id'},
+  ],
+};
+
+/// Descriptor for `QueueMovePayload`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List queueMovePayloadDescriptor = $convert.base64Decode(
+    'ChBRdWV1ZU1vdmVQYXlsb2FkEhcKB2l0ZW1faWQYASABKAlSBml0ZW1JZBIpCg5iZWZvcmVfaX'
+    'RlbV9pZBgCIAEoCUgAUgxiZWZvcmVJdGVtSWSIAQESKQoOaWZfcGxheWJhY2tfaWQYAyABKAlI'
+    'AVIMaWZQbGF5YmFja0lkiAEBQhEKD19iZWZvcmVfaXRlbV9pZEIRCg9faWZfcGxheWJhY2tfaW'
+    'Q=');
+
+@$core.Deprecated('Use queueClearPayloadDescriptor instead')
+const QueueClearPayload$json = {
+  '1': 'QueueClearPayload',
+  '2': [
+    {'1': 'if_playback_id', '3': 1, '4': 1, '5': 9, '9': 0, '10': 'ifPlaybackId', '17': true},
+  ],
+  '8': [
+    {'1': '_if_playback_id'},
+  ],
+};
+
+/// Descriptor for `QueueClearPayload`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List queueClearPayloadDescriptor = $convert.base64Decode(
+    'ChFRdWV1ZUNsZWFyUGF5bG9hZBIpCg5pZl9wbGF5YmFja19pZBgBIAEoCUgAUgxpZlBsYXliYW'
+    'NrSWSIAQFCEQoPX2lmX3BsYXliYWNrX2lk');
 
 @$core.Deprecated('Use browserPayloadDescriptor instead')
 const BrowserPayload$json = {
@@ -396,10 +470,14 @@ const StatusMessage$json = {
     {'1': 'duration', '3': 4, '4': 1, '5': 3, '10': 'duration'},
     {'1': 'title', '3': 5, '4': 1, '5': 9, '9': 0, '10': 'title', '17': true},
     {'1': 'media_kind', '3': 6, '4': 1, '5': 9, '9': 1, '10': 'mediaKind', '17': true},
+    {'1': 'playback_id', '3': 7, '4': 1, '5': 9, '9': 2, '10': 'playbackId', '17': true},
+    {'1': 'current_item_id', '3': 8, '4': 1, '5': 9, '9': 3, '10': 'currentItemId', '17': true},
   ],
   '8': [
     {'1': '_title'},
     {'1': '_media_kind'},
+    {'1': '_playback_id'},
+    {'1': '_current_item_id'},
   ],
 };
 
@@ -408,7 +486,9 @@ final $typed_data.Uint8List statusMessageDescriptor = $convert.base64Decode(
     'Cg1TdGF0dXNNZXNzYWdlEhIKBHR5cGUYASABKAlSBHR5cGUSFAoFc3RhdGUYAiABKAlSBXN0YX'
     'RlEhoKCHBvc2l0aW9uGAMgASgDUghwb3NpdGlvbhIaCghkdXJhdGlvbhgEIAEoA1IIZHVyYXRp'
     'b24SGQoFdGl0bGUYBSABKAlIAFIFdGl0bGWIAQESIgoKbWVkaWFfa2luZBgGIAEoCUgBUgltZW'
-    'RpYUtpbmSIAQFCCAoGX3RpdGxlQg0KC19tZWRpYV9raW5k');
+    'RpYUtpbmSIAQESJAoLcGxheWJhY2tfaWQYByABKAlIAlIKcGxheWJhY2tJZIgBARIrCg9jdXJy'
+    'ZW50X2l0ZW1faWQYCCABKAlIA1INY3VycmVudEl0ZW1JZIgBAUIICgZfdGl0bGVCDQoLX21lZG'
+    'lhX2tpbmRCDgoMX3BsYXliYWNrX2lkQhIKEF9jdXJyZW50X2l0ZW1faWQ=');
 
 @$core.Deprecated('Use contextMessageDescriptor instead')
 const ContextMessage$json = {
@@ -431,17 +511,33 @@ const PlaylistItemInfo$json = {
     {'1': 'index', '3': 1, '4': 1, '5': 5, '10': 'index'},
     {'1': 'title', '3': 2, '4': 1, '5': 9, '10': 'title'},
     {'1': 'media_kind', '3': 3, '4': 1, '5': 9, '9': 0, '10': 'mediaKind', '17': true},
+    {'1': 'item_id', '3': 4, '4': 1, '5': 9, '9': 1, '10': 'itemId', '17': true},
+    {'1': 'season', '3': 5, '4': 1, '5': 5, '9': 2, '10': 'season', '17': true},
+    {'1': 'episode', '3': 6, '4': 1, '5': 5, '9': 3, '10': 'episode', '17': true},
+    {'1': 'imdb_id', '3': 7, '4': 1, '5': 9, '9': 4, '10': 'imdbId', '17': true},
+    {'1': 'tmdb_id', '3': 8, '4': 1, '5': 9, '9': 5, '10': 'tmdbId', '17': true},
+    {'1': 'binge_group', '3': 9, '4': 1, '5': 9, '9': 6, '10': 'bingeGroup', '17': true},
   ],
   '8': [
     {'1': '_media_kind'},
+    {'1': '_item_id'},
+    {'1': '_season'},
+    {'1': '_episode'},
+    {'1': '_imdb_id'},
+    {'1': '_tmdb_id'},
+    {'1': '_binge_group'},
   ],
 };
 
 /// Descriptor for `PlaylistItemInfo`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List playlistItemInfoDescriptor = $convert.base64Decode(
     'ChBQbGF5bGlzdEl0ZW1JbmZvEhQKBWluZGV4GAEgASgFUgVpbmRleBIUCgV0aXRsZRgCIAEoCV'
-    'IFdGl0bGUSIgoKbWVkaWFfa2luZBgDIAEoCUgAUgltZWRpYUtpbmSIAQFCDQoLX21lZGlhX2tp'
-    'bmQ=');
+    'IFdGl0bGUSIgoKbWVkaWFfa2luZBgDIAEoCUgAUgltZWRpYUtpbmSIAQESHAoHaXRlbV9pZBgE'
+    'IAEoCUgBUgZpdGVtSWSIAQESGwoGc2Vhc29uGAUgASgFSAJSBnNlYXNvbogBARIdCgdlcGlzb2'
+    'RlGAYgASgFSANSB2VwaXNvZGWIAQESHAoHaW1kYl9pZBgHIAEoCUgEUgZpbWRiSWSIAQESHAoH'
+    'dG1kYl9pZBgIIAEoCUgFUgZ0bWRiSWSIAQESJAoLYmluZ2VfZ3JvdXAYCSABKAlIBlIKYmluZ2'
+    'VHcm91cIgBAUINCgtfbWVkaWFfa2luZEIKCghfaXRlbV9pZEIJCgdfc2Vhc29uQgoKCF9lcGlz'
+    'b2RlQgoKCF9pbWRiX2lkQgoKCF90bWRiX2lkQg4KDF9iaW5nZV9ncm91cA==');
 
 @$core.Deprecated('Use playlistStatusMessageDescriptor instead')
 const PlaylistStatusMessage$json = {
@@ -451,6 +547,13 @@ const PlaylistStatusMessage$json = {
     {'1': 'items', '3': 2, '4': 3, '5': 11, '6': '.playbridge.PlaylistItemInfo', '10': 'items'},
     {'1': 'current_index', '3': 3, '4': 1, '5': 5, '10': 'currentIndex'},
     {'1': 'total_count', '3': 4, '4': 1, '5': 5, '10': 'totalCount'},
+    {'1': 'playback_id', '3': 5, '4': 1, '5': 9, '9': 0, '10': 'playbackId', '17': true},
+    {'1': 'queue_revision', '3': 6, '4': 1, '5': 3, '10': 'queueRevision'},
+    {'1': 'current_item_id', '3': 7, '4': 1, '5': 9, '9': 1, '10': 'currentItemId', '17': true},
+  ],
+  '8': [
+    {'1': '_playback_id'},
+    {'1': '_current_item_id'},
   ],
 };
 
@@ -458,7 +561,39 @@ const PlaylistStatusMessage$json = {
 final $typed_data.Uint8List playlistStatusMessageDescriptor = $convert.base64Decode(
     'ChVQbGF5bGlzdFN0YXR1c01lc3NhZ2USEgoEdHlwZRgBIAEoCVIEdHlwZRIyCgVpdGVtcxgCIA'
     'MoCzIcLnBsYXlicmlkZ2UuUGxheWxpc3RJdGVtSW5mb1IFaXRlbXMSIwoNY3VycmVudF9pbmRl'
-    'eBgDIAEoBVIMY3VycmVudEluZGV4Eh8KC3RvdGFsX2NvdW50GAQgASgFUgp0b3RhbENvdW50');
+    'eBgDIAEoBVIMY3VycmVudEluZGV4Eh8KC3RvdGFsX2NvdW50GAQgASgFUgp0b3RhbENvdW50Ei'
+    'QKC3BsYXliYWNrX2lkGAUgASgJSABSCnBsYXliYWNrSWSIAQESJQoOcXVldWVfcmV2aXNpb24Y'
+    'BiABKANSDXF1ZXVlUmV2aXNpb24SKwoPY3VycmVudF9pdGVtX2lkGAcgASgJSAFSDWN1cnJlbn'
+    'RJdGVtSWSIAQFCDgoMX3BsYXliYWNrX2lkQhIKEF9jdXJyZW50X2l0ZW1faWQ=');
+
+@$core.Deprecated('Use commandResultMessageDescriptor instead')
+const CommandResultMessage$json = {
+  '1': 'CommandResultMessage',
+  '2': [
+    {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
+    {'1': 'request_id', '3': 2, '4': 1, '5': 9, '10': 'requestId'},
+    {'1': 'ok', '3': 3, '4': 1, '5': 8, '10': 'ok'},
+    {'1': 'error', '3': 4, '4': 1, '5': 9, '9': 0, '10': 'error', '17': true},
+    {'1': 'message', '3': 5, '4': 1, '5': 9, '9': 1, '10': 'message', '17': true},
+    {'1': 'playback_id', '3': 6, '4': 1, '5': 9, '9': 2, '10': 'playbackId', '17': true},
+    {'1': 'queue_revision', '3': 7, '4': 1, '5': 3, '9': 3, '10': 'queueRevision', '17': true},
+  ],
+  '8': [
+    {'1': '_error'},
+    {'1': '_message'},
+    {'1': '_playback_id'},
+    {'1': '_queue_revision'},
+  ],
+};
+
+/// Descriptor for `CommandResultMessage`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List commandResultMessageDescriptor = $convert.base64Decode(
+    'ChRDb21tYW5kUmVzdWx0TWVzc2FnZRISCgR0eXBlGAEgASgJUgR0eXBlEh0KCnJlcXVlc3RfaW'
+    'QYAiABKAlSCXJlcXVlc3RJZBIOCgJvaxgDIAEoCFICb2sSGQoFZXJyb3IYBCABKAlIAFIFZXJy'
+    'b3KIAQESHQoHbWVzc2FnZRgFIAEoCUgBUgdtZXNzYWdliAEBEiQKC3BsYXliYWNrX2lkGAYgAS'
+    'gJSAJSCnBsYXliYWNrSWSIAQESKgoOcXVldWVfcmV2aXNpb24YByABKANIA1INcXVldWVSZXZp'
+    'c2lvbogBAUIICgZfZXJyb3JCCgoIX21lc3NhZ2VCDgoMX3BsYXliYWNrX2lkQhEKD19xdWV1ZV'
+    '9yZXZpc2lvbg==');
 
 @$core.Deprecated('Use authMessageDescriptor instead')
 const AuthMessage$json = {
@@ -489,6 +624,7 @@ const AuthResponse$json = {
     {'1': 'browsers', '3': 6, '4': 3, '5': 9, '10': 'browsers'},
     {'1': 'screen_mirror_web_rtc', '3': 7, '4': 1, '5': 8, '9': 2, '10': 'screenMirrorWebRtc', '17': true},
     {'1': 'media_kinds', '3': 8, '4': 3, '5': 9, '10': 'mediaKinds'},
+    {'1': 'features', '3': 9, '4': 3, '5': 9, '10': 'features'},
   ],
   '8': [
     {'1': '_token'},
@@ -504,8 +640,8 @@ final $typed_data.Uint8List authResponseDescriptor = $convert.base64Decode(
     'KAlIAVIPY2VydEZpbmdlcnByaW50iAEBEhgKB3BsYXllcnMYBSADKAlSB3BsYXllcnMSGgoIYn'
     'Jvd3NlcnMYBiADKAlSCGJyb3dzZXJzEjYKFXNjcmVlbl9taXJyb3Jfd2ViX3J0YxgHIAEoCEgC'
     'UhJzY3JlZW5NaXJyb3JXZWJSdGOIAQESHwoLbWVkaWFfa2luZHMYCCADKAlSCm1lZGlhS2luZH'
-    'NCCAoGX3Rva2VuQhMKEV9jZXJ0X2ZpbmdlcnByaW50QhgKFl9zY3JlZW5fbWlycm9yX3dlYl9y'
-    'dGM=');
+    'MSGgoIZmVhdHVyZXMYCSADKAlSCGZlYXR1cmVzQggKBl90b2tlbkITChFfY2VydF9maW5nZXJw'
+    'cmludEIYChZfc2NyZWVuX21pcnJvcl93ZWJfcnRj');
 
 @$core.Deprecated('Use pairingRequestMessageDescriptor instead')
 const PairingRequestMessage$json = {

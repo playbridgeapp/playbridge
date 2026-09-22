@@ -40,6 +40,8 @@ struct RuntimeConfig {
     #[serde(default)]
     media_kinds: Vec<String>,
     #[serde(default)]
+    features: Vec<String>,
+    #[serde(default)]
     screen_mirror_web_rtc: bool,
     #[serde(default)]
     advertise: bool,
@@ -67,6 +69,7 @@ impl RuntimeConfig {
         config.players = self.players;
         config.browsers = self.browsers;
         config.media_kinds = self.media_kinds;
+        config.features = self.features;
         config.screen_mirror_web_rtc = self.screen_mirror_web_rtc;
         config.advertise = self.advertise;
         Ok(config)

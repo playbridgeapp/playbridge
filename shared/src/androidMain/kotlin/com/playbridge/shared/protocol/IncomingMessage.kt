@@ -28,6 +28,9 @@ import playbridge.PlayPayload
 import playbridge.PlaylistJumpPayload
 import playbridge.PlaylistPayload
 import playbridge.QueueAddPayload
+import playbridge.QueueClearPayload
+import playbridge.QueueMovePayload
+import playbridge.QueueRemovePayload
 import playbridge.RemotePayload
 import playbridge.VisualMetadata
 
@@ -47,6 +50,10 @@ sealed class IncomingMessage {
     data class Playlist(val payload: playbridge.PlaylistPayload) : IncomingMessage()
     data class QueueAdd(val payload: playbridge.QueueAddPayload) : IncomingMessage()
     data class PlaylistJump(val payload: playbridge.PlaylistJumpPayload) : IncomingMessage()
+    data object QueueQuery : IncomingMessage()
+    data class QueueRemove(val payload: playbridge.QueueRemovePayload) : IncomingMessage()
+    data class QueueMove(val payload: playbridge.QueueMovePayload) : IncomingMessage()
+    data class QueueClear(val payload: playbridge.QueueClearPayload) : IncomingMessage()
     data class Control(val payload: playbridge.ControlPayload) : IncomingMessage()
     data class Remote(val payload: playbridge.RemotePayload) : IncomingMessage()
     data class Mouse(val payload: playbridge.MousePayload) : IncomingMessage()
@@ -94,6 +101,9 @@ private val moshi: Moshi = Moshi.Builder()
 private val playlistAdapter = moshi.adapter(PlaylistPayload::class.java)
 private val queueAddAdapter = moshi.adapter(QueueAddPayload::class.java)
 private val playlistJumpAdapter = moshi.adapter(PlaylistJumpPayload::class.java)
+private val queueRemoveAdapter = moshi.adapter(QueueRemovePayload::class.java)
+private val queueMoveAdapter = moshi.adapter(QueueMovePayload::class.java)
+private val queueClearAdapter = moshi.adapter(QueueClearPayload::class.java)
 private val controlAdapter = moshi.adapter(ControlPayload::class.java)
 private val remoteAdapter = moshi.adapter(RemotePayload::class.java)
 private val mouseAdapter = moshi.adapter(MousePayload::class.java)
@@ -157,10 +167,11 @@ fun decodePlaylistPayloadJson(json: String): PlaylistPayload? = try {
 // Inner payload comes from Moshi+Wire; the envelope uses kotlinx-serialization so we
 // don't string-concatenate JSON.
 
-private fun envelope(action: String, payloadJson: String): String =
+private fun envelope(action: String, payloadJson: String, requestId: String? = null): String =
     buildJsonObject {
         put("type", "command")
         put("action", action)
+        if (requestId != null) put("requestId", requestId)
         put("payload", Json.parseToJsonElement(payloadJson))
     }.toString()
 
@@ -180,6 +191,21 @@ fun createSingleVideoCommandJson(payload: PlayPayload): String =
 
 fun createQueueAddCommandJson(item: PlayPayload): String =
     envelope("queue_add", queueAddAdapter.toJson(QueueAddPayload(item = item.withResolvedMediaKind())))
+
+fun createQueueAddCommandJson(
+    items: List<PlayPayload>,
+    ifPlaybackId: String?,
+    requestId: String = UUID.randomUUID().toString(),
+): String = envelope(
+    "queue_add",
+    queueAddAdapter.toJson(
+        QueueAddPayload(
+            items = items.map(PlayPayload::withResolvedMediaKind),
+            if_playback_id = ifPlaybackId,
+        ),
+    ),
+    requestId,
+)
 
 fun createPlaylistJumpCommandJson(index: Int): String =
     envelope("playlist_jump", playlistJumpAdapter.toJson(PlaylistJumpPayload(index = index)))
@@ -356,6 +382,7 @@ fun createAuthResponseJson(
     browsers: List<String> = emptyList(),
     mediaKinds: List<String> = emptyList(),
     screenMirrorWebRtc: Boolean = false,
+    features: List<String> = emptyList(),
 ): String =
     buildJsonObject {
         put("type", "auth_response")
@@ -365,6 +392,7 @@ fun createAuthResponseJson(
         if (browsers.isNotEmpty()) put("browsers", buildJsonArray { browsers.forEach { add(it) } })
         if (mediaKinds.isNotEmpty()) put("mediaKinds", buildJsonArray { mediaKinds.forEach { add(it) } })
         if (screenMirrorWebRtc) put("screenMirrorWebRtc", true)
+        if (features.isNotEmpty()) put("features", buildJsonArray { features.forEach { add(it) } })
     }.toString()
 
 fun createContextJson(active: String): String =
@@ -379,14 +407,18 @@ fun createStatusJson(
     duration: Long,
     title: String?,
     mediaKind: String? = null,
+    playbackId: String? = null,
+    currentItemId: String? = null,
 ): String = buildJsonObject {
         put("type", "status")
         put("state", state)
         put("position", position)
         put("duration", duration)
         if (title != null) put("title", title)
-        if (mediaKind != null) put("mediaKind", mediaKind)
-    }.toString()
+    if (mediaKind != null) put("mediaKind", mediaKind)
+    if (playbackId != null) put("playbackId", playbackId)
+    if (currentItemId != null) put("currentItemId", currentItemId)
+}.toString()
 
 fun createPlaylistStatusJson(
     items: List<Pair<Int, String>>,
@@ -487,11 +519,18 @@ fun parseIncomingMessage(text: String): IncomingMessage {
 
 private fun parseCommandAction(action: String, payloadJson: String?, raw: String): IncomingMessage {
     if (action == "context_query") return IncomingMessage.ContextQuery
+    if (action == "queue_query") return IncomingMessage.QueueQuery
+    if (action == "queue_clear" && payloadJson == null) {
+        return IncomingMessage.QueueClear(QueueClearPayload())
+    }
     if (payloadJson == null) return IncomingMessage.Unknown("missing_payload_for_$action", raw)
     return when (action) {
         "playlist" -> playlistAdapter.fromJson(payloadJson)?.let { IncomingMessage.Playlist(it) }
         "queue_add" -> queueAddAdapter.fromJson(payloadJson)?.let { IncomingMessage.QueueAdd(it) }
         "playlist_jump" -> playlistJumpAdapter.fromJson(payloadJson)?.let { IncomingMessage.PlaylistJump(it) }
+        "queue_remove" -> queueRemoveAdapter.fromJson(payloadJson)?.let { IncomingMessage.QueueRemove(it) }
+        "queue_move" -> queueMoveAdapter.fromJson(payloadJson)?.let { IncomingMessage.QueueMove(it) }
+        "queue_clear" -> queueClearAdapter.fromJson(payloadJson)?.let { IncomingMessage.QueueClear(it) }
         "control" -> controlAdapter.fromJson(payloadJson)?.let { IncomingMessage.Control(it) }
         "remote" -> remoteAdapter.fromJson(payloadJson)?.let { IncomingMessage.Remote(it) }
         "mouse" -> mouseAdapter.fromJson(payloadJson)?.let { IncomingMessage.Mouse(it) }

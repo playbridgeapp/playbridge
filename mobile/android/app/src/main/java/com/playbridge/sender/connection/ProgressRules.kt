@@ -5,12 +5,20 @@ package com.playbridge.sender.connection
  * dependencies so [PlaybackProgressTracker] behavior is unit-testable.
  */
 internal object ProgressRules {
+    enum class ReceiverAdvanceOutcome {
+        NONE,
+        SAVE_RESUME,
+        MARK_WATCHED,
+    }
 
     /** Fraction of the duration that counts as "watched" (Trakt/Plex use 85–95%). */
     const val WATCHED_FRACTION = 0.90
 
     /** Ignore "durations" shorter than this — trailers, bogus renderer values. */
     const val MIN_TRACK_DURATION_MS = 5 * 60_000L
+
+    /** Do not persist insignificant resume positions near the start of an item. */
+    const val MIN_RESUME_POSITION_MS = 30_000L
 
     /**
      * Fraction that counts as "finished" when the playlist advances past an item.
@@ -40,6 +48,35 @@ internal object ProgressRules {
     fun titlesMatch(reported: String?, expected: String?): Boolean {
         if (reported.isNullOrBlank() || expected.isNullOrBlank()) return true
         return reported.contains(expected) || expected.contains(reported)
+    }
+
+    /** Stable receiver IDs win over mutable queue positions; indexes are legacy fallback only. */
+    fun receiverItemChanged(
+        previousItemId: String?,
+        currentItemId: String?,
+        previousIndex: Int?,
+        currentIndex: Int,
+    ): Boolean = if (previousItemId != null && currentItemId != null) {
+        previousItemId != currentItemId
+    } else {
+        previousIndex != null && previousIndex != currentIndex
+    }
+
+    fun receiverAdvanceOutcome(
+        previousIsEpisode: Boolean,
+        advancedForward: Boolean,
+        positionMs: Long,
+        durationMs: Long,
+    ): ReceiverAdvanceOutcome {
+        if (!previousIsEpisode) return ReceiverAdvanceOutcome.NONE
+        if (advancedForward && finishedOnAdvance(positionMs, durationMs)) {
+            return ReceiverAdvanceOutcome.MARK_WATCHED
+        }
+        return if (positionMs >= MIN_RESUME_POSITION_MS && durationMs > 0) {
+            ReceiverAdvanceOutcome.SAVE_RESUME
+        } else {
+            ReceiverAdvanceOutcome.NONE
+        }
     }
 
     /**

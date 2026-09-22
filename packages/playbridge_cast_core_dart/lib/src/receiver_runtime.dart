@@ -34,6 +34,7 @@ final class ReceiverRuntimeConfig {
     this.players = const [],
     this.browsers = const [],
     this.mediaKinds = const [],
+    this.features = const [],
     this.screenMirrorWebRtc = false,
     this.advertise = false,
   });
@@ -49,6 +50,7 @@ final class ReceiverRuntimeConfig {
   final List<String> players;
   final List<String> browsers;
   final List<String> mediaKinds;
+  final List<String> features;
   final bool screenMirrorWebRtc;
   final bool advertise;
 
@@ -64,6 +66,7 @@ final class ReceiverRuntimeConfig {
         'players': players,
         'browsers': browsers,
         'mediaKinds': mediaKinds,
+        'features': features,
         'screenMirrorWebRtc': screenMirrorWebRtc,
         'advertise': advertise,
       };

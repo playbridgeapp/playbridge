@@ -78,6 +78,13 @@ public class MessageEnvelope(
     schemaIndex = 6,
   )
   public val media_kind: String? = null,
+  @field:WireField(
+    tag = 8,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "requestId",
+    schemaIndex = 7,
+  )
+  public val request_id: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<MessageEnvelope, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -98,6 +105,7 @@ public class MessageEnvelope(
     if (duration != other.duration) return false
     if (title != other.title) return false
     if (media_kind != other.media_kind) return false
+    if (request_id != other.request_id) return false
     return true
   }
 
@@ -112,6 +120,7 @@ public class MessageEnvelope(
       result = result * 37 + (duration?.hashCode() ?: 0)
       result = result * 37 + (title?.hashCode() ?: 0)
       result = result * 37 + (media_kind?.hashCode() ?: 0)
+      result = result * 37 + (request_id?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -126,6 +135,7 @@ public class MessageEnvelope(
     if (duration != null) result += """duration=$duration"""
     if (title != null) result += """title=${sanitize(title)}"""
     if (media_kind != null) result += """media_kind=${sanitize(media_kind)}"""
+    if (request_id != null) result += """request_id=${sanitize(request_id)}"""
     return result.joinToString(prefix = "MessageEnvelope{", separator = ", ", postfix = "}")
   }
 
@@ -137,9 +147,10 @@ public class MessageEnvelope(
     duration: Long? = this.duration,
     title: String? = this.title,
     media_kind: String? = this.media_kind,
+    request_id: String? = this.request_id,
     unknownFields: ByteString = this.unknownFields,
   ): MessageEnvelope = MessageEnvelope(type, action, state, position, duration, title, media_kind,
-      unknownFields)
+      request_id, unknownFields)
 
   public companion object {
     @JvmField
@@ -162,6 +173,7 @@ public class MessageEnvelope(
         size += ProtoAdapter.INT64.encodedSizeWithTag(5, value.duration)
         size += ProtoAdapter.STRING.encodedSizeWithTag(6, value.title)
         size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.media_kind)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(8, value.request_id)
         return size
       }
 
@@ -175,11 +187,13 @@ public class MessageEnvelope(
         ProtoAdapter.INT64.encodeWithTag(writer, 5, value.duration)
         ProtoAdapter.STRING.encodeWithTag(writer, 6, value.title)
         ProtoAdapter.STRING.encodeWithTag(writer, 7, value.media_kind)
+        ProtoAdapter.STRING.encodeWithTag(writer, 8, value.request_id)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: MessageEnvelope) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 8, value.request_id)
         ProtoAdapter.STRING.encodeWithTag(writer, 7, value.media_kind)
         ProtoAdapter.STRING.encodeWithTag(writer, 6, value.title)
         ProtoAdapter.INT64.encodeWithTag(writer, 5, value.duration)
@@ -199,6 +213,7 @@ public class MessageEnvelope(
         var duration: Long? = null
         var title: String? = null
         var media_kind: String? = null
+        var request_id: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
@@ -208,6 +223,7 @@ public class MessageEnvelope(
             5 -> duration = ProtoAdapter.INT64.decode(reader)
             6 -> title = ProtoAdapter.STRING.decode(reader)
             7 -> media_kind = ProtoAdapter.STRING.decode(reader)
+            8 -> request_id = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -219,6 +235,7 @@ public class MessageEnvelope(
           duration = duration,
           title = title,
           media_kind = media_kind,
+          request_id = request_id,
           unknownFields = unknownFields
         )
       }

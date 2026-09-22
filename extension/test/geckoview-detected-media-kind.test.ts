@@ -5,6 +5,7 @@ import {
   detectedMediaKind,
   inferredMediaContentType,
   isSupportedDomImage,
+  isSubtitleContentDisposition,
   shouldReportNetworkImage,
 } from "../src/geckoview/detected-media-kind";
 
@@ -13,6 +14,18 @@ test("classifies video, standalone audio, images, and subtitles", () => {
   assert.equal(detectedMediaKind("https://cdn.example/song", "audio/flac"), "audio");
   assert.equal(detectedMediaKind("https://cdn.example/poster", "image/webp"), "image");
   assert.equal(detectedMediaKind("https://cdn.example/captions.vtt"), "subtitle");
+});
+
+test("recognizes subtitle filenames in Content-Disposition", () => {
+  assert.equal(
+    isSubtitleContentDisposition('attachment; filename="English.srt"'),
+    true,
+  );
+  assert.equal(
+    isSubtitleContentDisposition("inline; filename*=UTF-8''captions.vtt"),
+    true,
+  );
+  assert.equal(isSubtitleContentDisposition("attachment; filename=notes.txt"), false);
 });
 
 test("classifies demuxed HLS audio before generic mpegurl video", () => {

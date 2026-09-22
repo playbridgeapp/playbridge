@@ -57,6 +57,28 @@ public class PlaylistStatusMessage(
     schemaIndex = 3,
   )
   public val total_count: Int = 0,
+  @field:WireField(
+    tag = 5,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "playbackId",
+    schemaIndex = 4,
+  )
+  public val playback_id: String? = null,
+  @field:WireField(
+    tag = 6,
+    adapter = "com.squareup.wire.ProtoAdapter#INT64",
+    label = WireField.Label.OMIT_IDENTITY,
+    jsonName = "queueRevision",
+    schemaIndex = 5,
+  )
+  public val queue_revision: Long = 0L,
+  @field:WireField(
+    tag = 7,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "currentItemId",
+    schemaIndex = 6,
+  )
+  public val current_item_id: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlaylistStatusMessage, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -82,6 +104,9 @@ public class PlaylistStatusMessage(
     if (items != other.items) return false
     if (current_index != other.current_index) return false
     if (total_count != other.total_count) return false
+    if (playback_id != other.playback_id) return false
+    if (queue_revision != other.queue_revision) return false
+    if (current_item_id != other.current_item_id) return false
     return true
   }
 
@@ -93,6 +118,9 @@ public class PlaylistStatusMessage(
       result = result * 37 + items.hashCode()
       result = result * 37 + current_index.hashCode()
       result = result * 37 + total_count.hashCode()
+      result = result * 37 + (playback_id?.hashCode() ?: 0)
+      result = result * 37 + queue_revision.hashCode()
+      result = result * 37 + (current_item_id?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -104,6 +132,9 @@ public class PlaylistStatusMessage(
     if (items.isNotEmpty()) result += """items=$items"""
     result += """current_index=$current_index"""
     result += """total_count=$total_count"""
+    if (playback_id != null) result += """playback_id=${sanitize(playback_id)}"""
+    result += """queue_revision=$queue_revision"""
+    if (current_item_id != null) result += """current_item_id=${sanitize(current_item_id)}"""
     return result.joinToString(prefix = "PlaylistStatusMessage{", separator = ", ", postfix = "}")
   }
 
@@ -112,9 +143,12 @@ public class PlaylistStatusMessage(
     items: List<PlaylistItemInfo> = this.items,
     current_index: Int = this.current_index,
     total_count: Int = this.total_count,
+    playback_id: String? = this.playback_id,
+    queue_revision: Long = this.queue_revision,
+    current_item_id: String? = this.current_item_id,
     unknownFields: ByteString = this.unknownFields,
   ): PlaylistStatusMessage = PlaylistStatusMessage(type, items, current_index, total_count,
-      unknownFields)
+      playback_id, queue_revision, current_item_id, unknownFields)
 
   public companion object {
     @JvmField
@@ -139,6 +173,11 @@ public class PlaylistStatusMessage(
         if (value.total_count != 0) {
           size += ProtoAdapter.INT32.encodedSizeWithTag(4, value.total_count)
         }
+        size += ProtoAdapter.STRING.encodedSizeWithTag(5, value.playback_id)
+        if (value.queue_revision != 0L) {
+          size += ProtoAdapter.INT64.encodedSizeWithTag(6, value.queue_revision)
+        }
+        size += ProtoAdapter.STRING.encodedSizeWithTag(7, value.current_item_id)
         return size
       }
 
@@ -153,11 +192,21 @@ public class PlaylistStatusMessage(
         if (value.total_count != 0) {
           ProtoAdapter.INT32.encodeWithTag(writer, 4, value.total_count)
         }
+        ProtoAdapter.STRING.encodeWithTag(writer, 5, value.playback_id)
+        if (value.queue_revision != 0L) {
+          ProtoAdapter.INT64.encodeWithTag(writer, 6, value.queue_revision)
+        }
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.current_item_id)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlaylistStatusMessage) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 7, value.current_item_id)
+        if (value.queue_revision != 0L) {
+          ProtoAdapter.INT64.encodeWithTag(writer, 6, value.queue_revision)
+        }
+        ProtoAdapter.STRING.encodeWithTag(writer, 5, value.playback_id)
         if (value.total_count != 0) {
           ProtoAdapter.INT32.encodeWithTag(writer, 4, value.total_count)
         }
@@ -175,12 +224,18 @@ public class PlaylistStatusMessage(
         val items = mutableListOf<PlaylistItemInfo>()
         var current_index: Int = 0
         var total_count: Int = 0
+        var playback_id: String? = null
+        var queue_revision: Long = 0L
+        var current_item_id: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> type = ProtoAdapter.STRING.decode(reader)
             2 -> items.add(PlaylistItemInfo.ADAPTER.decode(reader))
             3 -> current_index = ProtoAdapter.INT32.decode(reader)
             4 -> total_count = ProtoAdapter.INT32.decode(reader)
+            5 -> playback_id = ProtoAdapter.STRING.decode(reader)
+            6 -> queue_revision = ProtoAdapter.INT64.decode(reader)
+            7 -> current_item_id = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -189,6 +244,9 @@ public class PlaylistStatusMessage(
           items = items,
           current_index = current_index,
           total_count = total_count,
+          playback_id = playback_id,
+          queue_revision = queue_revision,
+          current_item_id = current_item_id,
           unknownFields = unknownFields
         )
       }

@@ -3,6 +3,7 @@ package com.playbridge.sender.cast
 import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
+import android.media.MediaDataSource
 import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -18,15 +19,18 @@ import androidx.media3.exoplayer.hls.playlist.HlsMultivariantPlaylist as Media3H
 import androidx.media3.exoplayer.hls.playlist.HlsPlaylistParser as Media3HlsPlaylistParser
 import com.playbridge.sender.BuildConfig
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.intOrNull
@@ -38,6 +42,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.util.IdentityHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -69,6 +74,7 @@ data class DetectedVideo(
     val timestamp: Long = System.currentTimeMillis(),
     var fileSize: Long? = null,  // Will be fetched asynchronously
     var fileSizeChecked: Boolean = false,
+    var durationMs: Long? = null,
     val originalMessage: String? = null,
     var qualities: List<VideoQuality> = emptyList(),
     var qualitiesChecked: Boolean = false,
@@ -167,6 +173,44 @@ internal fun detectionEvidenceScore(detectedBy: String?): Int = when (detectedBy
     "url_pattern_m3u8", "url_pattern_mpd" -> 10
     "response_body_url" -> 5
     else -> 15
+}
+
+internal fun thumbnailEvidenceVersion(video: DetectedVideo): Int {
+    var result = detectionEvidenceScore(video.detectedBy)
+    result = 31 * result + (video.headers?.hashCode() ?: 0)
+    result = 31 * result + (video.playlistBody?.hashCode() ?: 0)
+    result = 31 * result + video.qualities.map { it.url }.hashCode()
+    result = 31 * result + (video.hlsRole?.hashCode() ?: 0)
+    return result
+}
+
+internal fun shouldApplyManifestProbe(source: DetectedVideo, tracked: DetectedVideo): Boolean =
+    !(tracked.qualities.isNotEmpty() && source.qualities.isEmpty()) &&
+        !(tracked.effectiveValidationState == MediaValidationState.VERIFIED_PLAYABLE &&
+            source.effectiveValidationState != MediaValidationState.VERIFIED_PLAYABLE)
+
+/** Parsed HLS variants supplied by the GeckoView detector's response-body scanner. */
+internal fun detectorVideoQualities(value: JsonArray?): List<VideoQuality>? {
+    if (value == null) return null
+    val parsed = value.mapNotNull { element ->
+        val quality = runCatching { element.jsonObject }.getOrNull() ?: return@mapNotNull null
+        val resolution = quality["resolution"]?.jsonPrimitive?.contentOrNull
+            ?: return@mapNotNull null
+        val bandwidth = quality["bandwidth"]?.jsonPrimitive?.longOrNull
+            ?: return@mapNotNull null
+        val url = quality["url"]?.jsonPrimitive?.contentOrNull
+            ?: return@mapNotNull null
+        VideoQuality(
+            resolution = resolution,
+            bandwidth = bandwidth,
+            url = url,
+            codecs = quality["codecs"]?.jsonPrimitive?.contentOrNull,
+            audioGroupId = quality["audioGroupId"]?.jsonPrimitive?.contentOrNull,
+            frameRate = quality["frameRate"]?.jsonPrimitive?.contentOrNull,
+            averageBandwidth = quality["averageBandwidth"]?.jsonPrimitive?.longOrNull,
+        )
+    }
+    return parsed.takeIf { it.isNotEmpty() }
 }
 
 internal fun validationStateForDetection(
@@ -281,9 +325,8 @@ fun DetectedVideo.castScore(): Int {
         0
     }
     val replayScore = if (!headers.isNullOrEmpty()) 15 else 0
-    val previewScore = if (thumbnailState == ThumbnailPreviewState.READY) 25 else 0
     return validationScore + evidenceScore + adaptiveScore + qualityLadderScore +
-        replayScore + previewScore
+        replayScore
 }
 
 /**
@@ -301,8 +344,16 @@ fun buildCastSheetVideos(videos: List<DetectedVideo>): List<DetectedVideo> {
     // Prefer a detector-emitted synthetic master with a body; else any body; else newest.
     // Within each tier, prefer the newest media lifecycle / activity so an SPA's latest
     // view wins over synthetic rows left over from previously opened streams.
-    val byLifecycleThenActivity = compareBy<DetectedVideo> { it.lifecycleIndex }
-        .thenBy { maxOf(it.timestamp, it.lastSeen) }
+    val handoffOrderSnapshot = IdentityHashMap<DetectedVideo, Pair<Int, Long>>().apply {
+        handoffSources.forEach { video ->
+            this[video] = video.lifecycleIndex to maxOf(video.timestamp, video.lastSeen)
+        }
+    }
+    val byLifecycleThenActivity = compareBy<DetectedVideo> {
+        handoffOrderSnapshot[it]?.first ?: Int.MIN_VALUE
+    }.thenBy {
+        handoffOrderSnapshot[it]?.second ?: Long.MIN_VALUE
+    }
     val source = handoffSources
         .filter { it.isSyntheticMaster && !it.playlistBody.isNullOrBlank() }
         .maxWithOrNull(byLifecycleThenActivity)
@@ -334,6 +385,18 @@ fun buildCastSheetAudio(videos: List<DetectedVideo>): List<DetectedVideo> =
 
 fun buildCastSheetImages(videos: List<DetectedVideo>): List<DetectedVideo> =
     videos.filter { it.isImage }.sortedByDescending { it.timestamp }
+
+/**
+ * Every viable video that should be enriched before the cast sheet opens.
+ *
+ * Keep this separate from [thumbnailPrefetchCandidates]: that helper intentionally chooses a
+ * small latency-sensitive subset, while browser idle processing should eventually prepare every
+ * row so lazy composition and scrolling never decide when stream work begins.
+ */
+internal fun backgroundStreamProcessingCandidates(
+    media: List<DetectedVideo>,
+): List<DetectedVideo> = buildCastSheetVideos(media)
+    .filter { it.effectiveValidationState != MediaValidationState.FAILED }
 
 internal fun thumbnailPrefetchCandidates(
     media: List<DetectedVideo>,
@@ -395,12 +458,39 @@ private fun recencyBonus(video: DetectedVideo, newestMs: Long): Int {
 private fun lifecycleBonus(video: DetectedVideo, newestLifecycle: Int): Int =
     if (video.lifecycleIndex >= newestLifecycle) LIFECYCLE_BONUS else 0
 
-private fun castSheetComparator(videos: List<DetectedVideo>): Comparator<DetectedVideo> {
-    val newestMs = videos.maxOfOrNull { maxOf(it.timestamp, it.lastSeen) } ?: 0L
-    val newestLifecycle = videos.maxOfOrNull { it.lifecycleIndex } ?: 0
-    return compareByDescending<DetectedVideo> {
-        it.castScore() + recencyBonus(it, newestMs) + lifecycleBonus(it, newestLifecycle)
-    }.thenByDescending { maxOf(it.timestamp, it.lastSeen) }
+private data class CastSortSnapshot(
+    val castScore: Int,
+    val seenMs: Long,
+    val lifecycleIndex: Int,
+)
+
+internal fun castSheetComparator(videos: List<DetectedVideo>): Comparator<DetectedVideo> {
+    // Probe results are mutable and can finish on a worker while TimSort is comparing rows.
+    // Capture every comparator input once so compare(a, b) cannot change during one sort.
+    val snapshots = IdentityHashMap<DetectedVideo, CastSortSnapshot>().apply {
+        videos.forEach { video ->
+            this[video] = CastSortSnapshot(
+                castScore = video.castScore(),
+                seenMs = maxOf(video.timestamp, video.lastSeen),
+                lifecycleIndex = video.lifecycleIndex,
+            )
+        }
+    }
+    val newestMs = snapshots.values.maxOfOrNull { it.seenMs } ?: 0L
+    val newestLifecycle = snapshots.values.maxOfOrNull { it.lifecycleIndex } ?: 0
+    val totals = IdentityHashMap<DetectedVideo, Int>().apply {
+        videos.forEach { video ->
+            val snapshot = snapshots.getValue(video)
+            val ageMinutes = (newestMs - snapshot.seenMs).coerceAtLeast(0L) / RECENCY_MINUTE_MS
+            val decay = (ageMinutes * RECENCY_BONUS_PER_MINUTE)
+                .coerceAtMost(RECENCY_BONUS_CAP.toLong())
+            val recency = (RECENCY_BONUS_CAP - decay).toInt()
+            val lifecycle = if (snapshot.lifecycleIndex >= newestLifecycle) LIFECYCLE_BONUS else 0
+            this[video] = snapshot.castScore + recency + lifecycle
+        }
+    }
+    return compareByDescending<DetectedVideo> { totals.getValue(it) }
+        .thenByDescending { snapshots.getValue(it).seenMs }
 }
 
 /**
@@ -518,8 +608,9 @@ object VideoDetector {
     // Last document generation accepted from the GeckoView detector per Kotlin tab.
     private val detectorPageTracker = DetectorPageTracker()
 
-    // Track ignored URLs (e.g., HLS variants) — global since variants can appear across tabs
-    private val ignoredUrls = mutableSetOf<String>()
+    // Suppression belongs to the document that established the master/segment relationship.
+    private val ignoredUrlsByTab = mutableMapOf<String, MutableSet<String>>()
+    private val ignoredPrefixesByTab = mutableMapOf<String, MutableSet<String>>()
 
     /**
      * Incremented on the main thread whenever a video's playability or quality status changes.
@@ -552,7 +643,7 @@ object VideoDetector {
                     tracked.fileSize = source.fileSize
                     tracked.fileSizeChecked = source.fileSizeChecked
                 }
-                if (manifest) {
+                if (manifest && shouldApplyManifestProbe(source, tracked)) {
                     tracked.qualities = source.qualities
                     tracked.qualitiesChecked = source.qualitiesChecked
                     tracked.hlsPlaylist = source.hlsPlaylist
@@ -574,13 +665,24 @@ object VideoDetector {
                     }
                     MediaValidationState.PENDING -> Unit
                 }
-                if (thumbnail) tracked.thumbnailState = source.thumbnailState
+                if (thumbnail && (
+                        source.thumbnailState == ThumbnailPreviewState.READY ||
+                            thumbnailEvidenceVersion(tracked) == thumbnailEvidenceVersion(source)
+                        )
+                ) {
+                    tracked.thumbnailState = source.thumbnailState
+                }
+                if (thumbnail && source.durationMs != null) {
+                    tracked.durationMs = source.durationMs
+                }
             }
         }
     }
 
     private val thumbnailWorkMutex = Mutex()
-    private val thumbnailRequests = ThumbnailRequestCoordinator<String, Bitmap>()
+    private data class ThumbnailRequestKey(val url: String, val evidenceVersion: Int)
+
+    private val thumbnailRequests = ThumbnailRequestCoordinator<ThumbnailRequestKey, Bitmap>()
 
     /**
      * Get the observable video list for a specific tab.
@@ -681,9 +783,16 @@ object VideoDetector {
         when (type) {
             "video_detected" -> {
                 val url = message["url"]?.jsonPrimitive?.content ?: return
+                StreamDiagnostics.event("detect") {
+                    "id=${StreamDiagnostics.id(url)} tab=$kotlinTabId " +
+                        "by=${message["detectedBy"]?.jsonPrimitive?.contentOrNull}"
+                }
 
                 // Check if URL is in exact ignore list or starts with an ignored segment prefix
-                if (ignoredUrls.contains(url) || ignoredUrls.any { url.startsWith(it) }) {
+                if (ignoredUrlsByTab[kotlinTabId]?.contains(url) == true ||
+                    ignoredPrefixesByTab[kotlinTabId]?.any { url.startsWith(it) } == true
+                ) {
+                    StreamDiagnostics.event("drop") { "id=${StreamDiagnostics.id(url)} tab=$kotlinTabId reason=variant_or_segment" }
                     debugLog("Ignoring media URL (matched blocklist or segment prefix): $url")
                     return
                 }
@@ -711,6 +820,9 @@ object VideoDetector {
                     val incomingMediaKind = message["mediaKind"]?.jsonPrimitive?.contentOrNull
                     val incomingWidth = message["width"]?.jsonPrimitive?.intOrNull
                     val incomingHeight = message["height"]?.jsonPrimitive?.intOrNull
+                    val incomingQualities = detectorVideoQualities(
+                        runCatching { message["qualities"]?.jsonArray }.getOrNull(),
+                    )
                     val isSynthetic =
                         message["isSyntheticMaster"]?.jsonPrimitive?.booleanOrNull ?: false
                     val evidenceUpgraded =
@@ -727,17 +839,23 @@ object VideoDetector {
                             incomingMediaKind != null ||
                             incomingWidth != null ||
                             incomingHeight != null ||
+                            incomingQualities != null ||
                             isSynthetic ||
                             evidenceUpgraded ||
                             incomingLastSeen > existing.lastSeen
                     if (shouldUpdate) {
+                        val hasImprovedThumbnailEvidence =
+                            evidenceUpgraded ||
+                                (!headers.isNullOrEmpty() && existing.headers.isNullOrEmpty()) ||
+                                (!playlistBody.isNullOrBlank() && existing.playlistBody.isNullOrBlank()) ||
+                                (incomingQualities != null && existing.qualities.isEmpty())
                         debugLog(
                             "Updating detection for tab $kotlinTabId " +
                                 "kind=${incomingMediaKind ?: existing.mediaKind ?: "?"} " +
                                 "by=$incomingDetectedBy evidenceUpgraded=$evidenceUpgraded",
                         )
                         videos[existingIndex] = existing.copy(
-                            headers = headers ?: existing.headers,
+                            headers = headers?.takeIf { it.isNotEmpty() } ?: existing.headers,
                             originUrl = message["originUrl"]?.jsonPrimitive?.content
                                 ?: existing.originUrl,
                             contentType = message["contentType"]?.jsonPrimitive?.content
@@ -751,6 +869,15 @@ object VideoDetector {
                             mediaKind = incomingMediaKind ?: existing.mediaKind,
                             width = incomingWidth ?: existing.width,
                             height = incomingHeight ?: existing.height,
+                            qualities = incomingQualities ?: existing.qualities,
+                            qualitiesChecked = incomingQualities != null || existing.qualitiesChecked,
+                            hlsPlaylist = incomingQualities?.let { qualities ->
+                                HlsPlaylist(
+                                    videoQualities = qualities,
+                                    masterPlaylistUrl = url,
+                                    validation = HlsPlaylistValidation.VALID_MASTER,
+                                )
+                            } ?: existing.hlsPlaylist,
                             detectedBy = if (evidenceUpgraded) {
                                 incomingDetectedBy
                             } else {
@@ -763,6 +890,7 @@ object VideoDetector {
                                 lifecycleIndexForTab(kotlinTabId),
                             ),
                             validationState = if (
+                                incomingQualities != null ||
                                 incomingValidation == MediaValidationState.VERIFIED_PLAYABLE
                             ) {
                                 MediaValidationState.VERIFIED_PLAYABLE
@@ -770,11 +898,20 @@ object VideoDetector {
                                 existing.validationState
                             },
                             isPlayable = if (
+                                incomingQualities != null ||
                                 incomingValidation == MediaValidationState.VERIFIED_PLAYABLE
                             ) {
                                 true
                             } else {
                                 existing.isPlayable
+                            },
+                            thumbnailState = if (
+                                hasImprovedThumbnailEvidence &&
+                                existing.thumbnailState == ThumbnailPreviewState.UNAVAILABLE
+                            ) {
+                                ThumbnailPreviewState.NOT_REQUESTED
+                            } else {
+                                existing.thumbnailState
                             },
                         )
                         notifyVideoUpdated()
@@ -800,6 +937,9 @@ object VideoDetector {
                     mediaKind = message["mediaKind"]?.jsonPrimitive?.contentOrNull,
                     width = message["width"]?.jsonPrimitive?.intOrNull,
                     height = message["height"]?.jsonPrimitive?.intOrNull,
+                    qualities = detectorVideoQualities(
+                        runCatching { message["qualities"]?.jsonArray }.getOrNull(),
+                    ).orEmpty(),
                     lastSeen = incomingLastSeen,
                     lifecycleIndex = lifecycleIndexForTab(kotlinTabId),
                     validationState = validationStateForDetection(
@@ -807,6 +947,17 @@ object VideoDetector {
                         isSynthetic,
                     ),
                 )
+
+                if (video.qualities.isNotEmpty()) {
+                    video.qualitiesChecked = true
+                    video.hlsPlaylist = HlsPlaylist(
+                        videoQualities = video.qualities,
+                        masterPlaylistUrl = video.url,
+                        validation = HlsPlaylistValidation.VALID_MASTER,
+                    )
+                    video.validationState = MediaValidationState.VERIFIED_PLAYABLE
+                    video.isPlayable = true
+                }
 
                 debugLog(
                     "MEDIA DETECTED tab=$kotlinTabId kind=${video.mediaKind ?: video.kind} " +
@@ -838,6 +989,22 @@ object VideoDetector {
     suspend fun fetchFileSize(video: DetectedVideo): Long? {
         if (video.fileSizeChecked) {
             return video.fileSize
+        }
+        if (video.hasSyntheticHandoff ||
+            video.url.contains(".m3u8", ignoreCase = true) ||
+            video.url.contains(".mpd", ignoreCase = true) ||
+            video.contentType?.contains("mpegurl", ignoreCase = true) == true ||
+            video.contentType?.contains("dash", ignoreCase = true) == true
+        ) {
+            // Manifest byte length is not the video size; HEAD may also invalidate a valid
+            // authenticated stream whose server only supports GET.
+            withContext(Dispatchers.Main) {
+                video.fileSize = null
+                video.fileSizeChecked = true
+                syncProbeStateToTrackedCopies(video, fileSize = true)
+                notifyVideoUpdated()
+            }
+            return null
         }
 
         return withContext(Dispatchers.IO) {
@@ -896,6 +1063,8 @@ object VideoDetector {
                     notifyVideoUpdated()
                 }
                 video.fileSize
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching file size: ${e.message}")
                 video.fileSizeChecked = true
@@ -1091,6 +1260,9 @@ object VideoDetector {
      * Operates on a specific tab's video list for variant cleanup.
      */
     suspend fun fetchHlsQualities(video: DetectedVideo, kotlinTabId: String? = null): List<VideoQuality> {
+        StreamDiagnostics.event("manifest_request") {
+            "id=${StreamDiagnostics.id(video.url)} checked=${video.qualitiesChecked} qualities=${video.qualities.size} headers=${video.headers?.size ?: 0}"
+        }
         if (video.qualitiesChecked) {
             return video.qualities
         }
@@ -1127,6 +1299,13 @@ object VideoDetector {
                     video.contentType?.contains("mpegurl", ignoreCase = true) == true) {
 
                     val playlist = HlsParser.parsePlaylist(video.url, video.headers)
+                    StreamDiagnostics.event("manifest_result") {
+                        "id=${StreamDiagnostics.id(video.url)} validation=${playlist.validation} qualities=${playlist.videoQualities.size}"
+                    }
+                    if (playlist.validation == HlsPlaylistValidation.FETCH_FAILED) {
+                        // A failed replay cannot erase a body-confirmed quality ladder.
+                        return@withContext video.qualities
+                    }
                     video.hlsPlaylist = playlist
                     video.qualities = playlist.videoQualities
                     video.qualitiesChecked = true
@@ -1154,13 +1333,12 @@ object VideoDetector {
                             // URL itself (e.g. stream.m3u8 is in the same directory as segments).
                             val safeSegmentPrefixes = playlist.segmentPrefixes
                                 .filter { !video.url.startsWith(it) }
-                            ignoredUrls.addAll(safeSegmentPrefixes)
-
                             if (kotlinTabId != null) {
-                                val prefixes = playlist.segmentPrefixes
+                                ignoredPrefixesByTab.getOrPut(kotlinTabId) { mutableSetOf() }
+                                    .addAll(safeSegmentPrefixes)
                                 tabVideos[kotlinTabId]?.removeAll { detected ->
                                     detected.url != video.url &&
-                                    prefixes.any { detected.url.startsWith(it) }
+                                    safeSegmentPrefixes.any { detected.url.startsWith(it) }
                                 }
                             }
                         }
@@ -1168,13 +1346,10 @@ object VideoDetector {
 
                     if (playlist.videoQualities.isNotEmpty()) {
                         withContext(Dispatchers.Main) {
-                            // Add variants to ignore list so future detections are filtered
-                            playlist.videoQualities.forEach { quality ->
-                                ignoredUrls.add(quality.url)
-                            }
-
                             // Only remove existing items when we have a confirmed tab ID.
                             if (kotlinTabId != null) {
+                                val ignoredUrls = ignoredUrlsByTab.getOrPut(kotlinTabId) { mutableSetOf() }
+                                ignoredUrls.addAll(playlist.videoQualities.map { it.url }.filter { it != video.url })
                                 tabVideos[kotlinTabId]?.removeAll { detected ->
                                     ignoredUrls.contains(detected.url)
                                 }
@@ -1193,15 +1368,16 @@ object VideoDetector {
                     video.qualitiesChecked = true
                     emptyList()
                 }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
             } catch (e: Exception) {
                 // Avoid logging the stream URL in release; message alone is enough for failures.
                 Log.e(TAG, "Error fetching HLS qualities: ${e.message}")
                 if (BuildConfig.DEBUG) {
                     Log.e(TAG, "HLS qualities URL was: ${video.url}")
                 }
-                video.isPlayable = false
-                video.validationState = MediaValidationState.FAILED
-                video.qualitiesChecked = true
+                // Transport/parser exceptions are inconclusive, not proof the stream is invalid.
+                video.qualitiesChecked = false
                 withContext(Dispatchers.Main) {
                     syncProbeStateToTrackedCopies(video, manifest = true)
                     notifyVideoUpdated()
@@ -1216,10 +1392,17 @@ object VideoDetector {
         video: DetectedVideo,
         priority: ThumbnailRequestPriority = ThumbnailRequestPriority.VISIBLE,
     ): Bitmap? {
-        if (!video.isVideo) return null
-        if (video.url.startsWith("data:", ignoreCase = true)) return null
+        if (!video.isVideo || video.url.startsWith("data:", ignoreCase = true)) {
+            StreamDiagnostics.event("thumb_skip") { "id=${StreamDiagnostics.id(video.url)} reason=unsupported_kind_or_data_url" }
+            return null
+        }
+        val started = System.nanoTime()
+        StreamDiagnostics.event("thumb_request") {
+            "id=${StreamDiagnostics.id(video.url)} priority=$priority evidence=${thumbnailEvidenceVersion(video)} headers=${video.headers?.size ?: 0} qualities=${video.qualities.size}"
+        }
         val cached = synchronized(thumbnailCache) { thumbnailCache[video.url] }
         if (cached != null) {
+            StreamDiagnostics.event("thumb_cache_hit") { "id=${StreamDiagnostics.id(video.url)}" }
             withContext(Dispatchers.Main) {
                 val changed = video.thumbnailState != ThumbnailPreviewState.READY ||
                     video.effectiveValidationState != MediaValidationState.VERIFIED_PLAYABLE
@@ -1234,8 +1417,15 @@ object VideoDetector {
             return cached
         }
 
-        val bitmap = thumbnailRequests.run(video.url, priority) {
+        val requestKey = ThumbnailRequestKey(video.url, thumbnailEvidenceVersion(video))
+        val bitmap = thumbnailRequests.run(requestKey, priority, onEvent = { event ->
+            StreamDiagnostics.event("thumb_$event") { "id=${StreamDiagnostics.id(video.url)} priority=$priority" }
+        }) {
+            StreamDiagnostics.event("thumb_decoder_wait") { "id=${StreamDiagnostics.id(video.url)}" }
             thumbnailWorkMutex.withLock {
+                StreamDiagnostics.event("thumb_decoder_start") {
+                    "id=${StreamDiagnostics.id(video.url)} waitMs=${(System.nanoTime() - started) / 1_000_000}"
+                }
                 // Another URL can finish while this request waits for the decoder slot.
                 synchronized(thumbnailCache) {
                     thumbnailCache[video.url]
@@ -1255,6 +1445,9 @@ object VideoDetector {
                     bmp
                 }
             }
+        }
+        StreamDiagnostics.event("thumb_result") {
+            "id=${StreamDiagnostics.id(video.url)} outcome=${if (bitmap != null) "ready" else "unavailable"} elapsedMs=${(System.nanoTime() - started) / 1_000_000}"
         }
         withContext(Dispatchers.Main) {
             val nextPreviewState = if (bitmap != null) {
@@ -1278,30 +1471,74 @@ object VideoDetector {
         return bitmap
     }
 
-    /**
-     * Progressive thumbnail extraction:
-     * 1. Download the first 2 MB of the file to a temp file.
-     * 2. Run MMR on the local file.
-     */
+    /** Seek metadata and frames independently, including MP4s with their moov box at the end. */
     private fun fetchProgressiveThumbnail(video: DetectedVideo): Bitmap? {
-        val ctx = appContext ?: return null
-        val tempFile = File.createTempFile("playbridge_prog_thumb_", ".tmp", ctx.cacheDir)
-        return try {
-            // Download first 2MB
-            if (!downloadSegmentToFile(video.url, video.headers, tempFile, maxBytes = 2 * 1024 * 1024)) {
-                Log.w(TAG, "Progressive thumbnail download failed")
-                return null
+        val id = StreamDiagnostics.id(video.url)
+        val reader = ThumbnailRangeReader(video.url, video.headers.orEmpty()) { detail ->
+            StreamDiagnostics.event("thumb_range") { "id=$id $detail" }
+        }
+        val source = object : MediaDataSource() {
+            override fun getSize() = reader.size()
+            override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int) =
+                reader.readAt(position, buffer, offset, size)
+            override fun close() = reader.close()
+        }
+        val task = java.util.concurrent.FutureTask<Bitmap?> {
+            val retriever = MediaMetadataRetriever()
+            var fallback: Bitmap? = null
+            try {
+                retriever.setDataSource(source)
+                val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                    ?.toLongOrNull() ?: 0L
+                if (duration > 0) video.durationMs = duration
+                for ((attempt, seekUs) in thumbnailSeekTimesUs(duration).withIndex()) {
+                    if (Thread.currentThread().isInterrupted) break
+                    val frame = if (android.os.Build.VERSION.SDK_INT >= 27) {
+                        retriever.getScaledFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 640, 360)
+                    } else {
+                        retriever.getFrameAtTime(seekUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    }
+                    val black = frame != null && isNearlyBlackThumbnail(frame.width, frame.height, frame::getPixel)
+                    StreamDiagnostics.event("thumb_frame") {
+                        "id=$id attempt=${attempt + 1} seekUs=$seekUs result=${if (frame == null) "missing" else if (black) "black" else "ready"}"
+                    }
+                    if (frame != null) {
+                        if (fallback == null || !black) {
+                            fallback?.recycle()
+                            fallback = frame
+                        } else frame.recycle()
+                        if (!black) break
+                    }
+                }
+            } catch (e: Exception) {
+                StreamDiagnostics.event("thumb_extract_failed") { "id=$id type=${e.javaClass.simpleName}" }
+            } finally {
+                try { retriever.release() } finally { source.close() }
             }
-            extractThumbnailFromFile(tempFile)
+            if (Thread.currentThread().isInterrupted) {
+                fallback?.recycle()
+                null
+            } else fallback
+        }
+        Thread(task, "progressive-thumbnail").start()
+        return try {
+            task.get(12, TimeUnit.SECONDS)
+        } catch (e: Exception) {
+            task.cancel(true)
+            StreamDiagnostics.event("thumb_extract_stopped") { "id=$id type=${e.javaClass.simpleName}" }
+            null
         } finally {
-            tempFile.delete()
+            source.close()
         }
     }
 
     /**
      * Runs MediaMetadataRetriever on a local file.
      */
-    private fun extractThumbnailFromFile(file: File): Bitmap? {
+    private fun extractThumbnailFromFile(
+        file: File,
+        onDuration: ((Long) -> Unit)? = null,
+    ): Bitmap? {
         var result: Bitmap? = null
         var exception: Exception? = null
         val latch = CountDownLatch(1)
@@ -1313,6 +1550,7 @@ object VideoDetector {
                     val durationMs = retriever
                         .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
                         ?.toLongOrNull() ?: 0L
+                    if (durationMs > 0L) onDuration?.invoke(durationMs)
                     
                     // For short clips, seek to 0.5s. For others, seek to 1s (safe within 2MB chunk).
                     val seekUs = if (durationMs > 2_000L) 1_000_000L else 500_000L
@@ -1369,11 +1607,17 @@ object VideoDetector {
         }
 
         val parsed = fetchThumbnailMediaPlaylist(mediaPlaylistUrl, video.headers)
+        StreamDiagnostics.event("thumb_hls_playlist") {
+            "id=${StreamDiagnostics.id(video.url)} resource=${StreamDiagnostics.id(mediaPlaylistUrl)} parsed=${parsed != null} segments=${parsed?.playlist?.segments?.size ?: 0}"
+        }
         val segments = parsed?.playlist?.segments?.filterNot { it.hasGapTag }.orEmpty()
         if (parsed == null || segments.isEmpty()) {
             Log.w(TAG, "HLS thumbnail: no usable media segments")
             return null
         }
+        parsed.playlist.durationUs
+            .takeIf { parsed.playlist.hasEndTag && it > 0L && it != C.TIME_UNSET }
+            ?.let { video.durationMs = it / 1_000L }
 
         // ~25% into the segment list for a mid-stream frame (avoids intros)
         val targetIndex = ((segments.size - 1) * 0.25).toInt()
@@ -1417,7 +1661,10 @@ object VideoDetector {
             return null
         }
         return try {
-            if (connection.responseCode !in 200..299) return null
+            if (connection.responseCode !in 200..299) {
+                StreamDiagnostics.event("thumb_http_failure") { "resource=${StreamDiagnostics.id(playlistUrl)} stage=playlist status=${connection.responseCode}" }
+                return null
+            }
             val resolvedPlaylistUrl = connection.url.toString()
             val parsed = connection.inputStream.use { input ->
                 val parser = if (multivariant != null) {
@@ -1573,7 +1820,10 @@ object VideoDetector {
         if (range != null) connection.setRequestProperty("Range", range)
         return try {
             val status = connection.responseCode
-            if (status !in 200..299) return null
+            if (status !in 200..299) {
+                StreamDiagnostics.event("thumb_http_failure") { "resource=${StreamDiagnostics.id(url)} stage=sample status=$status" }
+                return null
+            }
             connection.inputStream.use { input ->
                 if (range != null && status != HttpURLConnection.HTTP_PARTIAL && offset > 0L) {
                     var remainingSkip = offset
@@ -1693,6 +1943,8 @@ object VideoDetector {
         tabVideos.remove(tabId)
         tabSeenUrls.remove(tabId)
         tabLifecycleIndex.remove(tabId)
+        ignoredUrlsByTab.remove(tabId)
+        ignoredPrefixesByTab.remove(tabId)
     }
 
     /**
@@ -1704,7 +1956,8 @@ object VideoDetector {
         tabSeenUrls.clear()
         tabLifecycleIndex.clear()
         detectorPageTracker.clear()
-        ignoredUrls.clear()
+        ignoredUrlsByTab.clear()
+        ignoredPrefixesByTab.clear()
     }
 
     /**

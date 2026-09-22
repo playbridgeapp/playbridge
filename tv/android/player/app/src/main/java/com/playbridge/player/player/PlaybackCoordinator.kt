@@ -18,6 +18,15 @@ import playbridge.PlayPayload
  */
 class PlaybackCoordinator(private val host: Host) {
 
+    sealed class MutationResult {
+        data object Applied : MutationResult()
+        data object NoActivePlayback : MutationResult()
+        data object StalePlayback : MutationResult()
+        data object ItemNotFound : MutationResult()
+        data object QueueFull : MutationResult()
+        data object InvalidCommand : MutationResult()
+    }
+
     interface Host {
         /** Load and start [item] in the underlying engine. [displayTitle] carries the "(n/m)" suffix. */
         fun loadItem(item: PlayPayload, displayTitle: String?)
@@ -40,18 +49,29 @@ class PlaybackCoordinator(private val host: Host) {
     }
 
     private val items = mutableListOf<PlayPayload>()
+    private val stableItemIds = mutableListOf<String>()
     private var cursor = 0
+    var playbackId: String? = null
+        private set
+    var queueRevision: Long = 0
+        private set
 
     val playlist: List<PlayPayload> get() = items
     val index: Int get() = cursor
     val hasPlaylist: Boolean get() = items.size > 1
     val isEmpty: Boolean get() = items.isEmpty()
+    fun itemIdAt(index: Int): String? = stableItemIds.getOrNull(index)
 
     /** Replace the queue (e.g. on initial intent / M3U expansion). Does not load. */
-    fun setPlaylist(newItems: List<PlayPayload>, startIndex: Int) {
+    fun setPlaylist(newItems: List<PlayPayload>, startIndex: Int, replacementId: String = java.util.UUID.randomUUID().toString()) {
         items.clear()
-        items.addAll(newItems)
+        stableItemIds.clear()
+        val accepted = newItems.take(MAX_QUEUE_ITEMS)
+        items.addAll(accepted)
+        stableItemIds.addAll(accepted.map(::stableItemId))
         cursor = startIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+        playbackId = replacementId
+        queueRevision++
     }
 
     /**
@@ -70,8 +90,12 @@ class PlaybackCoordinator(private val host: Host) {
      * compared as complete payloads because a webpage may intentionally reuse one media URL for
      * multiple logical queue entries (for example, a playlist demo with distinct item titles).
      */
-    fun queueAdd(newItems: List<PlayPayload>) {
-        if (newItems.isEmpty()) return
+    fun queueAdd(newItems: List<PlayPayload>, ifPlaybackId: String? = null): MutationResult {
+        if (items.isEmpty()) return MutationResult.NoActivePlayback
+        if (ifPlaybackId != null && !validId(ifPlaybackId)) return MutationResult.InvalidCommand
+        if (ifPlaybackId != null && ifPlaybackId != playbackId) return MutationResult.StalePlayback
+        if (newItems.isEmpty() || newItems.size > MAX_APPEND_ITEMS) return MutationResult.InvalidCommand
+        if (newItems.any { item -> item.item_id?.let { !validId(it) } == true }) return MutationResult.InvalidCommand
         // Walk the batch so each candidate is checked against the live queue *plus* items
         // already accepted from this same drain — filterNot{ isAlreadyQueued } alone misses
         // duplicates that only exist inside newItems.
@@ -80,9 +104,13 @@ class PlaybackCoordinator(private val host: Host) {
             if (isDuplicateOf(item, against = items) || isDuplicateOf(item, against = accepted)) continue
             accepted.add(item)
         }
-        if (accepted.isEmpty()) return
+        if (accepted.isEmpty()) return MutationResult.Applied
+        if (items.size + accepted.size > MAX_QUEUE_ITEMS) return MutationResult.QueueFull
         items.addAll(accepted)
+        stableItemIds.addAll(accepted.map(::stableItemId))
+        queueRevision++
         host.onPlaylistChanged(items, cursor)
+        return MutationResult.Applied
     }
 
     /**
@@ -130,6 +158,7 @@ class PlaybackCoordinator(private val host: Host) {
             return
         }
         cursor++
+        queueRevision++
         val item = items[cursor]
         host.loadItem(item, displayTitle(item, cursor))
         host.onPlaylistChanged(items, cursor)
@@ -147,6 +176,7 @@ class PlaybackCoordinator(private val host: Host) {
         }
         host.saveProgressBeforeAdvance(captureThumbnail = true)
         cursor--
+        queueRevision++
         val item = items[cursor]
         host.loadItem(item, displayTitle(item, cursor))
         host.onPlaylistChanged(items, cursor)
@@ -155,11 +185,105 @@ class PlaybackCoordinator(private val host: Host) {
     /** Jump to an explicit index (phone `playlist_jump` / on-TV panel selection). */
     suspend fun jumpTo(target: Int) {
         if (items.isEmpty() || target !in items.indices) return
+        if (target == cursor) return
         host.saveProgressBeforeAdvance(captureThumbnail = false)
         cursor = target
+        queueRevision++
         val item = items[cursor]
         host.loadItem(item, displayTitle(item, cursor))
         host.onPlaylistChanged(items, cursor)
+    }
+
+    suspend fun jumpToItem(itemId: String, ifPlaybackId: String? = null): MutationResult {
+        if (!validId(itemId) || (ifPlaybackId != null && !validId(ifPlaybackId))) return MutationResult.InvalidCommand
+        if (ifPlaybackId != null && ifPlaybackId != playbackId) return MutationResult.StalePlayback
+        val target = stableItemIds.indexOf(itemId)
+        if (target < 0) return MutationResult.ItemNotFound
+        jumpTo(target)
+        return MutationResult.Applied
+    }
+
+    suspend fun jumpToIndex(target: Int, ifPlaybackId: String? = null): MutationResult {
+        if (ifPlaybackId != null && !validId(ifPlaybackId)) return MutationResult.InvalidCommand
+        if (ifPlaybackId != null && ifPlaybackId != playbackId) return MutationResult.StalePlayback
+        if (target !in items.indices) return MutationResult.ItemNotFound
+        jumpTo(target)
+        return MutationResult.Applied
+    }
+
+    suspend fun remove(itemIds: Set<String>, ifPlaybackId: String? = null): MutationResult {
+        if (items.isEmpty()) return MutationResult.NoActivePlayback
+        if (itemIds.any { !validId(it) } || (ifPlaybackId != null && !validId(ifPlaybackId))) return MutationResult.InvalidCommand
+        if (ifPlaybackId != null && ifPlaybackId != playbackId) return MutationResult.StalePlayback
+        if (itemIds.isEmpty() || itemIds.any(String::isBlank)) return MutationResult.InvalidCommand
+        if (stableItemIds.none { it in itemIds }) return MutationResult.ItemNotFound
+        val currentId = stableItemIds.getOrNull(cursor)
+        val removedCurrent = currentId in itemIds
+        if (removedCurrent) host.saveProgressBeforeAdvance(captureThumbnail = false)
+        val retained = items.indices.filter { stableItemIds[it] !in itemIds }
+        val retainedItems = retained.map(items::get)
+        val retainedIds = retained.map(stableItemIds::get)
+        items.clear()
+        items.addAll(retainedItems)
+        stableItemIds.clear()
+        stableItemIds.addAll(retainedIds)
+        cursor = currentId?.let { id -> stableItemIds.indexOf(id).takeIf { it >= 0 } }
+            ?: cursor.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+        queueRevision++
+        if (removedCurrent && items.isNotEmpty()) {
+            host.loadItem(items[cursor], displayTitle(items[cursor], cursor))
+        } else if (items.isEmpty()) {
+            host.onPlaylistFinished()
+        }
+        host.onPlaylistChanged(items, cursor)
+        return MutationResult.Applied
+    }
+
+    fun move(itemId: String, beforeItemId: String?, ifPlaybackId: String? = null): MutationResult {
+        if (items.isEmpty()) return MutationResult.NoActivePlayback
+        if (!validId(itemId) || (beforeItemId != null && !validId(beforeItemId)) ||
+            (ifPlaybackId != null && !validId(ifPlaybackId))) return MutationResult.InvalidCommand
+        if (ifPlaybackId != null && ifPlaybackId != playbackId) return MutationResult.StalePlayback
+        val from = stableItemIds.indexOf(itemId)
+        if (from < 0) return MutationResult.ItemNotFound
+        val currentId = stableItemIds.getOrNull(cursor)
+        val item = items.removeAt(from)
+        stableItemIds.removeAt(from)
+        val target = if (beforeItemId == null) items.size else stableItemIds.indexOf(beforeItemId)
+        if (target < 0) {
+            items.add(from, item)
+            stableItemIds.add(from, itemId)
+            return MutationResult.ItemNotFound
+        }
+        items.add(target, item)
+        stableItemIds.add(target, itemId)
+        cursor = currentId?.let(stableItemIds::indexOf) ?: 0
+        queueRevision++
+        host.onPlaylistChanged(items, cursor)
+        return MutationResult.Applied
+    }
+
+    fun clear(ifPlaybackId: String? = null): MutationResult {
+        if (items.isEmpty()) return MutationResult.NoActivePlayback
+        if (ifPlaybackId != null && !validId(ifPlaybackId)) return MutationResult.InvalidCommand
+        if (ifPlaybackId != null && ifPlaybackId != playbackId) return MutationResult.StalePlayback
+        items.clear()
+        stableItemIds.clear()
+        cursor = 0
+        queueRevision++
+        host.onPlaylistChanged(items, cursor)
+        return MutationResult.Applied
+    }
+
+    private fun stableItemId(item: PlayPayload): String =
+        item.item_id?.takeIf(::validId) ?: java.util.UUID.randomUUID().toString()
+
+    private fun validId(value: String): Boolean = value.isNotBlank() && value.length <= MAX_ID_LENGTH
+
+    companion object {
+        const val MAX_QUEUE_ITEMS = 200
+        const val MAX_APPEND_ITEMS = 50
+        const val MAX_ID_LENGTH = 128
     }
 
     /** Mark the current item as failed in place (IPTV channel failover). */

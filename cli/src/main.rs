@@ -73,6 +73,8 @@ enum JsonLine<'a> {
 
 mod credentials;
 mod google_cast;
+mod json_session;
+mod mcp;
 mod preferred;
 mod receive;
 mod send;
@@ -82,21 +84,57 @@ mod update_installer;
 
 use google_cast::run_google_cast;
 
+#[derive(Debug, PartialEq, Eq)]
+struct RunError {
+    message: String,
+    show_usage: bool,
+}
+
+impl RunError {
+    fn usage(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            show_usage: true,
+        }
+    }
+
+    fn failed() -> Self {
+        Self {
+            message: String::new(),
+            show_usage: false,
+        }
+    }
+}
+
+impl From<String> for RunError {
+    fn from(message: String) -> Self {
+        Self::usage(message)
+    }
+}
+
+impl From<&str> for RunError {
+    fn from(message: &str) -> Self {
+        Self::usage(message)
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     let arguments = env::args().skip(1).collect::<Vec<_>>();
     match run(arguments).await {
         Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("error: {message}");
-            eprintln!();
-            eprintln!("{}", usage());
+        Err(error) => {
+            if error.show_usage {
+                eprintln!("error: {}", error.message);
+                eprintln!();
+                eprintln!("{}", usage());
+            }
             ExitCode::from(2)
         }
     }
 }
 
-async fn run(arguments: Vec<String>) -> Result<(), String> {
+async fn run(arguments: Vec<String>) -> Result<(), RunError> {
     let (arguments, globals) = GlobalOptions::extract(arguments)?;
     if arguments
         .first()
@@ -121,18 +159,195 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
             run_dashboard(globals.theme.as_deref(), ui::DashboardLaunch::Home).await
         }
         "send" | "cast" => {
-            let Some(target) = arguments.get(1) else {
-                return Err("missing media file or URL to send".into());
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!("{}", usage());
+                return Ok(());
+            }
+            let machine = arguments[1..].iter().any(|value| value == "--json");
+            match parse_send_args(&arguments[1..]) {
+                Ok(args) => {
+                    if machine {
+                        let media_payload = if args.media_payload_stdin {
+                            Some(send::MediaPayloadSource::Stdin)
+                        } else {
+                            args.media_payload_file.map(send::MediaPayloadSource::File)
+                        };
+                        send::run_json_cast(
+                            args.target,
+                            args.device,
+                            args.pair_code,
+                            args.pair_code_file,
+                            args.session_id,
+                            args.skip_history,
+                            media_payload,
+                        )
+                        .await
+                        .map_err(|_| RunError::failed())
+                    } else {
+                        send::validate_media_target(&args.target)?;
+                        run_dashboard(
+                            globals.theme.as_deref(),
+                            ui::DashboardLaunch::Cast {
+                                source: Some(args.target),
+                                browser: false,
+                                skip_history: args.skip_history,
+                            },
+                        )
+                        .await
+                    }
+                }
+                Err(message) => {
+                    if machine {
+                        let error = if message.starts_with("unknown send option:") {
+                            "unknown_option"
+                        } else if message.contains("single media file") {
+                            "invalid_arguments"
+                        } else {
+                            "missing_media_target"
+                        };
+                        let _ = send::emit_json(&serde_json::json!({
+                            "ok": false,
+                            "error": error,
+                            "message": message,
+                        }));
+                        Err(RunError::failed())
+                    } else {
+                        Err(RunError::usage(message))
+                    }
+                }
+            }
+        }
+        "mcp" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!("{}", mcp::usage());
+                return Ok(());
+            }
+            mcp::run().await.map_err(RunError::usage)
+        }
+        "paired" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!(
+                    "List saved PlayBridge receiver credentials.\n\nUsage:\n  playbridge paired --json"
+                );
+                return Ok(());
+            }
+            let paired = credentials::PlaybridgeCredentials::list().map_err(RunError::usage)?;
+            send::emit_json(&serde_json::json!({ "ok": true, "paired": paired }))
+                .map_err(|_| RunError::failed())
+        }
+        "forget" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!(
+                    "Forget credentials held by this CLI sender only.\n\nUsage:\n  playbridge forget <uuid|name> --json\n  playbridge forget --all --json"
+                );
+                return Ok(());
+            }
+            let all = arguments[1..].iter().any(|value| value == "--all");
+            let selectors = arguments[1..]
+                .iter()
+                .filter(|value| value.as_str() != "--json" && value.as_str() != "--all")
+                .collect::<Vec<_>>();
+            let result = if all {
+                if !selectors.is_empty() {
+                    Err("--all cannot be combined with a device".into())
+                } else {
+                    credentials::PlaybridgeCredentials::forget_all()
+                }
+            } else if let [selector] = selectors.as_slice() {
+                credentials::PlaybridgeCredentials::forget(selector).map(|item| vec![item])
+            } else {
+                Err("forget requires one device selector or --all".into())
             };
-            send::validate_media_target(target)?;
-            run_dashboard(
-                globals.theme.as_deref(),
-                ui::DashboardLaunch::Cast {
-                    source: Some(target.clone()),
-                    browser: false,
-                },
+            match result {
+                Ok(forgotten) => send::emit_json(&serde_json::json!({
+                    "ok": true,
+                    "forgotten": forgotten,
+                }))
+                .map_err(|_| RunError::failed()),
+                Err(error) => {
+                    let _ = send::emit_json(&serde_json::json!({
+                        "ok": false,
+                        "error": error,
+                    }));
+                    Err(RunError::failed())
+                }
+            }
+        }
+        "pair" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!(
+                    "Pair with a PlayBridge receiver without casting media.\n\nUsage:\n  playbridge pair [device] --json [--pair-code <code>]\n  playbridge pair --device <id> --json"
+                );
+                return Ok(());
+            }
+            let args = parse_pair_args(&arguments[1..]).map_err(RunError::usage)?;
+            send::run_json_pair(
+                args.device,
+                args.pair_code,
+                args.pair_code_file,
+                args.session_id,
             )
             .await
+            .map_err(|_| RunError::failed())
+        }
+        "status" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!("{}", usage());
+                return Ok(());
+            }
+            match json_session::parse_status_args(&arguments[1..]) {
+                Ok(session_id) => {
+                    send::run_json_status(session_id.as_deref()).map_err(|_| RunError::failed())
+                }
+                Err(message) => {
+                    let _ = send::emit_json(&serde_json::json!({
+                        "ok": false,
+                        "error": "invalid_arguments",
+                        "message": message,
+                    }));
+                    Err(RunError::failed())
+                }
+            }
+        }
+        "control" => {
+            if arguments[1..]
+                .iter()
+                .any(|value| value == "--help" || value == "-h")
+            {
+                println!("{}", usage());
+                return Ok(());
+            }
+            match json_session::parse_control_args(&arguments[1..]) {
+                Ok((session_id, request)) => send::run_json_control(session_id.as_deref(), request)
+                    .await
+                    .map_err(|_| RunError::failed()),
+                Err(message) => {
+                    let _ = send::emit_json(&serde_json::json!({
+                        "ok": false,
+                        "error": "invalid_arguments",
+                        "message": message,
+                    }));
+                    Err(RunError::failed())
+                }
+            }
         }
         "browser" => {
             let Some(target) = arguments.get(1) else {
@@ -144,6 +359,7 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 ui::DashboardLaunch::Cast {
                     source: Some(target.clone()),
                     browser: true,
+                    skip_history: None,
                 },
             )
             .await
@@ -184,10 +400,12 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 )
                 .await
             } else {
-                discover(args).await
+                discover(args).await.map_err(RunError::from)
             }
         }
-        "google-cast" | "googlecast" => run_google_cast(&arguments[1..]).await,
+        "google-cast" | "googlecast" => run_google_cast(&arguments[1..])
+            .await
+            .map_err(RunError::from),
         "preferred" => {
             if let Some(sub) = arguments.get(1)
                 && sub == "clear"
@@ -219,7 +437,25 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 println!("PlayBridge CLI configuration is valid.");
                 Ok(())
             }
-            _ => Err("expected: playbridge config <path|check>".into()),
+            Some("skip-history") => match arguments.get(2).map(String::as_str) {
+                None => {
+                    let enabled = ui::skip_history_default()?;
+                    println!("{}", if enabled { "on" } else { "off" });
+                    Ok(())
+                }
+                Some("on" | "true") if arguments.len() == 3 => {
+                    ui::set_skip_history_default(true)?;
+                    println!("Skip history default is on.");
+                    Ok(())
+                }
+                Some("off" | "false") if arguments.len() == 3 => {
+                    ui::set_skip_history_default(false)?;
+                    println!("Skip history default is off.");
+                    Ok(())
+                }
+                _ => Err("expected: playbridge config skip-history [on|off]".into()),
+            },
+            _ => Err("expected: playbridge config <path|check|skip-history>".into()),
         },
         target => {
             // Default to sending the media target directly
@@ -229,6 +465,7 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
                 ui::DashboardLaunch::Cast {
                     source: Some(target.to_owned()),
                     browser: false,
+                    skip_history: None,
                 },
             )
             .await
@@ -239,14 +476,16 @@ async fn run(arguments: Vec<String>) -> Result<(), String> {
 async fn run_dashboard(
     theme_override: Option<&str>,
     launch: ui::DashboardLaunch,
-) -> Result<(), String> {
+) -> Result<(), RunError> {
     if !ui::dashboard_available() {
         return Err(
             "the PlayBridge dashboard requires an interactive terminal; use `discover --json` or `discover --json-lines` for machine-readable discovery"
                 .into(),
         );
     }
-    ui::run_dashboard(theme_override, launch).await
+    ui::run_dashboard(theme_override, launch)
+        .await
+        .map_err(RunError::from)
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -285,6 +524,204 @@ impl GlobalOptions {
         }
         Ok((remaining, options))
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SendArgs {
+    target: String,
+    device: Option<String>,
+    pair_code: Option<String>,
+    pair_code_file: Option<String>,
+    session_id: Option<String>,
+    skip_history: Option<bool>,
+    media_payload_file: Option<String>,
+    media_payload_stdin: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct PairArgs {
+    device: Option<String>,
+    pair_code: Option<String>,
+    pair_code_file: Option<String>,
+    session_id: Option<String>,
+}
+
+fn parse_pair_args(arguments: &[String]) -> Result<PairArgs, String> {
+    let mut device = None;
+    let mut pair_code = None;
+    let mut pair_code_file = None;
+    let mut session_id = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let target = match arguments[index].as_str() {
+            "--json" => None,
+            "--device" | "--pair-code" | "--pair-code-file" | "--session-id" => {
+                let option = arguments[index].clone();
+                index += 1;
+                let value = arguments
+                    .get(index)
+                    .ok_or_else(|| format!("{option} requires a value"))?
+                    .clone();
+                match option.as_str() {
+                    "--device" => device = Some(value),
+                    "--pair-code" => pair_code = Some(value),
+                    "--pair-code-file" => pair_code_file = Some(value),
+                    _ => session_id = Some(value),
+                }
+                None
+            }
+            value if value.starts_with("--device=") => {
+                device = Some(value[9..].to_owned());
+                None
+            }
+            value if value.starts_with("--pair-code=") => {
+                pair_code = Some(value[12..].to_owned());
+                None
+            }
+            value if value.starts_with("--pair-code-file=") => {
+                pair_code_file = Some(value[17..].to_owned());
+                None
+            }
+            value if value.starts_with("--session-id=") => {
+                session_id = Some(value[13..].to_owned());
+                None
+            }
+            value if value.starts_with('-') => return Err(format!("unknown pair option: {value}")),
+            value => Some(value.to_owned()),
+        };
+        if let Some(target) = target {
+            if device.is_some() {
+                return Err("pair accepts a single device".into());
+            }
+            device = Some(target);
+        }
+        index += 1;
+    }
+    if pair_code.is_some() && pair_code_file.is_some() {
+        return Err("--pair-code and --pair-code-file cannot be combined".into());
+    }
+    Ok(PairArgs {
+        device,
+        pair_code,
+        pair_code_file,
+        session_id,
+    })
+}
+
+fn parse_send_args(arguments: &[String]) -> Result<SendArgs, String> {
+    let mut target = None;
+    let mut device = None;
+    let mut pair_code = None;
+    let mut pair_code_file = None;
+    let mut session_id = None;
+    let mut skip_history = None;
+    let mut media_payload_file = None;
+    let mut media_payload_stdin = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--json" | "--help" | "-h" => {}
+            "--device" => {
+                index += 1;
+                device = Some(
+                    arguments
+                        .get(index)
+                        .ok_or("--device requires a value")?
+                        .clone(),
+                );
+            }
+            value if value.starts_with("--device=") => {
+                device = Some(value["--device=".len()..].to_owned());
+            }
+            "--pair-code" => {
+                index += 1;
+                pair_code = Some(
+                    arguments
+                        .get(index)
+                        .ok_or("--pair-code requires a value")?
+                        .clone(),
+                );
+            }
+            value if value.starts_with("--pair-code=") => {
+                pair_code = Some(value["--pair-code=".len()..].to_owned());
+            }
+            "--pair-code-file" => {
+                index += 1;
+                pair_code_file = Some(
+                    arguments
+                        .get(index)
+                        .ok_or("--pair-code-file requires a value")?
+                        .clone(),
+                );
+            }
+            value if value.starts_with("--pair-code-file=") => {
+                pair_code_file = Some(value["--pair-code-file=".len()..].to_owned());
+            }
+            "--session-id" => {
+                index += 1;
+                session_id = Some(
+                    arguments
+                        .get(index)
+                        .ok_or("--session-id requires a value")?
+                        .clone(),
+                );
+            }
+            "--media-payload-file" => {
+                index += 1;
+                media_payload_file = Some(
+                    arguments
+                        .get(index)
+                        .ok_or("--media-payload-file requires a value")?
+                        .clone(),
+                );
+            }
+            value if value.starts_with("--session-id=") => {
+                session_id = Some(value["--session-id=".len()..].to_owned());
+            }
+            value if value.starts_with("--media-payload-file=") => {
+                media_payload_file = Some(value["--media-payload-file=".len()..].to_owned());
+            }
+            "--media-payload-stdin" => media_payload_stdin = true,
+            "--skip-history" => {
+                if skip_history == Some(false) {
+                    return Err("--skip-history and --save-history cannot be combined".into());
+                }
+                skip_history = Some(true);
+            }
+            "--save-history" => {
+                if skip_history == Some(true) {
+                    return Err("--skip-history and --save-history cannot be combined".into());
+                }
+                skip_history = Some(false);
+            }
+            value if value.starts_with('-') => {
+                return Err(format!("unknown send option: {value}"));
+            }
+            value => {
+                if target.is_some() {
+                    return Err("send accepts a single media file or URL".into());
+                }
+                target = Some(value.to_owned());
+            }
+        }
+        index += 1;
+    }
+    if pair_code.is_some() && pair_code_file.is_some() {
+        return Err("--pair-code and --pair-code-file cannot be combined".into());
+    }
+    if media_payload_stdin && media_payload_file.is_some() {
+        return Err("--media-payload-stdin and --media-payload-file cannot be combined".into());
+    }
+    Ok(SendArgs {
+        target: target.ok_or_else(|| "missing media file or URL to send".to_owned())?,
+        device,
+        pair_code,
+        pair_code_file,
+        session_id,
+        skip_history,
+        media_payload_file,
+        media_payload_stdin,
+    })
 }
 
 fn parse_discover_args(arguments: &[String]) -> Result<DiscoverArgs, String> {
@@ -466,16 +903,48 @@ Dashboard Commands:
   preferred clear                   Open Settings and clear the preferred receiver
 
 Machine Commands:
+  send|cast <filename|URL> --json   Cast to the preferred receiver and print JSON events
+  mcp                               Run a stdio MCP server for AI agents
+  paired --json                     List this sender's saved receiver credentials
+  forget <uuid|name> --json         Forget one receiver credential locally
+  forget --all --json               Forget all receiver credentials locally
+  pair [device] --json              Pair with a PlayBridge receiver without casting
+  status [--json] [--session-id]    Print status of a JSON send session
+  control <pause|play|toggle|stop|seek|volume|mute|loop|speed|audio_boost> [--json]
+                                    Control the active JSON send session
   discover --json                   Print one final discovery report
   discover --json-lines             Stream discovery events
   google-cast status [options]      Query Google Cast status without launching
   google-cast launch [options]      Launch or join a Google Cast receiver
   config <path|check>               Locate or validate UI configuration
+  config skip-history [on|off]      Show or change the cast history default
 
 Global Options:
       --theme <name>               Override the configured UI theme
   -V, --version                    Print the CLI version
   -h, --help                       Show this help
+
+Control Options:
+  pause|play|toggle|stop          Transport controls
+  seek <seconds>                  Relative seek; negative seeks backward
+  volume <delta>                  Relative volume in -1..1
+  mute                            Toggle mute
+  speed <value>                   Playback speed
+
+Send Options:
+      --json                      Cast without the dashboard (preferred receiver, or discover)
+      --device <id>               Receiver id, uuid, name, or address
+      --pair-code <code>          SAS code shown by a PlayBridge receiver
+      --pair-code-file <path>     Wait for that file to contain the SAS code
+      --session-id <id>           Address one machine-mode cast session
+      --skip-history              Do not save this cast to receiver history
+      --save-history              Save this cast, overriding the configured default
+
+Pair Options:
+      --device <id>               PlayBridge receiver id, uuid, name, or address
+      --pair-code <code>          SAS code shown by the receiver
+      --pair-code-file <path>     Wait for that file to contain the SAS code
+      --session-id <id>           Identify an agent-managed pairing operation
 
 Discover Options:
   -p, --protocol <names>           playbridge, native, dlna, roku, dial, googlecast,
@@ -512,6 +981,29 @@ mod tests {
         let args = parse_discover_args(&[]).unwrap();
         assert_eq!(args.protocols, HashSet::from(ReceiverProtocol::DEFAULTS));
         assert_eq!(args.timeout, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn parse_pair_args_supports_agent_managed_pairing() {
+        let args = parse_pair_args(&strings(&[
+            "playbridge:tv-id",
+            "--pair-code-file",
+            "/tmp/code",
+            "--session-id=session-1",
+            "--json",
+        ]))
+        .unwrap();
+        assert_eq!(args.device.as_deref(), Some("playbridge:tv-id"));
+        assert_eq!(args.pair_code_file.as_deref(), Some("/tmp/code"));
+        assert_eq!(args.session_id.as_deref(), Some("session-1"));
+        assert!(parse_pair_args(&strings(&["one", "two"])).is_err());
+        assert!(
+            parse_pair_args(&strings(&[
+                "--pair-code=123456",
+                "--pair-code-file=/tmp/code",
+            ]))
+            .is_err()
+        );
     }
 
     #[test]
@@ -558,12 +1050,118 @@ mod tests {
         let help = usage();
         assert!(help.contains("Dashboard Commands:"));
         assert!(help.contains("Machine Commands:"));
+        assert!(help.contains("send|cast <filename|URL> --json"));
+        assert!(help.contains("mcp"));
+        assert!(help.contains("status [--json]"));
+        assert!(
+            help.contains(
+                "control <pause|play|toggle|stop|seek|volume|mute|loop|speed|audio_boost>"
+            )
+        );
         assert!(help.contains("Interactive workflows require a terminal"));
+    }
+
+    #[test]
+    fn parse_send_args_accepts_json_flag_before_or_after_target() {
+        let after = parse_send_args(&strings(&["video.mp4", "--json"])).unwrap();
+        assert_eq!(after.target, "video.mp4");
+        assert_eq!(after.device, None);
+        let before = parse_send_args(&strings(&["--json", "https://example.test/a.m3u8"])).unwrap();
+        assert_eq!(before.target, "https://example.test/a.m3u8");
+    }
+
+    #[test]
+    fn parse_send_args_accepts_history_overrides() {
+        let skipped = parse_send_args(&strings(&["video.mp4", "--skip-history"])).unwrap();
+        assert_eq!(skipped.skip_history, Some(true));
+        let saved = parse_send_args(&strings(&["video.mp4", "--save-history"])).unwrap();
+        assert_eq!(saved.skip_history, Some(false));
+        assert!(
+            parse_send_args(&strings(&["video.mp4", "--skip-history", "--save-history"])).is_err()
+        );
+    }
+
+    #[test]
+    fn parse_send_args_accepts_device_and_pair_code() {
+        let args = parse_send_args(&strings(&[
+            "--json",
+            "video.mp4",
+            "--device",
+            "Living Room",
+            "--pair-code",
+            "123456",
+        ]))
+        .unwrap();
+        assert_eq!(args.target, "video.mp4");
+        assert_eq!(args.device.as_deref(), Some("Living Room"));
+        assert_eq!(args.pair_code.as_deref(), Some("123456"));
+        assert_eq!(args.pair_code_file, None);
+        assert_eq!(args.session_id, None);
+        let file = parse_send_args(&strings(&[
+            "video.mp4",
+            "--pair-code-file",
+            "/tmp/playbridge-sas",
+        ]))
+        .unwrap();
+        assert_eq!(file.pair_code_file.as_deref(), Some("/tmp/playbridge-sas"));
+        let scoped = parse_send_args(&strings(&[
+            "video.mp4",
+            "--json",
+            "--session-id",
+            "agent-123",
+        ]))
+        .unwrap();
+        assert_eq!(scoped.session_id.as_deref(), Some("agent-123"));
+
+        let stdin_payload =
+            parse_send_args(&strings(&["video.mp4", "--json", "--media-payload-stdin"])).unwrap();
+        assert!(stdin_payload.media_payload_stdin);
+        assert!(
+            parse_send_args(&strings(&[
+                "video.mp4",
+                "--media-payload-stdin",
+                "--media-payload-file",
+                "/tmp/payload.json",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parse_send_args_rejects_missing_unknown_and_extra_targets() {
+        assert!(parse_send_args(&strings(&["--json"])).is_err());
+        assert!(
+            parse_send_args(&strings(&["video.mp4", "--foo"]))
+                .unwrap_err()
+                .contains("unknown send option")
+        );
+        assert!(
+            parse_send_args(&strings(&["one.mp4", "two.mp4"]))
+                .unwrap_err()
+                .contains("single media file")
+        );
     }
 
     #[tokio::test]
     async fn removed_no_tui_option_is_rejected() {
         let error = run(strings(&["--no-tui"])).await.unwrap_err();
-        assert!(error.contains("has been removed"));
+        assert!(error.message.contains("has been removed"));
+        assert!(error.show_usage);
+    }
+
+    #[tokio::test]
+    async fn json_send_without_target_skips_usage() {
+        let error = run(strings(&["send", "--json"])).await.unwrap_err();
+        assert!(!error.show_usage);
+        assert!(error.message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_without_json_does_not_silently_enter_machine_mode() {
+        let error = run(strings(&["send", "https://example.test/video.mp4"]))
+            .await
+            .unwrap_err();
+        assert!(error.show_usage);
+        assert!(error.message.contains("interactive terminal"));
     }
 }

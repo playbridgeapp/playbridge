@@ -16,6 +16,9 @@ import com.squareup.wire.ReverseProtoWriter
 import com.squareup.wire.Syntax.PROTO_3
 import com.squareup.wire.WireField
 import com.squareup.wire.`internal`.JvmField
+import com.squareup.wire.`internal`.immutableCopyOf
+import com.squareup.wire.`internal`.redactElements
+import com.squareup.wire.`internal`.sanitize
 import kotlin.Any
 import kotlin.AssertionError
 import kotlin.Boolean
@@ -26,6 +29,7 @@ import kotlin.Long
 import kotlin.Nothing
 import kotlin.String
 import kotlin.Suppress
+import kotlin.collections.List
 import okio.ByteString
 
 public class QueueAddPayload(
@@ -36,8 +40,24 @@ public class QueueAddPayload(
     schemaIndex = 0,
   )
   public val item: PlayPayload? = null,
+  items: List<PlayPayload> = emptyList(),
+  @field:WireField(
+    tag = 3,
+    adapter = "com.squareup.wire.ProtoAdapter#STRING",
+    jsonName = "ifPlaybackId",
+    schemaIndex = 2,
+  )
+  public val if_playback_id: String? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<QueueAddPayload, Nothing>(ADAPTER, unknownFields) {
+  @field:WireField(
+    tag = 2,
+    adapter = "playbridge.PlayPayload#ADAPTER",
+    label = WireField.Label.REPEATED,
+    schemaIndex = 1,
+  )
+  public val items: List<PlayPayload> = immutableCopyOf("items", items)
+
   @Deprecated(
     message = "Shouldn't be used in Kotlin",
     level = DeprecationLevel.HIDDEN,
@@ -50,6 +70,8 @@ public class QueueAddPayload(
     if (other !is QueueAddPayload) return false
     if (unknownFields != other.unknownFields) return false
     if (item != other.item) return false
+    if (items != other.items) return false
+    if (if_playback_id != other.if_playback_id) return false
     return true
   }
 
@@ -58,6 +80,8 @@ public class QueueAddPayload(
     if (result == 0) {
       result = unknownFields.hashCode()
       result = result * 37 + (item?.hashCode() ?: 0)
+      result = result * 37 + items.hashCode()
+      result = result * 37 + (if_playback_id?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -66,11 +90,17 @@ public class QueueAddPayload(
   override fun toString(): String {
     val result = mutableListOf<String>()
     if (item != null) result += """item=$item"""
+    if (items.isNotEmpty()) result += """items=$items"""
+    if (if_playback_id != null) result += """if_playback_id=${sanitize(if_playback_id)}"""
     return result.joinToString(prefix = "QueueAddPayload{", separator = ", ", postfix = "}")
   }
 
-  public fun copy(item: PlayPayload? = this.item, unknownFields: ByteString = this.unknownFields):
-      QueueAddPayload = QueueAddPayload(item, unknownFields)
+  public fun copy(
+    item: PlayPayload? = this.item,
+    items: List<PlayPayload> = this.items,
+    if_playback_id: String? = this.if_playback_id,
+    unknownFields: ByteString = this.unknownFields,
+  ): QueueAddPayload = QueueAddPayload(item, items, if_playback_id, unknownFields)
 
   public companion object {
     @JvmField
@@ -87,6 +117,8 @@ public class QueueAddPayload(
         if (value.item != null) {
           size += PlayPayload.ADAPTER.encodedSizeWithTag(1, value.item)
         }
+        size += PlayPayload.ADAPTER.asRepeated().encodedSizeWithTag(2, value.items)
+        size += ProtoAdapter.STRING.encodedSizeWithTag(3, value.if_playback_id)
         return size
       }
 
@@ -94,11 +126,15 @@ public class QueueAddPayload(
         if (value.item != null) {
           PlayPayload.ADAPTER.encodeWithTag(writer, 1, value.item)
         }
+        PlayPayload.ADAPTER.asRepeated().encodeWithTag(writer, 2, value.items)
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.if_playback_id)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: QueueAddPayload) {
         writer.writeBytes(value.unknownFields)
+        ProtoAdapter.STRING.encodeWithTag(writer, 3, value.if_playback_id)
+        PlayPayload.ADAPTER.asRepeated().encodeWithTag(writer, 2, value.items)
         if (value.item != null) {
           PlayPayload.ADAPTER.encodeWithTag(writer, 1, value.item)
         }
@@ -106,20 +142,27 @@ public class QueueAddPayload(
 
       override fun decode(reader: ProtoReader): QueueAddPayload {
         var item: PlayPayload? = null
+        val items = mutableListOf<PlayPayload>()
+        var if_playback_id: String? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> item = PlayPayload.ADAPTER.decode(reader)
+            2 -> items.add(PlayPayload.ADAPTER.decode(reader))
+            3 -> if_playback_id = ProtoAdapter.STRING.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
         return QueueAddPayload(
           item = item,
+          items = items,
+          if_playback_id = if_playback_id,
           unknownFields = unknownFields
         )
       }
 
       override fun redact(`value`: QueueAddPayload): QueueAddPayload = value.copy(
         item = value.item?.let(PlayPayload.ADAPTER::redact),
+        items = value.items.redactElements(PlayPayload.ADAPTER),
         unknownFields = ByteString.EMPTY
       )
     }

@@ -26,11 +26,13 @@ import {
 import {
   detectedMediaKind,
   inferredMediaContentType,
+  isSubtitleContentDisposition,
+  isSubtitleUrl,
   shouldReportNetworkImage,
   type DetectedMediaKind,
 } from "./detected-media-kind";
 import { enrichReplayHeaders } from "./header-enrichment";
-import { HlsParser } from "../core/hls-parser";
+import { HlsParser, type VideoQuality } from "../core/hls-parser";
 import {
   classifyHlsUrl,
   detectionEvidencePriority,
@@ -54,6 +56,7 @@ import {
 import {
   attachBoundedResponseBodyScanner,
   scanResponseBodyForMedia,
+  subtitleContentType,
   shouldInspectResponseBody,
   type ResponseBodyStreamFilter,
 } from "../core/response-body-media";
@@ -94,7 +97,6 @@ const AUDIO_EXTENSIONS = [
   ".flac",
   ".weba",
 ];
-const SUBTITLE_EXTENSIONS = [".vtt", ".srt"];
 const SEGMENT_OR_SUB_RE =
   /\.(?:vtt|srt|ts|m4s)(?:$|\?)|\/segment|frag(?:ment)?|\/chunks?\/|init[-_][^/]*\.mp4|seg[-_][^/]*\.mp4/i;
 
@@ -114,7 +116,7 @@ interface VideoData {
   audioUrl?: string;
   isSyntheticMaster?: boolean;
   syntheticPlaylist?: string;
-  qualities?: unknown[];
+  qualities?: VideoQuality[];
   frameId?: number;
   navigationGeneration?: number;
   mediaKind?: DetectedMediaKind;
@@ -597,6 +599,7 @@ function nativeVideoMessage(video: VideoData): Record<string, unknown> {
     audioUrl: out.audioUrl ?? null,
     playlistBody: out.syntheticPlaylist ?? null,
     isSyntheticMaster: out.isSyntheticMaster ?? false,
+    qualities: out.qualities ?? null,
     mediaKind:
       out.mediaKind ?? detectedMediaKind(out.url, out.contentType, out.hlsRole),
     width: out.width ?? null,
@@ -1026,7 +1029,9 @@ function applyMasterBody(
   }
   try {
     const playlist = HlsParser.parsePlaylistContent(rawBody, stored.url);
-    if (playlist.role === "master" || playlist.videoQualities.length > 0) {
+    const parsedMaster =
+      playlist.role === "master" || playlist.videoQualities.length > 0;
+    if (parsedMaster) {
       stored.hlsRole = "master";
       stored.qualities = playlist.videoQualities;
       if (playlist.hasSeparateAudio) stored.hasSeparateAudio = true;
@@ -1046,6 +1051,10 @@ function applyMasterBody(
       }
     }
     maybeSynthesizeFromObservations(tabId, stored.hlsGroupKey);
+    // reportVideo emitted the body-confirmed detection before this callback parsed the
+    // response body. Re-emit the enriched record so Android receives the quality ladder
+    // immediately instead of having to fetch the master again from a lazy cast-sheet row.
+    if (parsedMaster) emitNativeVideo(stored);
   } catch (e) {
     plog("master body parse failed:", (e as Error)?.message);
   }
@@ -1263,6 +1272,9 @@ browser.webRequest.onHeadersReceived.addListener(
     const contentLength = Number.isFinite(parsedContentLength)
       ? parsedContentLength
       : null;
+    const contentDisposition = details.responseHeaders?.find(
+      (h) => h.name.toLowerCase() === "content-disposition",
+    )?.value ?? "";
     const stored = requestHeadersMap.get(details.requestId);
     const tabId = resolveTabId(details.tabId, details.url);
     const navigationGeneration = currentNavigationGeneration(
@@ -1271,7 +1283,9 @@ browser.webRequest.onHeadersReceived.addListener(
     );
     const urlFull = details.url.toLowerCase();
     const urlPath = urlFull.split("?")[0] ?? urlFull;
-    const hasSubExt = SUBTITLE_EXTENSIONS.some((ext) => urlPath.endsWith(ext));
+    const hasSubExt =
+      isSubtitleUrl(details.url) ||
+      isSubtitleContentDisposition(contentDisposition);
     const isSubtitleContentType =
       contentType.includes("text/vtt") ||
       contentType.includes("subrip") ||
@@ -1343,7 +1357,9 @@ browser.webRequest.onHeadersReceived.addListener(
         hlsRole,
         navigationGeneration,
         mediaKind:
-          hlsRole === "audio_media"
+          hasSubExt
+            ? "subtitle"
+            : hlsRole === "audio_media"
             ? "audio"
             : detectedMediaKind(details.url, contentType, hlsRole) ?? "video",
       };
@@ -1383,7 +1399,26 @@ browser.webRequest.onHeadersReceived.addListener(
             contentType,
           );
 
-          if (scan.responseKind) {
+          if (scan.responseKind === "subtitle") {
+            reportVideoForRequest(
+              {
+                url: details.url,
+                tabId,
+                contentType: subtitleContentType(body),
+                detectedBy: "body_content_subtitle",
+                originUrl: details.originUrl ?? "",
+                timestamp: Date.now(),
+                frameId,
+                hlsRole: "not_hls",
+                navigationGeneration: bodyNavigationGeneration,
+                mediaKind: "subtitle",
+              },
+              tabId,
+              stored?.headers ?? null,
+              details.type,
+              details.url,
+            );
+          } else if (scan.responseKind) {
             let hlsRole: HlsRole = "not_hls";
             let playlist:
               | ReturnType<typeof HlsParser.parsePlaylistContent>
