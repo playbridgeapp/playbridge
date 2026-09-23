@@ -252,6 +252,15 @@ fn registered_media_filename(url: &Url, content_type: Option<&str>) -> String {
     if content_type.contains("dash") || content_type.contains("mpd") {
         return "manifest.mpd".to_string();
     }
+    if content_type.split(';').next().unwrap_or("").trim() == "video/mp4"
+        || url
+            .path()
+            .trim_end_matches('/')
+            .to_ascii_lowercase()
+            .ends_with(".mp4")
+    {
+        return "media.mp4".to_string();
+    }
     let lower = url.as_str().to_ascii_lowercase();
     if lower.contains(".mpd") || lower.contains("manifest/dash") {
         return "manifest.mpd".to_string();

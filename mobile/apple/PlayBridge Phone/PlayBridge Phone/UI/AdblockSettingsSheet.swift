@@ -31,9 +31,9 @@ struct AdblockSettingsSheet: View {
                         ForEach(userRules) { rule in
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(rule.domain.isEmpty ? "All sites" : rule.domain)
-                                    .font(.system(size: 13, weight: .medium)).foregroundColor(Theme.onSurface)
+                                    .font(Theme.font(size: 13, weight: .medium)).foregroundColor(Theme.onSurface)
                                 Text(rule.selector)
-                                    .font(.system(size: 11, design: .monospaced)).foregroundColor(Theme.onSurfaceVariant)
+                                    .font(Theme.font(size: 11, design: .monospaced)).foregroundColor(Theme.onSurfaceVariant)
                                     .lineLimit(1)
                             }
                         }
@@ -52,7 +52,7 @@ struct AdblockSettingsSheet: View {
                 if !blockedSources.isEmpty {
                     Section {
                         ForEach(blockedSources, id: \.self) { host in
-                            Text(host).font(.system(size: 13)).foregroundColor(Theme.onSurface)
+                            Text(host).font(Theme.font(size: 13)).foregroundColor(Theme.onSurface)
                         }
                         .onDelete { offsets in
                             offsets.map { blockedSources[$0] }.forEach { ContentBlocker.removeUserBlockedDomain($0) }
@@ -71,11 +71,11 @@ struct AdblockSettingsSheet: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text("PlayBridge Extra Rules")
-                                    .font(.system(size: 15, weight: .medium))
+                                    .font(Theme.font(size: 15, weight: .medium))
                                     .foregroundColor(Theme.onSurface)
                                 Spacer()
                                 Text("Built-in")
-                                    .font(.system(size: 10, weight: .bold))
+                                    .font(Theme.font(size: 10, weight: .bold))
                                     .foregroundColor(Theme.primary)
                                     .padding(.horizontal, 6)
                                     .padding(.vertical, 2)
@@ -83,11 +83,11 @@ struct AdblockSettingsSheet: View {
                                     .clipShape(Capsule())
                             }
                             Text(extra.absoluteString)
-                                .font(.system(size: 11))
+                                .font(Theme.font(size: 11))
                                 .foregroundColor(Theme.onSurfaceVariant)
                                 .lineLimit(1)
                             Text(ContentBlocker.isListDownloaded(url: extra) ? "Active" : "Downloads on launch")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(Theme.font(size: 11, weight: .semibold))
                                 .foregroundColor(ContentBlocker.isListDownloaded(url: extra) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
                                 .padding(.top, 2)
                         }
@@ -102,16 +102,16 @@ struct AdblockSettingsSheet: View {
                     ForEach(filterLists, id: \.self) { url in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(getListName(for: url))
-                                .font(.system(size: 15, weight: .medium))
+                                .font(Theme.font(size: 15, weight: .medium))
                                 .foregroundColor(Theme.onSurface)
                             Text(url.absoluteString)
-                                .font(.system(size: 11))
+                                .font(Theme.font(size: 11))
                                 .foregroundColor(Theme.onSurfaceVariant)
                                 .lineLimit(1)
                             
                             HStack {
                                 Text(ContentBlocker.isListDownloaded(url: url) ? "Downloaded" : "Not downloaded")
-                                    .font(.system(size: 11, weight: .semibold))
+                                    .font(Theme.font(size: 11, weight: .semibold))
                                     .foregroundColor(ContentBlocker.isListDownloaded(url: url) ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
                             }
                             .padding(.top, 2)
@@ -160,7 +160,7 @@ struct AdblockSettingsSheet: View {
                             Spacer()
                         }
                         .foregroundColor(.white)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(Theme.font(size: 15, weight: .semibold))
                     }
                     .listRowBackground(Theme.primaryDim)
                     .disabled(isUpdating)

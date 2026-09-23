@@ -279,7 +279,7 @@ class PhoneSenderServices private constructor(
     companion object {
         private const val TAG = "PhoneSenderServices"
         private const val OPERATION_TIMEOUT_MS = 15_000L
-        private const val EXPECTED_ABI = 1
+        private const val EXPECTED_ABI = 2
 
         private val mutex = Mutex()
         @Volatile private var instance: PhoneSenderServices? = null

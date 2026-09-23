@@ -103,6 +103,7 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             print("[Proxy] T\(taskId) cancelling upstream (VLC disconnected)")
             state.sendGate.signal()   // unblock any waiting didReceive call
             state.task.cancel()
+            state.connection.cancel()
         }
     }
 
@@ -315,9 +316,11 @@ class ProxySessionManager: NSObject, URLSessionDataDelegate {
             let header = buildResponseHeader(response, overrideContentLength: body.count)
             let payload = (header.data(using: .utf8) ?? Data()) + body
 
+#if DEBUG
             let preview = String(data: buffer.prefix(200), encoding: .utf8)?
                 .replacingOccurrences(of: "\n", with: "\\n") ?? "<non-utf8>"
             print("[Proxy] T\(task.taskIdentifier) HLS upstream size=\(buffer.count) rewritten=\(body.count) preview=\(preview)")
+#endif
 
             state.sendGate.wait()
             state.connection.send(content: payload, completion: .contentProcessed({ _ in
@@ -440,7 +443,6 @@ class VLCProxyServer {
     private let headers: [String: String]
     private var listener: NWListener?
     private(set) var port: UInt16 = 0
-    private let listenerQueue = DispatchQueue(label: "vlc-proxy-listener", qos: .userInitiated)
 
     var localURL: URL {
         var c = URLComponents()
@@ -472,27 +474,40 @@ class VLCProxyServer {
         return c.url!
     }
 
-    func start() {
-        guard let newListener = try? NWListener(using: .tcp, on: .any) else { return }
+    func start(completion: @escaping (Bool) -> Void) {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        guard let newListener = try? NWListener(using: parameters) else { completion(false); return }
         self.listener = newListener
-
-        let semaphore = DispatchSemaphore(value: 0)
-        newListener.stateUpdateHandler = { [weak self] state in
+        var finished = false
+        func finish(_ ready: Bool) {
+            guard !finished else { return }
+            finished = true
+            completion(ready)
+        }
+        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+            guard let self, let newListener, self.listener === newListener else { finish(false); return }
             switch state {
             case .ready:
-                self?.port = newListener.port?.rawValue ?? 0
-                semaphore.signal()
-            case .failed:
-                semaphore.signal()
+                self.port = newListener.port?.rawValue ?? 0
+                finish(self.port != 0)
+            case .failed, .cancelled:
+                self.stop()
+                finish(false)
             default: break
             }
         }
         newListener.newConnectionHandler = { [weak self] conn in
+            guard let self else { conn.cancel(); return }
             let q = DispatchQueue(label: "vlc-proxy-conn", qos: .userInitiated)
-            self?.handleConnection(conn, on: q)
+            self.handleConnection(conn, on: q)
         }
-        newListener.start(queue: listenerQueue)
-        _ = semaphore.wait(timeout: .now() + 3)
+        newListener.start(queue: .main)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self, weak newListener] in
+            guard !finished else { return }
+            if let self, let newListener, self.listener === newListener { self.stop() }
+            finish(false)
+        }
     }
 
     func stop() {
@@ -502,9 +517,23 @@ class VLCProxyServer {
 
     private func handleConnection(_ connection: NWConnection, on queue: DispatchQueue) {
         connection.start(queue: queue)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, _, error in
-            guard let self = self, error == nil, let data = data,
-                  let req = String(data: data, encoding: .utf8) else {
+        receiveHeaders(from: connection)
+    }
+
+    private func receiveHeaders(from connection: NWConnection, buffered: Data = Data()) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16_384) { [weak self] data, _, complete, error in
+            guard let self, error == nil, let data, !data.isEmpty else {
+                connection.cancel()
+                return
+            }
+            let accumulated = buffered + data
+            guard accumulated.count <= 16_384 else { connection.cancel(); return }
+            guard accumulated.range(of: Data("\r\n\r\n".utf8)) != nil else {
+                if complete { connection.cancel() }
+                else { self.receiveHeaders(from: connection, buffered: accumulated) }
+                return
+            }
+            guard let req = String(data: accumulated, encoding: .utf8) else {
                 connection.cancel()
                 return
             }
@@ -517,8 +546,10 @@ class VLCProxyServer {
 #endif
 
             let parts = requestLine.split(separator: " ")
-            let method = parts.count > 0 ? String(parts[0]) : "GET"
-            let requestURI = parts.count > 1 ? String(parts[1]) : "/"
+            guard parts.count == 3, ["GET", "HEAD"].contains(String(parts[0])),
+                  parts[1].hasPrefix("/") else { connection.cancel(); return }
+            let method = String(parts[0])
+            let requestURI = String(parts[1])
 
             // Split request-URI into path and query
             let uriParts = requestURI.split(separator: "?", maxSplits: 1)
@@ -553,7 +584,10 @@ class VLCProxyServer {
                 c.host = self.targetURL.host
                 c.port = self.targetURL.port
                 c.path = decodedRequestPath
-                c.percentEncodedQuery = requestQuery
+                // Parse first: assigning malformed percent escapes directly can trap.
+                c.percentEncodedQuery = requestQuery.flatMap {
+                    URLComponents(string: "http://localhost/?" + $0)?.percentEncodedQuery
+                }
                 upstreamURL = c.url ?? self.targetURL
                 debugLogNetworkRequest("VLC proxy same-host sub-request", url: upstreamURL, headers: self.headers)
             }

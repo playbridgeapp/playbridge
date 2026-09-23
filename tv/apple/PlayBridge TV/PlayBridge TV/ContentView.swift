@@ -126,6 +126,8 @@ struct ContentView: View {
                                 withAnimation { playerStarted = true }
                             },
                             onBack: {
+                                playlistStore.clear()
+                                stillWatching.reset()
                                 server.currentPlayRequest = nil
                                 playerStarted = false
                             }

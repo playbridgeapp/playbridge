@@ -9,6 +9,9 @@ struct MenuSheet: View {
     @EnvironmentObject private var data: BrowserDataStore
 
     @State private var showAdblockSettings = false
+    @State private var showDownloads = false
+    @State private var showNetworkLogs = false
+    @State private var allowPopups = false
     @State private var showComingSoonAlert = false
     @State private var comingSoonFeatureName = ""
 
@@ -70,9 +73,9 @@ struct MenuSheet: View {
                 // Row 2
                 HStack(spacing: 0) {
                     menuGridItem(
-                        icon: "puzzlepiece",
-                        label: "Extensions",
-                        comingSoon: true
+                        icon: "network",
+                        label: "Network logs",
+                        action: { showNetworkLogs = true }
                     )
                     menuGridItem(
                         icon: "gearshape",
@@ -97,18 +100,26 @@ struct MenuSheet: View {
                         }
                     )
                     
-                    // Spacer grid cell to match layout of 5 items
-                    Spacer()
-                        .frame(maxWidth: .infinity)
+                    menuGridItem(icon: "arrow.down.circle", label: "Downloads", action: { showDownloads = true })
                 }
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 30)
+            .padding(.bottom, 16)
+            if BrowserSitePolicy.origin(URL(string: tab.urlString)) != nil {
+                Toggle("Allow popups for this site", isOn: $allowPopups)
+                    .padding(.horizontal, 20)
+                    .onChange(of: allowPopups) { value in
+                        BrowserSitePolicy.setPopupsAllowed(value, url: URL(string: tab.urlString))
+                    }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Theme.surfaceContainerLow.ignoresSafeArea())
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.hidden)
+        .onAppear { allowPopups = BrowserSitePolicy.popupsAllowed(URL(string: tab.urlString)) }
+        .sheet(isPresented: $showNetworkLogs) { BrowserNetworkLogView(tab: tab, store: store) }
+        .sheet(isPresented: $showDownloads) { BrowserDownloadsView(downloads: store.downloads) }
         .sheet(isPresented: $showAdblockSettings) {
             AdblockSettingsSheet(store: store)
         }
@@ -144,12 +155,12 @@ struct MenuSheet: View {
                         .frame(width: 48, height: 48)
                     
                     Image(systemName: icon)
-                        .font(.system(size: 20))
+                        .font(Theme.font(size: 20))
                         .foregroundColor(selected ? Theme.primary : Theme.onSurfaceVariant)
                 }
                 
                 Text(label)
-                    .font(.system(size: 11, weight: .regular))
+                    .font(Theme.font(size: 11, weight: .regular))
                     .foregroundColor(selected ? Theme.primary : Theme.onSurface.opacity(0.7))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)

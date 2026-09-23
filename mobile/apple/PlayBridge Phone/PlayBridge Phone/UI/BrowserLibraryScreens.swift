@@ -27,10 +27,9 @@ struct HistoryScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    Button { nav.navigate(to: .browser) } label: {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-                    }
-                    Text("History").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                    DashboardNavigationButton()
+                    ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
+                    Text("History").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
                     if !data.history.isEmpty {
                         Button { confirmClear = true } label: {
@@ -38,7 +37,8 @@ struct HistoryScreen: View {
                         }
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
 
                 if data.history.isEmpty {
                     emptyState("No history yet", systemImage: "clock.arrow.circlepath")
@@ -78,13 +78,13 @@ struct BookmarksScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    Button { nav.navigate(to: .browser) } label: {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-                    }
-                    Text("Bookmarks").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                    DashboardNavigationButton()
+                    ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
+                    Text("Bookmarks").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
                 }
-                .padding(20)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
 
                 if data.bookmarks.isEmpty {
                     emptyState("No bookmarks yet", systemImage: "bookmark")
@@ -122,13 +122,17 @@ struct BrowserSettingsScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    Button { nav.navigate(to: .browser) } label: {
-                        Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-                    }
-                    Text("Browser settings").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                    DashboardNavigationButton()
+                    ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
+                    Text("Browser settings")
+                        .font(Theme.font(size: 22, weight: .bold))
+                        .foregroundColor(Theme.onSurface)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                     Spacer()
                 }
-                .padding(20)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
 
                 Form {
                     Section("Search engine") {
@@ -138,13 +142,14 @@ struct BrowserSettingsScreen: View {
                         .onChange(of: engine) { newValue in SearchEngine.current = newValue }
                     }
                     Section("Privacy") {
+                        Link("Privacy policy", destination: URL(string: "https://playbridge.app/privacy")!)
                         Button("Clear history") { confirmClearHistory = true }
                             .foregroundColor(Theme.danger)
                         Button("Clear cookies & website data") { clearWebsiteData() }
                             .foregroundColor(Theme.danger)
                     }
                     if let clearedMessage {
-                        Section { Text(clearedMessage).font(.system(size: 13)).foregroundColor(Color(hex: 0x4CAF50)) }
+                        Section { Text(clearedMessage).font(Theme.font(size: 13)).foregroundColor(Color(hex: 0x4CAF50)) }
                     }
                 }
                 .scrollContentBackground(.hidden)
@@ -173,16 +178,16 @@ struct BrowserSettingsScreen: View {
 
 private func rowView(title: String, subtitle: String) -> some View {
     VStack(alignment: .leading, spacing: 2) {
-        Text(title).font(.system(size: 15)).foregroundColor(Theme.onSurface).lineLimit(1)
-        Text(subtitle).font(.system(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
+        Text(title).font(Theme.font(size: 15)).foregroundColor(Theme.onSurface).lineLimit(1)
+        Text(subtitle).font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant).lineLimit(1)
     }
 }
 
 private func emptyState(_ text: String, systemImage: String) -> some View {
     VStack(spacing: 12) {
         Spacer()
-        Image(systemName: systemImage).font(.system(size: 40)).foregroundColor(Theme.onSurfaceVariant)
-        Text(text).font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
+        Image(systemName: systemImage).font(Theme.font(size: 40)).foregroundColor(Theme.onSurfaceVariant)
+        Text(text).font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface)
         Spacer(); Spacer()
     }
     .frame(maxWidth: .infinity)

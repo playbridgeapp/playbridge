@@ -30,7 +30,9 @@ struct ConnectionHandshake {
 class WebSocketServer: ObservableObject {
     private var tlsListener: NWListener?
     private var connectedConnections: [NWConnection] = []
-    private var authenticatedConnections: Set<ObjectIdentifier> = []
+    private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
+    private var connectionAuthorization = ConnectionAuthorization<ObjectIdentifier>()
+    private var authenticationTimeouts: [ObjectIdentifier: DispatchWorkItem] = [:]
     private var historyStore: HistoryStore?
     var playlistStore: PlaylistStore?
 
@@ -323,16 +325,25 @@ class WebSocketServer: ObservableObject {
         tlsListener?.cancel()
         tlsListener = nil
         certFingerprint = nil
-        for connection in connectedConnections { connection.cancel() }
+        autoTimeoutWork?.cancel()
+        autoTimeoutWork = nil
+        inProgressHandshakes.removeAll()
+        for timeout in authenticationTimeouts.values { timeout.cancel() }
+        authenticationTimeouts.removeAll()
+        let connections = Array(activeConnections.values)
+        activeConnections.removeAll()
+        connectionAuthorization.removeAll()
         connectedConnections.removeAll()
-        authenticatedConnections.removeAll()
-        DispatchQueue.main.async {
-            self.connectedCount = 0
-            self.isAuthenticated = false
-            self.pendingPairingRequest = nil
-            self.serverState = "Stopped"
-            self.wssPort = nil
+        for connection in connections {
+            connection.stateUpdateHandler = nil
+            connection.viabilityUpdateHandler = nil
+            connection.cancel()
         }
+        connectedCount = 0
+        isAuthenticated = false
+        pendingPairingRequest = nil
+        serverState = "Stopped"
+        wssPort = nil
     }
 
     func restart(port: UInt16? = nil) {
@@ -373,6 +384,16 @@ class WebSocketServer: ObservableObject {
     }
 
     private func handleNewConnection(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        activeConnections[id] = connection
+        // Includes clients that stall before sending a pairing reveal.
+        let timeout = DispatchWorkItem { [weak self, weak connection] in
+            guard let self, let connection,
+                  !self.connectionAuthorization.isAuthorized(id, credentials: self.pairingCredentials) else { return }
+            self.removeConnection(connection)
+        }
+        authenticationTimeouts[id] = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120, execute: timeout)
         connection.viabilityUpdateHandler = { [weak self] isViable in
             if !isViable { self?.removeConnection(connection) }
         }
@@ -422,13 +443,18 @@ class WebSocketServer: ObservableObject {
     }
 
     private func removeConnection(_ connection: NWConnection) {
+        let id = ObjectIdentifier(connection)
+        guard activeConnections.removeValue(forKey: id) != nil else { return }
+        authenticationTimeouts.removeValue(forKey: id)?.cancel()
+        connectionAuthorization.remove(id)
+        connection.stateUpdateHandler = nil
+        connection.viabilityUpdateHandler = nil
         connection.cancel()
         handleHandshakeFailure(for: connection)
         DispatchQueue.main.async {
             self.connectedConnections.removeAll(where: { $0 === connection })
-            self.authenticatedConnections.remove(ObjectIdentifier(connection))
             self.connectedCount = self.connectedConnections.count
-            if self.connectedConnections.isEmpty { self.isAuthenticated = false }
+            self.isAuthenticated = !self.connectedConnections.isEmpty
             if self.pendingPairingRequest?.connection === connection {
                 self.autoTimeoutWork?.cancel()
                 self.autoTimeoutWork = nil
@@ -438,16 +464,18 @@ class WebSocketServer: ObservableObject {
     }
 
     private func receiveMessages(from connection: NWConnection) {
-        connection.receiveMessage { [weak self] content, _, _, error in
-            if let error = error {
-                print("WebSocket Receive Error (\(connection.endpoint)): \(error)")
-                self?.removeConnection(connection)
+        connection.receiveMessage { [weak self] content, context, _, error in
+            guard let self, self.activeConnections[ObjectIdentifier(connection)] != nil else { return }
+            let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                as? NWProtocolWebSocket.Metadata
+            if error != nil || metadata?.opcode == .close {
+                self.removeConnection(connection)
                 return
             }
-            if let content = content, let jsonString = String(data: content, encoding: .utf8) {
-                self?.handleMessage(jsonString, data: content, from: connection)
+            if let content, let jsonString = String(data: content, encoding: .utf8) {
+                self.handleMessage(jsonString, data: content, from: connection)
             }
-            self?.receiveMessages(from: connection)
+            self.receiveMessages(from: connection)
         }
     }
 
@@ -485,7 +513,7 @@ class WebSocketServer: ObservableObject {
                 handleAuth(msg, from: connection)
             }
         case "command":
-            if authenticatedConnections.contains(ObjectIdentifier(connection)) {
+            if connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
                 handleCommand(
                     action: json["action"] as? String,
                     payload: json["payload"],
@@ -723,6 +751,7 @@ class WebSocketServer: ObservableObject {
                 token: token
             )
             persistPairingCredentials()
+            disconnectRevokedClients()
             send(json: [
                 "type": "pairing_approved",
                 "nonce": credentialNonce.base64EncodedString(),
@@ -846,9 +875,15 @@ class WebSocketServer: ObservableObject {
         sendAuthResponse: Bool = true
     ) {
         DispatchQueue.main.async {
+            let id = ObjectIdentifier(connection)
+            guard self.activeConnections[id] != nil,
+                  self.pairingCredentials.isTokenAuthorized(token) else { return }
+            self.connectionAuthorization.authorize(id, token: token)
+            self.authenticationTimeouts.removeValue(forKey: id)?.cancel()
             self.isAuthenticated = true
-            self.authenticatedConnections.insert(ObjectIdentifier(connection))
-            self.connectedConnections.append(connection)
+            if !self.connectedConnections.contains(where: { $0 === connection }) {
+                self.connectedConnections.append(connection)
+            }
             self.connectedCount = self.connectedConnections.count
             if sendAuthResponse {
                 // Safe on reconnect: the sender has already pinned this TLS identity.
@@ -862,9 +897,7 @@ class WebSocketServer: ObservableObject {
             // for the active player to re-broadcast its status/tracks.
             self.broadcast(["type": "context", "active": self.currentPlayRequest != nil ? "player" : "idle"])
             // Sync the queue too, so a re-connecting phone can re-attach its episode queue.
-            if self.playlistStore?.items.isEmpty == false {
-                self.broadcastPlaylistStatus()
-            }
+            self.broadcastPlaylistStatus()
             NotificationCenter.default.post(name: Self.resyncRequest, object: nil)
         }
     }
@@ -874,11 +907,21 @@ class WebSocketServer: ObservableObject {
     func forgetDevice(_ device: PairedDevice) {
         pairingCredentials.forgetDevice(deviceUUID: device.deviceUUID)
         persistPairingCredentials()
+        disconnectRevokedClients()
     }
 
     func forgetAllDevices() {
         pairingCredentials.forgetAllDevices()
         persistPairingCredentials()
+        disconnectRevokedClients()
+    }
+
+    private func disconnectRevokedClients() {
+        for connection in connectedConnections {
+            if !connectionAuthorization.isAuthorized(ObjectIdentifier(connection), credentials: pairingCredentials) {
+                removeConnection(connection)
+            }
+        }
     }
 
     // MARK: - Command Handling
@@ -929,7 +972,8 @@ class WebSocketServer: ObservableObject {
             completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             return
         }
-        guard let payloadData = try? JSONSerialization.data(withJSONObject: payloadObj),
+        guard JSONSerialization.isValidJSONObject(payloadObj),
+              let payloadData = try? JSONSerialization.data(withJSONObject: payloadObj),
               let payloadJson = String(data: payloadData, encoding: .utf8) else {
             print("WebSocket Command Error: failed to re-encode payload for action \(action)")
             completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
@@ -999,6 +1043,13 @@ class WebSocketServer: ObservableObject {
                     ? store.jumpTo(itemID: p.itemID)
                     : store.jumpTo(index: Int(p.index))
                 if let req {
+                    if !req.skipHistory, let url = req.validURL {
+                        self.historyStore?.addToHistory(
+                            url: url,
+                            title: req.titleOrNil,
+                            headers: req.headersOrNil
+                        )
+                    }
                     self.currentPlayRequest = req
                     self.completeCommand(requestID, ok: true, to: connection)
                 } else {
@@ -1137,11 +1188,11 @@ class WebSocketServer: ObservableObject {
         send(json: result, to: connection)
     }
 
-    private func handlePlay(_ payload: Playbridge_PlayPayload) {
-        let url = payload.validURL!  // pre-validated by caller
+    func handlePlay(_ payload: Playbridge_PlayPayload) {
+        guard let url = payload.validURL else { return }
         print("WebSocket Play: \(payload.titleOrNil ?? "No Title")")
         debugLogNetworkRequest("WebSocket play", url: url, headers: payload.headersOrNil)
-        historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil)
+        if !payload.skipHistory { historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil) }
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
             self.playlistStore?.clear()
@@ -1152,7 +1203,9 @@ class WebSocketServer: ObservableObject {
     }
 
     private func handlePlaylist(_ payload: Playbridge_PlaylistPayload) {
-        let valid = payload.items.filter { $0.validURL != nil }
+        let indexed = payload.items.enumerated().filter { $0.element.validURL != nil }
+        let valid = indexed.map(\.element)
+        let startIndex = indexed.firstIndex { $0.offset == Int(payload.startIndex) } ?? 0
         print("WebSocket Playlist: \(valid.count)/\(payload.items.count) items, startIndex: \(payload.startIndex)")
         for (index, item) in valid.enumerated() {
             if let url = item.validURL {
@@ -1166,10 +1219,10 @@ class WebSocketServer: ObservableObject {
         guard !valid.isEmpty else { return }
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
-            self.playlistStore?.setPlaylist(items: valid, startIndex: Int(payload.startIndex))
+            self.playlistStore?.setPlaylist(items: valid, startIndex: startIndex)
             self.skipPreplayForCurrentRequest = payload.skipPreplay
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
-                self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil)
+                if !first.skipHistory { self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil) }
                 self.currentPlayRequest = first
             }
         }

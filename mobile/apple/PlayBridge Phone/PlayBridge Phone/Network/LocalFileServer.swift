@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import UniformTypeIdentifiers
 
 /// Minimal LAN HTTP/1.1 server that serves a single local media file with byte-range
 /// support, so a connected receiver (PlayBridge TV / DLNA) can fetch and play files
@@ -167,12 +168,20 @@ final class LocalFileServer {
         case "avi": return "video/x-msvideo"
         case "ts": return "video/mp2t"
         case "m3u8": return "application/vnd.apple.mpegurl"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "gif": return "image/gif"
+        case "webp": return "image/webp"
+        case "heic", "heif": return "image/heic"
+        case "bmp": return "image/bmp"
+        case "tif", "tiff": return "image/tiff"
         case "mp3": return "audio/mpeg"
-        case "m4a", "aac": return "audio/mp4"
+        case "m4a": return "audio/mp4"
+        case "aac": return "audio/aac"
         case "flac": return "audio/flac"
         case "wav": return "audio/wav"
-        case "ogg", "oga": return "audio/ogg"
-        default: return "application/octet-stream"
+        case "ogg", "oga", "opus": return "audio/ogg"
+        default: return UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
         }
     }
 

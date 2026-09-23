@@ -25,7 +25,11 @@ use serde_json::Value;
 uniffi::setup_scaffolding!();
 
 mod receiver_runtime;
-#[cfg(any(feature = "sender-services", feature = "sender-services-android"))]
+#[cfg(any(
+    feature = "sender-services",
+    feature = "sender-services-android",
+    feature = "sender-services-apple"
+))]
 mod sender_services;
 
 /// Android-only: JNI trampolines for stream-proxy-rust upstream-jni.
@@ -175,6 +179,10 @@ enum SessionCommand {
         request_id: Value,
         level: f32,
     },
+    AdjustVolume {
+        request_id: Value,
+        delta: f32,
+    },
     Status {
         request_id: Value,
     },
@@ -196,6 +204,7 @@ impl SessionCommand {
             | Self::Seek { request_id, .. }
             | Self::RelativeSeek { request_id, .. }
             | Self::SetVolume { request_id, .. }
+            | Self::AdjustVolume { request_id, .. }
             | Self::Status { request_id }
             | Self::Disconnect { request_id }
             | Self::EndReceiver { request_id } => request_id,
@@ -211,6 +220,7 @@ impl SessionCommand {
             Self::Seek { .. } => "seek",
             Self::RelativeSeek { .. } => "relative_seek",
             Self::SetVolume { .. } => "set_volume",
+            Self::AdjustVolume { .. } => "adjust_volume",
             Self::Status { .. } => "status",
             Self::Disconnect { .. } => "disconnect",
             Self::EndReceiver { .. } => "end_receiver",
@@ -844,6 +854,15 @@ async fn execute_session_command(
                     ));
                 }
                 receiver_mut(receiver)?.set_volume(*level).await?;
+                Ok(None)
+            }
+            SessionCommand::AdjustVolume { delta, .. } => {
+                if !delta.is_finite() || !(-1.0..=1.0).contains(delta) {
+                    return Err(CastError::Protocol(
+                        "volume delta must be between -1 and 1".into(),
+                    ));
+                }
+                receiver_mut(receiver)?.adjust_volume(*delta).await?;
                 Ok(None)
             }
             SessionCommand::Status { .. } => {
@@ -1606,6 +1625,13 @@ mod tests {
         .unwrap();
         assert!(valid.has_valid_request_id());
         assert_eq!(valid.operation(), "seek");
+
+        let volume: SessionCommand = serde_json::from_str(
+            r#"{"command":"adjust_volume","request_id":"volume-1","delta":-0.05}"#,
+        )
+        .unwrap();
+        assert!(volume.has_valid_request_id());
+        assert_eq!(volume.operation(), "adjust_volume");
 
         let invalid: SessionCommand =
             serde_json::from_str(r#"{"command":"play","request_id":{"nested":"not-supported"}}"#)

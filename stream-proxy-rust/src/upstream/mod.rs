@@ -435,13 +435,34 @@ pub fn filter_upstream_headers(
 ) -> HashMap<String, String> {
     let mut out = HashMap::new();
 
-    if urls_share_origin(target_url, credential_url) {
-        for (k, v) in session_headers {
-            let lower = k.to_lowercase();
-            if !should_skip_header(&lower) {
-                out.insert(k.clone(), v.clone());
+    let same_origin = urls_share_origin(target_url, credential_url);
+    for (k, v) in session_headers {
+        let lower = k.to_ascii_lowercase();
+        if should_skip_header(&lower) {
+            continue;
+        }
+        if same_origin || matches!(lower.as_str(), "user-agent" | "accept" | "accept-language") {
+            out.insert(k.clone(), v.clone());
+        } else if matches!(lower.as_str(), "referer" | "origin") {
+            // HLS commonly puts segments on another CDN. Preserve browser
+            // context there, but never send URL credentials, paths, or signed
+            // queries to another origin (strict-origin cross-origin behavior).
+            if let Ok(url) = url::Url::parse(v) {
+                if matches!(url.scheme(), "http" | "https") {
+                    let origin = url.origin().ascii_serialization();
+                    out.insert(
+                        k.clone(),
+                        if lower == "referer" {
+                            format!("{origin}/")
+                        } else {
+                            origin
+                        },
+                    );
+                }
             }
         }
+        // Cookie, Authorization, and unknown custom credentials remain
+        // restricted to the original media origin.
     }
 
     let lower_url = target_url.to_lowercase();
@@ -455,6 +476,25 @@ pub fn filter_upstream_headers(
     }
 
     with_default_upstream_headers(&out)
+}
+
+/// Reuse the browser-context policy for redirect hops. Preserve byte ranges,
+/// but scope credentials to the initial media origin and Referer to its origin.
+pub(crate) fn redirect_headers(
+    headers: &HashMap<String, String>,
+    initial: &str,
+    target: &str,
+) -> HashMap<String, String> {
+    let mut incoming = HeaderMap::new();
+    if let Some((_, range)) = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("range"))
+    {
+        if let Ok(value) = range.parse() {
+            incoming.insert("range", value);
+        }
+    }
+    filter_upstream_headers(headers, &incoming, target, initial, "play")
 }
 
 fn urls_share_origin(first: &str, second: &str) -> bool {
@@ -545,6 +585,35 @@ mod policy_tests {
         );
         assert!(!cross.contains_key("Authorization"));
         assert!(!cross.contains_key("Cookie"));
+    }
+
+    #[test]
+    fn cross_cdn_hls_keeps_browser_context_without_credentials() {
+        let headers = HashMap::from([
+            ("User-Agent".into(), "BrowserFixture".into()),
+            (
+                "Referer".into(),
+                "https://user:secret@page.example/player?token=secret".into(),
+            ),
+            ("Origin".into(), "https://page.example".into()),
+            ("Authorization".into(), "Bearer secret".into()),
+            ("Cookie".into(), "session=secret".into()),
+            ("X-Api-Key".into(), "secret".into()),
+        ]);
+        let cross = filter_upstream_headers(
+            &headers,
+            &HeaderMap::new(),
+            "https://segments.example/000.jpg",
+            "https://manifest.example/master.m3u8",
+            "session",
+        );
+        assert_eq!(cross.get("User-Agent").unwrap(), "BrowserFixture");
+        assert_eq!(cross.get("Referer").unwrap(), "https://page.example/");
+        assert_eq!(cross.get("Origin").unwrap(), "https://page.example");
+        assert!(!cross.contains_key("Authorization"));
+        assert!(!cross.contains_key("Cookie"));
+        assert!(!cross.contains_key("X-Api-Key"));
+        assert!(cross.values().all(|value| !value.contains("secret")));
     }
 
     #[tokio::test]

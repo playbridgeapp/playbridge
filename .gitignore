@@ -129,6 +129,8 @@ mempalace.yaml
 .qoder/
 .mcp.json
 .opencode.json
+.opencode.jsonc
+opencode.jsonc
 .opencode/
 # Local documentation, guides, and skills reference docs
 *_GUIDE.md
@@ -143,3 +145,6 @@ stream-proxy-dart/docker-compose.yml
 
 # Root Cargo workspace build output
 /target/
+
+# Generated Apple Rust static framework (rebuild with cast/build-apple.sh)
+/mobile/apple/Native/*.xcframework/

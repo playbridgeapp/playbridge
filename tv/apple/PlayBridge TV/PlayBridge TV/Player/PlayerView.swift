@@ -104,7 +104,7 @@ struct PlayerView: View {
         mediaGeneration &+= 1
         consumeStartPosition(at: playlistStore.currentIndex)
         if let nextRequest = playlistStore.next(), let nextURL = nextRequest.validURL {
-            historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil)
+            if !nextRequest.skipHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
             resumeTime = 0
         } else {
             onDismiss()
@@ -116,7 +116,7 @@ struct PlayerView: View {
         mediaGeneration &+= 1
         consumeStartPosition(at: playlistStore.currentIndex)
         if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
-            historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil)
+            if !jumpRequest.skipHistory { historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil) }
             resumeTime = 0
             withAnimation { showPlaylist = false }
         }

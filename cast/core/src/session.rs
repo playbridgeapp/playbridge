@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
@@ -87,6 +87,7 @@ pub enum ReceiverSession {
 pub struct GoogleCastSession {
     details: CastSessionDetails,
     request_ids: RequestIdGenerator,
+    volume_level: Option<(f32, Instant)>,
 }
 
 impl ReceiverSession {
@@ -139,6 +140,7 @@ impl ReceiverSession {
         Ok(Self::GoogleCast(GoogleCastSession {
             details,
             request_ids: RequestIdGenerator::new(),
+            volume_level: None,
         }))
     }
 
@@ -288,11 +290,7 @@ impl ReceiverSession {
 
     pub async fn set_volume(&mut self, level: f32) -> Result<()> {
         match self {
-            Self::GoogleCast(session) => session
-                .receiver_command(
-                    json!({ "type": "SET_VOLUME", "volume": { "level": level.clamp(0.0, 1.0) } }),
-                )
-                .await,
+            Self::GoogleCast(session) => session.set_volume(level).await,
             Self::PlayBridge(socket) => {
                 socket
                     .send(&remote(if level >= 0.5 {
@@ -313,6 +311,17 @@ impl ReceiverSession {
             }
             Self::Dlna(_) => Err(CastError::Protocol(
                 "DLNA volume control is not available for this session".into(),
+            )),
+        }
+    }
+
+    /// Adjust from the receiver's current level so a sender with no volume
+    /// snapshot cannot unexpectedly jump the speaker to a guessed value.
+    pub async fn adjust_volume(&mut self, delta: f32) -> Result<()> {
+        match self {
+            Self::GoogleCast(session) => session.adjust_volume(delta).await,
+            _ => Err(CastError::Protocol(
+                "relative volume is only supported by Google Cast".into(),
             )),
         }
     }
@@ -418,7 +427,7 @@ impl ReceiverSession {
 
 impl GoogleCastSession {
     async fn load(&mut self, media: &MediaRequest) -> Result<()> {
-        self.ensure_receiver_application_active().await?;
+        let _ = self.ensure_receiver_application_active().await?;
         let inferred = castv2::media_format(&media.url);
         castv2::load_media(
             &mut self.details,
@@ -488,6 +497,28 @@ impl GoogleCastSession {
             .await
             .map_err(CastError::Transport)
     }
+    async fn set_volume(&mut self, level: f32) -> Result<()> {
+        let level = level.clamp(0.0, 1.0);
+        self.receiver_command(json!({ "type": "SET_VOLUME", "volume": { "level": level } }))
+            .await?;
+        self.volume_level = Some((level, Instant::now()));
+        Ok(())
+    }
+    async fn adjust_volume(&mut self, delta: f32) -> Result<()> {
+        // Reuse our last successfully sent level during a continuous gesture.
+        // Query the receiver again after the gesture goes quiet so hardware
+        // remote changes are respected on the next swipe.
+        let current = match self.volume_level {
+            Some((level, updated)) if updated.elapsed() < Duration::from_secs(1) => level,
+            _ => self
+                .ensure_receiver_application_active()
+                .await?
+                .ok_or_else(|| {
+                    CastError::Protocol("Google Cast receiver did not report its volume".into())
+                })?,
+        };
+        self.set_volume((current + delta).clamp(0.0, 1.0)).await
+    }
     async fn stop(&mut self) -> Result<()> {
         if self.details.media_session_id.is_some() {
             self.media_command("STOP").await?;
@@ -503,14 +534,14 @@ impl GoogleCastSession {
             .await
     }
     async fn status(&mut self) -> Result<PlaybackStatus> {
-        self.ensure_receiver_application_active().await?;
+        let _ = self.ensure_receiver_application_active().await?;
         let request_id = self
             .send_media(json!({ "type": "GET_STATUS" }), false)
             .await?;
         self.wait_for_media_status(request_id).await
     }
 
-    async fn ensure_receiver_application_active(&mut self) -> Result<()> {
+    async fn ensure_receiver_application_active(&mut self) -> Result<Option<f32>> {
         let request_id = self.request_ids.next();
         self.details
             .channel
@@ -566,7 +597,7 @@ impl GoogleCastSession {
             if application.transport_id != self.details.transport_id || !session_matches {
                 return Err(CastError::ReceiverSessionEnded);
             }
-            return Ok(());
+            return Ok(receiver_volume_level(&payload));
         }
     }
 
@@ -649,6 +680,11 @@ impl GoogleCastSession {
             }
         }
     }
+}
+
+fn receiver_volume_level(payload: &serde_json::Value) -> Option<f32> {
+    let level = payload["status"]["volume"]["level"].as_f64()?;
+    (level.is_finite() && (0.0..=1.0).contains(&level)).then_some(level as f32)
 }
 
 fn map_google_cast_load_error(error: castv2::LoadMediaError) -> CastError {
@@ -746,6 +782,21 @@ mod tests {
     fn maps_common_protocol_states() {
         assert_eq!(state_from_text("PLAYING"), PlaybackState::Playing);
         assert_eq!(state_from_text("paused_playback"), PlaybackState::Paused);
+    }
+    #[test]
+    fn receiver_volume_requires_a_valid_reported_level() {
+        assert_eq!(
+            receiver_volume_level(&json!({"status": {"volume": {"level": 0.12}}})),
+            Some(0.12)
+        );
+        assert_eq!(
+            receiver_volume_level(&json!({"status": {"volume": {"muted": true}}})),
+            None
+        );
+        assert_eq!(
+            receiver_volume_level(&json!({"status": {"volume": {"level": 1.5}}})),
+            None
+        );
     }
     #[test]
     fn formats_dlna_seek_time() {

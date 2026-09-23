@@ -28,13 +28,26 @@ enum GoogleCastNativeAvailability {
     }
 }
 
-/// Apple-side entry point for Cast Core ABI v2.
+/// Apple-side entry point for Google Cast and DLNA over Cast Core ABI v2.
 ///
 /// The generated XCFramework is optional while the iOS sender UI is being
 /// migrated. Once linked, `start` launches/joins the configured receiver and
 /// the first `connected` event means its media channel has answered
 /// `GET_STATUS`; it does not mean that media has already been loaded.
-final class GoogleCastNativeSession {
+/// DLNA readiness means Rust loaded the device description and found AVTransport.
+protocol GoogleCastSessionTransport: AnyObject {
+    func start(device: ExternalReceiverDevice) throws
+    func start(addresses: [String], port: UInt16) throws
+    func submit(_ command: [String: Any]) throws
+    func nextEvent(waitMilliseconds: UInt64) -> [String: Any]?
+    func close()
+}
+
+extension GoogleCastSessionTransport {
+    func start(device: ExternalReceiverDevice) throws { try start(addresses: device.addresses, port: device.port) }
+}
+
+final class GoogleCastNativeSession: GoogleCastSessionTransport {
 #if canImport(PlayBridgeCastCore)
     private var handle: OpaquePointer?
 
@@ -43,17 +56,22 @@ final class GoogleCastNativeSession {
     }
 
     func start(addresses: [String], port: UInt16 = 8009) throws {
+        try start(device: .init(id: "", name: "", addresses: addresses, port: port, model: "Google Cast"))
+    }
+
+    func start(device: ExternalReceiverDevice) throws {
         close()
         guard pb_cast_core_abi_version() == 2 else {
             throw SessionError.unsupportedABI
         }
-        let target: [String: Any] = [
-            "protocol": "google_cast",
-            "addresses": addresses,
-            "port": port,
+        var target: [String: Any] = [
+            "protocol": device.protocolID,
+            "addresses": device.addresses,
+            "port": device.port,
             "application_id": GoogleCastConfiguration.applicationID,
             "launch_policy": "reuse_or_launch",
         ]
+        if let location = device.location { target["location"] = location }
         let data = try JSONSerialization.data(withJSONObject: target)
         guard let json = String(data: data, encoding: .utf8) else {
             throw SessionError.invalidJSON

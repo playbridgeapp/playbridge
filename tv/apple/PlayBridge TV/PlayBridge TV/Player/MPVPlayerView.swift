@@ -382,7 +382,7 @@ class MPVViewController: UIViewController {
                 }
             }
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, !self.isMpvStopped else { return }
                 if self.playbackState.isLooping {
                     if let url = self.url { self.loadFile(url) }
                 } else {
@@ -795,7 +795,7 @@ class MPVViewController: UIViewController {
     }
 
     private func seekAsync(to seconds: Double) {
-        guard let handle = mpv else { return }
+        guard seconds.isFinite, let handle = mpv else { return }
         let pos = String(format: "%.2f", max(0, seconds))
         mpvQueue.async { self.mpvCommand(handle, ["seek", pos, "absolute"]) }
     }
@@ -1027,8 +1027,8 @@ class MPVViewController: UIViewController {
         var json: [String: Any] = [
             "type": "status",
             "state": playbackState.isPlaying ? "playing" : "paused",
-            "position": Int(max(0, playbackState.currentTime) * 1000),
-            "duration": Int(max(0, playbackState.duration) * 1000),
+            "position": PlaybackTime.milliseconds(playbackState.currentTime),
+            "duration": PlaybackTime.milliseconds(playbackState.duration),
         ]
         if let t = mediaTitle, !t.isEmpty { json["title"] = t }
         onBroadcast?(json)
@@ -1152,24 +1152,15 @@ class MPVViewController: UIViewController {
         mpv_set_wakeup_callback(handle, nil, nil)
         releaseCallbackSelf()
 
-        // Drain pending mpvQueue work, send quit, drain remaining events
-        mpvQueue.sync { [weak self] in
-            guard let self else { return }
-            self.mpvCommand(handle, ["quit"])
-            var n = 0
-            while n < 100, let evPtr = mpv_wait_event(handle, 0.1) {
-                let id = evPtr.pointee.event_id
-                if id == MPV_EVENT_NONE || id == MPV_EVENT_SHUTDOWN { break }
-                n += 1
-            }
-        }
-
         mpv = nil
 
-        // mpv_terminate_destroy cannot be called while blocking the main thread on tvOS —
-        // AVFoundation cleanup inside mpv needs the main thread and will deadlock otherwise.
-        DispatchQueue.global(qos: .userInitiated).async {
+        // Serialize destruction after pending commands without blocking the main thread.
+        // AVFoundation cleanup may itself need the main thread. Keep the output layer
+        // alive until mpv has released the native window pointer.
+        let outputLayer = displayLayer
+        mpvQueue.async {
             mpv_terminate_destroy(handle)
+            withExtendedLifetime(outputLayer) {}
         }
 
         resetDisplayCriteria()

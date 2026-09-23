@@ -224,8 +224,39 @@ impl UpstreamFetcher for JniUpstreamFetcher {
         let url = url.to_owned();
         let headers = headers.clone();
         Box::pin(async move {
-            validate_http_destination(&url, network_policy.as_ref()).await?;
-            connect_via_host(url, headers).await
+            let initial = url::Url::parse(&url).map_err(|_| "invalid upstream URL".to_string())?;
+            let is_mp4 = initial
+                .path()
+                .trim_end_matches('/')
+                .to_ascii_lowercase()
+                .ends_with(".mp4");
+            let mut current = initial;
+            for hop in 0..=10 {
+                validate_http_destination(current.as_str(), network_policy.as_ref()).await?;
+                let scoped = super::redirect_headers(&headers, &url, current.as_str());
+                let response = connect_via_host(current.to_string(), scoped).await?;
+                if !response.status.is_redirection() {
+                    return Ok(response);
+                }
+                // ABI v1 cannot report the final playlist URL for relative HLS
+                // rewriting. Limit this addition to progressive MP4 resources.
+                if !is_mp4 {
+                    return Err("redirected playlists require effective-URL support".into());
+                }
+                if hop == 10 {
+                    return Err("upstream redirect limit exceeded".into());
+                }
+                let location = response
+                    .headers
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| "upstream redirect omitted Location".to_string())?;
+                current = current
+                    .join(location)
+                    .map_err(|_| "invalid upstream redirect URL".to_string())?;
+                // Dropping the response closes its callback body before the next hop.
+            }
+            Err("upstream redirect limit exceeded".into())
         })
     }
 }
@@ -370,6 +401,7 @@ fn parse_response_headers(json: &str) -> HeaderMap {
         if matches!(
             lower.as_str(),
             "content-type"
+                | "location"
                 | "content-length"
                 | "content-range"
                 | "accept-ranges"
@@ -406,6 +438,7 @@ mod tests {
 
     /// Global callbacks are process-wide; serialize tests that mutate them.
     static TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static REQUESTS: StdMutex<Vec<(String, String)>> = StdMutex::new(Vec::new());
     static NEXT_HANDLE: AtomicI64 = AtomicI64::new(1);
     static MOCKS: StdMutex<Option<HashMap<i64, Arc<StdMutex<MockBody>>>>> = StdMutex::new(None);
     static OPEN_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
@@ -420,12 +453,18 @@ mod tests {
 
     unsafe extern "C" fn test_open(
         url: *const c_char,
-        _headers: *const c_char,
+        request_headers: *const c_char,
         out_status: *mut c_int,
         out_headers: *mut *mut c_char,
         out_error: *mut *mut c_char,
     ) -> i64 {
         let url = unsafe { CStr::from_ptr(url) }.to_string_lossy();
+        REQUESTS.lock().unwrap().push((
+            url.to_string(),
+            unsafe { CStr::from_ptr(request_headers) }
+                .to_string_lossy()
+                .to_string(),
+        ));
         if !url.contains("ok") {
             let err = CString::new("mock open fail").unwrap().into_raw();
             unsafe {
@@ -455,11 +494,23 @@ mod tests {
             }
             guard.as_mut().unwrap().insert(handle, body);
         }
+        let location = if url.contains("private-redirect") {
+            Some("http://127.0.0.1/ok")
+        } else if url.contains("loop-redirect") {
+            Some(url.as_ref())
+        } else if url.contains("redirect-ok.mp4") {
+            Some("https://cdn.test/ok")
+        } else {
+            None
+        };
+        let metadata = if let Some(location) = location {
+            serde_json::json!({"location": location, "content-length": "9"}).to_string()
+        } else {
+            r#"{"content-type":"text/plain","content-length":"9"}"#.into()
+        };
         unsafe {
-            *out_status = 200;
-            *out_headers = CString::new(r#"{"content-type":"text/plain","content-length":"9"}"#)
-                .unwrap()
-                .into_raw();
+            *out_status = if location.is_some() { 302 } else { 200 };
+            *out_headers = CString::new(metadata).unwrap().into_raw();
             *out_error = ptr::null_mut();
         }
         handle
@@ -515,6 +566,64 @@ mod tests {
             close: test_close,
             free_string: test_free_string,
         });
+    }
+
+    #[tokio::test]
+    async fn mp4_redirects_are_scoped_bounded_and_policy_checked() {
+        let _guard = TEST_LOCK.lock().await;
+        OPEN_DELAY_MS.store(0, Ordering::SeqCst);
+        install_test_callbacks();
+        REQUESTS.lock().unwrap().clear();
+        let fetcher = JniUpstreamFetcher::new();
+        let headers = HashMap::from([
+            ("User-Agent".into(), "AppleFixture".into()),
+            (
+                "Referer".into(),
+                "https://page.test/watch?secret=private".into(),
+            ),
+            ("Authorization".into(), "private".into()),
+            ("Range".into(), "bytes=0-1".into()),
+        ]);
+        let response = fetcher
+            .connect("https://example.test/redirect-ok.mp4/", &headers)
+            .await
+            .unwrap();
+        assert_eq!(
+            axum::body::to_bytes(response.body, 100)
+                .await
+                .unwrap()
+                .as_ref(),
+            b"hello-jni"
+        );
+        let calls = REQUESTS.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        let forwarded: HashMap<String, String> = serde_json::from_str(&calls[1].1).unwrap();
+        assert_eq!(forwarded["User-Agent"], "AppleFixture");
+        assert_eq!(forwarded["Referer"], "https://page.test/");
+        assert_eq!(forwarded["range"], "bytes=0-1");
+        assert!(!forwarded.contains_key("Authorization"));
+        let policy = NetworkPolicy::new(vec![]).unwrap();
+        REQUESTS.lock().unwrap().clear();
+        assert!(fetcher
+            .connect_with_policy(
+                "https://93.184.216.34/private-redirect-ok.mp4",
+                &headers,
+                Some(policy)
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            REQUESTS.lock().unwrap().len(),
+            1,
+            "private redirect must not reach callback"
+        );
+        REQUESTS.lock().unwrap().clear();
+        assert!(fetcher
+            .connect("https://example.test/loop-redirect-ok.mp4", &headers)
+            .await
+            .is_err());
+        assert_eq!(REQUESTS.lock().unwrap().len(), 11);
+        clear_upstream_callbacks();
     }
 
     #[tokio::test]

@@ -64,11 +64,17 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     private var pingTimer: DispatchSourceTimer?
 
-    // Mouse-move batching (collapse rapid deltas into ~60Hz packets), as in the Kotlin client.
+    // Continuous pointer events collapse to one packet of each kind per frame.
     private let mouseQueue = DispatchQueue(label: "com.playbridge.phone.mouse")
-    private var pendingDx: Float = 0
-    private var pendingDy: Float = 0
-    private var mouseFlushScheduled = false
+    private var pendingMoveDx: Float = 0
+    private var pendingMoveDy: Float = 0
+    private var pendingScrollDx: Float = 0
+    private var pendingScrollDy: Float = 0
+    private var pendingZoomFactor: Float = 1
+    private var pendingRotationDegrees: Float = 0
+    private var pendingAnchorX: Float?
+    private var pendingAnchorY: Float?
+    private var mouseFlush: DispatchWorkItem?
 
     override init() {
         super.init()
@@ -108,6 +114,7 @@ final class WebSocketClient: NSObject, ObservableObject {
         stopPing()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        mouseQueue.async { self.clearPendingMouseLocked() }
         setState(.disconnected)
     }
 
@@ -116,7 +123,7 @@ final class WebSocketClient: NSObject, ObservableObject {
     @discardableResult
     func send(_ text: String) -> Bool {
         guard let task else { return false }
-        task.send(.string(text)) { _ in }
+        task.send(.string(WireProtocol.applyingHistoryPreference(text, prevent: UserDefaults.standard.bool(forKey: "cast_prevent_receiver_history")))) { _ in }
         return true
     }
 
@@ -129,29 +136,86 @@ final class WebSocketClient: NSObject, ObservableObject {
 
     func sendPing() { _ = send(WireProtocol.ping()) }
 
-    /// Mouse command with automatic batching/throttling for high-frequency `move` events.
+    /// Continuous gesture updates coalesce to ~60 Hz. Discrete commands flush first.
     func sendMouse(event: String, dx: Float = 0, dy: Float = 0) {
-        if event == "move" {
-            mouseQueue.async {
-                self.pendingDx += dx
-                self.pendingDy += dy
-                if !self.mouseFlushScheduled {
-                    self.mouseFlushScheduled = true
-                    self.mouseQueue.asyncAfter(deadline: .now() + 0.016) { self.flushMouse() }
-                }
+        mouseQueue.async {
+            guard dx.isFinite, dy.isFinite else { return }
+            switch event {
+            case "move":
+                self.pendingMoveDx += dx
+                self.pendingMoveDy += dy
+            case "scroll":
+                self.pendingScrollDx += dx
+                self.pendingScrollDy += dy
+            case "zoom":
+                guard dx > 0 else { return }
+                self.pendingZoomFactor = min(8, max(0.125, self.pendingZoomFactor * dx))
+            case "rotate":
+                self.pendingRotationDegrees += dx
+            case "transform_anchor":
+                self.pendingAnchorX = min(1, max(0, dx))
+                self.pendingAnchorY = min(1, max(0, dy))
+            default:
+                self.flushPendingMouseLocked()
+                _ = self.send(MousePacket.pack(event: event, dx: dx, dy: dy))
+                return
             }
-            return
+            self.scheduleMouseFlushLocked()
         }
-        _ = send(MousePacket.pack(event: event, dx: dx, dy: dy))
     }
 
-    private func flushMouse() {
-        mouseFlushScheduled = false
-        let dx = pendingDx, dy = pendingDy
-        pendingDx = 0; pendingDy = 0
-        if dx != 0 || dy != 0 {
-            _ = send(MousePacket.pack(event: "move", dx: dx, dy: dy))
+    func endPointerGesture() {
+        mouseQueue.async {
+            self.flushPendingMouseLocked()
+            _ = self.send(MousePacket.pack(event: "transform_anchor", dx: -1, dy: -1))
         }
+    }
+
+    private func scheduleMouseFlushLocked() {
+        guard mouseFlush == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.mouseFlush = nil
+            self.flushPendingMouseLocked()
+        }
+        mouseFlush = work
+        mouseQueue.asyncAfter(deadline: .now() + 0.016, execute: work)
+    }
+
+    private func flushPendingMouseLocked() {
+        mouseFlush?.cancel()
+        mouseFlush = nil
+        let moveDx = pendingMoveDx, moveDy = pendingMoveDy
+        let scrollDx = pendingScrollDx, scrollDy = pendingScrollDy
+        let zoomFactor = pendingZoomFactor
+        let rotationDegrees = pendingRotationDegrees
+        let anchorX = pendingAnchorX, anchorY = pendingAnchorY
+        pendingMoveDx = 0
+        pendingMoveDy = 0
+        pendingScrollDx = 0
+        pendingScrollDy = 0
+        pendingZoomFactor = 1
+        pendingRotationDegrees = 0
+        pendingAnchorX = nil
+        pendingAnchorY = nil
+        if let anchorX, let anchorY { _ = send(MousePacket.pack(event: "transform_anchor", dx: anchorX, dy: anchorY)) }
+        if moveDx != 0 || moveDy != 0 { _ = send(MousePacket.pack(event: "move", dx: moveDx, dy: moveDy)) }
+        if scrollDx != 0 || scrollDy != 0 { _ = send(MousePacket.pack(event: "scroll", dx: scrollDx, dy: scrollDy)) }
+        if zoomFactor != 1 { _ = send(MousePacket.pack(event: "zoom", dx: zoomFactor, dy: 0)) }
+        if rotationDegrees != 0 { _ = send(MousePacket.pack(event: "rotate", dx: rotationDegrees, dy: 0)) }
+    }
+
+    private func clearPendingMouseLocked() {
+        mouseFlush?.cancel()
+        mouseFlush = nil
+        pendingMoveDx = 0
+        pendingMoveDy = 0
+        pendingScrollDx = 0
+        pendingScrollDy = 0
+        pendingZoomFactor = 1
+        pendingRotationDegrees = 0
+        pendingAnchorX = nil
+        pendingAnchorY = nil
     }
 
     // MARK: - Connection lifecycle

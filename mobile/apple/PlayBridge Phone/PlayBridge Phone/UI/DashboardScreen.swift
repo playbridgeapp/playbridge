@@ -3,7 +3,6 @@ import SwiftUI
 struct DashboardScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
-    @State private var showExitConfirm = false
     @State private var showComingSoonAlert = false
     @State private var comingSoonFeatureName = ""
 
@@ -17,6 +16,14 @@ struct DashboardScreen: View {
         return vm.pairedDevice?.name
     }
 
+    private func isSource(_ destination: AppScreen) -> Bool {
+        switch (nav.dashboardSource, destination) {
+        case (.iptvDetail(_), .iptv), (.collectionDetail(_), .collections): return true
+        case (let source?, _): return source == destination
+        case (nil, _): return false
+        }
+    }
+
     var body: some View {
         ZStack {
             // ── Animated Ambient Mesh Background ─────────────────────────────────
@@ -28,13 +35,13 @@ struct DashboardScreen: View {
                     Spacer().frame(height: 60)
 
                     Text("PlayBridge")
-                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .font(Theme.font(size: 28, weight: .bold, design: .rounded))
                         .foregroundColor(Theme.onSurface)
 
                     Spacer().frame(height: 4)
 
                     Text("CONSOLE HUB")
-                        .font(.system(size: 10, weight: .bold))
+                        .font(Theme.font(size: 10, weight: .bold))
                         .foregroundColor(Theme.primary.opacity(0.7))
                         .tracking(3)
 
@@ -55,9 +62,6 @@ struct DashboardScreen: View {
 
                     Spacer().frame(height: 32)
 
-                    // ── Exit Button ───────────────────────────────────────────────────
-                    exitButton
-
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 24)
@@ -65,12 +69,6 @@ struct DashboardScreen: View {
 
             // ── Top Left Close Button ─────────────────────────────────────────
             closeButton
-        }
-        .alert("Exit PlayBridge?", isPresented: $showExitConfirm) {
-            Button("Exit", role: .destructive) { exit(0) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This fully quits the app. Any cast that relies on PlayBridge — phone files, DLNA, or queued playback — will stop or error out.")
         }
         .alert("\(comingSoonFeatureName) Coming Soon", isPresented: $showComingSoonAlert) {
             Button("OK", role: .cancel) {}
@@ -91,7 +89,7 @@ struct DashboardScreen: View {
                     systemImage: "globe",
                     gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)],
                     tall: true,
-                    isActive: nav.lastMainScreen == .browser,
+                    isActive: isSource(.browser),
                     action: { nav.navigate(to: .browser) }
                 )
 
@@ -101,7 +99,7 @@ struct DashboardScreen: View {
                     systemImage: "tv",
                     gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
                     tall: true,
-                    isActive: nav.lastMainScreen == .connection,
+                    isActive: isSource(.connection),
                     action: { nav.navigate(to: .connection) }
                 )
             }
@@ -109,12 +107,12 @@ struct DashboardScreen: View {
             // Row 2: Phone Files (live), IPTV
             HStack(spacing: 12) {
                 cardView(
-                    title: "Phone Files",
-                    subtitle: "Cast videos & audio",
+                    title: "Media Library",
+                    subtitle: "Videos, images & audio",
                     systemImage: "folder",
                     gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)],
                     tall: false,
-                    isActive: nav.currentScreen == .phoneFiles,
+                    isActive: isSource(.phoneFiles),
                     action: { nav.navigate(to: .phoneFiles) }
                 )
 
@@ -124,7 +122,7 @@ struct DashboardScreen: View {
                     systemImage: "tv.fill",
                     gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)],
                     tall: false,
-                    isActive: nav.currentScreen == .iptv,
+                    isActive: isSource(.iptv),
                     action: { nav.navigate(to: .iptv) }
                 )
             }
@@ -137,7 +135,7 @@ struct DashboardScreen: View {
                     systemImage: "play.rectangle.fill",
                     gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)],
                     tall: false,
-                    isActive: nav.currentScreen == .collections,
+                    isActive: isSource(.collections),
                     action: { nav.navigate(to: .collections) }
                 )
 
@@ -147,8 +145,8 @@ struct DashboardScreen: View {
                     systemImage: "clock.arrow.circlepath",
                     gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)],
                     tall: false,
-                    isActive: false,
-                    comingSoon: true
+                    isActive: isSource(.castHistory),
+                    action: { nav.navigate(to: .castHistory) }
                 )
             }
         }
@@ -215,7 +213,7 @@ struct DashboardScreen: View {
                             .fill(Color.white.opacity(0.2))
                             .frame(width: 40, height: 40)
                         Image(systemName: systemImage)
-                            .font(.system(size: 20))
+                            .font(Theme.font(size: 20))
                             .foregroundColor(.white)
                     }
 
@@ -224,12 +222,12 @@ struct DashboardScreen: View {
                     // Text Details
                     VStack(alignment: .leading, spacing: 2) {
                         Text(title)
-                            .font(.system(size: tall ? 16 : 13, weight: .semibold))
+                            .font(Theme.font(size: tall ? 16 : 13, weight: .semibold))
                             .foregroundColor(.white)
                             .lineLimit(1)
 
                         Text(subtitle)
-                            .font(.system(size: tall ? 12 : 10))
+                            .font(Theme.font(size: tall ? 12 : 10))
                             .foregroundColor(Color.white.opacity(0.7))
                             .lineLimit(1)
                     }
@@ -250,27 +248,6 @@ struct DashboardScreen: View {
         .buttonStyle(.plain)
     }
 
-    private var exitButton: some View {
-        Button {
-            showExitConfirm = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "power")
-                    .font(.system(size: 16, weight: .medium))
-                Text("Exit PlayBridge")
-                    .font(.system(size: 15, weight: .medium))
-            }
-            .foregroundColor(Theme.danger)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Theme.danger.opacity(0.5), lineWidth: 1)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-
     private var closeButton: some View {
         VStack {
             HStack {
@@ -282,7 +259,7 @@ struct DashboardScreen: View {
                             .fill(Theme.surfaceContainer.opacity(0.5))
                             .frame(width: 40, height: 40)
                         Image(systemName: "xmark")
-                            .font(.system(size: 16, weight: .bold))
+                            .font(Theme.font(size: 16, weight: .bold))
                             .foregroundColor(Theme.onSurface.opacity(0.8))
                     }
                 }
@@ -348,7 +325,7 @@ struct StatusPill: View {
                     .animation(isConnected ? .easeInOut(duration: 1.0).repeatForever(autoreverses: true) : .default, value: pulse)
 
                 Text(text)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(Theme.font(size: 12, weight: .medium))
                     .foregroundColor(isConnected ? (isSecure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000)) : Theme.onSurfaceVariant)
                     .lineLimit(1)
             }
@@ -392,7 +369,7 @@ struct ActiveBadge: View {
                 .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true), value: pulse)
 
             Text("ACTIVE")
-                .font(.system(size: 8, weight: .bold))
+                .font(Theme.font(size: 8, weight: .bold))
                 .foregroundColor(.white)
         }
         .padding(.horizontal, 6)

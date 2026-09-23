@@ -24,7 +24,8 @@ struct CollectionsScreen: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .alert("New collection", isPresented: $showNew) {
             TextField("Name", text: $newName)
@@ -39,16 +40,14 @@ struct CollectionsScreen: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Button { nav.navigate(to: .dashboard) } label: {
-                Image(systemName: "chevron.left").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-            }
+            DashboardNavigationButton()
             VStack(alignment: .leading, spacing: 2) {
-                Text("Collections").font(.system(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
-                Text("Your saved playlists").font(.system(size: 12)).foregroundColor(Theme.onSurfaceVariant)
+                Text("Collections").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
+                Text("Your saved playlists").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)
             }
             Spacer()
             Button { showNew = true } label: {
-                Image(systemName: "plus").font(.system(size: 18, weight: .semibold)).foregroundColor(Theme.primary)
+                Image(systemName: "plus").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.primary)
             }
         }
     }
@@ -56,12 +55,12 @@ struct CollectionsScreen: View {
     private var emptyState: some View {
         VStack(spacing: 14) {
             Spacer()
-            Image(systemName: "play.rectangle.on.rectangle").font(.system(size: 44)).foregroundColor(Theme.onSurfaceVariant)
-            Text("No collections yet").font(.system(size: 16, weight: .semibold)).foregroundColor(Theme.onSurface)
+            Image(systemName: "play.rectangle.on.rectangle").font(Theme.font(size: 44)).foregroundColor(Theme.onSurfaceVariant)
+            Text("No collections yet").font(Theme.font(size: 16, weight: .semibold)).foregroundColor(Theme.onSurface)
             Text("Create a collection, then add channels or links to it.")
-                .font(.system(size: 13)).foregroundColor(Theme.onSurfaceVariant).multilineTextAlignment(.center)
+                .font(Theme.font(size: 13)).foregroundColor(Theme.onSurfaceVariant).multilineTextAlignment(.center)
             Button { showNew = true } label: {
-                Text("New collection").font(.system(size: 15, weight: .semibold)).foregroundColor(.white)
+                Text("New collection").font(Theme.font(size: 15, weight: .semibold)).foregroundColor(.white)
                     .padding(.horizontal, 20).padding(.vertical, 12)
                     .background(RoundedRectangle(cornerRadius: 14).fill(Theme.primary))
             }
@@ -74,13 +73,13 @@ struct CollectionsScreen: View {
     private func row(_ c: MediaCollection) -> some View {
         Button { nav.navigate(to: .collectionDetail(c.id)) } label: {
             HStack(spacing: 12) {
-                Image(systemName: "play.rectangle.fill").font(.system(size: 18)).foregroundColor(Theme.primary).frame(width: 26)
+                Image(systemName: "play.rectangle.fill").font(Theme.font(size: 18)).foregroundColor(Theme.primary).frame(width: 26)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(c.name).font(.system(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface).lineLimit(1)
-                    Text("\(c.itemCount) item\(c.itemCount == 1 ? "" : "s")").font(.system(size: 11)).foregroundColor(Theme.onSurfaceVariant)
+                    Text(c.name).font(Theme.font(size: 15, weight: .semibold)).foregroundColor(Theme.onSurface).lineLimit(1)
+                    Text("\(c.itemCount) item\(c.itemCount == 1 ? "" : "s")").font(Theme.font(size: 11)).foregroundColor(Theme.onSurfaceVariant)
                 }
                 Spacer()
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundColor(Theme.onSurfaceVariant)
+                Image(systemName: "chevron.right").font(Theme.font(size: 13, weight: .semibold)).foregroundColor(Theme.onSurfaceVariant)
             }
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 14).fill(Theme.surfaceContainer))

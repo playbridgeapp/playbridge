@@ -134,8 +134,9 @@ void main() {
         await PlaybackRequestPreparer.prepare(item, StreamProxyMode.always);
 
     expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
-    expect(prepared.url, contains('/movie.mp4'));
+    expect(prepared.url, endsWith('.mp4'));
     expect(prepared.headers, isNull);
+    expect(prepared.originalUrl, item.url);
   });
 
   test('Always mode proxies HLS stream', () async {
@@ -209,7 +210,8 @@ void main() {
         await PlaybackRequestPreparer.prepare(item, StreamProxyMode.auto);
 
     expect(prepared.url, startsWith('http://127.0.0.1:$port/s/'));
-    expect(prepared.url, contains('/movie.mp4'));
+    expect(prepared.url, endsWith('.mp4'));
     expect(prepared.headers, isNull);
+    expect(prepared.originalUrl, item.url);
   });
 }

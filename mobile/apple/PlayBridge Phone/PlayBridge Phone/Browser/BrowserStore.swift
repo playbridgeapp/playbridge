@@ -5,10 +5,14 @@ import WebKit
 /// default data store so cookies/logins persist across tabs (like a normal browser).
 final class BrowserStore: ObservableObject {
     @Published private(set) var tabs: [BrowserTab] = []
-    @Published var activeID: UUID?
+    @Published private(set) var activeID: UUID?
 
     /// Forwarded when any tab's page calls `window.playbridge.cast(...)`.
-    var onPageCast: (([String: Any]) -> Void)?
+    var onPageCast: (([String: Any], String) -> Void)?
+    let downloads = BrowserDownloads()
+    var browserVisible = false {
+        didSet { if !browserVisible { activeTab?.cancelPrompt() } }
+    }
 
     @Published var adBlockEnabled: Bool = ContentBlocker.isEnabled
     private var ruleLists: [WKContentRuleList] = []
@@ -25,13 +29,15 @@ final class BrowserStore: ObservableObject {
     let data = BrowserDataStore()
 
     private var isRestoring = false
-    private let tabsFileURL: URL = {
+    private let tabsFileURL: URL
+    private static func defaultTabsFileURL() -> URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("browser_tabs.json")
-    }()
+    }
 
-    init() {
+    init(tabsFileURL: URL? = nil) {
+        self.tabsFileURL = tabsFileURL ?? Self.defaultTabsFileURL()
         restoreTabs()
         Task { @MainActor in
             // Compile cached rules so blocking is active immediately (curated fallback).
@@ -59,10 +65,8 @@ final class BrowserStore: ObservableObject {
     /// Loads any tab URLs that were deferred while rules were still compiling.
     private func flushPendingLoads() {
         guard !pendingInitialLoads.isEmpty else { return }
-        for tab in tabs {
-            if let url = pendingInitialLoads[tab.id] { tab.load(url) }
-        }
-        pendingInitialLoads.removeAll()
+        guard let tab = activeTab, let url = pendingInitialLoads.removeValue(forKey: tab.id) else { return }
+        tab.load(url)
     }
 
     var activeTab: BrowserTab? { tabs.first { $0.id == activeID } }
@@ -73,11 +77,49 @@ final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
-    private func makeTab(url: String?) -> BrowserTab {
+    private func makeTab(url: String?, activate: Bool = true, after openerID: UUID? = nil, windowConfiguration: WKWebViewConfiguration? = nil) -> BrowserTab {
         let handler = TabScriptHandler()
-        let tab = BrowserTab(configuration: makeConfiguration(), handler: handler)
+        let configuration = windowConfiguration ?? makeConfiguration()
+        // WebKit may share the opener's content controller. Each tab needs its own
+        // message handler without changing the supplied process pool/data store.
+        if windowConfiguration != nil { configuration.userContentController = WKUserContentController() }
+        let tab = BrowserTab(configuration: configuration, handler: handler)
         handler.tab = tab
-        tab.onPageCast = { [weak self] payload in self?.onPageCast?(payload) }
+        tab.isActive = { [weak self, weak tab] in
+            guard let self, let tab else { return false }
+            return self.browserVisible && self.activeID == tab.id
+        }
+        tab.onPageCast = { [weak self] payload, origin in self?.onPageCast?(payload, origin) }
+        tab.onDownload = { [weak self] download, view in self?.downloads.adopt(download, webView: view) }
+        tab.onMetadataChanged = { [weak self] in self?.saveTabs() }
+        tab.onBeforeLoad = { [weak self, weak tab] in
+            guard let self, let tab else { return }
+            self.pendingInitialLoads.removeValue(forKey: tab.id)
+            self.applyRules(to: tab)
+        }
+        tab.onCreateWindow = { [weak self, weak tab] configuration, request in
+            guard let self, let tab else { return nil }
+            let child = self.makeTab(url: request.url?.absoluteString, after: tab.id, windowConfiguration: configuration)
+            child.popupOpenerURL = tab.loadedWebView?.url
+            child.onAdNavigationBlocked = { [weak self, weak child, weak tab] message in
+                // Only discard a popup which never committed real content. In a
+                // popunder/tab swap, both existing video pages remain intact.
+                DispatchQueue.main.async {
+                    guard let self, let child, !child.hasCommittedPage,
+                          self.tabs.contains(where: { $0.id == child.id }) else { return }
+                    let wasSelected = self.activeID == child.id
+                    self.closeTab(child.id)
+                    if let tab, self.tabs.contains(where: { $0.id == tab.id }) {
+                        if let entry = child.networkLog.entries.last(where: { $0.state == "Blocked by ad rules" }) {
+                            tab.networkLog.record(url: entry.url, page: entry.page, kind: "popup", state: entry.state)
+                        }
+                        tab.showBlockedNavigationNotice(message)
+                        if wasSelected { self.select(tab.id) }
+                    }
+                }
+            }
+            return child.webView
+        }
         tab.onMainFrameCommit = { [weak self, weak tab] _ in
             guard let self, let tab else { return }
             self.applyRules(to: tab)
@@ -103,25 +145,31 @@ final class BrowserStore: ObservableObject {
             domains.forEach { ContentBlocker.addUserBlockedDomain($0) }
             Task { @MainActor in await self.updateAdBlockRules() }
         }
-        tab.onOpenNewTab = { [weak self] url, background in
-            guard let self else { return }
-            if background { self.openInBackground(url.absoluteString) }
-            else { self.newTab(loading: url.absoluteString) }
+        tab.onOpenNewTab = { [weak self, weak tab] url, background in
+            guard let self, let tab else { return }
+            self.makeTab(url: url.absoluteString, activate: !background, after: tab.id)
         }
-        tabs.append(tab)
-        activeID = tab.id
-        applyRules(to: tab)
+        if let openerID, let index = tabs.firstIndex(where: { $0.id == openerID }) {
+            tabs.insert(tab, at: index + 1)
+        } else {
+            tabs.append(tab)
+        }
+        if activate { activeTab?.cancelPrompt(); activeID = tab.id }
         if let url, !url.isEmpty {
-            if rulesReady {
+            tab.urlString = url
+            tab.title = URL(string: url)?.host ?? url
+            tab.isHome = false
+            applyRules(to: tab)
+            if windowConfiguration != nil {
+                // Returning the child view lets WebKit perform exactly one navigation.
+            } else if activate && !isRestoring && rulesReady {
                 tab.load(url)
             } else {
-                // Defer until the first compile applies. Setting urlString keeps the
-                // address bar and saveTabs() correct while the load is pending.
-                tab.urlString = url
                 pendingInitialLoads[tab.id] = url
             }
         } else {
-            tab.isHome = true   // show the new-tab/home page until the user navigates
+            tab.isHome = windowConfiguration == nil
+            applyRules(to: tab)
         }
         saveTabs()
         return tab
@@ -129,18 +177,26 @@ final class BrowserStore: ObservableObject {
 
     // MARK: - Tab persistence
 
-    private struct SavedTabs: Codable { var urls: [String]; var activeIndex: Int }
+    private struct SavedTab: Codable {
+        var url: String
+        var title: String
+        var isHome: Bool
+        var desktop: Bool
+    }
+    private struct SavedTabs: Codable { var tabs: [SavedTab]; var activeIndex: Int }
+    private struct LegacyTabs: Codable { var urls: [String]; var activeIndex: Int }
 
     private func restoreTabs() {
         isRestoring = true
         let saved = loadSavedTabs()
-        if saved.urls.isEmpty {
-            makeTab(url: nil)
-        } else {
-            for u in saved.urls { makeTab(url: u) }
-            if tabs.indices.contains(saved.activeIndex) {
-                activeID = tabs[saved.activeIndex].id
+        if saved.tabs.isEmpty { makeTab(url: nil) }
+        else {
+            for item in saved.tabs {
+                let tab = makeTab(url: item.isHome ? nil : item.url, activate: false)
+                tab.title = item.title.isEmpty ? (URL(string: item.url)?.host ?? "New Tab") : item.title
+                tab.isDesktopMode = item.desktop
             }
+            activeID = tabs[tabs.indices.contains(saved.activeIndex) ? saved.activeIndex : 0].id
         }
         isRestoring = false
         saveTabs()
@@ -148,24 +204,20 @@ final class BrowserStore: ObservableObject {
 
     private func saveTabs() {
         guard !isRestoring else { return }
-        var urls: [String] = []
-        var activeIndex = 0
-        for tab in tabs {
-            let u = tab.urlString
-            guard u.hasPrefix("http") else { continue }
-            if tab.id == activeID { activeIndex = urls.count }
-            urls.append(u)
-        }
-        let payload = SavedTabs(urls: urls, activeIndex: activeIndex)
-        if let d = try? JSONEncoder().encode(payload) { try? d.write(to: tabsFileURL, options: .atomic) }
+        let items = tabs.map { SavedTab(url: $0.urlString, title: $0.title, isHome: $0.isHome, desktop: $0.isDesktopMode) }
+        let payload = SavedTabs(tabs: items, activeIndex: tabs.firstIndex { $0.id == activeID } ?? 0)
+        if let data = try? JSONEncoder().encode(payload) { try? data.write(to: tabsFileURL, options: .atomic) }
     }
 
     private func loadSavedTabs() -> SavedTabs {
-        guard let d = try? Data(contentsOf: tabsFileURL),
-              let s = try? JSONDecoder().decode(SavedTabs.self, from: d) else {
-            return SavedTabs(urls: [], activeIndex: 0)
+        guard let data = try? Data(contentsOf: tabsFileURL) else { return SavedTabs(tabs: [], activeIndex: 0) }
+        if let saved = try? JSONDecoder().decode(SavedTabs.self, from: data) { return saved }
+        if let legacy = try? JSONDecoder().decode(LegacyTabs.self, from: data) {
+            return SavedTabs(tabs: legacy.urls.map {
+                SavedTab(url: $0, title: URL(string: $0)?.host ?? $0, isHome: false, desktop: false)
+            }, activeIndex: legacy.activeIndex)
         }
-        return s
+        return SavedTabs(tabs: [], activeIndex: 0)
     }
 
     /// Sites whose own anti-adblock breaks playback when their requests are blocked.
@@ -206,27 +258,35 @@ final class BrowserStore: ObservableObject {
         applyRulesToAllTabs()
     }
 
+    @MainActor func updateUserDomainRules(replacing identifier: String) async throws {
+        let list = try await ContentBlocker.compileUserDomainList()
+        ruleLists.removeAll { $0.identifier == identifier || ContentBlocker.isUserDomainRuleList($0) }
+        if let list { ruleLists.append(list) }
+        applyRulesToAllTabs()
+    }
+
     private func applyRulesToAllTabs() { tabs.forEach { applyRules(to: $0) } }
 
     private func applyRules(to tab: BrowserTab) {
-        let cc = tab.webView.configuration.userContentController
+        let cc = tab.configuration.userContentController
         cc.removeAllContentRuleLists()
         // Skip blocking on anti-adblock sites (e.g. YouTube) so playback isn't broken.
-        guard adBlockEnabled, !isExempt(tab.webView.url) else { return }
-        for list in ruleLists {
+        guard adBlockEnabled else { return }
+        let exempt = isExempt(URL(string: tab.urlString))
+        for list in ruleLists where !exempt || ContentBlocker.isUserDomainRuleList(list) {
             cc.add(list)
         }
     }
 
     /// Open a URL in a new tab without switching away from the current one.
     func openInBackground(_ url: String) {
-        let previous = activeID
-        makeTab(url: url)
-        if let previous { activeID = previous }
+        makeTab(url: url, activate: false, after: activeID)
         saveTabs()
     }
 
     func select(_ id: UUID) {
+        guard tabs.contains(where: { $0.id == id }) else { return }
+        if activeID != id { activeTab?.cancelPrompt() }
         activeID = id
         // A deliberate user selection outranks the rules-ready deferral — load now.
         if let url = pendingInitialLoads.removeValue(forKey: id),
@@ -236,16 +296,40 @@ final class BrowserStore: ObservableObject {
         saveTabs()
     }
 
-    func closeTab(_ id: UUID) {
-        guard let idx = tabs.firstIndex(where: { $0.id == id }) else { return }
-        pendingInitialLoads.removeValue(forKey: id)
-        tabs[idx].webView.stopLoading()
-        tabs.remove(at: idx)
-        if tabs.isEmpty {
-            makeTab(url: nil)
-        } else if activeID == id {
-            activeID = tabs[min(idx, tabs.count - 1)].id
+    @discardableResult
+    func duplicateTab(_ id: UUID) -> BrowserTab? {
+        guard let source = tabs.first(where: { $0.id == id }) else { return nil }
+        let duplicate = makeTab(url: source.isHome ? nil : source.urlString, activate: false, after: id)
+        duplicate.title = source.title
+        duplicate.isDesktopMode = source.isDesktopMode
+        saveTabs()
+        return duplicate
+    }
+
+    func bookmarkTabs(_ ids: Set<UUID>) {
+        for tab in tabs where ids.contains(tab.id) && !tab.isHome && !tab.urlString.isEmpty {
+            data.addBookmark(url: tab.urlString, title: tab.title)
         }
+    }
+
+    func closeTab(_ id: UUID) { closeTabs([id]) }
+
+    func closeTabs(_ ids: Set<UUID>) {
+        let closing = tabs.filter { ids.contains($0.id) }
+        guard !closing.isEmpty else { return }
+        let oldActiveIndex = tabs.firstIndex { $0.id == activeID } ?? 0
+        let survivors = tabs.filter { !ids.contains($0.id) }
+        let next = tabs.dropFirst(oldActiveIndex).first { !ids.contains($0.id) } ?? survivors.last
+        for tab in closing {
+            pendingInitialLoads.removeValue(forKey: tab.id)
+            tab.detector.clear()
+            tab.cancelPrompt()
+            tab.stopElementPicker()
+            tab.stop()
+        }
+        tabs = survivors
+        if tabs.isEmpty { makeTab(url: nil) }
+        else if let activeID, ids.contains(activeID), let next { select(next.id) }
         saveTabs()
     }
 
@@ -253,6 +337,7 @@ final class BrowserStore: ObservableObject {
         let cfg = WKWebViewConfiguration()
         cfg.websiteDataStore = .default()
         cfg.allowsInlineMediaPlayback = true
+        cfg.preferences.javaScriptCanOpenWindowsAutomatically = true
         cfg.mediaTypesRequiringUserActionForPlayback = []
         cfg.userContentController = WKUserContentController()
         return cfg
@@ -264,21 +349,45 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
     weak var tab: BrowserTab?
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.userContentController(controller, didReceive: message) }
+            return
+        }
+        if message.name == "playbackState" {
+            guard message.webView === tab?.loadedWebView else { return }
+            tab?.recordPlaybackState(message.body)
+            return
+        }
+        if message.name == "networkLog" {
+            guard message.webView === tab?.loadedWebView else { return }
+            tab?.networkLog.ingest(message.body, page: message.frameInfo.request.url?.absoluteString ?? "", isSubframe: !message.frameInfo.isMainFrame)
+            return
+        }
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
+        case "mediaLifecycle":
+            if message.frameInfo.isMainFrame { tab?.detector.beginMediaLifecycle() }
         case "video":
             tab?.detector.ingest(body)
         case "cast":
-            if let payload = body["payload"] as? [String: Any] { tab?.onPageCast?(payload) }
+            guard message.frameInfo.isMainFrame, let payload = body["payload"] as? [String: Any],
+                  let source = message.frameInfo.request.url else { return }
+            tab?.requestPageCast(payload, source: source)
+        case "pickerState":
+            if message.frameInfo.isMainFrame, body["active"] as? Bool == false { tab?.pickerDidFinish() }
         case "pickedElement":
+            guard tab?.isPickingElement == true, message.frameInfo.isMainFrame,
+                  let host = message.frameInfo.request.url?.host else { return }
             if let selector = body["selector"] as? String, !selector.isEmpty {
-                tab?.onElementPicked?(selector, (body["host"] as? String) ?? "")
+                tab?.onElementPicked?(selector, host)
             }
         case "pickedResource":
+            guard tab?.isPickingElement == true, message.frameInfo.isMainFrame else { return }
             if let host = body["host"] as? String, !host.isEmpty {
                 tab?.onResourceBlock?(host)
             }
         case "pickedResources":
+            guard tab?.isPickingElement == true, message.frameInfo.isMainFrame else { return }
             if let hosts = body["hosts"] as? [String], !hosts.isEmpty {
                 tab?.onResourcesBlock?(hosts)
             }

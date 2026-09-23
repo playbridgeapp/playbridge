@@ -94,3 +94,20 @@ struct PairingCredentialState {
         pairedDevices[index].lastConnected = connectedAt
     }
 }
+
+/// Authorization belongs to a socket, never to the receiver's aggregate UI state.
+struct ConnectionAuthorization<ID: Hashable> {
+    private var verifiers: [ID: String] = [:]
+
+    mutating func authorize(_ id: ID, token: String) {
+        verifiers[id] = PairingCredentialState.hashToken(token)
+    }
+
+    func isAuthorized(_ id: ID, credentials: PairingCredentialState) -> Bool {
+        guard let verifier = verifiers[id] else { return false }
+        return credentials.authorizedTokenVerifiers.contains(verifier)
+    }
+
+    mutating func remove(_ id: ID) { verifiers.removeValue(forKey: id) }
+    mutating func removeAll() { verifiers.removeAll() }
+}

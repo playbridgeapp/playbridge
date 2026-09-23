@@ -8,6 +8,7 @@ final class BonjourBrowser: NSObject, ObservableObject {
     enum ScanOwner: Hashable {
         case userInterface
         case savedReconnect
+        case savedDevices
     }
 
     @Published private(set) var devices: [DiscoveredDevice] = []
@@ -64,7 +65,8 @@ extension BonjourBrowser: NetServiceBrowserDelegate {
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didRemove service: NetService, moreComing: Bool) {
-        devices.removeAll { $0.name == service.name }
+        let name = service.name
+        DispatchQueue.main.async { self.devices.removeAll { $0.name == name } }
     }
 }
 
@@ -86,7 +88,8 @@ extension BonjourBrowser: NetServiceDelegate {
             port: service.port,
             txt: txt
         )
-        upsert(device)
+        let resolved = device
+        DispatchQueue.main.async { self.upsert(resolved) }
     }
 
     func netService(_ service: NetService, didNotResolve errorDict: [String: NSNumber]) {

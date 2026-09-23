@@ -42,12 +42,17 @@ struct TvCapabilityOptions {
 /// Identifiable wrapper for AVPlayer to trigger SwiftUI full screen cover.
 struct PlayerItem: Identifiable {
     let id = UUID()
-    let player: AVPlayer
+    let session: PlaybackSession
+#if DEBUG
+    var report: () -> String = { "" }
+    var diagnostics: PlaybackDiagnostics?
+#endif
 }
 
 /// Unified Cast Sheet displaying all detected streams with previews, matching/exceeding Android's CastSheet UX.
 struct CastSheet: View {
-    let videos: [DetectedVideo]
+    @ObservedObject var detector: VideoDetector
+    private var videos: [DetectedVideo] { detector.videos }
     let tab: BrowserTab
     @ObservedObject var store: BrowserStore
 
@@ -58,20 +63,26 @@ struct CastSheet: View {
     @State private var selectedVideo: DetectedVideo?
     @State private var selectedQuality: VideoQuality?
     @State private var attachedSubtitles = Set<String>()
-    @State private var qualities: [VideoQuality] = []
-    @State private var loadingQualities = false
-    @State private var thumbnail: UIImage?
-    @State private var isThumbnailLoading = false
     @State private var castAction = "play"
     @State private var browseUrl = ""
     @State private var selectedTab = 0
-    @State private var playerMode = "tv"
+    @State private var browserMode = "tv"
+    @AppStorage("stream_route_default") private var routePreference = StreamRoute.direct.rawValue
+    @State private var proxyConfiguration = StreamProxySettingsStore.load()
+    @State private var showProxySettings = false
+    @State private var selectProxyAfterSave = false
+    private var streamRoute: StreamRoute { StreamRoute(rawValue: routePreference) ?? .direct }
     @State private var fullscreenPlayerItem: PlayerItem?
+    @State private var showDestination = false
+    @State private var playbackPreparation: Task<Void, Never>?
+    @State private var playbackPreparationID: UUID?
+    @State private var playbackError: String?
 
     private var streams: [DetectedVideo] { videos.filter { !$0.isSubtitle } }
     private var subtitles: [DetectedVideo] { videos.filter { $0.isSubtitle } }
 
     private var sendEnabled: Bool {
+        if playbackPreparationID != nil { return false }
         if castAction == "browse" {
             return vm.isConnected && !browseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         } else {
@@ -81,54 +92,101 @@ struct CastSheet: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
+            VStack(spacing: 0) {
+                // Keep casting actions and list tabs visible while results scroll.
                 VStack(alignment: .leading, spacing: 16) {
                     header
-                    capabilitySelectors
-                    
-                    if castAction == "browse" {
-                        browseSection
-                    } else {
+                    if castAction == "browse" { capabilitySelectors }
+                    if castAction != "browse" {
                         tabsSection
-                        
-                        if selectedTab == 0 {
+                    }
+                }
+                .padding(.top, 24)
+                .padding(.bottom, castAction == "browse" ? 16 : 0)
+                .fixedSize(horizontal: false, vertical: true)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if castAction == "browse" {
+                            browseSection
+                        } else if selectedTab == 0 {
                             videosListSection
                         } else {
                             subtitlesListSection
                         }
                     }
+                    .padding(.vertical, 8)
                 }
-                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .background(Theme.surface.ignoresSafeArea())
-            .navigationTitle("Cast")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Close") { dismiss() }
-                        .foregroundColor(Theme.primary)
+            .toolbar(.hidden, for: .navigationBar)
+            .accessibilityAction(.escape) { dismiss() }
+            .sheet(isPresented: $showDestination) { DeviceConnectionSheet() }
+            .alert("Couldn’t start playback", isPresented: Binding(
+                get: { playbackError != nil },
+                set: { if !$0 { playbackError = nil } }
+            )) {
+                Button("OK", role: .cancel) { playbackError = nil }
+            } message: {
+                Text(playbackError ?? "")
+            }
+            .overlay(alignment: .bottom) {
+                if playbackPreparationID != nil {
+                    ProgressView("Preparing playback…")
+                        .padding()
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .padding()
+                }
+            }
+            .onDisappear { playbackPreparation?.cancel() }
+            .sheet(isPresented: $showProxySettings) {
+                StreamProxySettingsView(configuration: proxyConfiguration) { configuration in
+                    proxyConfiguration = configuration
+                    if selectProxyAfterSave { routePreference = StreamRoute.proxy.rawValue }
                 }
             }
             .fullScreenCover(item: $fullscreenPlayerItem) { item in
-                FullScreenVideoPlayerView(player: item.player) {
+                FullScreenVideoPlayerView(session: item.session, diagnosticsReport: {
+#if DEBUG
+                    item.report()
+#else
+                    ""
+#endif
+                }) {
                     fullscreenPlayerItem = nil
                 }
             }
+            .onChange(of: vm.destinationID) { _ in
+                if vm.isExternalReceiver { castAction = "play"; selectedTab = 0; attachedSubtitles.removeAll() }
+            }
             .onAppear {
+                if vm.isExternalReceiver { castAction = "play"; selectedTab = 0; attachedSubtitles.removeAll() }
+                if streamRoute == .proxy, (try? proxyConfiguration.validatedURL()) == nil {
+                    routePreference = StreamRoute.direct.rawValue
+                }
                 if selectedVideo == nil, let firstStream = sortedStreams(streams).first {
                     selectVideo(firstStream)
                 }
                 if browseUrl.isEmpty {
                     browseUrl = tab.urlString
                 }
-                if streams.isEmpty && vm.pairedDevice?.browsers.isEmpty == false {
+                if streams.isEmpty && vm.supportsBrowser {
                     castAction = "browse"
                 }
             }
+            .onChange(of: videos) { current in
+                if let selectedVideo, !current.contains(where: { $0.id == selectedVideo.id }) {
+                    self.selectedVideo = nil
+                    selectedQuality = nil
+                }
+                if selectedVideo == nil, let first = sortedStreams(streams).first {
+                    selectVideo(first)
+                }
+            }
             .onChange(of: castAction) { newAction in
-                let options = newAction == "browse" ? TvCapabilityOptions.browserOptions(for: vm.pairedDevice) : TvCapabilityOptions.playerOptions(for: vm.pairedDevice)
-                if !options.contains(where: { $0.id == playerMode }) {
-                    playerMode = "tv"
+                if newAction == "browse", !TvCapabilityOptions.browserOptions(for: vm.pairedDevice).contains(where: { $0.id == browserMode }) {
+                    browserMode = "tv"
                 }
             }
         }
@@ -136,100 +194,143 @@ struct CastSheet: View {
 
     // MARK: - Subviews
 
+    private var actionLabel: String {
+        castAction == "browse" ? "Browse" : castAction == "queue" ? "Queue" : "Play"
+    }
+
+    private var actionIcon: String {
+        castAction == "browse" ? "globe" : castAction == "queue" ? "text.badge.plus" : "play.fill"
+    }
+
+    private var destinationDescription: String {
+        if vm.isConnected, let name = vm.receiverName {
+            return "Connected to \(name)"
+        }
+        return "No receiver connected"
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
-            Picker("Action", selection: $castAction) {
-                Text("Play").tag("play")
-                if vm.isConnected && vm.coordinator.activeContext == "player" {
-                    Text("Queue").tag("queue")
+            Menu {
+                Picker("Action", selection: $castAction) {
+                    Label("Play", systemImage: "play.fill").tag("play")
+                    if vm.isConnected && vm.supportsQueue && vm.coordinator.activeContext == "player" {
+                        Label("Queue", systemImage: "text.badge.plus").tag("queue")
+                    }
+                    if vm.supportsBrowser {
+                        Label("Browse", systemImage: "globe").tag("browse")
+                    }
                 }
-                if vm.pairedDevice?.browsers.isEmpty == false {
-                    Text("Browse").tag("browse")
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 200)
-            
-            Spacer()
-            
-            if let device = vm.pairedDevice {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(vm.isConnected ? Color.green : Color.red)
-                        .frame(width: 6, height: 6)
-                    Text(device.name)
-                        .font(.caption.bold())
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Theme.surfaceContainerHigh)
-                .cornerRadius(6)
-                .foregroundColor(Theme.onSurfaceVariant)
-            }
-            
-            Button {
-                sendAction()
             } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: actionIcon)
+                    Text(actionLabel)
+                    Image(systemName: "chevron.down").font(Theme.font(.caption2).bold())
+                }
+                .font(Theme.font(.subheadline).weight(.medium))
+                .foregroundColor(Theme.primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Theme.secondaryContainer, in: RoundedRectangle(cornerRadius: 8))
+                .frame(minHeight: 44)
+            }
+            .accessibilityLabel("Cast action")
+            .accessibilityValue(actionLabel)
+
+            if castAction != "browse" { routeMenu }
+
+            Spacer(minLength: 0)
+
+            Button { showDestination = true } label: {
+                Image(systemName: "tv")
+                    .font(Theme.font(size: 20))
+                    .foregroundColor(vm.isConnected ? Theme.primary : Theme.onSurfaceVariant)
+                    .frame(width: 44, height: 44)
+            }
+            .accessibilityLabel(destinationDescription)
+            .accessibilityHint("Show cast destination")
+
+            Button { sendAction() } label: {
                 Image(systemName: "paperplane.fill")
-                    .font(.body.bold())
-                    .foregroundColor(sendEnabled ? Theme.onPrimary : Theme.onSurfaceVariant.opacity(0.3))
-                    .padding(8)
-                    .background(sendEnabled ? Theme.ctaGradient : LinearGradient(colors: [Color.clear], startPoint: .leading, endPoint: .trailing))
-                    .clipShape(Circle())
+                    .font(Theme.font(size: 20))
+                    .foregroundColor(sendEnabled ? Theme.primary : Theme.onSurfaceVariant.opacity(0.38))
+                    .frame(width: 44, height: 44)
             }
             .disabled(!sendEnabled)
+            .accessibilityLabel("Send")
+            .accessibilityHint("\(actionLabel) on the connected receiver")
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, 16)
+    }
+
+    private var routeMenu: some View {
+        Menu {
+            ForEach(StreamRoute.allCases) { route in
+                Button {
+                    if route == .proxy, (try? proxyConfiguration.validatedURL()) == nil {
+                        selectProxyAfterSave = true
+                        showProxySettings = true
+                    } else { routePreference = route.rawValue }
+                } label: {
+                    if streamRoute == route {
+                        Label(route.label, systemImage: "checkmark")
+                    } else {
+                        Text(route.label)
+                    }
+                }
+            }
+            Divider()
+            Button {
+                selectProxyAfterSave = false
+                showProxySettings = true
+            } label: {
+                Label("Configure proxy", systemImage: "gearshape")
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(streamRoute.label)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                Image(systemName: "chevron.down").font(Theme.font(.caption2).bold())
+            }
+            .font(Theme.font(.subheadline).weight(.medium))
+            .foregroundColor(Theme.primary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Theme.secondaryContainer, in: RoundedRectangle(cornerRadius: 8))
+            .frame(minHeight: 44)
+        }
+        .accessibilityLabel("Stream route")
+        .accessibilityValue(streamRoute.label)
     }
 
     private var capabilitySelectors: some View {
         HStack(spacing: 8) {
-            let options = castAction == "browse" ? TvCapabilityOptions.browserOptions(for: vm.pairedDevice) : TvCapabilityOptions.playerOptions(for: vm.pairedDevice)
-            let currentLabel = options.first(where: { $0.id == playerMode })?.label ?? "TV Default"
-            
-            Menu {
-                ForEach(options, id: \.id) { opt in
-                    Button(opt.label) {
-                        playerMode = opt.id
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(currentLabel)
-                    Image(systemName: "chevron.down")
-                }
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Theme.surfaceContainerHigh)
-                .cornerRadius(8)
-                .foregroundColor(Theme.onSurface)
-            }
-            
             if castAction == "browse" {
-                Button {
-                    tab.toggleDesktopMode()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: tab.isDesktopMode ? "desktopcomputer" : "iphone")
-                        Text(tab.isDesktopMode ? "Desktop" : "Mobile")
+                Menu {
+                    ForEach(TvCapabilityOptions.browserOptions(for: vm.pairedDevice), id: \.id) { option in
+                        Button(option.label) { browserMode = option.id }
                     }
-                    .font(.caption)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Theme.surfaceContainerHigh)
-                    .cornerRadius(8)
-                    .foregroundColor(Theme.onSurface)
+                } label: {
+                    Text("Browser: " + (TvCapabilityOptions.browserOptions(for: vm.pairedDevice).first { $0.id == browserMode }?.label ?? "TV Default"))
+                        .font(Theme.font(.caption)).padding(10)
+                }
+                Button { tab.toggleDesktopMode() } label: {
+                    Label(tab.isDesktopMode ? "Desktop" : "Mobile", systemImage: tab.isDesktopMode ? "desktopcomputer" : "iphone")
+                        .font(Theme.font(.caption))
+                        .padding(10)
                 }
             }
         }
+        .buttonStyle(.plain)
         .padding(.horizontal, 16)
     }
 
     private var browseSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("BROWSE PAGE ON TV")
-                .font(.caption.bold())
+                .font(Theme.font(.caption).bold())
                 .foregroundColor(Theme.onSurfaceVariant)
             
             TextField("Website URL", text: $browseUrl)
@@ -247,7 +348,7 @@ struct CastSheet: View {
                     dismiss()
                 } label: {
                     Label("New Tab", systemImage: "plus")
-                        .font(.caption.bold())
+                        .font(Theme.font(.caption).bold())
                         .foregroundColor(Theme.primary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -262,7 +363,7 @@ struct CastSheet: View {
                     }
                 } label: {
                     Label("Safari", systemImage: "safari")
-                        .font(.caption.bold())
+                        .font(Theme.font(.caption).bold())
                         .foregroundColor(Theme.primary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -275,40 +376,50 @@ struct CastSheet: View {
     }
 
     private var tabsSection: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                Button {
-                    withAnimation { selectedTab = 0 }
-                } label: {
-                    VStack(spacing: 8) {
-                        Text("Videos (\(streams.count))")
-                            .font(.subheadline.bold())
-                            .foregroundColor(selectedTab == 0 ? Theme.primary : Theme.onSurfaceVariant)
-                        Rectangle()
-                            .fill(selectedTab == 0 ? Theme.primary : Color.clear)
-                            .frame(height: 2)
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Detected media")
+                .font(Theme.font(.caption))
+                .foregroundColor(Theme.onSurfaceVariant)
+                .padding(.horizontal, 16)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    mediaTab("Videos", icon: "play.fill", count: streams.count, index: 0)
+                    if !vm.isExternalReceiver { mediaTab("Subtitles", icon: "captions.bubble", count: subtitles.count, index: 1) }
                 }
-                .frame(maxWidth: .infinity)
-                
-                Button {
-                    withAnimation { selectedTab = 1 }
-                } label: {
-                    VStack(spacing: 8) {
-                        Text("Subtitles (\(subtitles.count))")
-                            .font(.subheadline.bold())
-                            .foregroundColor(selectedTab == 1 ? Theme.primary : Theme.onSurfaceVariant)
-                        Rectangle()
-                            .fill(selectedTab == 1 ? Theme.primary : Color.clear)
-                            .frame(height: 2)
-                    }
-                }
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 8)
+                Divider().background(Theme.outlineVariant)
             }
-            .padding(.horizontal, 16)
-            
-            Divider().background(Theme.outlineVariant)
         }
+    }
+
+    private func mediaTab(_ title: String, icon: String, count: Int, index: Int) -> some View {
+        let selected = selectedTab == index
+        return Button {
+            withAnimation { selectedTab = index }
+        } label: {
+            VStack(spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: icon).font(Theme.font(size: 14))
+                    Text(title).font(Theme.font(.subheadline).weight(.semibold))
+                    Text("\(count)")
+                        .font(Theme.font(.caption2).bold())
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Theme.primary.opacity(selected ? 0.22 : 0.12), in: Capsule())
+                }
+                .foregroundColor(selected ? Theme.primary : Theme.onSurfaceVariant)
+                .frame(minHeight: 44)
+                .frame(maxWidth: .infinity)
+                Rectangle()
+                    .fill(selected ? Theme.primary : Color.clear)
+                    .frame(height: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title), \(count)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var videosListSection: some View {
@@ -316,13 +427,13 @@ struct CastSheet: View {
             if streams.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "film")
-                        .font(.system(size: 48))
+                        .font(Theme.font(size: 48))
                         .foregroundColor(Theme.onSurfaceVariant.opacity(0.5))
                     Text("No videos detected yet")
-                        .font(.headline)
+                        .font(Theme.font(.headline))
                         .foregroundColor(Theme.onSurface)
                     Text("Browse a page with video content")
-                        .font(.caption)
+                        .font(Theme.font(.caption))
                         .foregroundColor(Theme.onSurfaceVariant)
                 }
                 .frame(maxWidth: .infinity)
@@ -333,29 +444,28 @@ struct CastSheet: View {
                         video: video,
                         isSelected: selectedVideo?.id == video.id,
                         selectedQuality: selectedQuality,
-                        attachedSubtitles: attachedSubtitles,
-                        qualities: qualities,
-                        loadingQualities: loadingQualities,
-                        isThumbnailLoading: isThumbnailLoading,
-                        thumbnail: thumbnail,
+                        qualities: detector.qualities[video.id] ?? [],
+                        loadingQualities: (video.kind == .hls || video.kind == .dash) && detector.qualities[video.id] == nil,
+                        thumbnail: detector.thumbnails[video.id],
+                        thumbnailLoading: detector.thumbnailStates[video.id] == .loading,
                         onSelect: {
                             selectVideo(video)
                         },
                         onQualitySelect: { q in
-                            selectQuality(q)
-                        },
-                        onSubtitleToggle: { subUrl in
-                            if attachedSubtitles.contains(subUrl) {
-                                attachedSubtitles.remove(subUrl)
-                            } else {
-                                attachedSubtitles.insert(subUrl)
-                            }
+                            if selectedVideo?.id != video.id { selectVideo(video) }
+                            selectedQuality = q
                         },
                         onPlayOnPhone: {
                             playOnPhone(video)
                         },
                         onCopyUrl: {
-                            UIPasteboard.general.string = selectedQuality?.url ?? video.url
+                            UIPasteboard.general.string = (selectedVideo?.id == video.id ? selectedQuality?.url : nil) ?? video.url
+                        },
+                        onCopyDiagnostics: {
+#if DEBUG
+                            UIPasteboard.general.setItems([["public.utf8-plain-text": detector.debugReport(for: video)]],
+                                options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(900)])
+#endif
                         }
                     )
                 }
@@ -369,10 +479,10 @@ struct CastSheet: View {
             if subtitles.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "captions.bubble")
-                        .font(.system(size: 40))
+                        .font(Theme.font(size: 40))
                         .foregroundColor(Theme.onSurfaceVariant.opacity(0.5))
                     Text("No subtitles detected")
-                        .font(.subheadline)
+                        .font(Theme.font(.subheadline))
                         .foregroundColor(Theme.onSurfaceVariant)
                 }
                 .frame(maxWidth: .infinity)
@@ -392,11 +502,11 @@ struct CastSheet: View {
                             
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(sub.displayTitle)
-                                    .font(.subheadline)
+                                    .font(Theme.font(.subheadline))
                                     .foregroundColor(Theme.onSurface)
                                     .lineLimit(1)
                                 Text(sub.host)
-                                    .font(.caption)
+                                    .font(Theme.font(.caption))
                                     .foregroundColor(Theme.onSurfaceVariant)
                                     .lineLimit(1)
                             }
@@ -418,80 +528,90 @@ struct CastSheet: View {
     private func selectVideo(_ video: DetectedVideo) {
         selectedVideo = video
         selectedQuality = nil
-        qualities = []
-        thumbnail = nil
-
-        let headers = VideoDetector.mediaHeaders(for: video)
-        isThumbnailLoading = true
-        loadingQualities = true
-        
-        Task {
-            // Show a parsed thumbnail (like Android) rather than an inline video player.
-            let thumb = await Thumbnailer.thumbnail(url: video.url, headers: headers, isHLS: video.kind == .hls)
-            await MainActor.run {
-                self.thumbnail = thumb
-                self.isThumbnailLoading = false
-            }
-            
-            var loadedQualities: [VideoQuality] = []
-            if video.kind == .hls {
-                loadedQualities = await HLSParser.variants(masterURL: video.url, headers: headers)
-            } else if video.kind == .dash {
-                loadedQualities = await DASHParser.variants(mpdURL: video.url, headers: headers)
-            }
-            await MainActor.run {
-                self.qualities = loadedQualities
-                self.loadingQualities = false
-            }
-        }
-    }
-
-    private func selectQuality(_ q: VideoQuality?) {
-        selectedQuality = q
     }
 
     private func playOnPhone(_ video: DetectedVideo) {
-        let castURL = selectedQuality?.url ?? video.url
-        if let u = URL(string: castURL) {
-            let headers = VideoDetector.mediaHeaders(for: video)
-            let asset = AVURLAsset(url: u, options: headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers])
-            let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-            fullscreenPlayerItem = PlayerItem(player: p)
+        playbackPreparation?.cancel()
+        let attempt = UUID()
+        playbackPreparationID = attempt
+        let url = (selectedVideo?.id == video.id ? selectedQuality?.url : nil) ?? video.url
+        let route = streamRoute
+        let configuration = proxyConfiguration
+        playbackPreparation = Task { @MainActor in
+            defer { if playbackPreparationID == attempt { playbackPreparationID = nil } }
+            do {
+                let prepare: () async throws -> RoutedStream = {
+                    try await StreamRouteService().prepare(url: url, headers: VideoDetector.mediaHeaders(for: video),
+                        contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType,
+                        route: route, configuration: configuration)
+                }
+                let media = try await prepare()
+                try Task.checkCancellation()
+                guard playbackPreparationID == attempt else { return }
+                let session = PlaybackSession(media: media, route: route, prepare: prepare)
+                var presentation = PlayerItem(session: session)
+#if DEBUG
+                presentation.report = { [weak detector] in detector?.debugReport(for: video) ?? "" }
+                presentation.diagnostics = PlaybackDiagnostics(player: session.player) { [weak detector] report in
+                    detector?.recordPlaybackDiagnostics("Route: \(route.label)\n" + report, for: video.id)
+                }
+#endif
+                fullscreenPlayerItem = presentation
+            } catch {
+                guard !Task.isCancelled, playbackPreparationID == attempt else { return }
+                playbackError = error.localizedDescription
+            }
         }
     }
 
     private func sendAction() {
         if castAction == "browse" {
-            vm.browseTo(url: browseUrl, desktopMode: tab.isDesktopMode)
-        } else if let video = selectedVideo {
-            if castAction == "queue" {
-                vm.queueStream(video, quality: selectedQuality, subtitles: Array(attachedSubtitles), playerMode: playerMode)
-            } else {
-                vm.castStream(video, quality: selectedQuality, subtitles: Array(attachedSubtitles), playerMode: playerMode)
-                nav.navigate(to: .remote)
+            vm.browseTo(url: browseUrl, browserMode: browserMode, desktopMode: tab.isDesktopMode)
+            dismiss()
+            return
+        }
+        guard let video = selectedVideo else { return }
+        playbackPreparation?.cancel()
+        let attempt = UUID()
+        playbackPreparationID = attempt
+        let url = selectedQuality?.url ?? video.url
+        let route = streamRoute
+        let configuration = proxyConfiguration
+        let subtitleURLs = Array(attachedSubtitles)
+        let queue = castAction == "queue"
+        let destination = vm.destinationID
+        playbackPreparation = Task { @MainActor in
+            defer { if playbackPreparationID == attempt { playbackPreparationID = nil } }
+            do {
+                let router = StreamRouteService()
+                let media = try await router.prepare(url: url, headers: VideoDetector.mediaHeaders(for: video),
+                    contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType,
+                    route: route, configuration: configuration)
+                var subtitles: [RoutedStream] = []
+                for url in subtitleURLs {
+                    let detected = detector.videos.first { $0.url == url }
+                    subtitles.append(try await router.prepare(url: url,
+                        headers: detected.map(VideoDetector.mediaHeaders) ?? [:], contentType: detected?.contentType,
+                        route: route, configuration: configuration))
+                }
+                try Task.checkCancellation()
+                guard playbackPreparationID == attempt, vm.isConnected,
+                      destination == vm.destinationID else { return }
+                if route == .phone, media.url.host == "127.0.0.1" {
+                    throw StreamRoutingError.message("Connect to Wi-Fi to send via phone.")
+                }
+                try await vm.sendRoutedStream(media, video: video, subtitles: subtitles, queue: queue)
+                if !queue { nav.navigate(to: .remote) }
+                dismiss()
+            } catch {
+                guard !Task.isCancelled, playbackPreparationID == attempt else { return }
+                playbackError = error.localizedDescription
             }
         }
-        dismiss()
     }
 
     private func sortedStreams(_ list: [DetectedVideo]) -> [DetectedVideo] {
-        list.sorted { v1, v2 in
-            let score1 = score(v1)
-            let score2 = score(v2)
-            if score1 != score2 {
-                return score1 > score2
-            }
-            return v1.displayTitle.localizedCompare(v2.displayTitle) == .orderedAscending
-        }
-    }
-
-    private func score(_ video: DetectedVideo) -> Int {
-        if video.kind == .hls {
-            return video.url.contains("master") ? 5 : 4
-        }
-        if video.kind == .dash { return 4 }
-        if video.kind == .mp4 { return 2 }
-        return 0
+        CastStreamRanking.sorted(list, qualities: detector.qualities, thumbnails: detector.thumbnailStates, manifests: detector.manifests)
     }
 }
 
@@ -501,228 +621,301 @@ struct VideoCard: View {
     let video: DetectedVideo
     let isSelected: Bool
     let selectedQuality: VideoQuality?
-    let attachedSubtitles: Set<String>
     let qualities: [VideoQuality]
     let loadingQualities: Bool
-    let isThumbnailLoading: Bool
     let thumbnail: UIImage?
-    
+    let thumbnailLoading: Bool
     let onSelect: () -> Void
     let onQualitySelect: (VideoQuality?) -> Void
-    let onSubtitleToggle: (String) -> Void
     let onPlayOnPhone: () -> Void
     let onCopyUrl: () -> Void
-    
-    @State private var localThumbnail: UIImage?
-    @State private var localLoading = false
-    
+    let onCopyDiagnostics: () -> Void
+#if DEBUG
+    @State private var copiedDiagnostics = false
+#endif
+
+    private var formatColor: Color {
+        switch video.kind {
+        case .hls: return Theme.primary
+        case .dash: return Theme.onSecondaryContainer
+        default: return Theme.primary
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Header Row: Type badge, host/name
-            HStack(spacing: 8) {
-                Text(video.kind.badge)
-                    .font(.caption2.bold())
-                    .foregroundColor(Theme.onPrimary)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Theme.primaryDim)
-                    .cornerRadius(6)
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(video.displayTitle)
-                        .font(.subheadline.bold())
-                        .foregroundColor(Theme.onSurface)
-                        .lineLimit(1)
-                    Text(video.host)
-                        .font(.caption)
-                        .foregroundColor(Theme.onSurfaceVariant)
-                        .lineLimit(1)
-                }
-                
-                Spacer()
-                
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(Theme.primary)
-                }
-            }
-            
-            // Media Preview container
-            ZStack {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.black.opacity(0.4))
-                
-                if isSelected {
-                    if isThumbnailLoading {
-                        ProgressView().tint(Theme.primary)
-                    } else if let thumbnail = thumbnail {
-                        Image(uiImage: thumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity, maxHeight: 140)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    } else {
-                        ProgressView().tint(Theme.primary)
-                    }
-                } else {
-                    if let localThumbnail = localThumbnail {
-                        Image(uiImage: localThumbnail)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: .infinity, maxHeight: 140)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                    } else if localLoading {
-                        ProgressView().tint(Theme.primary)
-                    } else {
-                        VStack(spacing: 4) {
-                            Image(systemName: "play.fill")
-                                .font(.title3)
-                                .foregroundColor(Theme.onSurfaceVariant.opacity(0.6))
-                            Text("No preview available")
-                                .font(.caption2)
-                                .foregroundColor(Theme.onSurfaceVariant.opacity(0.6))
-                        }
-                    }
-                }
-            }
-            .frame(height: 140)
-            .frame(maxWidth: .infinity)
-            .clipped()
-            
-            // Click target to select/expand card
-            if !isSelected {
-                Button {
-                    onSelect()
-                } label: {
-                    Text("Select Stream")
-                        .font(.caption.bold())
-                        .foregroundColor(Theme.primary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(Theme.surfaceContainerHigh)
-                        .cornerRadius(8)
-                }
-                .buttonStyle(.plain)
-            }
-            
-            if isSelected {
-                VStack(alignment: .leading, spacing: 10) {
-                    // Quick Action Row
-                    HStack(spacing: 16) {
-                        Button(action: onPlayOnPhone) {
-                            Label("Play on Phone", systemImage: "play.circle.fill")
-                                .font(.caption.bold())
-                                .foregroundColor(Theme.primary)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Button(action: onCopyUrl) {
-                            Label("Copy URL", systemImage: "doc.on.doc")
-                                .font(.caption.bold())
-                                .foregroundColor(Theme.primary)
-                        }
-                        .buttonStyle(.plain)
-                        
+            // A native button covers the card's media area without nesting the
+            // independent quality/action buttons inside another button.
+            Button {
+                if !isSelected { onSelect() }
+            } label: {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Label(video.kind.badge, systemImage: "film")
+                            .font(Theme.font(.caption2).bold())
+                            .foregroundColor(formatColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(formatColor.opacity(0.2), in: RoundedRectangle(cornerRadius: 6))
                         Spacer()
+                        if isSelected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(Theme.primary)
+                        }
                     }
-                    .padding(.top, 4)
-                    
-                    // Quality Variants Selection
-                    if !qualities.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("QUALITY")
-                                .font(.caption2.bold())
-                                .foregroundColor(Theme.onSurfaceVariant)
-                            
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 8) {
-                                    Button {
-                                        onQualitySelect(nil)
-                                    } label: {
-                                        Text("Auto")
-                                            .font(.caption)
-                                            .padding(.horizontal, 10)
-                                            .padding(.vertical, 6)
-                                            .background(selectedQuality == nil ? Theme.primaryDim : Theme.surfaceContainerHighest)
-                                            .foregroundColor(selectedQuality == nil ? Theme.onPrimary : Theme.onSurface)
-                                            .cornerRadius(8)
-                                    }
-                                    .buttonStyle(.plain)
-                                    
-                                    ForEach(qualities) { q in
-                                        Button {
-                                            onQualitySelect(q)
-                                        } label: {
-                                            Text(q.label)
-                                                .font(.caption)
-                                                .padding(.horizontal, 10)
-                                                .padding(.vertical, 6)
-                                                .background(selectedQuality?.id == q.id ? Theme.primaryDim : Theme.surfaceContainerHighest)
-                                                .foregroundColor(selectedQuality?.id == q.id ? Theme.onPrimary : Theme.onSurface)
-                                                .cornerRadius(8)
+
+                    Color.black.opacity(0.25)
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .overlay {
+                            GeometryReader { geometry in
+                                if let thumbnail {
+                                    Image(uiImage: thumbnail)
+                                        .resizable()
+                                        .scaledToFill()
+                                        .frame(width: geometry.size.width, height: geometry.size.height)
+                                        .clipped()
+                                } else {
+                                    VStack(spacing: 6) {
+                                        if thumbnailLoading {
+                                            ProgressView().tint(Theme.onSurfaceVariant)
+                                        } else {
+                                            Image(systemName: "play.fill").font(Theme.font(.title2))
+                                            Text("Preview unavailable").font(Theme.font(.caption))
                                         }
-                                        .buttonStyle(.plain)
                                     }
+                                    .foregroundColor(Theme.onSurfaceVariant)
+                                    .frame(width: geometry.size.width, height: geometry.size.height)
                                 }
                             }
                         }
-                    } else if loadingQualities {
-                        HStack(spacing: 8) {
-                            ProgressView().tint(Theme.primary)
-                            Text("Parsing qualities…")
-                                .font(.caption)
-                                .foregroundColor(Theme.onSurfaceVariant)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    Text(video.displayTitle)
+                        .font(Theme.font(.headline).weight(.medium))
+                        .foregroundColor(Theme.onSurface)
+                        .lineLimit(2)
+                    Text(video.url)
+                        .font(Theme.font(.caption))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    HStack(spacing: 12) {
+                        if let contentType = video.contentType {
+                            Label(contentType, systemImage: "info.circle")
+                        }
+                        Label(video.detectedBy, systemImage: "magnifyingglass")
+                    }
+                    .font(Theme.font(.caption2))
+                    .foregroundColor(Theme.onSurfaceVariant)
+                    .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(video.displayTitle), \(video.kind.badge), \(video.host)")
+            .accessibilityHint("Select stream")
+            .accessibilityAddTraits(isSelected ? .isSelected : [])
+
+            if video.kind == .hls || video.kind == .dash {
+                qualityOptions
+            }
+
+            HStack(spacing: 16) {
+                Button(action: onPlayOnPhone) {
+                    Label("Play on Phone", systemImage: "play.circle")
+                }
+                Button(action: onCopyUrl) {
+                    Label("Copy URL", systemImage: "doc.on.doc")
+                }
+            }
+            .font(Theme.font(.caption).weight(.semibold))
+            .foregroundColor(Theme.primary)
+            .buttonStyle(.plain)
+#if DEBUG
+            Button {
+                onCopyDiagnostics()
+                copiedDiagnostics = true
+            } label: {
+                Label(copiedDiagnostics ? "Diagnostics copied" : "Copy diagnostics", systemImage: "doc.on.clipboard")
+                    .font(Theme.font(.caption).weight(.semibold))
+                    .foregroundColor(Theme.primary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Copy this stream's preview and manifest debugging details")
+#endif
+        }
+        .padding(12)
+        .background(isSelected ? Theme.secondaryContainer : Theme.surfaceContainer)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(isSelected ? Theme.primary : Color.clear, lineWidth: 2)
+                .allowsHitTesting(false)
+        }
+        .background {
+            // Padding and gaps select the card too; controls above consume their own taps.
+            Color.clear.contentShape(Rectangle()).onTapGesture {
+                if !isSelected { onSelect() }
+            }
+        }
+
+    }
+
+    private var qualityOptions: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(video.kind == .dash ? "Qualities · receiver auto-selects" : "Qualities")
+                .font(Theme.font(.caption))
+                .foregroundColor(Theme.onSurfaceVariant)
+            if loadingQualities {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking manifest…").font(Theme.font(.caption))
+                }
+                .foregroundColor(Theme.onSurfaceVariant)
+            } else if qualities.isEmpty {
+                Text("No quality variants found")
+                    .font(Theme.font(.caption))
+                    .foregroundColor(Theme.onSurfaceVariant)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        qualityChip("Auto", quality: nil)
+                        ForEach(qualities) { quality in
+                            if video.kind == .dash {
+                                // DASHParser returns the same MPD for each tier; these
+                                // labels describe available tiers, not forced resolution.
+                                Text(quality.label)
+                                    .font(Theme.font(.caption))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(Theme.surfaceContainerHigh, in: Capsule())
+                            } else {
+                                qualityChip(quality.label, quality: quality)
+                            }
                         }
                     }
                 }
             }
         }
-        .padding(12)
-        .background(isSelected ? Theme.surfaceContainerHigh : Theme.surfaceContainer)
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isSelected ? Theme.primary : Color.clear, lineWidth: 2)
-        )
-        .task {
-            if !isSelected {
-                localLoading = true
-                let headers = VideoDetector.mediaHeaders(for: video)
-                localThumbnail = await Thumbnailer.thumbnail(url: video.url, headers: headers, isHLS: video.kind == .hls)
-                localLoading = false
-            }
+    }
+
+    private func qualityChip(_ title: String, quality: VideoQuality?) -> some View {
+        let selected = isSelected && selectedQuality?.id == quality?.id
+        return Button { onQualitySelect(quality) } label: {
+            Text(title)
+                .font(Theme.font(.caption).weight(.medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(selected ? Theme.primary : Theme.surfaceContainerHigh, in: Capsule())
+                .foregroundColor(selected ? Theme.onPrimary : Theme.onSurface)
         }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
 // MARK: - FullScreenVideoPlayerView Component
 
 struct FullScreenVideoPlayerView: View {
-    let player: AVPlayer
+    @ObservedObject var session: PlaybackSession
+    let diagnosticsReport: () -> String
     let onDismiss: () -> Void
-    
+    private var player: AVPlayer { session.player }
+    private var canAirPlay: Bool { session.canAirPlay }
+#if DEBUG
+    @State private var copiedDiagnostics = false
+#endif
+    @State private var audioSessionError: String?
+    @State private var activatedAudioSession = false
+
     var body: some View {
-        ZStack {
-            Color.black.ignoresSafeArea()
-            VideoPlayer(player: player)
-                .ignoresSafeArea()
-                .onAppear { player.play() }
-                .onDisappear { player.pause() }
-            
-            VStack {
-                HStack {
-                    Button(action: onDismiss) {
-                        Image(systemName: "xmark")
-                            .foregroundColor(.white)
-                            .padding()
-                            .background(Color.black.opacity(0.6))
-                            .clipShape(Circle())
-                    }
-                    Spacer()
+        VStack(spacing: 0) {
+            HStack {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
                 }
-                .padding()
+                .accessibilityLabel("Close player")
                 Spacer()
             }
+            .padding(.horizontal, 8)
+
+            if !canAirPlay {
+                Text("Connect to Wi-Fi to use AirPlay.")
+                    .font(Theme.font(.footnote))
+                    .foregroundColor(.white)
+                    .padding(.bottom, 8)
+            }
+            ZStack {
+                VideoPlayer(player: player)
+                if let failure = session.failure {
+                    Color.black.opacity(0.94)
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            Image(systemName: "exclamationmark.triangle")
+                                .font(Theme.font(.largeTitle))
+                            Text(player.isExternalPlaybackActive ? "AirPlay playback failed" : "Playback failed")
+                                .font(Theme.font(.title2).bold())
+                            Text(failure.message)
+                                .multilineTextAlignment(.center)
+                            Text("Route: " + session.route.label)
+                                .font(Theme.font(.footnote))
+                                .foregroundStyle(.secondary)
+                            if session.retrying {
+                                ProgressView("Retrying…").tint(.white)
+                            } else {
+                                Button("Try again") { session.retry() }
+                                    .buttonStyle(.borderedProminent)
+                            }
+#if DEBUG
+                            Button(copiedDiagnostics ? "Diagnostics copied" : "Copy diagnostics") {
+                                UIPasteboard.general.setItems([["public.utf8-plain-text": diagnosticsReport()]],
+                                    options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(900)])
+                                copiedDiagnostics = true
+                            }
+                            .buttonStyle(.bordered)
+#endif
+                            Button("Close player", action: onDismiss)
+                        }
+                        .foregroundColor(.white)
+                        .padding(24)
+                        .frame(maxWidth: 460)
+                        .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+        .background(Color.black.ignoresSafeArea())
+        .onAppear {
+            do {
+                let audio = AVAudioSession.sharedInstance()
+                try audio.setCategory(.playback, mode: .moviePlayback)
+                try audio.setActive(true)
+                activatedAudioSession = true
+            } catch {
+                audioSessionError = error.localizedDescription
+            }
+            player.isMuted = false
+            player.volume = 1
+            player.allowsExternalPlayback = canAirPlay
+            player.play()
+        }
+        .onDisappear {
+            session.close()
+            if activatedAudioSession {
+                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+                activatedAudioSession = false
+            }
+        }
+        .alert("Couldn’t enable playback audio", isPresented: Binding(
+            get: { audioSessionError != nil },
+            set: { if !$0 { audioSessionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { audioSessionError = nil }
+        } message: {
+            Text(audioSessionError ?? "")
         }
     }
 }

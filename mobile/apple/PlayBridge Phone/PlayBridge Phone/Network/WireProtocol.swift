@@ -8,6 +8,28 @@ import Foundation
 /// Standalone messages (ping/auth/pairing_request) are not wrapped in the command envelope.
 enum WireProtocol {
 
+    /// Apply at the transport boundary so replay and queue additions follow the preference.
+    static func applyingHistoryPreference(_ text: String, prevent: Bool) -> String {
+        guard prevent, let data = text.data(using: .utf8),
+              var command = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              command["type"] as? String == "command",
+              var payload = command["payload"] as? [String: Any] else { return text }
+        switch command["action"] as? String {
+        case "playlist":
+            guard let items = payload["items"] as? [[String: Any]] else { return text }
+            payload["items"] = items.map { item in
+                var marked = item; marked["skipHistory"] = true; return marked
+            }
+        case "queue_add":
+            guard var item = payload["item"] as? [String: Any] else { return text }
+            item["skipHistory"] = true
+            payload["item"] = item
+        default: return text
+        }
+        command["payload"] = payload
+        return encode(command)
+    }
+
     // MARK: - Standalone messages
 
     static func ping() -> String { #"{"type":"ping"}"# }
@@ -111,6 +133,10 @@ enum WireProtocol {
         return envelope(action: "browser", payload: payload)
     }
 
+    static func browserControlCommand(_ action: String) -> String {
+        envelope(action: "browser_control", payload: ["action": action])
+    }
+
     static func controlCommand(_ command: String) -> String {
         envelope(action: "control", payload: ["command": command])
     }
@@ -164,6 +190,18 @@ enum WireProtocol {
         encode(["type": "command", "action": "context_query"])
     }
 
+    static func userScriptQuery() -> String { encode(["type": "user_script_query"]) }
+
+    static func userScript(name: String, content: String) -> String {
+        encode(["type": "user_script", "name": name, "content": content])
+    }
+
+    static func userAgentQuery() -> String { encode(["type": "user_agent_query"]) }
+
+    static func userAgent(name: String, value: String, save: Bool) -> String {
+        encode(["type": "user_agent", "name": name, "value": value, "save": save])
+    }
+
     // MARK: - Helpers
 
     private static func envelope(
@@ -198,6 +236,10 @@ enum MousePacket {
         case "scroll": type = 2
         case "down": type = 3
         case "up": type = 4
+        case "zoom": type = 5
+        case "reset": type = 6
+        case "rotate": type = 7
+        case "transform_anchor": type = 8
         default: type = 0
         }
         var data = Data(capacity: 9)

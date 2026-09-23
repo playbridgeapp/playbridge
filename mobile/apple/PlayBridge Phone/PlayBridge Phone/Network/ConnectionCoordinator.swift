@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// Parses TV→phone status messages into observable now-playing state.
 /// Direct port of `connection/ConnectionCoordinator.kt`. Handles the proto-defined messages
@@ -7,11 +8,27 @@ final class ConnectionCoordinator: ObservableObject {
     @Published var activeContext: String = "idle"   // player | browser | idle
     @Published var playback: TvPlaybackStatus?
     @Published var playlist: PlaylistUiState?
+    @Published var videoTracks: [MediaTrack] = []
     @Published var audioTracks: [MediaTrack] = []
     @Published var subtitleTracks: [MediaTrack] = []
     @Published var playerSpeed: Float = 1.0
     @Published var playerScaling: String = "Fit"
+    @Published var audioBoost = false
+    @Published var subtitleOffsetMs: Int64 = 0
+    @Published var playerEngine = ""
+    @Published var qualityMaxHeight = 0
+    @Published var currentVideoHeight = 0
+    @Published var playerIsLive = false
+    @Published var playerIsSeekable = true
+    @Published var speedAvailable = false
+    @Published var scalingAvailable = false
+    @Published var audioBoostAvailable = false
+    @Published var qualityAvailable = false
+    @Published var mediaKind = "video"
     @Published var lastCommandResult: QueueCommandResult?
+    @Published var installedUserScripts: [String] = []
+    @Published var userAgentActive = ""
+    @Published var savedUserAgents: [(name: String, value: String)] = []
 
     /// Feed every non-handshake message here (wired to `WebSocketClient.onMessage`).
     func handle(_ text: String) {
@@ -30,6 +47,7 @@ final class ConnectionCoordinator: ObservableObject {
             if active == "idle" { clear() }
 
         case "status":
+            mediaKind = json["mediaKind"] as? String ?? "video"
             playback = TvPlaybackStatus(
                 state: json["state"] as? String ?? "paused",
                 positionMs: int64(json["position"]),
@@ -79,12 +97,35 @@ final class ConnectionCoordinator: ObservableObject {
             )
 
         case "tracks":
+            videoTracks = parseTracks(json["video"])
             audioTracks = parseTracks(json["audio"])
             subtitleTracks = parseTracks(json["subtitle"])
 
         case "player_settings":
             if let speed = json["speed"] as? Double { playerSpeed = Float(speed) }
-            playerScaling = json["scaling"] as? String ?? playerScaling
+            else if let speed = json["speed"] as? NSNumber { playerSpeed = speed.floatValue }
+            playerScaling = json["scaling"] as? String ?? "Fit"
+            audioBoost = json["audioBoost"] as? Bool ?? false
+            subtitleOffsetMs = int64(json["subtitleOffsetMs"])
+            playerEngine = json["engine"] as? String ?? ""
+            qualityMaxHeight = intValue(json["qualityMaxHeight"])
+            currentVideoHeight = intValue(json["currentVideoHeight"])
+            playerIsLive = json["isLive"] as? Bool ?? false
+            playerIsSeekable = json["isSeekable"] as? Bool ?? true
+            speedAvailable = json["speedAvailable"] as? Bool ?? true
+            scalingAvailable = json["scalingAvailable"] as? Bool ?? true
+            audioBoostAvailable = json["audioBoostAvailable"] as? Bool ?? true
+            qualityAvailable = json["qualityAvailable"] as? Bool ?? false
+
+        case "user_scripts":
+            installedUserScripts = (json["names"] as? [String]) ?? []
+
+        case "user_agents":
+            userAgentActive = json["active"] as? String ?? ""
+            savedUserAgents = ((json["entries"] as? [[String: Any]]) ?? []).compactMap { entry in
+                guard let name = entry["name"] as? String, let value = entry["value"] as? String else { return nil }
+                return (name, value)
+            }
 
         default:
             break
@@ -95,17 +136,24 @@ final class ConnectionCoordinator: ObservableObject {
         guard let arr = value as? [[String: Any]] else { return [] }
         return arr.enumerated().map { (i, o) in
             MediaTrack(
-                id: o["id"] as? String ?? "\(i)",
+                id: (o["id"] as? String) ?? (o["id"] as? NSNumber)?.stringValue ?? "\(i)",
                 name: o["name"] as? String ?? "Track \(i + 1)",
-                selected: o["selected"] as? Bool ?? false
+                selected: o["selected"] as? Bool ?? false,
+                type: o["type"] as? String
             )
         }
+    }
+
+    private func intValue(_ value: Any?) -> Int {
+        if let n = value as? Int { return n }
+        if let n = value as? NSNumber { return n.intValue }
+        return 0
     }
 
     private func int64(_ value: Any?) -> Int64 {
         if let n = value as? Int64 { return n }
         if let n = value as? Int { return Int64(n) }
-        if let n = value as? Double { return Int64(n) }
+        if let n = value as? Double { return n.isFinite ? (Int64(exactly: n.rounded(.towardZero)) ?? 0) : 0 }
         if let n = value as? NSNumber { return n.int64Value }
         return 0
     }
@@ -124,10 +172,26 @@ final class ConnectionCoordinator: ObservableObject {
     func clear() {
         playback = nil
         playlist = nil
+        videoTracks = []
         audioTracks = []
         subtitleTracks = []
         playerSpeed = 1.0
         playerScaling = "Fit"
+        audioBoost = false
+        subtitleOffsetMs = 0
+        playerEngine = ""
+        qualityMaxHeight = 0
+        currentVideoHeight = 0
+        playerIsLive = false
+        playerIsSeekable = true
+        speedAvailable = false
+        scalingAvailable = false
+        audioBoostAvailable = false
+        qualityAvailable = false
+        mediaKind = "video"
         lastCommandResult = nil
+        installedUserScripts = []
+        userAgentActive = ""
+        savedUserAgents = []
     }
 }

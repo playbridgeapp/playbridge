@@ -566,3 +566,91 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
     proxy.shutdown().await.unwrap();
     upstream.abort();
 }
+
+#[cfg(feature = "upstream-reqwest")]
+#[tokio::test]
+async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
+    async fn media(headers: HeaderMap) -> axum::response::Response {
+        assert_eq!(headers["user-agent"], "AppleFixture");
+        assert_eq!(headers["referer"], "https://page.test/");
+        assert!(!headers.contains_key("authorization"));
+        assert!(!headers.contains_key("cookie"));
+        let (range, body) = match headers["range"].to_str().unwrap() {
+            "bytes=0-1" => ("bytes 0-1/10", "01"),
+            "bytes=4-7" => ("bytes 4-7/10", "4567"),
+            _ => panic!("unexpected range"),
+        };
+        (
+            StatusCode::PARTIAL_CONTENT,
+            [
+                ("content-type", "video/mp4"),
+                ("content-range", range),
+                ("accept-ranges", "bytes"),
+            ],
+            body,
+        )
+            .into_response()
+    }
+    let cdn = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cdn_address = cdn.local_addr().unwrap();
+    let cdn_task = tokio::spawn(async move {
+        axum::serve(cdn, Router::new().route("/video.mp4", get(media)))
+            .await
+            .unwrap()
+    });
+    let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_address = origin.local_addr().unwrap();
+    let origin_task = tokio::spawn(async move {
+        axum::serve(
+            origin,
+            Router::new().route(
+                "/download.mp4/",
+                get(move |headers: HeaderMap| async move {
+                    assert_eq!(headers["authorization"], "fixture-secret");
+                    assert_eq!(headers["referer"], "https://page.test/watch?token=private");
+                    axum::response::Redirect::temporary(&format!("http://{cdn_address}/video.mp4"))
+                }),
+            ),
+        )
+        .await
+        .unwrap()
+    });
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    let registration = proxy
+        .register_remote(
+            "127.0.0.1",
+            format!("http://{origin_address}/download.mp4/?token=private"),
+            HashMap::from([
+                ("User-Agent".into(), "AppleFixture".into()),
+                (
+                    "Referer".into(),
+                    "https://page.test/watch?token=private".into(),
+                ),
+                ("Authorization".into(), "fixture-secret".into()),
+                ("Cookie".into(), "session=private".into()),
+            ]),
+        )
+        .unwrap();
+    assert!(registration.url.ends_with("/media.mp4"));
+    let client = reqwest::Client::new();
+    for (requested, content_range, body) in [
+        ("bytes=0-1", "bytes 0-1/10", "01"),
+        ("bytes=4-7", "bytes 4-7/10", "4567"),
+    ] {
+        let response = client
+            .get(&registration.url)
+            .header("Range", requested)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()["content-range"], content_range);
+        assert_eq!(response.headers()["content-type"], "video/mp4");
+        assert_eq!(response.content_length(), Some(body.len() as u64));
+        assert_eq!(response.text().await.unwrap(), body);
+    }
+    origin_task.abort();
+    cdn_task.abort();
+}

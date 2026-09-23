@@ -104,8 +104,6 @@ jobs:
       run: |
         Compress-Archive -Path "build\windows\x64\runner\Release\*" `
           -DestinationPath "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip"
-        Compress-Archive -Path "native\cast_core\windows\playbridge.exe" `
-          -DestinationPath "playbridge-cli-windows-${{ steps.version.outputs.version }}.zip"
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -116,8 +114,6 @@ jobs:
       shell: bash
       run: |
         aws s3 cp "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip" \
-          s3://${{ secrets.R2_BUCKET }}/desktop-release/
-        aws s3 cp "playbridge-cli-windows-${{ steps.version.outputs.version }}.zip" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   build-linux:
@@ -200,8 +196,6 @@ jobs:
       run: |
         tar -czf "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
           -C build/linux/x64/release bundle
-        tar -czf "playbridge-cli-linux-${{ steps.version.outputs.version }}.tar.gz" \
-          -C native/cast_core/linux playbridge
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -211,8 +205,6 @@ jobs:
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
         aws s3 cp "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
-          s3://${{ secrets.R2_BUCKET }}/desktop-release/
-        aws s3 cp "playbridge-cli-linux-${{ steps.version.outputs.version }}.tar.gz" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   build-macos:
@@ -282,9 +274,6 @@ jobs:
         cd build/macos/Build/Products/Release
         zip -ry "$GITHUB_WORKSPACE/desktop/playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
           playbridge_desktop.app
-        cd "$GITHUB_WORKSPACE/desktop/native/cast_core/macos"
-        zip -y "$GITHUB_WORKSPACE/desktop/playbridge-cli-macos-${{ steps.version.outputs.version }}.zip" \
-          playbridge
 
     - name: Upload to R2
       if: steps.check_tag.outputs.skipped == 'false'
@@ -294,8 +283,6 @@ jobs:
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
         aws s3 cp "playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip" \
-          s3://${{ secrets.R2_BUCKET }}/desktop-release/
-        aws s3 cp "playbridge-cli-macos-${{ steps.version.outputs.version }}.zip" \
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   draft-release:
@@ -331,7 +318,12 @@ jobs:
         AWS_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       run: |
         mkdir -p output
-        aws s3 sync s3://${{ secrets.R2_BUCKET }}/desktop-release/ output/
+        for artifact in \
+          "playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip" \
+          "playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz" \
+          "playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip"; do
+          aws s3 cp "s3://${{ secrets.R2_BUCKET }}/desktop-release/$artifact" "output/$artifact"
+        done
 
     - name: Create draft GitHub release
       uses: softprops/action-gh-release@v2
@@ -352,12 +344,14 @@ jobs:
           | Linux | `playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz` — extract and run `bundle/playbridge_desktop` |
           | macOS 12+ | `playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip` — extract and right-click → Open (unsigned) |
 
-          Cross-platform CLI archives are also attached as `playbridge-cli-*`.
-
           **Linux:** requires `libmpv2` (`sudo apt install libmpv2` or `sudo dnf install mpv-libs`).
 
           **macOS:** unsigned build — Gatekeeper will warn on first launch. Right-click → Open to bypass, or run `xattr -dr com.apple.quarantine PlayBridge\ Desktop.app`.
-        files: output/*
+        fail_on_unmatched_files: true
+        files: |
+          output/playbridge-desktop-windows-${{ steps.version.outputs.version }}.zip
+          output/playbridge-desktop-linux-${{ steps.version.outputs.version }}.tar.gz
+          output/playbridge-desktop-macos-${{ steps.version.outputs.version }}.zip
         generate_release_notes: false
 
     - name: Clean up R2 after draft creation
