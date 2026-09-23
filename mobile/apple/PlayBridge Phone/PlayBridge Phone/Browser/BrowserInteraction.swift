@@ -59,6 +59,7 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
     static let world = WKContentWorld.world(name: "PlayBridge.PopupInteraction")
     weak var tab: BrowserTab?
     private var grant: (origin: String, document: URL?, mainFrame: Bool, time: TimeInterval)?
+    private var contextLink: (url: URL, time: TimeInterval)?
 
     static func originURL(_ frame: WKFrameInfo) -> URL? {
         let origin = frame.securityOrigin
@@ -79,14 +80,34 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
         return components.url
     }
 
-    func clear() { grant = nil }
+    func clear() {
+        grant = nil
+        contextLink = nil
+    }
+
+    func recordContextLink(_ rawValue: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard let url = URL(string: rawValue), BrowserSitePolicy.origin(url) != nil else {
+            contextLink = nil
+            return
+        }
+        contextLink = (url, now)
+    }
+
+    func consumeContextLink(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> URL? {
+        defer { contextLink = nil }
+        guard let contextLink else { return nil }
+        let age = now - contextLink.time
+        return age >= 0 && age < 2 ? contextLink.url : nil
+    }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "popupInteraction", message.world == Self.world,
               let tab, message.webView === tab.loadedWebView,
               tab.isActive(), !tab.isPickingElement,
               let origin = BrowserSitePolicy.origin(Self.originURL(message.frameInfo)) else { return }
-        if message.body as? String == "click" {
+        if let body = message.body as? [String: Any], let link = body["contextLink"] as? String {
+            recordContextLink(link)
+        } else if message.body as? String == "click" {
             grant = (origin, message.frameInfo.request.url, message.frameInfo.isMainFrame,
                      ProcessInfo.processInfo.systemUptime)
         } else if message.body as? String == "clear" {
@@ -106,6 +127,27 @@ final class BrowserPopupInteraction: NSObject, WKScriptMessageHandler {
     static let source = #"""
     (() => {
         const send = value => window.webkit.messageHandlers.popupInteraction.postMessage(value);
+        const contextTarget = path => {
+            let mediaURL = '';
+            for (const node of path) {
+                if (!(node instanceof Element)) continue;
+                const anchor = node.closest('a[href]');
+                if (anchor) return anchor.href;
+                if (!mediaURL) {
+                    const media = node.closest('img[src],video[src],audio[src]');
+                    if (media) mediaURL = media.currentSrc || media.src || '';
+                }
+            }
+            return mediaURL;
+        };
+        Object.defineProperty(window, '__playbridgeContextTarget', {value: contextTarget});
+        window.addEventListener('touchstart', event => {
+            let link = '';
+            if (event.isTrusted && event.touches.length === 1) {
+                link = contextTarget(event.composedPath());
+            }
+            send({contextLink: link});
+        }, {capture: true, passive: true});
         window.addEventListener('click', event => {
             // UserActivation shipped in Safari 16.4; older supported WebKit still
             // supplies the unforgeable isTrusted flag on real clicks.

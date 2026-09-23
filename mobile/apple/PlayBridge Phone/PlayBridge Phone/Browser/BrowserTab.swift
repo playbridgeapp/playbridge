@@ -43,6 +43,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if isMediaPlaying != playing { isMediaPlaying = playing }
     }
 
+    /// Stops page-owned playback without waking a lazily restored tab.
+    /// Cast-sheet dismissal intentionally does not resume the media.
+    func pauseMedia() {
+        loadedWebView?.evaluateJavaScript(
+            "window.__playbridgePauseMedia?.(); void 0;",
+            in: nil,
+            in: BrowserPlaybackScript.world,
+            completionHandler: nil
+        )
+    }
+
     @Published var isLoading: Bool = false
     @Published var progress: Double = 0
     @Published var canGoBack: Bool = false
@@ -181,6 +192,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         cc.add(popupInteraction, contentWorld: BrowserPopupInteraction.world, name: "popupInteraction")
         // Surface detector changes (new videos) on the tab so views observing the tab refresh.
         detector.objectWillChange
+            .receive(on: RunLoop.main)
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }
@@ -188,22 +200,28 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private func observe() {
         observations = [
             webView.observe(\.estimatedProgress, options: [.new]) { [weak self] wv, _ in
-                self?.progress = wv.estimatedProgress
+                let value = wv.estimatedProgress
+                DispatchQueue.main.async { self?.progress = value }
             },
             webView.observe(\.isLoading, options: [.new]) { [weak self] wv, _ in
-                self?.isLoading = wv.isLoading
+                let value = wv.isLoading
+                DispatchQueue.main.async { self?.isLoading = value }
             },
             webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
-                if let t = wv.title, !t.isEmpty { self?.title = t }
+                guard let title = wv.title, !title.isEmpty else { return }
+                DispatchQueue.main.async { self?.title = title }
             },
             webView.observe(\.url, options: [.new]) { [weak self] wv, _ in
-                if let u = wv.url?.absoluteString { self?.urlString = u }
+                guard let url = wv.url?.absoluteString else { return }
+                DispatchQueue.main.async { self?.urlString = url }
             },
             webView.observe(\.canGoBack, options: [.new]) { [weak self] wv, _ in
-                self?.canGoBack = wv.canGoBack
+                let value = wv.canGoBack
+                DispatchQueue.main.async { self?.canGoBack = value }
             },
             webView.observe(\.canGoForward, options: [.new]) { [weak self] wv, _ in
-                self?.canGoForward = wv.canGoForward
+                let value = wv.canGoForward
+                DispatchQueue.main.async { self?.canGoForward = value }
             },
         ]
     }
@@ -465,7 +483,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func webView(_ webView: WKWebView,
                  contextMenuConfigurationForElement elementInfo: WKContextMenuElementInfo,
                  completionHandler: @escaping (UIContextMenuConfiguration?) -> Void) {
-        guard let url = elementInfo.linkURL else { completionHandler(nil); return }
+        let trackedLink = popupInteraction.consumeContextLink()
+        guard let url = elementInfo.linkURL ?? trackedLink else { completionHandler(nil); return }
         let config = UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             guard let self else { return nil }
             let cast = UIAction(title: "Cast to TV", image: UIImage(systemName: "play.tv")) { _ in

@@ -3,7 +3,6 @@ import SwiftUI
 struct DashboardScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
-    @State private var showExitConfirm = false
     @State private var showComingSoonAlert = false
     @State private var comingSoonFeatureName = ""
 
@@ -15,6 +14,14 @@ struct DashboardScreen: View {
     private var connectedDeviceName: String? {
         if case .connected(let name, _) = vm.state { return name }
         return vm.pairedDevice?.name
+    }
+
+    private func isSource(_ destination: AppScreen) -> Bool {
+        switch (nav.dashboardSource, destination) {
+        case (.iptvDetail(_), .iptv), (.collectionDetail(_), .collections): return true
+        case (let source?, _): return source == destination
+        case (nil, _): return false
+        }
     }
 
     var body: some View {
@@ -55,9 +62,6 @@ struct DashboardScreen: View {
 
                     Spacer().frame(height: 32)
 
-                    // ── Exit Button ───────────────────────────────────────────────────
-                    exitButton
-
                     Spacer().frame(height: 24)
                 }
                 .padding(.horizontal, 24)
@@ -65,12 +69,6 @@ struct DashboardScreen: View {
 
             // ── Top Left Close Button ─────────────────────────────────────────
             closeButton
-        }
-        .alert("Exit PlayBridge?", isPresented: $showExitConfirm) {
-            Button("Exit", role: .destructive) { exit(0) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This fully quits the app. Any cast that relies on PlayBridge — phone files, DLNA, or queued playback — will stop or error out.")
         }
         .alert("\(comingSoonFeatureName) Coming Soon", isPresented: $showComingSoonAlert) {
             Button("OK", role: .cancel) {}
@@ -91,7 +89,7 @@ struct DashboardScreen: View {
                     systemImage: "globe",
                     gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)],
                     tall: true,
-                    isActive: nav.lastMainScreen == .browser,
+                    isActive: isSource(.browser),
                     action: { nav.navigate(to: .browser) }
                 )
 
@@ -101,7 +99,7 @@ struct DashboardScreen: View {
                     systemImage: "tv",
                     gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
                     tall: true,
-                    isActive: nav.lastMainScreen == .connection,
+                    isActive: isSource(.connection),
                     action: { nav.navigate(to: .connection) }
                 )
             }
@@ -114,7 +112,7 @@ struct DashboardScreen: View {
                     systemImage: "folder",
                     gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)],
                     tall: false,
-                    isActive: nav.currentScreen == .phoneFiles,
+                    isActive: isSource(.phoneFiles),
                     action: { nav.navigate(to: .phoneFiles) }
                 )
 
@@ -124,7 +122,7 @@ struct DashboardScreen: View {
                     systemImage: "tv.fill",
                     gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)],
                     tall: false,
-                    isActive: nav.currentScreen == .iptv,
+                    isActive: isSource(.iptv),
                     action: { nav.navigate(to: .iptv) }
                 )
             }
@@ -137,7 +135,7 @@ struct DashboardScreen: View {
                     systemImage: "play.rectangle.fill",
                     gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)],
                     tall: false,
-                    isActive: nav.currentScreen == .collections,
+                    isActive: isSource(.collections),
                     action: { nav.navigate(to: .collections) }
                 )
 
@@ -147,7 +145,7 @@ struct DashboardScreen: View {
                     systemImage: "clock.arrow.circlepath",
                     gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)],
                     tall: false,
-                    isActive: nav.currentScreen == .castHistory,
+                    isActive: isSource(.castHistory),
                     action: { nav.navigate(to: .castHistory) }
                 )
             }
@@ -246,27 +244,6 @@ struct DashboardScreen: View {
             }
             .frame(height: tall ? 150 : 120)
             .opacity(comingSoon ? 0.4 : 1.0)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var exitButton: some View {
-        Button {
-            showExitConfirm = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "power")
-                    .font(Theme.font(size: 16, weight: .medium))
-                Text("Exit PlayBridge")
-                    .font(Theme.font(size: 15, weight: .medium))
-            }
-            .foregroundColor(Theme.danger)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Theme.danger.opacity(0.5), lineWidth: 1)
-            )
         }
         .buttonStyle(.plain)
     }

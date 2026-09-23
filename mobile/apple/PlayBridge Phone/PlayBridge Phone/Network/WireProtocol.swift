@@ -190,6 +190,18 @@ enum WireProtocol {
         encode(["type": "command", "action": "context_query"])
     }
 
+    static func userScriptQuery() -> String { encode(["type": "user_script_query"]) }
+
+    static func userScript(name: String, content: String) -> String {
+        encode(["type": "user_script", "name": name, "content": content])
+    }
+
+    static func userAgentQuery() -> String { encode(["type": "user_agent_query"]) }
+
+    static func userAgent(name: String, value: String, save: Bool) -> String {
+        encode(["type": "user_agent", "name": name, "value": value, "save": save])
+    }
+
     // MARK: - Helpers
 
     private static func envelope(
@@ -224,6 +236,10 @@ enum MousePacket {
         case "scroll": type = 2
         case "down": type = 3
         case "up": type = 4
+        case "zoom": type = 5
+        case "reset": type = 6
+        case "rotate": type = 7
+        case "transform_anchor": type = 8
         default: type = 0
         }
         var data = Data(capacity: 9)

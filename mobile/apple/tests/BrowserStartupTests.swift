@@ -139,12 +139,16 @@ enum ContentBlocker {
         try await wait("previous tab speaker clears") { first.refreshPlaybackState(); return !first.isMediaPlaying }
         second.refreshPlaybackState()
         try check(second.isMediaPlaying, "Pausing one tab cleared another tab's indicator")
-        _ = try await secondView.evaluateJavaScript("document.querySelector('audio').pause();void(0)")
-        try await wait("second tab paused") { second.refreshPlaybackState(); return !second.isMediaPlaying }
+        second.pauseMedia()
+        try await wait("cast-sheet media pause") { second.refreshPlaybackState(); return !second.isMediaPlaying }
         second.load(base + "/playback-frame")
         try await wait("iframe media page") { secondView.title == "PlaybackFrame" && !secondView.isLoading }
         _ = try await secondView.evaluateJavaScript("document.querySelector('iframe').contentWindow.postMessage('play','*');void(0)")
         try await wait("cross-origin iframe playing") { second.refreshPlaybackState(); return second.isMediaPlaying }
+        second.pauseMedia()
+        try await wait("cross-origin iframe cast-sheet pause") { second.refreshPlaybackState(); return !second.isMediaPlaying }
+        _ = try await secondView.evaluateJavaScript("document.querySelector('iframe').contentWindow.postMessage('play','*');void(0)")
+        try await wait("cross-origin iframe resumed") { second.refreshPlaybackState(); return second.isMediaPlaying }
         _ = try await secondView.evaluateJavaScript("document.querySelector('iframe').remove();void(0)")
         try await wait("removed iframe speaker clears") { second.refreshPlaybackState(); return !second.isMediaPlaying }
         try check(browser.tabs.filter { $0.loadedWebView != nil }.count == 3, "Playback tracking woke dormant tabs")
@@ -152,7 +156,44 @@ enum ContentBlocker {
         print("CHECK: per-tab playback, previous-tab pause, iframe playback/removal, expiry and dormant tabs passed")
     }
 
+    @MainActor func verifyContextTargets(_ webView: WKWebView) async throws {
+        _ = try await webView.evaluateJavaScript(#"""
+        (() => {
+            const fixture = document.createElement('div');
+            fixture.innerHTML = '<a href="https://example.test/home"><img id="pb-linked-logo" src="https://example.test/logo.png"></a>' +
+                '<img id="pb-standalone-image" src="https://example.test/standalone.png"><span id="pb-plain-element"></span>';
+            document.body.appendChild(fixture);
+        })();
+        """#)
+        func target(_ elementID: String) async throws -> String? {
+            try await webView.callAsyncJavaScript(
+                "return window.__playbridgeContextTarget([document.getElementById(elementID)]);",
+                arguments: ["elementID": elementID], in: nil,
+                contentWorld: BrowserPopupInteraction.world
+            ) as? String
+        }
+        let linkedLogo = try await target("pb-linked-logo")
+        let standaloneImage = try await target("pb-standalone-image")
+        let plainElement = try await target("pb-plain-element")
+        try check(linkedLogo == "https://example.test/home",
+                  "Linked logo did not resolve to its enclosing link")
+        try check(standaloneImage == "https://example.test/standalone.png",
+                  "Standalone image did not resolve to its media URL")
+        try check(plainElement == "", "Plain element incorrectly produced a context target")
+        print("CHECK: linked-logo and standalone-image context targets passed")
+    }
+
     @MainActor func run() async throws {
+        let linkInteraction = BrowserPopupInteraction()
+        linkInteraction.recordContextLink("https://example.test/logo-target", now: 100)
+        try check(linkInteraction.consumeContextLink(now: 101)?.absoluteString == "https://example.test/logo-target",
+                  "Linked-image context target was not retained for the native menu")
+        linkInteraction.recordContextLink("javascript:alert(1)", now: 100)
+        try check(linkInteraction.consumeContextLink(now: 101) == nil,
+                  "Non-web linked-image context target was accepted")
+        linkInteraction.recordContextLink("https://example.test/stale", now: 100)
+        try check(linkInteraction.consumeContextLink(now: 102) == nil,
+                  "Stale linked-image context target was reused")
         for scheme in ["", ":", "https:", "1http", "http\n", "data", "about", "file"] {
             try check(BrowserPopupInteraction.originURL(scheme: scheme, host: "example.test", port: 0) == nil,
                       "Invalid or opaque origin must not crash or receive a popup grant")
@@ -223,6 +264,7 @@ enum ContentBlocker {
         webView.frame = window!.bounds
         parent.load(base + "/parent")
         try await wait("parent load") { webView.title == "Parent" && !webView.isLoading }
+        try await verifyContextTargets(webView)
         print("CHECK: parent loaded")
         if ProcessInfo.processInfo.environment["TABS_UI"] == "1" {
             parent.title = "Example video with a longer title that wraps in the selected tab"

@@ -13,6 +13,14 @@ final class NavigationViewModel: ObservableObject {
     enum Screen { case dashboard, collections }
     func navigate(to: Screen) {}
 }
+struct DashboardNavigationButton: View {
+    var body: some View { Image(systemName: "square.grid.2x2.fill").frame(width: 44, height: 44) }
+}
+struct ScreenBackButton: View {
+    let destination: NavigationViewModel.Screen
+    let accessibilityLabel: String
+    var body: some View { Image(systemName: "chevron.left").frame(width: 36, height: 44) }
+}
 final class ConnectionViewModel: ObservableObject {
     var isConnected = false
     var destinationID: String? = "fixture"

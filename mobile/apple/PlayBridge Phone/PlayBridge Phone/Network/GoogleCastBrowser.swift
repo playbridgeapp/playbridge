@@ -74,13 +74,15 @@ final class GoogleCastBrowser: NSObject, ObservableObject, NetServiceBrowserDele
         guard self.browser === browser else { return }
         services.removeValue(forKey: key(service))?.stop()
         resolved.removeValue(forKey: key(service))
-        publish()
+        DispatchQueue.main.async { self.publish() }
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
         guard self.browser === browser else { return }
-        error = "Couldn’t discover Google Cast devices. Check Wi-Fi and Local Network access in Settings."
-        isScanning = false
+        DispatchQueue.main.async {
+            self.error = "Couldn’t discover Google Cast devices. Check Wi-Fi and Local Network access in Settings."
+            self.isScanning = false
+        }
     }
 
     func netServiceDidResolveAddress(_ service: NetService) {
@@ -101,7 +103,7 @@ final class GoogleCastBrowser: NSObject, ObservableObject, NetServiceBrowserDele
         let txt = service.txtRecordData().map(NetService.dictionary(fromTXTRecord:)) ?? [:]
         resolved[key(service)] = ExternalReceiverDevice.parse(serviceName: service.name, addresses: addresses, port: service.port,
             txt: txt.compactMapValues { String(data: $0, encoding: .utf8) })
-        publish()
+        DispatchQueue.main.async { self.publish() }
     }
 
     private func publish() {

@@ -167,6 +167,10 @@ final class GoogleCastController: ObservableObject {
         _ = try await request(["command": "set_volume", "level": min(1, max(0, level))])
     }
 
+    func adjustVolume(up: Bool) async throws {
+        _ = try await request(["command": "adjust_volume", "delta": up ? 0.05 : -0.05])
+    }
+
     private func request(_ payload: [String: Any], expectedGeneration: Int? = nil) async throws -> [String: Any] {
         let current = await MainActor.run { expectedGeneration ?? self.generation }
         let cancellation = CastRequestCancellation()

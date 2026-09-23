@@ -68,7 +68,7 @@ private struct CastHistoryList: View {
             .navigationTitle("Cast History")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Back", systemImage: "chevron.left") { nav.navigate(to: .dashboard) }
+                    DashboardNavigationButton()
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Clear", role: .destructive) { confirmClear = true }.disabled(store.entries.isEmpty)

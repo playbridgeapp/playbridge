@@ -129,6 +129,8 @@ mempalace.yaml
 .qoder/
 .mcp.json
 .opencode.json
+.opencode.jsonc
+opencode.jsonc
 .opencode/
 # Local documentation, guides, and skills reference docs
 *_GUIDE.md

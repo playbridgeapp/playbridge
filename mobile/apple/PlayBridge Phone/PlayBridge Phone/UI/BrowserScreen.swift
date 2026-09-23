@@ -110,6 +110,9 @@ private struct ActiveTabView: View {
                 .environmentObject(vm)
                 .environmentObject(nav)
         }
+        .onChange(of: showDetected) { isPresented in
+            if isPresented { tab.pauseMedia() }
+        }
         .sheet(isPresented: $showMenu) {
             MenuSheet(tab: tab, store: store, isPresented: $showMenu)
         }
@@ -163,17 +166,20 @@ private struct ActiveTabView: View {
 
     private var topBar: some View {
         HStack(spacing: 0) {
-            Button {
-                if addressFocused { addressFocused = false; address = tab.urlString }
-                else { nav.navigate(to: .dashboard) }
-            } label: {
-                Image(systemName: addressFocused ? "arrow.backward" : "square.grid.2x2.fill")
-                    .font(.system(size: 22)).foregroundColor(Theme.primary)
-                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            if addressFocused {
+                Button {
+                    addressFocused = false
+                    address = tab.urlString
+                } label: {
+                    Image(systemName: "arrow.backward")
+                        .font(.system(size: 22)).foregroundColor(Theme.primary)
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Cancel editing address")
+            } else {
+                DashboardNavigationButton()
             }
-            .buttonStyle(.plain)
-
-            .accessibilityLabel(addressFocused ? "Cancel editing address" : "Dashboard")
 
             // URL pill
             HStack(spacing: 6) {

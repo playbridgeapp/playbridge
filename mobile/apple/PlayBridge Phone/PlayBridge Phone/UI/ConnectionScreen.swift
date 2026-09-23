@@ -10,23 +10,36 @@ struct ConnectionScreen: View {
     @State private var dlnaLocation = ""
     @State private var manualIP: String = ""
     @State private var pairingCode: String = ""
+    @State private var showOtherDevices = false
+    @State private var showManualConnect = false
+    @State private var showManualDLNA = false
+    @State private var showManualRoku = false
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 12) {
                 header
                 statusBanner
                 pairingCodeSection
-                connectedSection
-                savedSection
-                ExternalReceiverDevicesView()
-                dlnaSection
-                rokuSection
-                dialSection
-                discoveredSection
-                manualSection
+                ConnectionSectionLabel("Now")
+                    .padding(.top, 2)
+                ConnectionNowDestinationCard(
+                    compact: false,
+                    onRemote: { nav.navigate(to: .remote) },
+                    onDisconnect: { vm.disconnect() }
+                )
+                ConnectionThisPhoneRow(
+                    selected: !vm.isConnected && !vm.connectionIsConnecting,
+                    compact: false,
+                    onSelect: { vm.disconnect() }
+                )
+                playBridgeSection
+                recentOtherSection
+                otherDevicesSection
+                if showManualConnect { manualSection }
             }
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 32)
         }
         .background(Theme.surface.ignoresSafeArea())
         .onAppear { vm.startDiscovery(); vm.pingSavedDevices() }
@@ -37,63 +50,279 @@ struct ConnectionScreen: View {
         }
     }
 
-    private var rokuSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ExternalReceiverDevicesView(rokuOnly: true)
-            Button("Search Roku again") { vm.rokuBrowser.start() }.disabled(vm.rokuBrowser.isScanning)
-            TextField("Roku IP address", text: $rokuAddress)
-                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
-            Button("Connect Roku") {
-                let input = rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard let device = DLNABrowser.manualRoku(input) else {
-                    vm.operationError = "Enter a Roku IP address or HTTP address, optionally including its port."
-                    return
-                }
-                vm.connectExternalReceiver(device)
-            }.disabled(rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    // MARK: - Android-parity destination groups
+
+    private var discoveryIsScanning: Bool {
+        vm.browser.isScanning || vm.googleCastBrowser.isScanning ||
+            vm.dlnaBrowser.isScanning || vm.rokuBrowser.isScanning
+    }
+
+    private var activePlayBridgeKey: String? {
+        guard vm.isConnected, !vm.isExternalReceiver, let device = vm.pairedDevice else { return nil }
+        return vm.deviceKey(device)
+    }
+
+    private var sortedSavedPlayBridgeDevices: [PairedDevice] {
+        vm.savedDevices
+            .filter { vm.deviceKey($0) != activePlayBridgeKey }
+            .sorted {
+                let leftOnline = vm.onlineStatus[vm.deviceKey($0)] == true
+                let rightOnline = vm.onlineStatus[vm.deviceKey($1)] == true
+                if leftOnline != rightOnline { return leftOnline && !rightOnline }
+                return $0.lastConnected > $1.lastConnected
+            }
+    }
+
+    private var unpairedPlayBridgeDevices: [DiscoveredDevice] {
+        vm.browser.devices.filter { discovered in
+            !vm.savedDevices.contains { saved in samePlayBridgeDevice(discovered, saved) } &&
+                !(vm.isConnected && !vm.isExternalReceiver && vm.pairedDevice.map {
+                    samePlayBridgeDevice(discovered, $0)
+                } == true)
         }
     }
 
-    private var dialSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button("Search app receivers (DIAL)") { showDIAL = true; vm.dialBrowser.start() }
-                .disabled(vm.dialBrowser.isScanning)
-            if showDIAL {
-                Text("DIAL finds devices that launch receiver apps. Generic video sending is not supported.")
-                    .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
-                if vm.dialBrowser.isScanning { ProgressView() }
-                if let error = vm.dialBrowser.error { Text(error).font(Theme.font(.caption)).foregroundColor(Theme.danger) }
-                ForEach(vm.dialBrowser.devices, id: \.identity) { device in
-                    Label(device.name + " · DIAL", systemImage: "tv")
+    private var recentOtherDevices: [ExternalReceiverDevice] {
+        vm.savedExternalReceiverDevices.filter {
+            !(vm.isConnected && vm.externalReceiver?.identity == $0.identity)
+        }
+    }
+
+    private var playBridgeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                ConnectionSectionLabel("PlayBridge")
+                Spacer()
+                Button {
+                    refreshDiscovery()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundColor(Theme.primary)
+                        .frame(width: 36, height: 36)
                 }
-                if !vm.dialBrowser.isScanning && vm.dialBrowser.devices.isEmpty {
-                    Text("No app receivers found.").font(Theme.font(.caption))
+                .accessibilityLabel("Refresh PlayBridge TVs")
+            }
+
+            if sortedSavedPlayBridgeDevices.isEmpty && unpairedPlayBridgeDevices.isEmpty {
+                emptyHint(
+                    discoveryIsScanning
+                        ? "Looking for PlayBridge TVs on your network…"
+                        : "No PlayBridge TVs yet. Open PlayBridge on your TV, then refresh."
+                )
+            } else {
+                ForEach(Array(sortedSavedPlayBridgeDevices.enumerated()), id: \.offset) { _, device in
+                    ConnectionPairedDeviceRow(
+                        device: device,
+                        online: vm.onlineStatus[vm.deviceKey(device)] == true,
+                        onSelect: { vm.connectSaved(device) },
+                        onRemove: { vm.forget(device) }
+                    )
+                }
+                ForEach(unpairedPlayBridgeDevices) { device in
+                    let display = PairedDevice(
+                        ip: device.ip,
+                        port: device.port,
+                        name: device.name,
+                        uuid: device.uuid,
+                        wssPort: device.wssPort
+                    )
+                    ConnectionPairedDeviceRow(
+                        device: display,
+                        online: true,
+                        onSelect: { vm.connect(to: device) }
+                    )
                 }
             }
         }
     }
 
-    private var dlnaSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ExternalReceiverDevicesView(dlnaOnly: true)
-            Button("Search again") { vm.dlnaBrowser.start() }
-                .disabled(vm.dlnaBrowser.isScanning)
-            TextField("DLNA device description URL", text: $dlnaLocation)
-                .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-                .textFieldStyle(.roundedBorder)
-            Text("Enter the receiver’s UPnP description URL, not a video URL.")
-                .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
-            Button("Connect DLNA") {
-                let location = dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let device = DLNABrowser.device(from: ["protocol": "Dlna", "id": location, "location": location]) {
+    @ViewBuilder private var recentOtherSection: some View {
+        if !recentOtherDevices.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ConnectionSectionLabel("Recent other")
+                ForEach(recentOtherDevices, id: \.identity) { device in
+                    ConnectionExternalDeviceRow(
+                        device: device,
+                        online: isExternalDeviceOnline(device),
+                        onSelect: { vm.connectExternalReceiver(device) },
+                        onRemove: { vm.forgetExternalReceiver(device) }
+                    )
+                }
+            }
+        }
+    }
+
+    private var otherDevicesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                withAnimation { showOtherDevices.toggle() }
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ConnectionSectionLabel("Other devices on this network")
+                        Text(discoveryIsScanning ? "Scanning quietly…" : "DLNA, Roku, Google Cast")
+                            .font(Theme.font(.caption))
+                            .foregroundColor(Theme.onSurfaceVariant)
+                    }
+                    Spacer()
+                    Image(systemName: showOtherDevices ? "chevron.up" : "chevron.down")
+                        .foregroundColor(Theme.onSurfaceVariant)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if showOtherDevices {
+                externalProtocolSection("Google Cast", devices: externalDevices(protocolID: "google_cast"))
+                externalProtocolSection("DLNA", devices: externalDevices(protocolID: "dlna"))
+                manualDLNAControls
+                externalProtocolSection("Roku", devices: externalDevices(protocolID: "roku"))
+                manualRokuControls
+
+                if showDIAL {
+                    Text("DIAL")
+                        .font(Theme.font(size: 14, weight: .semibold))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                    Text("DIAL finds devices that launch receiver apps; generic video sending is unavailable.")
+                        .font(Theme.font(.caption))
+                        .foregroundColor(Theme.onSurfaceVariant)
+                    ForEach(vm.dialBrowser.devices, id: \.identity) { device in
+                        ConnectionExternalDeviceRow(
+                            device: device,
+                            online: true,
+                            onSelect: {
+                                vm.operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."
+                            }
+                        )
+                    }
+                }
+
+                if allVisibleExternalDevices.isEmpty && !showDIAL {
+                    emptyHint(
+                        discoveryIsScanning
+                            ? "Looking for cast devices…"
+                            : "No other devices found. Tap refresh to scan again."
+                    )
+                }
+            }
+        }
+    }
+
+    private var manualDLNAControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Connect DLNA by URL…") { withAnimation { showManualDLNA.toggle() } }
+                .font(Theme.font(.subheadline))
+                .foregroundColor(Theme.primary)
+            if showManualDLNA {
+                TextField("DLNA device description URL", text: $dlnaLocation)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                Button("Connect") {
+                    let location = dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let device = DLNABrowser.device(from: [
+                        "protocol": "Dlna",
+                        "id": location,
+                        "location": location
+                    ]) {
+                        vm.connectExternalReceiver(device)
+                    } else {
+                        vm.operationError = "Enter a valid HTTP or HTTPS device description URL."
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.primaryDim)
+                .disabled(dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private var manualRokuControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button("Connect Roku by IP…") { withAnimation { showManualRoku.toggle() } }
+                .font(Theme.font(.subheadline))
+                .foregroundColor(Theme.primary)
+            if showManualRoku {
+                TextField("Roku IP address", text: $rokuAddress)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .textFieldStyle(.roundedBorder)
+                Button("Connect") {
+                    let input = rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let device = DLNABrowser.manualRoku(input) else {
+                        vm.operationError = "Enter a Roku IP address or HTTP address, optionally including its port."
+                        return
+                    }
                     vm.connectExternalReceiver(device)
-                } else {
-                    vm.operationError = "Enter a valid HTTP or HTTPS device description URL."
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.primaryDim)
+                .disabled(rokuAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .disabled(dlnaLocation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+    }
+
+    @ViewBuilder
+    private func externalProtocolSection(_ title: String, devices: [ExternalReceiverDevice]) -> some View {
+        if !devices.isEmpty {
+            Text(title)
+                .font(Theme.font(size: 14, weight: .semibold))
+                .foregroundColor(Theme.onSurfaceVariant)
+                .padding(.top, 2)
+            ForEach(devices, id: \.identity) { device in
+                let saved = vm.savedExternalReceiverDevices.contains { $0.identity == device.identity }
+                ConnectionExternalDeviceRow(
+                    device: device,
+                    online: isExternalDeviceOnline(device),
+                    onSelect: { vm.connectExternalReceiver(device) },
+                    onRemove: saved ? { vm.forgetExternalReceiver(device) } : nil
+                )
+            }
+        }
+    }
+
+    private var allVisibleExternalDevices: [ExternalReceiverDevice] {
+        externalDevices(protocolID: "google_cast") +
+            externalDevices(protocolID: "dlna") +
+            externalDevices(protocolID: "roku")
+    }
+
+    private func externalDevices(protocolID: String) -> [ExternalReceiverDevice] {
+        let live = (vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices)
+            .filter { $0.protocolID == protocolID }
+        let liveIDs = Set(live.map(\.identity))
+        return (live + vm.savedExternalReceiverDevices.filter {
+            $0.protocolID == protocolID && !liveIDs.contains($0.identity)
+        }).filter {
+            !(vm.isConnected && vm.externalReceiver?.identity == $0.identity)
+        }
+    }
+
+    private func isExternalDeviceOnline(_ device: ExternalReceiverDevice) -> Bool {
+        (vm.googleCastBrowser.devices + vm.dlnaBrowser.devices + vm.rokuBrowser.devices)
+            .contains { $0.identity == device.identity }
+    }
+
+    private func samePlayBridgeDevice(_ discovered: DiscoveredDevice, _ saved: PairedDevice) -> Bool {
+        if !discovered.uuid.isEmpty && !saved.uuid.isEmpty { return discovered.uuid == saved.uuid }
+        return discovered.ip == saved.ip && discovered.port == saved.port
+    }
+
+    private func refreshDiscovery() {
+        vm.stopDiscovery()
+        vm.startDiscovery()
+        vm.pingSavedDevices()
+    }
+
+    private func emptyHint(_ message: String) -> some View {
+        Text(message)
+            .font(Theme.font(.subheadline))
+            .foregroundColor(Theme.onSurfaceVariant)
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - SAS pairing code
@@ -146,25 +375,53 @@ struct ConnectionScreen: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("PlayBridge")
-                    .font(Theme.font(.largeTitle).bold())
-                    .foregroundColor(Theme.onSurface)
-                Text("Connect to your TV")
-                    .font(Theme.font(.subheadline))
-                    .foregroundColor(Theme.onSurfaceVariant)
-            }
+        HStack(spacing: 12) {
+            DashboardNavigationButton()
+
+            Text("Devices")
+                .font(Theme.font(size: 20, weight: .semibold))
+                .foregroundColor(Theme.onSurface)
             Spacer()
-            Button {
-                nav.navigate(to: .dashboard)
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(Theme.font(.title2))
-                    .foregroundColor(Theme.onSurfaceVariant)
+
+            Button(action: refreshDiscovery) {
+                if discoveryIsScanning {
+                    ProgressView()
+                        .tint(Theme.primary)
+                        .frame(width: 36, height: 36)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .foregroundColor(Theme.primary)
+                        .frame(width: 36, height: 36)
+                }
             }
+            .accessibilityLabel("Rescan network")
+
+            Button {
+                nav.navigate(to: .remote)
+            } label: {
+                Image(systemName: "gamecontroller.fill")
+                    .foregroundColor(Theme.primary)
+                    .frame(width: 36, height: 36)
+            }
+
+            Menu {
+                Button("Connect by IP…", systemImage: "plus") {
+                    withAnimation { showManualConnect.toggle() }
+                }
+                Button("Search app receivers (DIAL)", systemImage: "antenna.radiowaves.left.and.right") {
+                    showDIAL = true
+                    showOtherDevices = true
+                    vm.dialBrowser.start()
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .foregroundColor(Theme.onSurface)
+                    .frame(width: 36, height: 36)
+            }
+            .accessibilityLabel("More")
         }
-        .padding(.top, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
     }
 
     // MARK: - Status
@@ -188,7 +445,9 @@ struct ConnectionScreen: View {
         case .error(let message):
             banner(message, systemImage: "wifi.exclamationmark", tint: Theme.danger)
         default:
-            EmptyView()
+            if let message = vm.operationError {
+                banner(message, systemImage: "exclamationmark.triangle", tint: Theme.danger)
+            }
         }
     }
 
@@ -204,94 +463,11 @@ struct ConnectionScreen: View {
         .cornerRadius(14)
     }
 
-    // MARK: - Saved
-
-    @ViewBuilder private var savedSection: some View {
-        if !vm.savedDevices.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    sectionTitle("Your TVs")
-                    Spacer()
-                    Button { vm.pingSavedDevices() } label: {
-                        Image(systemName: "arrow.clockwise").foregroundColor(Theme.primary)
-                    }
-                }
-                ForEach(vm.savedDevices.indices, id: \.self) { i in
-                    let saved = vm.savedDevices[i]
-                    let online = vm.onlineStatus[vm.deviceKey(saved)] == true
-                    HStack {
-                        ZStack(alignment: .bottomTrailing) {
-                            Image(systemName: "tv").foregroundColor(Theme.primary)
-                            Circle()
-                                .fill(online ? Color(hex: 0x4CAF50) : Theme.onSurfaceVariant.opacity(0.4))
-                                .frame(width: 7, height: 7)
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(saved.name).foregroundColor(Theme.onSurface).font(Theme.font(.headline))
-                            Text(online ? "\(saved.ip) · online" : saved.ip)
-                                .foregroundColor(Theme.onSurfaceVariant).font(Theme.font(.caption))
-                        }
-                        Spacer()
-                        Button("Connect") { vm.connectSaved(saved) }
-                            .buttonStyle(.borderedProminent)
-                            .tint(Theme.primaryDim)
-                        Button(role: .destructive) { vm.forget(saved) } label: {
-                            Image(systemName: "trash")
-                        }
-                    }
-                    .padding(14)
-                    .background(Theme.surfaceContainer)
-                    .cornerRadius(14)
-                }
-            }
-        }
-    }
-
-    // MARK: - Discovered
-
-    private var discoveredSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                sectionTitle("Discovered")
-                Spacer()
-                if vm.browser.isScanning { ProgressView().tint(Theme.primary) }
-            }
-            if vm.browser.devices.isEmpty {
-                Text("Searching for receivers on your Wi-Fi…")
-                    .font(Theme.font(.subheadline))
-                    .foregroundColor(Theme.onSurfaceVariant)
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.surfaceContainerLow)
-                    .cornerRadius(14)
-            } else {
-                ForEach(vm.browser.devices) { device in
-                    Button { vm.connect(to: device) } label: {
-                        HStack {
-                            Image(systemName: "tv").foregroundColor(Theme.primary)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(device.name).foregroundColor(Theme.onSurface).font(Theme.font(.headline))
-                                Text("\(device.ip)\(device.wssPort != nil ? "  · secure" : "")")
-                                    .foregroundColor(Theme.onSurfaceVariant).font(Theme.font(.caption))
-                            }
-                            Spacer()
-                            Image(systemName: "chevron.right").foregroundColor(Theme.onSurfaceVariant)
-                        }
-                        .padding(14)
-                        .background(Theme.surfaceContainer)
-                        .cornerRadius(14)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-
     // MARK: - Manual
 
     private var manualSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionTitle("Manual connect")
+            ConnectionSectionLabel("Manual connect")
             HStack {
                 TextField("TV IP address", text: $manualIP)
                     .textInputAutocapitalization(.never)
@@ -312,86 +488,4 @@ struct ConnectionScreen: View {
         }
     }
 
-    @ViewBuilder private var connectedSection: some View {
-        if case .connected(let serverName, let secure) = vm.state {
-            VStack(alignment: .leading, spacing: 10) {
-                sectionTitle("Connected TV")
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 16) {
-                        Image(systemName: "tv")
-                            .font(Theme.font(size: 32))
-                            .foregroundColor(Theme.primary)
-                        
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(serverName)
-                                .foregroundColor(Theme.onSurface)
-                                .font(Theme.font(.headline))
-                            
-                            if let receiver = vm.externalReceiver {
-                                Text(receiver.protocolName).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
-                            } else if let saved = vm.pairedDevice {
-                                Text("\(saved.ip):\(secure ? (saved.wssPort != nil ? String(saved.wssPort!) : String(saved.port)) : String(saved.port))")
-                                    .foregroundColor(Theme.onSurfaceVariant)
-                                    .font(Theme.font(.caption))
-                            }
-                            
-                            if !vm.isExternalReceiver {
-                            HStack(spacing: 4) {
-                                Image(systemName: secure ? "lock.fill" : "lock.open.fill")
-                                    .font(Theme.font(size: 14))
-                                    .foregroundColor(secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
-                                Text(secure ? "Secure (wss)" : "Not secure (ws)")
-                                    .font(Theme.font(.caption))
-                                    .foregroundColor(secure ? Color(hex: 0x4CAF50) : Color(hex: 0xFFA000))
-                            }
-                            }
-                        }
-                        Spacer()
-                    }
-                    
-                    HStack {
-                        Button {
-                            nav.navigate(to: .remote)
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "gamecontroller.fill")
-                                Text("Remote Control")
-                            }
-                            .font(Theme.font(size: 14, weight: .semibold))
-                            .foregroundColor(Theme.onPrimary)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 8)
-                            .background(Theme.primaryDim)
-                            .cornerRadius(10)
-                        }
-                        .buttonStyle(.plain)
-
-                        Spacer()
-                        
-                        Button {
-                            vm.disconnect()
-                        } label: {
-                            Text("Disconnect")
-                                .font(Theme.font(size: 14, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background(Theme.danger)
-                                .cornerRadius(10)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(14)
-                .background(Theme.surfaceContainer)
-                .cornerRadius(14)
-            }
-        }
-    }
-
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text.uppercased())
-            .font(Theme.font(.caption).bold())
-            .foregroundColor(Theme.onSurfaceVariant)
-    }
 }

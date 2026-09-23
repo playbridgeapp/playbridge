@@ -57,5 +57,13 @@ xcodebuild -create-xcframework \
     -headers "$headers_dir" \
     -output "$framework"
 
+printf '%s\n' \
+    'PB_CAST_CORE_ROOT = $(SRCROOT)/../Native/PlayBridgeCastCore.xcframework' \
+    'PB_CAST_CORE_SLICE[sdk=iphoneos*] = ios-arm64' \
+    'PB_CAST_CORE_SLICE[sdk=iphonesimulator*] = ios-arm64_x86_64-simulator' \
+    'SWIFT_INCLUDE_PATHS = $(inherited) "$(PB_CAST_CORE_ROOT)/$(PB_CAST_CORE_SLICE)/Headers"' \
+    'OTHER_LDFLAGS = $(inherited) "$(PB_CAST_CORE_ROOT)/$(PB_CAST_CORE_SLICE)/libplaybridge_cast_core_ffi.a"' \
+    > "$framework/PlayBridgeCastCore.xcconfig"
+
 echo "Created $framework"
-echo "Add it to the iOS target's Frameworks, Libraries, and Embedded Content as Do Not Embed."
+echo "The iOS phone target now links Cast Core automatically when this framework is present."

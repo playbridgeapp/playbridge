@@ -68,6 +68,12 @@ final class FakeCastSession: GoogleCastSessionTransport {
         precondition(native.last("seek")?["position_seconds"] as? Double == 12.5)
         native.acknowledge(native.last("seek")!)
         try await seek.value
+        let volume = Task { try await controller.adjustVolume(up: false) }
+        await wait { native.last("adjust_volume") != nil }
+        precondition(native.last("adjust_volume")?["delta"] as? Double == -0.05)
+        precondition(native.last("set_volume") == nil, "Relative volume must not send a guessed absolute level")
+        native.acknowledge(native.last("adjust_volume")!)
+        try await volume.value
         do {
             try await controller.control("seek_to:-1")
             fatalError("Accepted a negative seek")

@@ -42,6 +42,7 @@ final class ConnectionViewModel: ObservableObject {
     private var savedReconnectGeneration: UUID?
     private var savedReconnectTimeout: DispatchWorkItem?
     private var savedEndpointRefreshTimeout: DispatchWorkItem?
+    private var discoveryOwners = 0
     private static let savedReconnectDiscoveryTimeout: TimeInterval = 10
 
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
@@ -89,11 +90,12 @@ final class ConnectionViewModel: ObservableObject {
             coordinator.playback = playback
             coordinator.activeContext = playback == nil || playback?.state == "stopped" ? "idle" : "player"
         }.store(in: &cancellables)
-        rokuBrowser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
-        dialBrowser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
-        dlnaBrowser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
-        googleCastBrowser.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        rokuBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        dialBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        dlnaBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        googleCastBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         coordinator.objectWillChange
+            .receive(on: RunLoop.main)
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
         browser.$devices
@@ -101,14 +103,32 @@ final class ConnectionViewModel: ObservableObject {
             .sink { [weak self] devices in self?.refreshSavedEndpoints(devices) }
             .store(in: &cancellables)
         browser.objectWillChange
+            .receive(on: RunLoop.main)
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &cancellables)
     }
 
     // MARK: - Discovery
 
-    func startDiscovery() { browser.start(owner: .userInterface); googleCastBrowser.start(); dlnaBrowser.start(); rokuBrowser.start() }
-    func stopDiscovery() { browser.stop(owner: .userInterface); googleCastBrowser.stop(); dlnaBrowser.stop(); rokuBrowser.stop(); dialBrowser.stop() }
+    func startDiscovery() {
+        discoveryOwners += 1
+        guard discoveryOwners == 1 else { return }
+        browser.start(owner: .userInterface)
+        googleCastBrowser.start()
+        dlnaBrowser.start()
+        rokuBrowser.start()
+    }
+
+    func stopDiscovery() {
+        guard discoveryOwners > 0 else { return }
+        discoveryOwners -= 1
+        guard discoveryOwners == 0 else { return }
+        browser.stop(owner: .userInterface)
+        googleCastBrowser.stop()
+        dlnaBrowser.stop()
+        rokuBrowser.stop()
+        dialBrowser.stop()
+    }
 
     // MARK: - Connect
 
@@ -165,7 +185,8 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Reconnect to the previously paired device (used on launch).
     func reconnectSaved() {
-        guard UserDefaults.standard.string(forKey: "last_receiver_protocol") != "google_cast" else { return }
+        let route = UserDefaults.standard.string(forKey: "last_receiver_protocol")
+        guard route != "google_cast", route != "this_phone" else { return }
         guard let saved = pairedDevice else { return }
         endSavedReconnectDiscovery()
         connectingDevice = DiscoveredDevice(ip: saved.ip, port: saved.port, name: saved.name,
@@ -377,7 +398,10 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func disconnect() {
+        UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
         if isExternalReceiver {
+            // Clear routing intent before the transport publishes its disconnect state.
+            externalReceiver = nil
             googleCast.disconnect()
             state = .disconnected
             coordinator.clear()
@@ -562,7 +586,17 @@ final class ConnectionViewModel: ObservableObject {
         ws.send(WireProtocol.browserControlCommand(action))
     }
 
-    func remote(_ key: String) { ws.send(WireProtocol.remoteCommand(key: key)) }
+    func remote(_ key: String) {
+        guard isConnected else { return }
+        guard isExternalReceiver else { ws.send(WireProtocol.remoteCommand(key: key)); return }
+        switch key {
+        case "volume_up": adjustExternalVolume(up: true)
+        case "volume_down": adjustExternalVolume(up: false)
+        default:
+            if externalReceiver?.protocolID == "roku" { sendRokuKeypress(key) }
+        }
+    }
+
     func jump(to item: PlaylistEpisode) {
         ws.send(WireProtocol.playlistJumpCommand(
             index: item.index,
@@ -595,7 +629,50 @@ final class ConnectionViewModel: ObservableObject {
         ws.send(WireProtocol.queueClear(playbackId: coordinator.playlist?.playbackId))
     }
     func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }
+    func endPointerGesture() { ws.endPointerGesture() }
     func queryContext() { if !isExternalReceiver { ws.send(WireProtocol.contextQuery()) } }
+    func queryUserScripts() { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userScriptQuery()) }
+    func installUserScript(name: String, content: String) { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userScript(name: name, content: content)) }
+    func queryUserAgents() { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userAgentQuery()) }
+    func setUserAgent(name: String, value: String, save: Bool) {
+        guard isConnected, supportsBrowser else { return }
+        ws.send(WireProtocol.userAgent(name: name, value: value, save: save))
+    }
+
+    private func adjustExternalVolume(up: Bool) {
+        if externalReceiver?.protocolID == "roku" {
+            sendRokuKeypress(up ? "volume_up" : "volume_down")
+            return
+        }
+        guard externalReceiver?.protocolID == "google_cast" else { return }
+        Task { @MainActor in
+            do { try await googleCast.adjustVolume(up: up) }
+            catch { operationError = error.localizedDescription }
+        }
+    }
+
+    private func sendRokuKeypress(_ key: String) {
+        let rokuKey: String
+        switch key {
+        case "dpad_up": rokuKey = "Up"
+        case "dpad_down": rokuKey = "Down"
+        case "dpad_left": rokuKey = "Left"
+        case "dpad_right": rokuKey = "Right"
+        case "dpad_center", "key_enter": rokuKey = "Select"
+        case "back": rokuKey = "Back"
+        case "home": rokuKey = "Home"
+        case "volume_up": rokuKey = "VolumeUp"
+        case "volume_down": rokuKey = "VolumeDown"
+        default: return
+        }
+        guard rokuKey.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }),
+              let host = externalReceiver?.addresses.first, !host.isEmpty else { return }
+        let literal = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        guard let url = URL(string: "http://\(literal):\(externalReceiver?.port ?? 8060)/keypress/\(rokuKey)") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        URLSession.shared.dataTask(with: request).resume()
+    }
 
     private func sendMediaCommand(_ command: String) {
         guard isConnected else { operationError = "Connect a device before casting."; return }

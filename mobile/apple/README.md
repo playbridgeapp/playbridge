@@ -78,9 +78,11 @@ XCFramework from the repository root:
 ./cast/build-apple.sh
 ```
 
-Then add `mobile/apple/Native/PlayBridgeCastCore.xcframework` to the phone
-target as **Do Not Embed**. The adapter remains a safe unavailable stub when
-the framework is not linked, so ordinary source builds continue to work.
+The build script writes an optional Xcode configuration inside the generated
+framework. The phone target links it automatically when present. Debug source
+builds can use the safe unavailable stub, but Release builds verify that Cast
+Core symbols are linked and fail without the generated framework. Do not embed
+the static framework.
 
 Set `PlayBridgeGoogleCastApplicationID` in the target build settings to the
 published PlayBridge Custom Web Receiver application ID, `30FDC6BC`.

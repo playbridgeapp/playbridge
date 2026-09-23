@@ -22,6 +22,7 @@ enum DetectionScript {
       var SEGMENT = /\.(ts|m4s|fmp4|cmfv|cmfa)(\?|$)/i;
       var MEDIA = /\.(m3u8|mpd|mp4|m4v|mov|mkv|webm|avi|flv|wmv|3gp|vtt|srt)(\?|$)/i;
       var MEDIA_CT = /(video\/|mpegurl|application\/dash|application\/octet-stream|text\/vtt|application\/x-subrip)/i;
+      var SUBTITLE_SCAN_LIMIT = 256 * 1024;
 
       function post(msg) {
         try { window.webkit.messageHandlers.playbridge.postMessage(msg); } catch (e) {}
@@ -46,7 +47,7 @@ enum DetectionScript {
       window.addEventListener('popstate', pageChanged);
       window.addEventListener('hashchange', pageChanged);
 
-      function report(url, contentType, detectedBy) {
+      function report(url, contentType, detectedBy, mediaKind) {
         if (!url || typeof url !== 'string') return;
         if (url.indexOf('blob:') === 0 || url.indexOf('data:') === 0) return;
         if (url.indexOf('http') !== 0) {
@@ -55,20 +56,92 @@ enum DetectionScript {
         }
         var path = url.split('?')[0];
         if (SEGMENT.test(path)) return; // HLS/DASH media segments aren't standalone streams
-        post({
+        var message = {
           type: 'video',
           url: url,
           contentType: contentType || '',
           detectedBy: detectedBy || 'unknown',
           originUrl: location.href,
           ua: navigator.userAgent
-        });
+        };
+        if (mediaKind) message.mediaKind = mediaKind;
+        post(message);
       }
 
       function looksMedia(url) {
         if (!url) return false;
         var path = ('' + url).split('?')[0];
         return MEDIA.test(path) && !SEGMENT.test(path);
+      }
+
+      function subtitleTypeFromDisposition(value) {
+        var match = /filename\*?\s*=\s*(?:utf-8''|["'])?[^;"']+\.(srt|vtt)(?:["']|;|$)/i.exec(value || '');
+        if (!match) return '';
+        return match[1].toLowerCase() === 'vtt' ? 'text/vtt' : 'application/x-subrip';
+      }
+
+      function subtitleTypeFromBody(body) {
+        var trimmed = (body || '').replace(/^\uFEFF/, '').replace(/^\s+/, '');
+        if (/^WEBVTT(?:[ \t].*)?(?:\r?\n|$)/i.test(trimmed)) return 'text/vtt';
+        if (/^(?:\d{1,7}\s*\r?\n\s*)?\d{1,2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{3}(?:\s|$)/.test(trimmed.slice(0, 8192))) {
+          return 'application/x-subrip';
+        }
+        return '';
+      }
+
+      function shouldInspectSubtitleBody(contentType) {
+        var ct = (contentType || '').toLowerCase();
+        if (/^(video|audio|image)\//.test(ct) || /font|css/.test(ct)) return false;
+        return !ct || /text\/|json|javascript|xml|octet-stream|vtt|subrip/.test(ct);
+      }
+
+      function scanSubtitleBody(url, body, disposition, detectedBy) {
+        var contentType = subtitleTypeFromBody(body) || subtitleTypeFromDisposition(disposition);
+        if (contentType) report(url, contentType, detectedBy || 'body_content_subtitle', 'subtitle');
+      }
+
+      function inspectFetchSubtitle(resp, fallbackURL) {
+        try {
+          var url = resp.url || fallbackURL;
+          var contentType = (resp.headers && resp.headers.get('content-type')) || '';
+          var disposition = (resp.headers && resp.headers.get('content-disposition')) || '';
+          var dispositionType = subtitleTypeFromDisposition(disposition);
+          if (dispositionType) report(url, dispositionType, 'subtitle_disposition', 'subtitle');
+          if (!shouldInspectSubtitleBody(contentType) || !resp.clone) return;
+
+          var length = parseInt((resp.headers && resp.headers.get('content-length')) || '', 10);
+          if (isFinite(length) && length > SUBTITLE_SCAN_LIMIT) return;
+          var copy = resp.clone();
+
+          // WKWebView supports streamed response bodies. Keep the duplicate read bounded so
+          // generic text/API responses cannot turn subtitle sniffing into an unbounded copy.
+          if (copy.body && copy.body.getReader && typeof TextDecoder !== 'undefined') {
+            var reader = copy.body.getReader();
+            var decoder = new TextDecoder();
+            var bytes = 0;
+            var text = '';
+            function pump() {
+              reader.read().then(function (part) {
+                if (part.done) {
+                  text += decoder.decode();
+                  scanSubtitleBody(url, text, disposition, 'body_content_subtitle');
+                  return;
+                }
+                bytes += part.value.byteLength;
+                if (bytes > SUBTITLE_SCAN_LIMIT) { try { reader.cancel(); } catch (e) {} return; }
+                text += decoder.decode(part.value, {stream: true});
+                pump();
+              }).catch(function () {});
+            }
+            pump();
+          } else if (copy.text) {
+            copy.text().then(function (text) {
+              if (text.length <= SUBTITLE_SCAN_LIMIT) {
+                scanSubtitleBody(url, text, disposition, 'body_content_subtitle');
+              }
+            }).catch(function () {});
+          }
+        } catch (e) {}
       }
 
       // ── fetch hook ──────────────────────────────────────────────────────────
@@ -83,6 +156,7 @@ enum DetectionScript {
               try {
                 var ct = resp.headers && resp.headers.get('content-type');
                 if (ct && MEDIA_CT.test(ct)) report(resp.url || url, ct, 'fetch_content_type');
+                inspectFetchSubtitle(resp, url);
               } catch (e) {}
               return resp;
             });
@@ -105,8 +179,36 @@ enum DetectionScript {
             try {
               var ct = xhr.getResponseHeader('content-type');
               if (ct && MEDIA_CT.test(ct)) report(xhr.responseURL || xhr.__pb_url, ct, 'xhr_content_type');
+              var dispositionType = subtitleTypeFromDisposition(xhr.getResponseHeader('content-disposition') || '');
+              if (dispositionType) report(xhr.responseURL || xhr.__pb_url, dispositionType, 'subtitle_disposition', 'subtitle');
             } catch (e) {}
           }
+        });
+        xhr.addEventListener('loadend', function () {
+          try {
+            var ct = xhr.getResponseHeader('content-type') || '';
+            var disposition = xhr.getResponseHeader('content-disposition') || '';
+            var length = parseInt(xhr.getResponseHeader('content-length') || '', 10);
+            if (!shouldInspectSubtitleBody(ct) || (isFinite(length) && length > SUBTITLE_SCAN_LIMIT)) return;
+            var url = xhr.responseURL || xhr.__pb_url;
+            if (xhr.responseType === '' || xhr.responseType === 'text') {
+              if (typeof xhr.responseText === 'string' && xhr.responseText.length <= SUBTITLE_SCAN_LIMIT) {
+                scanSubtitleBody(url, xhr.responseText, disposition, 'body_content_subtitle');
+              }
+            } else if (xhr.responseType === 'arraybuffer' && xhr.response && typeof TextDecoder !== 'undefined') {
+              if (xhr.response.byteLength <= SUBTITLE_SCAN_LIMIT) {
+                scanSubtitleBody(url, new TextDecoder().decode(xhr.response), disposition, 'body_content_subtitle');
+              }
+            } else if (xhr.responseType === 'blob' && xhr.response && typeof xhr.response.text === 'function') {
+              if (xhr.response.size <= SUBTITLE_SCAN_LIMIT) {
+                xhr.response.text().then(function (body) {
+                  if (body.length <= SUBTITLE_SCAN_LIMIT) {
+                    scanSubtitleBody(url, body, disposition, 'body_content_subtitle');
+                  }
+                }).catch(function () {});
+              }
+            }
+          } catch (e) {}
         });
         return origSend.apply(this, arguments);
       };
@@ -116,9 +218,11 @@ enum DetectionScript {
         if (!el || !el.tagName) return;
         if (el.tagName === 'VIDEO' || el.tagName === 'SOURCE') {
           if (el.src && el.src.indexOf('http') === 0) report(el.src, '', 'dom_video_element');
+        } else if (el.tagName === 'TRACK') {
+          if (el.src && el.src.indexOf('http') === 0) report(el.src, '', 'dom_track_element', 'subtitle');
         }
       }
-      function scanAll() { document.querySelectorAll('video, source').forEach(scanEl); }
+      function scanAll() { document.querySelectorAll('video, source, track').forEach(scanEl); }
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', scanAll);
       } else { scanAll(); }
@@ -130,7 +234,7 @@ enum DetectionScript {
               var n = m.addedNodes[j];
               if (n.nodeType !== 1) continue;
               scanEl(n);
-              if (n.querySelectorAll) n.querySelectorAll('video, source').forEach(scanEl);
+              if (n.querySelectorAll) n.querySelectorAll('video, source, track').forEach(scanEl);
             }
             if (m.type === 'attributes' && m.target && m.target.nodeType === 1) scanEl(m.target);
           }

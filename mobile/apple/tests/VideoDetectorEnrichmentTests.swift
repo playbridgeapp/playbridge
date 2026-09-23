@@ -120,6 +120,37 @@ struct VideoDetectorEnrichmentTests {
         precondition(spa.videos[1].lifecycleIndex == 2, "Requests just before navigation adopt the new lifecycle")
         spa.clear()
         spaProbe.finishAll()
-        print("PASS: eager enrichment, independent results, deduplication, concurrency, subtitle exclusion, navigation invalidation and detector teardown")
+
+        let subtitleProbe = Probe()
+        let subtitleDetector = subtitleProbe.detector()
+        let extensionlessSubtitle = "https://subs.example/resource/42"
+        subtitleDetector.ingest([
+            "url": extensionlessSubtitle,
+            "contentType": "text/plain",
+            "detectedBy": "body_content_subtitle",
+            "mediaKind": "subtitle",
+        ])
+        precondition(subtitleDetector.videos.first?.isSubtitle == true)
+        precondition(subtitleProbe.started.isEmpty, "Body-confirmed subtitles must not start preview work")
+
+        let dispositionSubtitle = "https://subs.example/resource/43"
+        subtitleDetector.ingest([
+            "url": dispositionSubtitle,
+            "contentType": "application/octet-stream",
+            "detectedBy": "fetch_content_type",
+        ])
+        await until { subtitleProbe.started.count == 1 }
+        subtitleDetector.ingest([
+            "url": dispositionSubtitle,
+            "contentType": "application/x-subrip",
+            "detectedBy": "subtitle_disposition",
+            "mediaKind": "subtitle",
+        ])
+        precondition(subtitleDetector.videos.last?.isSubtitle == true)
+        precondition(subtitleDetector.videos.last?.contentType == "application/x-subrip")
+        subtitleDetector.clear()
+        subtitleProbe.finishAll()
+
+        print("PASS: eager enrichment, subtitle body/disposition upgrades, deduplication, concurrency, navigation invalidation and detector teardown")
     }
 }

@@ -24,7 +24,8 @@ struct CollectionsScreen: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .alert("New collection", isPresented: $showNew) {
             TextField("Name", text: $newName)
@@ -39,9 +40,7 @@ struct CollectionsScreen: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Button { nav.navigate(to: .dashboard) } label: {
-                Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-            }
+            DashboardNavigationButton()
             VStack(alignment: .leading, spacing: 2) {
                 Text("Collections").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                 Text("Your saved playlists").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)

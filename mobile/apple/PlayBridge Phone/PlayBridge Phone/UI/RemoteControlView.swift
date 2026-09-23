@@ -1,85 +1,98 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Context-first layout matching the Android remote, with receiver-aware controls.
 struct RemoteControlView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @State private var modes: [String: RemoteMode] = [:]
-    @State private var castVolume = 0.5
     @State private var looping = false
     @State private var maximized = false
-    @State private var showSettings = false
+    @State private var presented: Presented?
     @State private var keyboardText = ""
-    @State private var seekPosition = 0.0
-    @State private var scrubbing = false
-    @State private var pendingSeek: Double?
-    @State private var seekReset: Task<Void, Never>?
+    @State private var subtitleURL = ""
+    @State private var agentName = ""
+    @State private var agentValue = ""
+    @State private var addingAgent = false
+    @State private var importingScript = false
+    @State private var seekFeedback: RemoteSeekBar.Feedback?
+    @FocusState private var keyboardFocused: Bool
 
     private var context: String { vm.coordinator.activeContext }
     private var playback: TvPlaybackStatus? { vm.coordinator.playback }
     private var isBrowser: Bool { context == "browser" && vm.supportsBrowser }
     private var isImage: Bool { vm.coordinator.mediaKind == "image" }
+    private var isAudio: Bool { vm.coordinator.mediaKind == "audio" }
     private var isLive: Bool { context == "player" && vm.coordinator.playerIsLive }
     private var duration: Double { max(0, Double(playback?.durationMs ?? 0)) }
+    private var protocolID: String? { vm.externalReceiver?.protocolID }
+    private var videoActive: Bool {
+        playback?.state == "playing" || playback?.state == "paused" || playback?.state == "buffering"
+    }
     private var canSeek: Bool {
-        RemoteMode.canSeek(context: context, externalProtocol: vm.externalReceiver?.protocolID,
-                           duration: playback?.durationMs ?? 0, isLive: isLive,
-                           isSeekable: vm.coordinator.playerIsSeekable) && !isImage
+        RemoteMode.canSeek(context: context, externalProtocol: protocolID, duration: playback?.durationMs ?? 0,
+                           isLive: isLive, isSeekable: vm.coordinator.playerIsSeekable, isImage: isImage)
     }
     private var availableModes: [RemoteMode] {
-        RemoteMode.available(context: context, external: vm.isExternalReceiver, browser: vm.supportsBrowser)
+        RemoteMode.available(context: context, external: vm.isExternalReceiver, supportsRemote: RemoteMode.supportsRemote(externalProtocol: protocolID))
     }
     private var mode: RemoteMode {
-        let selected = modes[context] ?? (isBrowser ? .touchpad : .context)
+        let selected = modes[context] ?? (context == "browser" ? .touchpad : .context)
         return availableModes.contains(selected) ? selected : .context
     }
-    private var position: Double {
-        min(max(0, scrubbing ? seekPosition : pendingSeek ?? Double(playback?.positionMs ?? 0)), max(1, duration))
-    }
+    private var supportsVolume: Bool { RemoteMode.supportsVolume(externalProtocol: protocolID) }
 
     var body: some View {
-        VStack(spacing: 16) {
-            if availableModes.count > 1 { modeSelector }
-            GeometryReader { geometry in
-                ScrollView {
-                    VStack(spacing: 16) {
-                        switch mode {
-                        case .context: contextBody
-                        case .dpad:
-                            Spacer(minLength: 12)
-                            dpad
-                            Spacer(minLength: 12)
-                            navigationRow
-                            if isBrowser { browserPlaybackControls } else { transport }
-                        case .touchpad:
-                            RemoteTouchpad { event, dx, dy in
-                                guard vm.isConnected else { return }
-                                vm.mouse(event: event, dx: dx, dy: dy)
-                            }
-                            .frame(height: max(240, geometry.size.height - 170))
-                            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 24))
-                            .overlay(alignment: .top) {
-                                VStack(spacing: 4) {
-                                    Image(systemName: "hand.draw").font(Theme.font(.title2))
-                                    Text("Drag to move · tap to click")
-                                    Text("Two fingers to scroll").font(Theme.font(.caption2))
-                                }.font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
-                                    .padding(22).allowsHitTesting(false)
-                            }
-                            navigationRow
-                            if isBrowser { browserPlaybackControls } else { transport }
-                        case .keyboard: keyboard
-                        }
-                    }.frame(maxWidth: .infinity).frame(minHeight: geometry.size.height)
+        VStack(spacing: 12) {
+            modeSelector
+            VStack(spacing: 12) {
+                switch mode {
+                case .context: contextBody
+                case .dpad:
+                    dpad.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    modeBottom
+                case .touchpad:
+                    touchpad.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    modeBottom
+                case .keyboard:
+                    keyboard.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .disabled(!vm.isConnected)
-        .sheet(isPresented: $showSettings) { settings }
-        .onChange(of: playback?.title) { _ in resetSeek(); looping = false }
-        .onChange(of: context) { _ in resetSeek() }
-        .onChange(of: vm.destinationID) { _ in modes = [:]; keyboardText = ""; resetSeek(); looping = false }
-        .onChange(of: vm.isConnected) { connected in if !connected { resetSeek() } }
-        .onDisappear { seekReset?.cancel() }
+        .overlay {
+            if let seekFeedback {
+                RemoteSeekBar.FeedbackHUD(feedback: seekFeedback)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+        .sheet(item: $presented) { sheet in
+            switch sheet {
+            case .settings: settings
+            case .subtitles: subtitles
+            case .addSubtitle: addSubtitle
+            case .more: browserMore
+            case .scripts: scripts
+            case .agents: agents
+            }
+        }
+        .fileImporter(isPresented: $importingScript, allowedContentTypes: [.javaScript, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: url, encoding: .utf8), !text.isEmpty else { return }
+            vm.installUserScript(name: url.deletingPathExtension().lastPathComponent, content: text)
+            vm.queryUserScripts()
+        }
+        .onChange(of: playback?.title) { _ in looping = false }
+        .onChange(of: vm.destinationID) { _ in modes = [:]; keyboardText = ""; looping = false; maximized = false }
+        .onChange(of: videoActive) { active in
+            if isBrowser && active { modes["browser"] = .context }
+        }
+        .onAppear {
+            if isBrowser && videoActive { modes["browser"] = .context }
+        }
     }
 
     private var modeSelector: some View {
@@ -99,62 +112,86 @@ struct RemoteControlView: View {
     }
 
     @ViewBuilder private var contextBody: some View {
-        if context == "player" || isBrowser {
-            VStack(spacing: 6) {
-                Text(isBrowser ? "TV BROWSER" : "NOW PLAYING")
-                    .font(Theme.font(.caption2).bold()).tracking(2).foregroundStyle(Theme.primary)
-                Text(playback?.title ?? (isBrowser ? "Browsing on your TV" : "Untitled"))
-                    .font(Theme.font(.title3).bold()).multilineTextAlignment(.center).lineLimit(3)
-            }.padding(.top, 8)
-            if !vm.isExternalReceiver && !isBrowser && !isImage { tracks }
-            episodes
-            Spacer(minLength: 16)
-            if !isImage && (!isBrowser || playback != nil) { timeline }
-            if isBrowser { navigationRow }
-            if isBrowser { browserPlaybackControls } else { transport }
-        } else {
-            Spacer(minLength: 24)
-            Image(systemName: "tv").font(Theme.font(size: 56)).foregroundStyle(Theme.primary.opacity(0.65))
-            Text(vm.isConnected ? "Nothing playing" : "Connect to a TV").font(Theme.font(.headline))
-            Text("on \(vm.receiverName ?? "your TV")").font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurfaceVariant)
-            if availableModes.contains(.dpad) {
-                Button("Show remote controls") { modes[context] = vm.supportsBrowser ? .touchpad : .dpad }
-                    .buttonStyle(.borderedProminent).tint(Theme.primaryDim)
+        switch context {
+        case "player":
+            VStack(spacing: 12) {
+                VStack(spacing: 4) {
+                    nowPlaying(title: playback?.title, kind: vm.coordinator.mediaKind)
+                    if !vm.isExternalReceiver && !isImage { tracks }
+                }
+                episodes
+                Spacer(minLength: 0)
+                if !isImage || duration > 0 {
+                    seekBar(playing: playback?.state == nil || playback?.state == "playing" || playback?.state == "buffering", browser: false)
+                }
+                mediaControls
+                if protocolID == "google_cast" {
+                    Button("End receiver session") { playerCommand("end_receiver") }
+                        .font(Theme.font(.caption)).foregroundStyle(Theme.danger)
+                }
             }
-            Spacer(minLength: 24)
-            if vm.isExternalReceiver { transport }
+        case "browser":
+            VStack(spacing: 12) {
+                if videoActive { nowPlaying(title: playback?.title, kind: "video") }
+                Spacer(minLength: 0)
+                if videoActive {
+                    seekBar(playing: playback?.state == "playing" || playback?.state == "buffering", browser: true)
+                } else if supportsVolume {
+                    volumeRow
+                }
+                browserRow
+            }
+        default:
+            VStack(spacing: 12) {
+                Spacer(minLength: 0)
+                Image(systemName: "tv").font(Theme.font(size: 56)).foregroundStyle(Theme.onSurfaceVariant.opacity(0.35))
+                Text(vm.isConnected ? "Nothing playing" : "Connect to a TV").font(Theme.font(.headline))
+                Text("on \(vm.receiverName ?? "your TV")").font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurfaceVariant)
+                if availableModes.contains(.touchpad) || availableModes.contains(.dpad) {
+                    Button { modes[context] = availableModes.contains(.touchpad) ? .touchpad : .dpad } label: {
+                        Label("Show touchpad & controls", systemImage: "hand.draw")
+                    }.buttonStyle(.borderedProminent).tint(Theme.primaryDim)
+                }
+                Spacer(minLength: 0)
+            }
         }
-        if vm.externalReceiver?.protocolID == "google_cast" {
-            HStack {
-                Image(systemName: "speaker.wave.1")
-                Slider(value: $castVolume, in: 0...1, onEditingChanged: { editing in
-                    if !editing { vm.setCastVolume(castVolume) }
-                }).accessibilityLabel("Set receiver volume")
-                Image(systemName: "speaker.wave.3")
-            }.foregroundStyle(Theme.onSurfaceVariant).tint(Theme.primary)
-            Button("End receiver session") { playerCommand("end_receiver") }
-                .font(Theme.font(.caption)).foregroundStyle(Theme.danger)
+    }
+
+    private func nowPlaying(title: String?, kind: String) -> some View {
+        VStack(spacing: 0) {
+            Text(title ?? "Playing on TV")
+                .font(Theme.font(size: 16, weight: .semibold))
+                .multilineTextAlignment(.center)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(kind == "audio" ? "Playing music" : kind == "image" ? "Viewing image" : "Playing video")
+                .font(Theme.font(size: 12))
+                .foregroundStyle(Theme.onSurfaceVariant)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var tracks: some View {
         HStack(spacing: 8) {
             trackMenu("Audio", icon: "waveform", tracks: vm.coordinator.audioTracks, command: "audio_track:")
-            if vm.coordinator.mediaKind != "audio" {
-                trackMenu("Subs", icon: "captions.bubble", tracks: vm.coordinator.subtitleTracks, command: "sub_track:", off: true)
-            }
-            if vm.coordinator.speedAvailable || vm.coordinator.scalingAvailable {
-                Button { showSettings = true } label: {
-                    Image(systemName: "ellipsis").frame(width: 44, height: 44)
+            if !isAudio {
+                Button { presented = .subtitles } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "captions.bubble")
+                        Text("Subs: \(vm.coordinator.subtitleTracks.first(where: \.selected)?.name ?? "Off")").lineLimit(1)
+                    }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(maxWidth: .infinity).frame(height: 32)
                         .background(Theme.surfaceContainerHigh, in: Capsule())
-                }.accessibilityLabel("Player settings")
+                }.buttonStyle(.plain)
             }
+            Button { presented = .settings } label: {
+                Image(systemName: "ellipsis").frame(width: 32, height: 32)
+                    .background(Theme.surfaceContainerHigh, in: Capsule())
+            }.accessibilityLabel("Player settings")
         }
     }
 
-    private func trackMenu(_ label: String, icon: String, tracks: [MediaTrack], command: String, off: Bool = false) -> some View {
+    private func trackMenu(_ label: String, icon: String, tracks: [MediaTrack], command: String) -> some View {
         Menu {
-            if off { Button("Off") { playerCommand(command + "none") } }
             ForEach(tracks) { track in
                 Button { playerCommand(command + track.id) } label: {
                     if track.selected { Label(track.name, systemImage: "checkmark") } else { Text(track.name) }
@@ -163,11 +200,10 @@ struct RemoteControlView: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
-                Text("\(label): \(tracks.first(where: \.selected)?.name ?? (off ? "Off" : "Default"))")
-                    .lineLimit(1)
+                Text("\(label): \(tracks.first(where: \.selected)?.name ?? "Default")").lineLimit(1)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.down").font(Theme.font(.caption2))
-            }.font(Theme.font(.caption)).padding(12)
+            }.font(Theme.font(size: 12)).padding(.horizontal, 10).frame(height: 32)
                 .background(Theme.surfaceContainerHigh, in: Capsule())
         }.disabled(tracks.isEmpty)
     }
@@ -199,147 +235,379 @@ struct RemoteControlView: View {
         }
     }
 
-    private var timeline: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 14) {
-                Button { playerCommand(playback?.state == "playing" ? "pause" : "play") } label: {
-                    Image(systemName: playback?.state == "playing" ? "pause.fill" : "play.fill")
-                        .font(Theme.font(.title2)).frame(width: 54, height: 54)
-                        .foregroundStyle(Theme.onPrimary).background(Theme.primary, in: Circle())
-                }.accessibilityLabel(playback?.state == "playing" ? "Pause" : "Play")
-                VStack(spacing: 4) {
-                    Slider(value: Binding(get: { position }, set: { seekPosition = $0 }), in: 0...max(1, duration), onEditingChanged: { editing in
-                        if editing { seekPosition = position }
-                        scrubbing = editing
-                        if !editing, canSeek {
-                            let target = min(max(0, seekPosition), duration)
-                            guard let ms = Int64(exactly: target.rounded(.towardZero)) else { return }
-                            playerCommand("seek_to:\(ms)")
-                            pendingSeek = target
-                            seekReset?.cancel()
-                            seekReset = Task { @MainActor in
-                                try? await Task.sleep(for: .seconds(2))
-                                if !Task.isCancelled { pendingSeek = nil }
-                            }
-                        }
-                    }).tint(Theme.primary).disabled(!canSeek).accessibilityLabel("Playback position")
-                    HStack {
-                        Text(RemoteMode.time(Int64(min(position, Double(Int64.max / 2)))))
-                        Spacer()
-                        Text(isLive ? "● LIVE" : duration > 0 ? RemoteMode.time(playback?.durationMs ?? 0) : "--:--")
-                    }.font(Theme.font(.caption2)).monospacedDigit().foregroundStyle(Theme.onSurfaceVariant)
-                }
-            }
-        }.padding(14).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 20))
+    private func seekBar(playing: Bool, browser: Bool) -> some View {
+        RemoteSeekBar(
+            positionMs: Double(playback?.positionMs ?? 0),
+            durationMs: duration,
+            isLive: browser ? false : isLive,
+            isSeekable: browser ? duration > 0 : canSeek,
+            isPlaying: playing,
+            enableVolume: supportsVolume && !isImage,
+            onSeekTo: { playerCommand("seek_to:\($0)") },
+            onVolumeUp: { vm.remote("volume_up") },
+            onVolumeDown: { vm.remote("volume_down") },
+            onPlayPause: { playPause(browser: browser) },
+            feedback: $seekFeedback
+        )
     }
 
-    private var transport: some View {
+    private var mediaControls: some View {
         HStack {
-            if mode != .context || context == "idle" {
-                action(playback?.state == "playing" ? "pause.fill" : "play.fill", playback?.state == "playing" ? "Pause" : "Play") {
-                    playerCommand(playback?.state == "playing" ? "pause" : "play")
-                }
+            if !isImage && !isLive && (vm.isExternalReceiver ? RemoteMode.supportsExternalSeek(externalProtocol: protocolID) : vm.coordinator.playerIsSeekable) {
+                action("gobackward.10", "-10s") { playerCommand("seek_back") }
+                action("goforward.10", "+10s") { playerCommand("seek_forward") }
             }
-            if !isImage && !isLive && (context != "player" || vm.coordinator.playerIsSeekable) {
-                action("backward.fill", "Rewind") { playerCommand("seek_back") }
-                action("forward.fill", "Forward") { playerCommand("seek_forward") }
-            }
-            if !vm.isExternalReceiver && !isImage && !isBrowser {
+            if !vm.isExternalReceiver && !isImage {
                 action("repeat", "Loop", tint: looping ? Theme.primary : Theme.onSurface) {
-                    looping.toggle(); playerCommand(looping ? "loop_on" : "loop_off")
+                    looping.toggle()
+                    playerCommand(looping ? "loop_on" : "loop_off")
                 }
-            }
-            if !vm.isExternalReceiver && vm.supportsBrowser && !isImage {
-                action("speaker.minus", "Vol −") { vm.remote("volume_down") }
-                action("speaker.plus", "Vol +") { vm.remote("volume_up") }
             }
             action("stop.fill", "Stop", tint: Theme.danger) { playerCommand("stop") }
-        }.padding(8).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 18))
+        }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    @ViewBuilder private var modeBottom: some View {
+        if isBrowser {
+            VStack(spacing: 8) {
+                if supportsVolume { volumeRow }
+                browserRow
+            }
+        } else if context == "player" {
+            mediaControls
+        }
+    }
+
+    private var volumeRow: some View {
+        HStack(spacing: 18) {
+            Button { vm.remote("volume_down") } label: { Image(systemName: "minus").frame(width: 44, height: 44) }.accessibilityLabel("Volume down")
+            Image(systemName: "speaker.wave.2").foregroundStyle(Theme.onSurfaceVariant)
+            Button { vm.remote("volume_up") } label: { Image(systemName: "plus").frame(width: 44, height: 44) }.accessibilityLabel("Volume up")
+        }.frame(maxWidth: .infinity).frame(minHeight: 48).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var browserRow: some View {
+        HStack {
+            action("arrow.uturn.backward", "Back") { vm.remote("back") }
+            action("arrow.forward", "Forward") { vm.browserControl("forward") }
+            action("arrow.clockwise", "Refresh") { vm.browserControl("refresh") }
+            action(maximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", maximized ? "Restore" : "Fullscreen") {
+                maximized.toggle()
+                vm.browserControl(maximized ? "maximize_video" : "restore_video")
+            }
+            action("house", "Home") { vm.remote("home") }
+            action("ellipsis", "More") { presented = .more }
+        }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var touchpad: some View {
+        ZStack(alignment: .bottom) {
+            RemoteTouchpad(imageGestures: isImage && context == "player") { event, dx, dy in
+                guard vm.isConnected else { return }
+                vm.mouse(event: event, dx: dx, dy: dy)
+            } onGestureEnd: {
+                vm.endPointerGesture()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 24))
+            VStack(spacing: 4) {
+                Image(systemName: "hand.draw").font(Theme.font(.title2)).opacity(0.15)
+                Text(isImage && context == "player"
+                     ? "1 finger: move  ·  Pinch: zoom  ·  Twist: rotate  ·  Double-tap: reset"
+                     : "1 finger: move  ·  2 fingers: scroll  ·  Pinch: zoom  ·  Tap: click  ·  Long-press+drag: drag")
+                    .multilineTextAlignment(.center)
+            }
+            .font(Theme.font(.caption2)).foregroundStyle(Theme.onSurfaceVariant.opacity(0.28))
+            .padding(22).allowsHitTesting(false).frame(maxHeight: .infinity, alignment: .center)
+            if isImage && context == "player" {
+                HStack(spacing: 16) {
+                    Button { vm.mouse(event: "rotate", dx: -90, dy: 0) } label: {
+                        Image(systemName: "rotate.left").frame(width: 44, height: 44)
+                    }.accessibilityLabel("Rotate left 90 degrees")
+                    Button { vm.mouse(event: "rotate", dx: 90, dy: 0) } label: {
+                        Image(systemName: "rotate.right").frame(width: 44, height: 44)
+                    }.accessibilityLabel("Rotate right 90 degrees")
+                }.padding(.bottom, 18)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var dpad: some View {
-        VStack(spacing: 0) {
-            pad("chevron.up", "Up", "dpad_up")
-            HStack(spacing: 0) {
-                pad("chevron.left", "Left", "dpad_left")
-                Button { vm.remote("dpad_center") } label: {
-                    Text("OK").font(Theme.font(.title3).bold()).frame(width: 88, height: 88)
-                        .foregroundStyle(Theme.onPrimary).background(Theme.primary, in: Circle())
-                }.accessibilityLabel("Select")
-                pad("chevron.right", "Right", "dpad_right")
+        ZStack {
+            Circle().fill(Theme.surfaceContainer).frame(width: 236, height: 236)
+            Circle().stroke(Theme.outlineVariant, lineWidth: 1).frame(width: 236, height: 236)
+            VStack(spacing: 4) {
+                pad("chevron.up", "Up", "dpad_up")
+                HStack(spacing: 4) {
+                    pad("chevron.left", "Left", "dpad_left")
+                    Button { vm.remote("dpad_center") } label: {
+                        Text("OK").font(Theme.font(size: 16, weight: .bold))
+                            .frame(width: 72, height: 72)
+                            .foregroundStyle(Theme.onPrimary)
+                            .background(Theme.primary, in: Circle())
+                    }.accessibilityLabel("Select")
+                    pad("chevron.right", "Right", "dpad_right")
+                }
+                pad("chevron.down", "Down", "dpad_down")
             }
-            pad("chevron.down", "Down", "dpad_down")
-        }.padding(12).background(Theme.surfaceContainerLow, in: Circle())
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func pad(_ icon: String, _ label: String, _ key: String) -> some View {
         Button { vm.remote(key) } label: {
-            Image(systemName: icon).font(Theme.font(.title2)).frame(width: 80, height: 72)
-        }.accessibilityLabel(label)
-    }
-
-    private var browserPlaybackControls: some View {
-        HStack {
-            action("speaker.minus", "Volume −") { vm.remote("volume_down") }
-            action("playpause.fill", "Play / pause") { vm.browserControl("toggle_play") }
-            action("speaker.plus", "Volume +") { vm.remote("volume_up") }
-        }.padding(8).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 18))
-    }
-
-    private var navigationRow: some View {
-        HStack {
-            action("arrow.uturn.backward", "Back") { vm.remote("back") }
-            if isBrowser {
-                action("arrow.forward", "Forward") { vm.browserControl("forward") }
-                action("arrow.clockwise", "Refresh") { vm.browserControl("refresh") }
-                action(maximized ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", maximized ? "Restore" : "Fullscreen") {
-                    maximized.toggle(); vm.browserControl(maximized ? "maximize_video" : "restore_video")
-                }
-                action("house", "Home") { vm.remote("home") }
-            }
-        }.padding(8).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 18))
+            Image(systemName: icon).font(Theme.font(size: 22, weight: .semibold))
+                .frame(width: 64, height: 52)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private var keyboard: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Select a text field on the TV, then type here.").font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurfaceVariant)
+            Text("Tap a text box on the TV, then type here — it's sent as you type.")
+                .font(Theme.font(.subheadline)).foregroundStyle(Theme.onSurfaceVariant)
             TextField("Type to send to TV…", text: $keyboardText)
+                .focused($keyboardFocused)
                 .textInputAutocapitalization(.never).autocorrectionDisabled().submitLabel(.go)
                 .padding(16).background(Theme.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 12))
                 .onChange(of: keyboardText) { text in
                     guard vm.isConnected, mode == .keyboard else { return }
                     vm.remote("text:" + Data(text.utf8).base64EncodedString())
                 }.onSubmit { vm.remote("key_enter") }
-            HStack {
-                Button("Clear") { keyboardText = "" }.buttonStyle(.bordered)
-                Spacer()
-                Button("Enter") { vm.remote("key_enter") }.buttonStyle(.borderedProminent).tint(Theme.primaryDim)
-            }
+            Button { vm.remote("key_enter") } label: { Label("Enter", systemImage: "return") }
+                .buttonStyle(.borderedProminent).tint(Theme.primaryDim).frame(maxWidth: .infinity)
             Spacer()
         }.padding(16).background(Theme.surfaceContainerLow, in: RoundedRectangle(cornerRadius: 20))
+            .onAppear { keyboardFocused = true }
     }
 
     private var settings: some View {
         NavigationStack {
             Form {
+                if vm.coordinator.qualityAvailable && vm.coordinator.videoTracks.filter({ $0.id != "auto" }).count > 1 {
+                    Section("Quality") {
+                        chipRow(vm.coordinator.videoTracks.map { ($0.name, $0.id) }, selected: vm.coordinator.qualityMaxHeight == 0 ? "auto" : "max:\(vm.coordinator.qualityMaxHeight)") { id in
+                            let value = id == "auto" ? "auto" : id.replacingOccurrences(of: "max:", with: "")
+                            playerCommand("video_quality:\(value)")
+                        }
+                    }
+                }
                 if vm.coordinator.speedAvailable {
                     Section("Speed") {
-                        Picker("Speed", selection: Binding(get: { vm.coordinator.playerSpeed }, set: { playerCommand("speed:\($0)") })) {
-                            ForEach([Float(0.5), 0.75, 1, 1.25, 1.5, 1.75, 2], id: \.self) { Text("\($0.formatted())×").tag($0) }
+                        chipRow([0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map { ($0 == 1 ? "1x" : "\($0)x", String($0)) }, selected: speedKey(vm.coordinator.playerSpeed)) { value in
+                            if let speed = Float(value) { playerCommand("speed:\(speed)") }
                         }
                     }
                 }
                 if vm.coordinator.scalingAvailable {
-                    Picker("Picture size", selection: Binding(get: { vm.coordinator.playerScaling }, set: { playerCommand("scaling:\($0)") })) {
-                        Text("Fit").tag("Fit"); Text("Crop to fill").tag("Zoom"); Text("Stretch").tag("Fill")
+                    Section("Scaling") {
+                        chipRow([("Fit", "Fit"), ("Crop to fill", "Zoom"), ("Stretch", "Fill")], selected: vm.coordinator.playerScaling) { playerCommand("scaling:\($0)") }
                     }
                 }
-                if !vm.coordinator.speedAvailable && !vm.coordinator.scalingAvailable {
-                    Text("This receiver has not reported additional playback settings.").foregroundStyle(.secondary)
+                Section("Subtitle offset") {
+                    HStack {
+                        Button("−250ms") { playerCommand("sub_offset:-250") }
+                        Spacer()
+                        Text("\(vm.coordinator.subtitleOffsetMs) ms")
+                        Spacer()
+                        Button("+250ms") { playerCommand("sub_offset:250") }
+                    }
                 }
-            }.navigationTitle("Player settings").navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showSettings = false } } }
-        }.presentationDetents([.medium, .large])
+                if vm.coordinator.audioBoostAvailable {
+                    Toggle("Audio boost", isOn: Binding(get: { vm.coordinator.audioBoost }, set: { _ in playerCommand("audio_boost") }))
+                }
+                Section("Player engine") {
+                    chipRow([("ExoPlayer", "exo"), ("MPV", "mpv")], selected: vm.coordinator.playerEngine) { playerCommand("switch_player:\($0)") }
+                }
+                if !isAudio {
+                    Button { presented = .addSubtitle } label: { Label("Add subtitle…", systemImage: "captions.bubble") }
+                }
+            }
+            .navigationTitle("Player settings").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
+        }
+    }
+
+    private var subtitles: some View {
+        NavigationStack {
+            List {
+                Button("Off") { playerCommand("sub_track:none"); presented = nil }
+                ForEach(groupedSubtitles, id: \.key) { group in
+                    Section(group.label) {
+                        ForEach(group.tracks) { track in
+                            Button { playerCommand("sub_track:\(track.id)"); presented = nil } label: {
+                                HStack {
+                                    Text(track.name)
+                                    Spacer()
+                                    if track.selected { Image(systemName: "checkmark").foregroundStyle(Theme.primary) }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Subtitles").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
+        }
+    }
+
+    private var addSubtitle: some View {
+        NavigationStack {
+            Form {
+                TextField("Subtitle URL (.srt / .vtt)", text: $subtitleURL)
+                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+            .navigationTitle("Add subtitle").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { presented = nil } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        let url = subtitleURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !url.isEmpty else { return }
+                        playerCommand("add_subtitle:\(url)")
+                        subtitleURL = ""
+                        presented = nil
+                    }.disabled(subtitleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+    }
+
+    private var browserMore: some View {
+        NavigationStack {
+            VStack(spacing: 18) {
+                Text("More controls").font(Theme.font(.headline))
+                HStack {
+                    action("shield", "Ad Block") { vm.browserControl("toggle_ublock"); presented = nil }
+                    action("square.stack.3d.up", "Source") { vm.browserControl("video_target_cycle"); presented = nil }
+                    action("speaker.wave.2", "Unmute") { vm.browserControl("video_unmute"); presented = nil }
+                    action("curlybraces", "Scripts") { vm.queryUserScripts(); presented = .scripts }
+                    action("globe", "User Agent") { vm.queryUserAgents(); presented = .agents }
+                }
+                Spacer()
+            }.padding(24)
+        }.presentationDetents([.medium])
+    }
+
+    private var scripts: some View {
+        NavigationStack {
+            List {
+                if vm.coordinator.installedUserScripts.isEmpty {
+                    Text("None installed.").foregroundStyle(Theme.onSurfaceVariant)
+                }
+                ForEach(vm.coordinator.installedUserScripts, id: \.self) { name in
+                    HStack {
+                        Text(name)
+                        Spacer()
+                        Button { vm.installUserScript(name: name, content: ""); vm.queryUserScripts() } label: {
+                            Image(systemName: "trash").foregroundStyle(Theme.danger)
+                        }.accessibilityLabel("Remove \(name)")
+                    }
+                }
+            }
+            .navigationTitle("User scripts on TV").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { presented = nil } }
+                ToolbarItem(placement: .confirmationAction) { Button("Install") { importingScript = true } }
+            }
+        }
+    }
+
+    private var agents: some View {
+        NavigationStack {
+            List {
+                Button { vm.setUserAgent(name: "", value: "", save: false) } label: {
+                    agentRow("Default (Mobile)", selected: vm.coordinator.userAgentActive.isEmpty)
+                }
+                ForEach(RemoteUserAgents.presets, id: \.label) { preset in
+                    Button { vm.setUserAgent(name: preset.label, value: preset.value, save: false) } label: {
+                        agentRow(preset.label, selected: vm.coordinator.userAgentActive == preset.label)
+                    }
+                }
+                if !vm.coordinator.savedUserAgents.isEmpty {
+                    Section("Saved on TV") {
+                        ForEach(vm.coordinator.savedUserAgents, id: \.name) { entry in
+                            HStack {
+                                Button { vm.setUserAgent(name: entry.name, value: entry.value, save: true) } label: {
+                                    agentRow(entry.name, selected: vm.coordinator.userAgentActive == entry.name)
+                                }
+                                Button { vm.setUserAgent(name: entry.name, value: "", save: true) } label: {
+                                    Image(systemName: "trash").foregroundStyle(Theme.danger)
+                                }.accessibilityLabel("Remove \(entry.name)")
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("User Agent (TV Browser)").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { presented = nil } }
+                ToolbarItem(placement: .confirmationAction) { Button("Add") { addingAgent = true } }
+            }
+            .alert("Add custom user agent", isPresented: $addingAgent) {
+                TextField("Name", text: $agentName)
+                TextField("User agent string", text: $agentValue)
+                Button("Save") {
+                    let name = agentName.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let value = agentValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !name.isEmpty, !value.isEmpty else { return }
+                    vm.setUserAgent(name: name, value: value, save: true)
+                    agentName = ""
+                    agentValue = ""
+                }
+                Button("Cancel", role: .cancel) {}
+            }
+        }
+    }
+
+    private func agentRow(_ label: String, selected: Bool) -> some View {
+        HStack {
+            Text(label).fontWeight(selected ? .semibold : .regular)
+            Spacer()
+            if selected { Image(systemName: "checkmark").foregroundStyle(Theme.primary) }
+        }
+    }
+
+    private func chipRow(_ options: [(String, String)], selected: String, onSelect: @escaping (String) -> Void) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack {
+                ForEach(options, id: \.1) { option in
+                    Button(option.0) { onSelect(option.1) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(option.1 == selected ? Theme.primaryDim : Theme.surfaceContainerHigh)
+                }
+            }
+        }
+    }
+
+    private var groupedSubtitles: [SubtitleGroup] {
+        let tracks = vm.coordinator.subtitleTracks.filter { $0.id != "off" && $0.id != "none" }
+        let embedded = tracks.filter { !isExternalSubtitle($0) }
+        let remote = tracks.filter { isExternalSubtitle($0) && !$0.name.contains("OpenSubtitles #") }
+        let external = tracks.filter { isExternalSubtitle($0) && $0.name.contains("OpenSubtitles #") }
+        return [
+            SubtitleGroup(key: "embedded", label: "Embedded", tracks: embedded),
+            SubtitleGroup(key: "remote", label: "Phone Remote", tracks: remote),
+            SubtitleGroup(key: "external", label: "External", tracks: external),
+        ].filter { !$0.tracks.isEmpty }
+    }
+
+    private func isExternalSubtitle(_ track: MediaTrack) -> Bool {
+        track.type == "external_sub" || track.id.hasPrefix("external_") || track.id.contains("://")
+    }
+
+    private func speedKey(_ value: Float) -> String {
+        let speeds: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+        let nearest = speeds.min { abs($0 - value) < abs($1 - value) } ?? 1
+        return String(nearest)
+    }
+
+    private func playPause(browser: Bool) {
+        if browser { vm.browserControl("toggle_play") }
+        else { playerCommand(playback?.state == "playing" ? "pause" : "play") }
     }
 
     private func action(_ icon: String, _ label: String, tint: Color = Theme.onSurface, perform: @escaping () -> Void) -> some View {
@@ -353,12 +621,31 @@ struct RemoteControlView: View {
 
     private func playerCommand(_ command: String) {
         guard vm.isConnected else { return }
-        if isBrowser {
-            vm.browserControl(command == "play" || command == "pause" ? "toggle_play" : command)
-        } else { vm.control(command) }
+        if isBrowser { vm.browserControl(command == "play" || command == "pause" ? "toggle_play" : command) }
+        else { vm.control(command) }
     }
 
-    private func resetSeek() {
-        seekReset?.cancel(); pendingSeek = nil; scrubbing = false; seekPosition = 0
+    private enum Presented: String, Identifiable {
+        case settings, subtitles, addSubtitle, more, scripts, agents
+        var id: String { rawValue }
     }
+}
+
+private struct SubtitleGroup {
+    let key: String
+    let label: String
+    let tracks: [MediaTrack]
+}
+
+enum RemoteUserAgents {
+    static let presets: [(label: String, value: String)] = [
+        ("Chrome — Android", "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"),
+        ("Chrome — Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+        ("Chrome — macOS", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+        ("Firefox — Android", "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0"),
+        ("Firefox — Windows", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"),
+        ("Safari — iPhone", "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"),
+        ("Safari — macOS", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"),
+        ("Samsung Internet — Android", "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/122.0.0.0 Mobile Safari/537.36"),
+    ]
 }

@@ -3,7 +3,6 @@ import SwiftUI
 struct IptvDetailScreen: View {
     let playlistId: UUID
 
-    @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var iptv: IptvStore
 
@@ -27,7 +26,19 @@ struct IptvDetailScreen: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
             } else {
-                Text("Playlist not found.").foregroundColor(Theme.onSurfaceVariant)
+                VStack(spacing: 12) {
+                    HStack(spacing: 12) {
+                        DashboardNavigationButton()
+                        ScreenBackButton(destination: .iptv, accessibilityLabel: "Back to IPTV")
+                        Text("IPTV").font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface)
+                        Spacer()
+                    }
+                    Spacer()
+                    Text("Playlist not found.").foregroundColor(Theme.onSurfaceVariant)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
             }
 
             if let toast {
@@ -45,9 +56,8 @@ struct IptvDetailScreen: View {
 
     private func header(_ pl: IptvPlaylist) -> some View {
         HStack(spacing: 12) {
-            Button { nav.navigate(to: .iptv) } label: {
-                Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-            }
+            DashboardNavigationButton()
+            ScreenBackButton(destination: .iptv, accessibilityLabel: "Back to IPTV")
             VStack(alignment: .leading, spacing: 2) {
                 Text(pl.name).font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface).lineLimit(1)
                 Text("\(pl.channelCount) channels").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)

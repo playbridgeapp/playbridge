@@ -28,7 +28,8 @@ struct IptvScreen: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
         .sheet(isPresented: $showAdd) {
             IptvAddSheet().environmentObject(iptv)
@@ -37,11 +38,7 @@ struct IptvScreen: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Button { nav.navigate(to: .dashboard) } label: {
-                Image(systemName: "chevron.left")
-                    .font(Theme.font(size: 18, weight: .semibold))
-                    .foregroundColor(Theme.onSurface)
-            }
+            DashboardNavigationButton()
             VStack(alignment: .leading, spacing: 2) {
                 Text("IPTV").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                 Text("Live channels from your playlists").font(Theme.font(size: 12)).foregroundColor(Theme.onSurfaceVariant)

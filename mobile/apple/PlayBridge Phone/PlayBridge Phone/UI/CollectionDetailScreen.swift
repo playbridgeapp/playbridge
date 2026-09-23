@@ -3,7 +3,6 @@ import SwiftUI
 struct CollectionDetailScreen: View {
     let collectionId: UUID
 
-    @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
     @EnvironmentObject private var browser: BrowserStore
@@ -33,7 +32,23 @@ struct CollectionDetailScreen: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
             } else {
-                Text("Collection not found.").foregroundColor(Theme.onSurfaceVariant)
+                if embedded {
+                    Text("Collection not found.").foregroundColor(Theme.onSurfaceVariant)
+                } else {
+                    VStack(spacing: 12) {
+                        HStack(spacing: 12) {
+                            DashboardNavigationButton()
+                            ScreenBackButton(destination: .collections, accessibilityLabel: "Back to Collections")
+                            Text("Collections").font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface)
+                            Spacer()
+                        }
+                        Spacer()
+                        Text("Collection not found.").foregroundColor(Theme.onSurfaceVariant)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 16)
+                }
             }
 
             if let toast {
@@ -52,9 +67,8 @@ struct CollectionDetailScreen: View {
     private func header(_ c: MediaCollection) -> some View {
         HStack(spacing: 12) {
             if !embedded {
-                Button { nav.navigate(to: .collections) } label: {
-                    Image(systemName: "chevron.left").font(Theme.font(size: 18, weight: .semibold)).foregroundColor(Theme.onSurface)
-                }
+                DashboardNavigationButton()
+                ScreenBackButton(destination: .collections, accessibilityLabel: "Back to Collections")
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(c.name).font(Theme.font(size: 20, weight: .bold)).foregroundColor(Theme.onSurface).lineLimit(1)

@@ -2,38 +2,21 @@ import SwiftUI
 
 struct RemoteControlScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
-    @EnvironmentObject private var nav: NavigationViewModel
     @State private var showCastLink = false
     @State private var castURL = ""
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 12) {
-                Button { nav.navigate(to: nav.remoteOrigin ?? nav.lastMainScreen) } label: {
-                    Image(systemName: "arrow.left").frame(width: 44, height: 44)
-                }.accessibilityLabel("Back")
-                Text("Remote").font(Theme.font(.title2).bold())
+        VStack(spacing: 8) {
+            HStack(spacing: 4) {
+                DashboardNavigationButton()
+                Text("Remote").font(Theme.font(.title3).bold())
                 Spacer()
                 Button { showCastLink = true } label: {
                     Image(systemName: "link").frame(width: 44, height: 44)
                 }.accessibilityLabel("Cast a link").disabled(!vm.isConnected)
             }
-            HStack(spacing: 10) {
-                Image(systemName: "tv").foregroundStyle(Theme.primary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(vm.receiverName ?? "Your TV").font(Theme.font(.subheadline).bold()).lineLimit(1)
-                    Text(vm.isConnected ? "Connected" : "Disconnected")
-                        .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
-                }
-                Spacer()
-                Text(vm.externalReceiver?.protocolName ?? "PlayBridge")
-                    .font(Theme.font(.caption2).bold()).foregroundStyle(Theme.primary)
-                    .padding(.horizontal, 10).padding(.vertical, 6)
-                    .background(Theme.primary.opacity(0.12), in: Capsule())
-                Circle().fill(vm.isConnected ? Color.green : Theme.onSurfaceVariant).frame(width: 7, height: 7)
-            }
-            .padding(14).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 20))
-            RemoteControlView()
+            statusChip
+            RemoteControlView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, 16).padding(.bottom, 12)
         .foregroundStyle(Theme.onSurface)
@@ -54,5 +37,29 @@ struct RemoteControlScreen: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showCastLink = false } } }
             }.presentationDetents([.medium])
         }
+    }
+
+    private var statusChip: some View {
+        let connected = vm.isConnected
+        let accent = connected ? Color.green : Theme.onSurfaceVariant
+        let name = vm.receiverName ?? (vm.isExternalReceiver ? "receiver" : "TV")
+        let label = vm.isExternalReceiver ? "Casting to \(name)" : (connected ? "Watching on \(name)" : "Not connected")
+        return HStack(spacing: 8) {
+            Image(systemName: vm.isExternalReceiver ? "airplayvideo" : "tv")
+                .font(Theme.font(size: 14, weight: .semibold))
+            Text(label).font(Theme.font(size: 14, weight: .medium)).lineLimit(1)
+            if let protocolName = vm.externalReceiver?.protocolName {
+                Text(protocolName)
+                    .font(Theme.font(size: 10, weight: .bold))
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(accent.opacity(0.25), in: RoundedRectangle(cornerRadius: 4))
+            }
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, 14)
+        .frame(height: 36)
+        .frame(maxWidth: 280)
+        .background(accent.opacity(0.15), in: Capsule())
+        .overlay(Capsule().stroke(accent.opacity(0.5), lineWidth: 1))
     }
 }

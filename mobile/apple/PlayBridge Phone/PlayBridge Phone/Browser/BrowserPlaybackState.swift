@@ -17,6 +17,19 @@ enum BrowserPlaybackScript {
     static let world = WKContentWorld.world(name: "PlayBridgePlaybackState")
     static let source = #"""
     (() => {
+      const pauseMessage = 'playbridge:pause-media';
+      function pauseMediaInFrame() {
+        for (const media of document.querySelectorAll('video,audio')) {
+          try { media.pause(); } catch (_) {}
+        }
+        for (let index = 0; index < window.frames.length; index++) {
+          try { window.frames[index].postMessage(pauseMessage, '*'); } catch (_) {}
+        }
+      }
+      Object.defineProperty(window, '__playbridgePauseMedia', {value: pauseMediaInFrame});
+      window.addEventListener('message', event => {
+        if (event.data === pauseMessage && event.source === window.parent) pauseMediaInFrame();
+      });
       const frame = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
       const samples = new WeakMap();
       let timer = null, lastReport = 0, lastPlaying = false;

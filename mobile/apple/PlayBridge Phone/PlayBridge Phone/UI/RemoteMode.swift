@@ -12,19 +12,35 @@ enum RemoteMode: String, CaseIterable, Identifiable {
         }
     }
 
-    static func available(context: String, external: Bool, browser: Bool) -> [Self] {
-        guard !external else { return [.context] }
-        var modes: [Self] = [.context, .dpad]
-        if browser { modes.append(.touchpad) }
-        if browser && context == "browser" { modes.append(.keyboard) }
+    static func supportsRemote(externalProtocol: String?) -> Bool {
+        externalProtocol == nil || externalProtocol == "roku"
+    }
+
+    static func supportsVolume(externalProtocol: String?) -> Bool {
+        externalProtocol == nil || externalProtocol == "google_cast" || externalProtocol == "roku"
+    }
+
+    static func supportsExternalSeek(externalProtocol: String?) -> Bool {
+        externalProtocol == "google_cast" || externalProtocol == "dlna"
+    }
+
+    static func available(context: String, external: Bool, supportsRemote: Bool) -> [Self] {
+        var modes: [Self] = [.context]
+        if supportsRemote { modes.append(.dpad) }
+        if !external { modes.append(.touchpad) }
+        if !external && context == "browser" { modes.append(.keyboard) }
         return modes
     }
 
-    static func canSeek(context: String, externalProtocol: String?, duration: Int64, isLive: Bool, isSeekable: Bool) -> Bool {
-        guard duration > 0, context == "player" || context == "browser" else { return false }
-        if let externalProtocol, !["google_cast", "dlna"].contains(externalProtocol) { return false }
-        // Native player settings must not disable a subsequent browser timeline.
-        return context == "browser" || (!isLive && isSeekable)
+    static func canSeek(context: String, externalProtocol: String?, duration: Int64, isLive: Bool, isSeekable: Bool, isImage: Bool = false) -> Bool {
+        guard duration > 0, !isImage else { return false }
+        switch externalProtocol == nil ? context : "player" {
+        case "browser": return true
+        case "player":
+            if externalProtocol != nil { return supportsExternalSeek(externalProtocol: externalProtocol) && !isLive }
+            return !isLive && isSeekable
+        default: return false
+        }
     }
 
     static func time(_ milliseconds: Int64) -> String {

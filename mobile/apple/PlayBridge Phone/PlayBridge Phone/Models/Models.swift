@@ -75,6 +75,7 @@ struct MediaTrack: Identifiable, Equatable {
     let id: String
     let name: String
     let selected: Bool
+    var type: String? = nil
 }
 
 /// One entry in the TV's playlist (the `playlist_status` message).

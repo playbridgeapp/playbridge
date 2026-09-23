@@ -349,6 +349,10 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
     weak var tab: BrowserTab?
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        if !Thread.isMainThread {
+            DispatchQueue.main.async { [weak self] in self?.userContentController(controller, didReceive: message) }
+            return
+        }
         if message.name == "playbackState" {
             guard message.webView === tab?.loadedWebView else { return }
             tab?.recordPlaybackState(message.body)

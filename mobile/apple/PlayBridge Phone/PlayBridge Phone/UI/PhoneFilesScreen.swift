@@ -5,7 +5,6 @@ import QuickLookThumbnailing
 
 struct PhoneFilesScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
-    @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
     @EnvironmentObject private var collections: CollectionsStore
     @EnvironmentObject private var browser: BrowserStore
@@ -34,8 +33,7 @@ struct PhoneFilesScreen: View {
     var body: some View {
         VStack(spacing: 12) {
             HStack {
-                Button { nav.navigate(to: .dashboard) } label: { Image(systemName: "chevron.left") }
-                    .accessibilityLabel("Back to dashboard")
+                DashboardNavigationButton()
                 Text("Media Library").font(Theme.font(.title2).bold())
                 Spacer()
                 Button { showDevices = true } label: { Image(systemName: vm.isConnected ? "tv.fill" : "tv") }

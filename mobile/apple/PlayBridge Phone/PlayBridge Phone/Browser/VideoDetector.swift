@@ -171,7 +171,10 @@ final class VideoDetector: ObservableObject {
         }
 
         let contentType = (body["contentType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        let kind = DetectedVideo.classify(url: url, contentType: contentType)
+        let explicitKind: StreamKind? = body["mediaKind"] as? String == StreamKind.subtitle.rawValue
+            ? .subtitle
+            : nil
+        let kind = explicitKind ?? DetectedVideo.classify(url: url, contentType: contentType)
 
         let detectedBy = (body["detectedBy"] as? String) ?? "unknown"
         if seen.contains(url), let idx = videos.firstIndex(where: { $0.url == url }) {
@@ -181,7 +184,10 @@ final class VideoDetector: ObservableObject {
                 updated.detectedBy = detectedBy
             }
             let oldKind = updated.kind
-            if let ct = contentType, updated.contentType == nil {
+            if let explicitKind, explicitKind != updated.kind {
+                updated.contentType = contentType ?? updated.contentType
+                updated.kind = explicitKind
+            } else if let ct = contentType, updated.contentType == nil {
                 updated.contentType = ct
                 updated.kind = DetectedVideo.classify(url: url, contentType: ct)
             }
