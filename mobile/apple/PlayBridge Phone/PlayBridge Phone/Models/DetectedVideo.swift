@@ -56,6 +56,20 @@ struct DetectedVideo: Identifiable, Hashable {
     }
 }
 
+enum SubtitleOrdering {
+    /// First detection is stable across routine repeat observations on SPA pages.
+    static func newestFirst(_ videos: [DetectedVideo]) -> [DetectedVideo] {
+        videos.enumerated()
+            .filter { $0.element.isSubtitle }
+            .sorted { lhs, rhs in
+                lhs.element.timestamp == rhs.element.timestamp
+                    ? lhs.offset < rhs.offset
+                    : lhs.element.timestamp > rhs.element.timestamp
+            }
+            .map(\.element)
+    }
+}
+
 /// An HLS/DASH quality variant. Port of `VideoQuality` in `cast/HlsParser.kt`.
 struct VideoQuality: Identifiable, Equatable {
     var id: String { "\(url)|\(label)|\(bandwidth)|\(codecs ?? "")" }

@@ -9,6 +9,7 @@ import UIKit
 /// `mediaHeaders`). One instance per browser tab.
 final class VideoDetector: ObservableObject {
     @Published private(set) var videos: [DetectedVideo] = []
+    @Published private(set) var subtitlePreviews: [String: SubtitlePreviewState] = [:]
     
     @Published private(set) var qualities: [String: [VideoQuality]] = [:]
     @Published private(set) var thumbnails: [String: UIImage] = [:]
@@ -103,13 +104,39 @@ final class VideoDetector: ObservableObject {
         manifests[video.id] = nil
         thumbnails[video.id] = nil
         thumbnailStates[video.id] = nil
-        guard !video.isSubtitle else { return }
+        if video.isSubtitle {
+            subtitlePreviews[video.id] = nil
+            return
+        }
         if video.kind == .hls || video.kind == .dash {
             pending.append(Job(video: video, revision: revision, work: .qualities))
         }
         thumbnailStates[video.id] = .loading
         pending.append(Job(video: video, revision: revision, work: .thumbnail))
         startPendingWork()
+    }
+
+    @MainActor
+    func loadSubtitlePreview(for video: DetectedVideo) async {
+        guard video.isSubtitle, subtitlePreviews[video.id] == nil else { return }
+        let revision = revisions[video.id]
+        subtitlePreviews[video.id] = .loading
+        let sample = await SubtitlePreview.fetch(url: video.url, headers: Self.mediaHeaders(for: video))
+        let language = if let sample {
+            await Task.detached(priority: .utility) {
+                SubtitleLanguageDetector.detect(sample.languageText)
+            }.value
+        } else {
+            nil as String?
+        }
+        guard revisions[video.id] == revision else { return }
+        if Task.isCancelled {
+            subtitlePreviews[video.id] = nil
+        } else if let sample {
+            subtitlePreviews[video.id] = .ready(preview: sample.preview, language: language)
+        } else {
+            subtitlePreviews[video.id] = .unavailable
+        }
     }
 
     private func startPendingWork() {
@@ -181,8 +208,10 @@ final class VideoDetector: ObservableObject {
         let requestHeaders = Self.requestHeaders(
             originUrl: originUrl,
             userAgent: body["ua"] as? String,
-            // Only fetch/XHR requests carry an Origin; DOM media loads do not.
-            includeOrigin: detectedBy.hasPrefix("fetch") || detectedBy.hasPrefix("xhr")
+            // Subtitle body/disposition detections also come from fetch/XHR.
+            // DOM media loads do not carry an Origin.
+            includeOrigin: detectedBy.hasPrefix("fetch") || detectedBy.hasPrefix("xhr") ||
+                detectedBy == "body_content_subtitle" || detectedBy == "subtitle_disposition"
         )
         if seen.contains(url), let idx = videos.firstIndex(where: { $0.url == url }) {
             var updated = videos[idx]
@@ -258,6 +287,7 @@ final class VideoDetector: ObservableObject {
         playbackDiagnostics = [:]
 #endif
         lifecycleIndex = 0
+        subtitlePreviews = [:]
         manifests = [:]
         // Invalidate before cancelling: uncooperative media callbacks may arrive late,
         // including for the same URL detected again on the new page.

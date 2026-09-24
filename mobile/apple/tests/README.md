@@ -39,6 +39,11 @@ exclusion, late results after navigation (including the same URL), and detector
 teardown without retention by its tasks. They do not test native AVFoundation
 cancellation or real device background/suspension behavior.
 
+The fixture runner also checks SRT/VTT subtitle sample parsing, three-cue display
+limits, longer language samples, confidence gating, newest-first subtitle order,
+markup cleanup, malformed-cue fallback, and empty previews. Network authentication
+and actual sheet rendering still require an iPhone or simulator check.
+
 Run all standalone fixtures (macOS Swift toolchain and Node required):
 
 ```sh

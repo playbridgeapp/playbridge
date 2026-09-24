@@ -12,9 +12,13 @@ compiler=(swiftc -module-cache-path "$build_dir/modules" "$source_root/Browser/S
   "$test_root/CastStreamRankingTests.swift" -o "$build_dir/ranking"
 "$build_dir/ranking"
 "${compiler[@]}" "$source_root/Models/DetectedVideo.swift" \
+  "$source_root/Browser/SubtitlePreview.swift" \
   "$source_root/Browser/VideoDetector.swift" "$test_root/VideoDetectorEnrichmentTests.swift" \
   -o "$build_dir/enrichment"
 "$build_dir/enrichment"
+"${compiler[@]}" "$source_root/Browser/SubtitlePreview.swift" \
+  "$test_root/SubtitlePreviewTests.swift" -o "$build_dir/subtitle-preview"
+"$build_dir/subtitle-preview"
 "${compiler[@]}" "$source_root/Models/DetectedVideo.swift" \
   "$source_root/Browser/HLSParser.swift" "$source_root/Browser/HLSPreviewSample.swift" \
   "$test_root/HLSPreviewSampleTests.swift" -o "$build_dir/sample"

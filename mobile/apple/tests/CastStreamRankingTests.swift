@@ -52,6 +52,14 @@ struct CastStreamRankingTests {
         precondition(dashQualities.count == 2 && dashQualities.allSatisfy { $0.url == dash.url })
 
         let input = [child, file, ladder, dash]
+        var olderSubtitle = video("older.vtt", .subtitle)
+        olderSubtitle.timestamp = 1_000
+        olderSubtitle.lastSeen = 50_000
+        var newerSubtitle = video("newer.vtt", .subtitle)
+        newerSubtitle.timestamp = 2_000
+        newerSubtitle.lastSeen = 2_000
+        precondition(SubtitleOrdering.newestFirst([olderSubtitle, file, newerSubtitle]).map(\.id) ==
+                     [newerSubtitle.id, olderSubtitle.id], "Repeat observations must not move older subtitles above new ones")
         let pending = CastStreamRanking.sorted(input, qualities: [:])
         precondition(pending.map(\.id) == [child.id, ladder.id, dash.id, file.id], "Pending ties preserve detection order")
         let enriched = CastStreamRanking.sorted(input, qualities: [ladder.id: hlsQualities, dash.id: dashQualities])

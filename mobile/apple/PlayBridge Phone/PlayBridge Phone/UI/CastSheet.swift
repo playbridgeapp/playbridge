@@ -79,7 +79,7 @@ struct CastSheet: View {
     @State private var playbackError: String?
 
     private var streams: [DetectedVideo] { videos.filter { !$0.isSubtitle } }
-    private var subtitles: [DetectedVideo] { videos.filter { $0.isSubtitle } }
+    private var subtitles: [DetectedVideo] { SubtitleOrdering.newestFirst(videos) }
 
     private var sendEnabled: Bool {
         if playbackPreparationID != nil { return false }
@@ -475,7 +475,7 @@ struct CastSheet: View {
     }
 
     private var subtitlesListSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        LazyVStack(alignment: .leading, spacing: 12) {
             if subtitles.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "captions.bubble")
@@ -501,14 +501,42 @@ struct CastSheet: View {
                                 .foregroundColor(attachedSubtitles.contains(sub.url) ? Theme.primary : Theme.onSurfaceVariant)
                             
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(sub.displayTitle)
-                                    .font(Theme.font(.subheadline))
-                                    .foregroundColor(Theme.onSurface)
-                                    .lineLimit(1)
+                                HStack(spacing: 6) {
+                                    Text(sub.displayTitle)
+                                        .font(Theme.font(.subheadline))
+                                        .foregroundColor(Theme.onSurface)
+                                        .lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    if case .ready(_, let language) = detector.subtitlePreviews[sub.id] {
+                                        Text(language.map { "Likely \($0)" } ?? "Language unknown")
+                                            .font(Theme.font(.caption))
+                                            .foregroundColor(language == nil ? Theme.onSurfaceVariant : Theme.primary)
+                                            .lineLimit(1)
+                                            .frame(maxWidth: 132, alignment: .trailing)
+                                    }
+                                }
+                                Text("Detected \(Date(timeIntervalSince1970: Double(sub.timestamp) / 1_000).formatted(date: .omitted, time: .standard))")
+                                    .font(Theme.font(.caption))
+                                    .foregroundColor(Theme.onSurfaceVariant)
                                 Text(sub.host)
                                     .font(Theme.font(.caption))
                                     .foregroundColor(Theme.onSurfaceVariant)
                                     .lineLimit(1)
+                                switch detector.subtitlePreviews[sub.id] {
+                                case .loading:
+                                    Text("Loading preview…")
+                                        .font(Theme.font(.caption))
+                                        .foregroundColor(Theme.onSurfaceVariant)
+                                        .italic()
+                                case .ready(let preview, _):
+                                    Text(preview)
+                                        .font(Theme.font(.caption))
+                                        .foregroundColor(Theme.primary)
+                                        .lineLimit(2)
+                                        .italic()
+                                case .unavailable, .none:
+                                    EmptyView()
+                                }
                             }
                             Spacer()
                         }
@@ -517,6 +545,9 @@ struct CastSheet: View {
                         .cornerRadius(12)
                     }
                     .buttonStyle(.plain)
+                    .task(id: sub.headers) {
+                        await detector.loadSubtitlePreview(for: sub)
+                    }
                 }
             }
         }

@@ -81,6 +81,8 @@ data class DetectedVideo(
     var hlsPlaylist: HlsPlaylist? = null,
     var subtitlePreview: String? = null,
     var subtitlePreviewChecked: Boolean = false,
+    @kotlinx.serialization.Transient
+    var subtitleLanguage: String? = null,
     var isPlayable: Boolean? = null,
     @kotlinx.serialization.Transient
     val playlistPayload: List<playbridge.PlayPayload>? = null,
@@ -386,6 +388,10 @@ fun buildCastSheetAudio(videos: List<DetectedVideo>): List<DetectedVideo> =
 fun buildCastSheetImages(videos: List<DetectedVideo>): List<DetectedVideo> =
     videos.filter { it.isImage }.sortedByDescending { it.timestamp }
 
+/** First detection is stable across routine repeat observations on SPA pages. */
+fun newestSubtitlesFirst(videos: List<DetectedVideo>): List<DetectedVideo> =
+    videos.filter { it.isSubtitle }.sortedByDescending { it.timestamp }
+
 /**
  * Every viable video that should be enriched before the cast sheet opens.
  *
@@ -634,6 +640,7 @@ object VideoDetector {
         fileSize: Boolean = false,
         manifest: Boolean = false,
         thumbnail: Boolean = false,
+        subtitle: Boolean = false,
     ) {
         tabVideos.values.forEach { videos ->
             videos.forEach trackedLoop@ { tracked ->
@@ -642,6 +649,11 @@ object VideoDetector {
                 if (fileSize) {
                     tracked.fileSize = source.fileSize
                     tracked.fileSizeChecked = source.fileSizeChecked
+                }
+                if (subtitle && tracked.timestamp == source.timestamp) {
+                    tracked.subtitlePreview = source.subtitlePreview
+                    tracked.subtitlePreviewChecked = source.subtitlePreviewChecked
+                    tracked.subtitleLanguage = source.subtitleLanguage
                 }
                 if (manifest && shouldApplyManifestProbe(source, tracked)) {
                     tracked.qualities = source.qualities
@@ -1085,7 +1097,7 @@ object VideoDetector {
             return video.subtitlePreview
         }
 
-        return withContext(Dispatchers.IO) {
+        val preview = withContext(Dispatchers.IO) {
             try {
                 val url = URL(video.url)
                 val connection = url.openConnection() as HttpURLConnection
@@ -1094,13 +1106,14 @@ object VideoDetector {
                 connection.readTimeout = 5000
                 connection.instanceFollowRedirects = true
 
-                // Set Range header to fetch only first 4KB to ensure we get a few cues
-                connection.setRequestProperty("Range", "bytes=0-4096")
+                // A larger bounded sample gives language ID several dialogue cues.
+                connection.setRequestProperty("Range", "bytes=0-8191")
 
                 // Forward the page's request headers (Referer / Cookie / User-Agent) — many
                 // subtitle hosts 403 a bare request, which is why previews sometimes don't load.
                 val hdrs = video.headers ?: emptyMap()
-                hdrs.forEach { (k, v) -> runCatching { connection.setRequestProperty(k, v) } }
+                hdrs.filterKeys { !it.equals("Range", ignoreCase = true) }
+                    .forEach { (k, v) -> runCatching { connection.setRequestProperty(k, v) } }
                 if (!video.originUrl.isNullOrEmpty() && hdrs.keys.none { it.equals("Referer", ignoreCase = true) }) {
                     connection.setRequestProperty("Referer", video.originUrl)
                 }
@@ -1112,7 +1125,18 @@ object VideoDetector {
 
                 // Check if response is partial content (206) or OK (200)
                 if (connection.responseCode in 200..299) {
-                    val content = connection.inputStream.bufferedReader().use { it.readText() }
+                    // Hosts may ignore Range, so cap the bytes actually consumed too.
+                    val content = connection.inputStream.use { input ->
+                        val output = ByteArrayOutputStream(8192)
+                        val buffer = ByteArray(4096)
+                        while (output.size() < 8192) {
+                            val count = input.read(buffer, 0, minOf(buffer.size, 8192 - output.size()))
+                            if (count <= 0) break
+                            output.write(buffer, 0, count)
+                        }
+                        output.toString(Charsets.UTF_8.name())
+                    }
+                    connection.disconnect()
 
                     if (content.isNotEmpty()) {
                         val cues = if (video.url.endsWith(".vtt", ignoreCase = true) ||
@@ -1122,10 +1146,11 @@ object VideoDetector {
                             parseSrt(content)
                         }
 
-                        // Extract first 3 cues
-                        val previewText = cues.take(3).joinToString(" • ") {
-                            it.text.replace("\n", " ")
-                        }
+                        val cueText = cues.take(20).map { cue ->
+                            cue.text.replace(Regex("<[^>]+>"), "")
+                                .replace("\n", " ").trim()
+                        }.filter { it.isNotEmpty() }
+                        val previewText = cueText.take(3).joinToString(" • ")
 
                         if (previewText.isNotEmpty()) {
                             video.subtitlePreview = previewText
@@ -1140,6 +1165,12 @@ object VideoDetector {
                             video.subtitlePreview = fallbackLines.joinToString(" • ")
                         }
 
+                        val languageText = (if (cueText.isNotEmpty()) {
+                            cueText.joinToString(" ")
+                        } else {
+                            video.subtitlePreview.orEmpty()
+                        }).take(200)
+                        video.subtitleLanguage = SubtitleLanguageDetector.detect(languageText)
                         video.subtitlePreviewChecked = true
                         debugLog(
                             "Subtitle preview for ${video.url.take(30)}: ${video.subtitlePreview}",
@@ -1154,12 +1185,19 @@ object VideoDetector {
                     video.subtitlePreviewChecked = true
                     null
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching subtitle preview: ${e.message}")
+                debugLog("Subtitle preview unavailable (${e.javaClass.simpleName})")
                 video.subtitlePreviewChecked = true
                 null
             }
         }
+        withContext(Dispatchers.Main) {
+            syncProbeStateToTrackedCopies(video, subtitle = true)
+            notifyVideoUpdated()
+        }
+        return preview
     }
 
     // Subtitle parsing helpers copied from TV's SubtitleManager

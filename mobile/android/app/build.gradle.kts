@@ -237,6 +237,7 @@ androidComponents {
 
 dependencies {
     implementation(project(":webrtc-runtime"))
+    implementation(libs.mlkit.language.id)
     implementation(libs.androidx.palette.ktx)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

@@ -100,6 +100,39 @@ class DiscoveredTv {
       );
 }
 
+/// Keeps the previous completed scan visible while fresh results stream in.
+/// A failed scan retains known devices instead of falsely marking them offline.
+@visibleForTesting
+class DiscoveryScanResults {
+  final Map<String, DiscoveredTv> _completed = {};
+  Map<String, DiscoveredTv>? _pending;
+
+  Iterable<DiscoveredTv> get visible => {
+        ..._completed,
+        ...?_pending,
+      }.values;
+
+  void begin() => _pending = {};
+
+  void update(String key, DiscoveredTv device) {
+    final pending = _pending;
+    if (pending != null) pending[key] = device;
+  }
+
+  void complete({required bool succeeded}) {
+    final pending = _pending;
+    if (pending == null) return;
+    if (succeeded) _completed.clear();
+    _completed.addAll(pending);
+    _pending = null;
+  }
+
+  void clear() {
+    _completed.clear();
+    _pending = null;
+  }
+}
+
 /// Browses the LAN for PlayBridge TV receivers — the sender-side counterpart to
 /// [DiscoveryPublisher]. Emits the current set of resolved TVs whenever it
 /// changes. mDNS gives the desktop sender the same DHCP-proof discovery the
@@ -107,11 +140,13 @@ class DiscoveredTv {
 class TvDiscoveryBrowser {
   static const _serviceType = '_playbridge._tcp';
   static const _scanTimeout = Duration(seconds: 15);
+  static const refreshInterval = Duration(minutes: 5);
 
   BonsoirDiscovery? _discovery;
   StreamSubscription<BonsoirDiscoveryEvent>? _sub;
   DiscoveryScanner? _rustScanner;
   StreamSubscription<ReceiverEvent>? _rustSub;
+  Timer? _refreshTimer;
   bool _rustStarting = false;
   bool _started = false;
   int _rustErrorCount = 0;
@@ -123,7 +158,7 @@ class TvDiscoveryBrowser {
 
   // Keyed by mDNS service name: `uuid` is only known after a service resolves.
   final Map<String, DiscoveredTv> _bonjourResolved = {};
-  final Map<String, DiscoveredTv> _rustResolved = {};
+  final DiscoveryScanResults _rustResults = DiscoveryScanResults();
   final Set<String> _resolving = {};
 
   /// Stream of the current resolved-TV list (replaces on every change).
@@ -132,13 +167,16 @@ class TvDiscoveryBrowser {
   bool get isScanning => _rustScanner != null || _rustStarting;
 
   List<DiscoveredTv> get current => mergeDiscoveredDevices(
-        rust: _rustResolved.values,
+        rust: _rustResults.visible,
         bonjourFallback: _bonjourResolved.values,
       );
 
   Future<void> start() async {
     if (_started) return;
     _started = true;
+    _refreshTimer = Timer.periodic(refreshInterval, (_) {
+      if (_started && !isScanning) unawaited(rescan());
+    });
     unawaited(_startRustDiscovery());
     try {
       final discovery = BonsoirDiscovery(type: _serviceType);
@@ -171,6 +209,7 @@ class TvDiscoveryBrowser {
     if (_rustScanner != null) return;
     _rustStarting = true;
     _rustErrorCount = 0;
+    _rustResults.begin();
     _emitScanning(true);
     try {
       final scanner = CastCoreLibrary.open().discover(
@@ -190,7 +229,7 @@ class TvDiscoveryBrowser {
             case ReceiverUpdated(:final receiver):
               final device = discoveredTvFromRust(receiver);
               if (device != null) {
-                _rustResolved[receiver.id] = device;
+                _rustResults.update(receiver.id, device);
                 _emit();
               }
             case DiscoveryError():
@@ -205,6 +244,8 @@ class TvDiscoveryBrowser {
         },
         onDone: () {
           if (!identical(_rustScanner, scanner)) return;
+          _rustResults.complete(succeeded: _rustErrorCount == 0);
+          _emit();
           debugPrint(
             '[tv-discovery] Rust scan finished: '
             'PlayBridge=${_count(TvProtocol.playBridge)}, '
@@ -221,6 +262,8 @@ class TvDiscoveryBrowser {
       _rustSub = null;
       _rustScanner?.dispose();
       _rustScanner = null;
+      _rustResults.complete(succeeded: false);
+      _emit();
       debugPrint(
         '[tv-discovery] Rust unavailable; using Bonsoir PlayBridge fallback',
       );
@@ -230,7 +273,7 @@ class TvDiscoveryBrowser {
     }
   }
 
-  int _count(TvProtocol protocol) => _rustResolved.values
+  int _count(TvProtocol protocol) => _rustResults.visible
       .where((device) => device.protocol == protocol)
       .length;
 
@@ -247,10 +290,7 @@ class TvDiscoveryBrowser {
   /// Starts a fresh bounded Rust scan without restarting the long-lived
   /// PlayBridge Bonjour fallback or touching saved receivers.
   Future<void> rescan() async {
-    if (!_started) return;
-    await _stopRustDiscovery(emitScanning: false);
-    _rustResolved.clear();
-    _emit();
+    if (!_started || isScanning) return;
     await _startRustDiscovery();
   }
 
@@ -320,6 +360,8 @@ class TvDiscoveryBrowser {
 
   Future<void> stop() async {
     _started = false;
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
     await _stopRustDiscovery();
     await _sub?.cancel();
     _sub = null;
@@ -327,7 +369,7 @@ class TvDiscoveryBrowser {
     _discovery = null;
     if (d != null) await d.stop();
     _bonjourResolved.clear();
-    _rustResolved.clear();
+    _rustResults.clear();
     _resolving.clear();
   }
 

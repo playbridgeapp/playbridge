@@ -156,8 +156,11 @@ struct VideoDetectorEnrichmentTests {
             "contentType": "text/plain",
             "detectedBy": "body_content_subtitle",
             "mediaKind": "subtitle",
+            "originUrl": "https://player.example/watch",
         ])
         precondition(subtitleDetector.videos.first?.isSubtitle == true)
+        precondition(subtitleDetector.videos.first?.headers["Origin"] == "https://player.example")
+        precondition(subtitleDetector.videos.first?.headers["Referer"] == "https://player.example/watch")
         precondition(subtitleProbe.started.isEmpty, "Body-confirmed subtitles must not start preview work")
 
         let dispositionSubtitle = "https://subs.example/resource/43"

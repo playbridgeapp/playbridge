@@ -176,20 +176,30 @@ fun CastSheet(
         playableVideos.firstOrNull()?.playlistPayload != null
     }
 
-    var selectedTab by remember { mutableIntStateOf(0) }
+    // Keep the order fixed for this sheet session so late detector updates do not move tabs
+    // out from under someone using them. Selection follows the media kind, not its position.
+    val tabOrder = remember {
+        prioritizedCastSheetTabs(
+            videoCount = playableVideos.size + if (contentPayload != null) 1 else 0,
+            audioCount = detectedAudio.size,
+            subtitleCount = allSubtitles.size,
+            imageCount = detectedImages.size,
+        )
+    }
+    var selectedTabKind by remember { mutableStateOf(tabOrder.first()) }
     val tabs: List<Pair<DetectedMediaKind?, String>> = if (isPlaylistMode) {
         listOf(null to "Playlist Bundle")
     } else {
-        listOf(
-            DetectedMediaKind.VIDEO to "Videos",
-            DetectedMediaKind.AUDIO to "Audio",
-            DetectedMediaKind.IMAGE to "Images",
-            DetectedMediaKind.SUBTITLE to "Subtitles",
-        )
+        tabOrder.map { kind ->
+            kind to when (kind) {
+                DetectedMediaKind.VIDEO -> "Videos"
+                DetectedMediaKind.AUDIO -> "Audio"
+                DetectedMediaKind.SUBTITLE -> "Subtitles"
+                DetectedMediaKind.IMAGE -> "Images"
+            }
+        }
     }
-    LaunchedEffect(tabs.size) {
-        if (selectedTab !in tabs.indices) selectedTab = 0
-    }
+    val selectedTab = if (isPlaylistMode) 0 else tabOrder.indexOf(selectedTabKind)
 
     // State for subtitle search dialog. The gate + shared results live here; the dialog's
     // own query/loading/results are bundled in SubtitleSearchUiState (held here so they
@@ -970,11 +980,12 @@ fun CastSheet(
                     val count = if (isPlaylistMode) {
                         playableVideos.firstOrNull()?.playlistPayload?.size ?: 0
                     } else {
-                        when (index) {
-                            0 -> playableVideos.size
-                            1 -> detectedAudio.size
-                            2 -> detectedImages.size
-                            else -> allSubtitles.size + extraSubtitles.size
+                        when (kind) {
+                            DetectedMediaKind.VIDEO -> playableVideos.size
+                            DetectedMediaKind.AUDIO -> detectedAudio.size
+                            DetectedMediaKind.SUBTITLE -> allSubtitles.size + extraSubtitles.size
+                            DetectedMediaKind.IMAGE -> detectedImages.size
+                            null -> 0
                         }
                     }
                     val accent = if (kind != null) {
@@ -986,7 +997,7 @@ fun CastSheet(
 
                     Tab(
                         selected = tabSelected,
-                        onClick = { selectedTab = index },
+                        onClick = { if (kind != null) selectedTabKind = kind },
                         selectedContentColor = accent,
                         unselectedContentColor = accent.copy(alpha = 0.72f),
                         modifier = Modifier
@@ -1036,7 +1047,7 @@ fun CastSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (selectedTab == 0) {
+            if (isPlaylistMode || selectedTabKind == DetectedMediaKind.VIDEO) {
                 if (
                     playableVideos.isEmpty() &&
                     unavailableVideos.isEmpty() &&
@@ -1296,7 +1307,7 @@ fun CastSheet(
                         }
                     }
                 }
-            } else if (selectedTab == 1) {
+            } else if (selectedTabKind == DetectedMediaKind.AUDIO) {
                 if (detectedAudio.isEmpty()) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -1341,7 +1352,7 @@ fun CastSheet(
                         }
                     }
                 }
-            } else if (selectedTab == 2) {
+            } else if (selectedTabKind == DetectedMediaKind.IMAGE) {
                 if (detectedImages.isEmpty()) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -1385,7 +1396,7 @@ fun CastSheet(
                         }
                     }
                 }
-            } else if (selectedTab == 3) {
+            } else if (selectedTabKind == DetectedMediaKind.SUBTITLE) {
                 // Subtitles Tab
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     Button(
@@ -1398,7 +1409,9 @@ fun CastSheet(
                     }
                     Spacer(Modifier.height(16.dp))
 
-                    val combinedSubtitles = remember(allSubtitles, extraSubtitles) { allSubtitles + extraSubtitles }
+                    val combinedSubtitles = remember(allSubtitles, extraSubtitles) {
+                        newestSubtitlesFirst(allSubtitles + extraSubtitles)
+                    }
                     if (combinedSubtitles.isEmpty()) {
                         Column(
                             modifier = Modifier
@@ -1420,6 +1433,7 @@ fun CastSheet(
                             items(combinedSubtitles, key = { "sub:${it.url}" }, contentType = { "subtitle" }) { subtitle ->
                                 var previewText by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
                                 var isLoadingPreview by remember(subtitle.url) { mutableStateOf(!subtitle.subtitlePreviewChecked) }
+                                var detectedLanguage by remember(subtitle.url) { mutableStateOf(subtitle.subtitleLanguage) }
 
                                 LaunchedEffect(subtitle.url) {
                                     if (!subtitle.subtitlePreviewChecked) {
@@ -1427,6 +1441,7 @@ fun CastSheet(
                                         previewText = VideoDetector.fetchSubtitlePreview(subtitle)
                                         isLoadingPreview = false
                                     }
+                                    detectedLanguage = subtitle.subtitleLanguage
                                 }
 
                                 val subInfo = parseUrlInfo(subtitle.url)
@@ -1476,18 +1491,36 @@ fun CastSheet(
                                                         color = MaterialTheme.colorScheme.primary
                                                     )
                                                     Text(
-                                                        text = formatTimestamp(subtitle.timestamp),
+                                                        text = "Detected ${formatTimestamp(subtitle.timestamp)}",
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = MaterialTheme.colorScheme.outline
                                                     )
                                                 }
                                                 Spacer(modifier = Modifier.height(4.dp))
-                                                Text(
-                                                    text = subtitle.title ?: subInfo.filename ?: (subInfo.host + subInfo.path),
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    maxLines = 2,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Text(
+                                                        text = subtitle.title ?: subInfo.filename ?: (subInfo.host + subInfo.path),
+                                                        style = MaterialTheme.typography.bodyMedium,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier.weight(1f),
+                                                    )
+                                                    if (!isLoadingPreview && !previewText.isNullOrEmpty()) {
+                                                        Spacer(modifier = Modifier.width(8.dp))
+                                                        Text(
+                                                            text = detectedLanguage?.let { "Likely $it" } ?: "Language unknown",
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = if (detectedLanguage == null) {
+                                                                MaterialTheme.colorScheme.outline
+                                                            } else {
+                                                                MaterialTheme.colorScheme.primary
+                                                            },
+                                                            maxLines = 1,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            modifier = Modifier.widthIn(max = 132.dp),
+                                                        )
+                                                    }
+                                                }
 
                                                 if (isLoadingPreview) {
                                                     Text(

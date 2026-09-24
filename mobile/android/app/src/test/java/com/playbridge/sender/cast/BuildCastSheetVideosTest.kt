@@ -7,6 +7,21 @@ import org.junit.Test
 
 class BuildCastSheetVideosTest {
     @Test
+    fun subtitleOrderUsesFirstDetectionNotRepeatedLastSeen() {
+        val older = DetectedVideo(
+            url = "https://cdn.example/older.vtt",
+            timestamp = 1_000,
+            lastSeen = 50_000,
+        )
+        val newer = DetectedVideo(
+            url = "https://cdn.example/newer.vtt",
+            timestamp = 2_000,
+            lastSeen = 2_000,
+        )
+        assertEquals(listOf(newer, older), newestSubtitlesFirst(listOf(older, newer)))
+    }
+
+    @Test
     fun lateEmptyProbeCannotEraseBodyConfirmedMaster() {
         val earlyProbe = DetectedVideo(url = "https://cdn.example/master.m3u8")
         val enriched = earlyProbe.copy(

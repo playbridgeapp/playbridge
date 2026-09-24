@@ -77,6 +77,56 @@ void main() {
     expect(dlna.identityKey, 'dlna:shared');
     expect(playBridge.identityKey, isNot(dlna.identityKey));
   });
+
+  test('rescan keeps old devices visible while fresh results arrive', () {
+    final results = DiscoveryScanResults();
+    final old = _device(uuid: 'old', name: 'Old TV');
+    final updated = _device(
+      uuid: 'old',
+      name: 'Old TV',
+      host: '192.168.1.30',
+    );
+    final fresh = _device(uuid: 'fresh', name: 'New TV');
+
+    results.begin();
+    results.update('old', old);
+    results.complete(succeeded: true);
+    results.begin();
+    expect(results.visible.toList(), [old]);
+
+    results.update('old', updated);
+    results.update('fresh', fresh);
+    expect(results.visible.toList(), [updated, fresh]);
+    results.complete(succeeded: true);
+    expect(results.visible.toList(), [updated, fresh]);
+  });
+
+  test('completed scan removes missing devices without an empty-list gap', () {
+    final results = DiscoveryScanResults();
+    final old = _device(uuid: 'old', name: 'Old TV');
+    results.begin();
+    results.update('old', old);
+    results.complete(succeeded: true);
+
+    results.begin();
+    expect(results.visible.toList(), [old]);
+    results.complete(succeeded: true);
+    expect(results.visible, isEmpty);
+  });
+
+  test('failed scan retains known devices and merges any fresh results', () {
+    final results = DiscoveryScanResults();
+    final old = _device(uuid: 'old', name: 'Old TV');
+    final fresh = _device(uuid: 'fresh', name: 'New TV');
+    results.begin();
+    results.update('old', old);
+    results.complete(succeeded: true);
+
+    results.begin();
+    results.update('fresh', fresh);
+    results.complete(succeeded: false);
+    expect(results.visible.toList(), [old, fresh]);
+  });
 }
 
 DiscoveredTv _device({
