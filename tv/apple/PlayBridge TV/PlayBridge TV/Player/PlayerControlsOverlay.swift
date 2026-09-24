@@ -22,6 +22,7 @@ class PlayerControlsData: ObservableObject {
 
     // Subtitles
     @Published var subtitleTracks: [(id: Int, name: String)] = []
+    @Published var externalSubtitleTracks: [(id: Int, name: String)] = []
     @Published var currentSubtitleIndex: Int = -1
     @Published var showSubtitleMenu: Bool = false
 
@@ -232,7 +233,7 @@ struct PlayerControlsOverlay: View {
                                 .buttonStyle(.card)
 
                                 // Subtitles button
-                                if !data.subtitleTracks.isEmpty {
+                                if !data.subtitleTracks.isEmpty || !data.externalSubtitleTracks.isEmpty {
                                     Button(action: {
                                         data.showSubtitleMenu.toggle()
                                         data.showAudioMenu = false
@@ -320,7 +321,7 @@ struct PlayerControlsOverlay: View {
                 TrackMenuView(
                     title: "Subtitles",
                     icon: "captions.bubble.fill",
-                    tracks: data.subtitleTracks,
+                    tracks: data.subtitleTracks + data.externalSubtitleTracks,
                     currentId: data.currentSubtitleIndex,
                     includeOff: true
                 ) { id in

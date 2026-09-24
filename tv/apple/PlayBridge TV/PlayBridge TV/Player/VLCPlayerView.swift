@@ -40,9 +40,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var url: URL?
         var headers: [String: String]?
         var subtitles: [String]?
+        private var externalSubtitleCatalog = ExternalSubtitleCatalog(urls: [])
+        private var loadedExternalURLs = Set<String>()
+        private var subtitleSession: URLSession?
+        private var subtitleDownloadTask: URLSessionDownloadTask?
+        private var subtitleRequestID: UUID?
+        private var downloadedSubtitleFiles: [URL] = []
         var initialTime: Double = 0.0
         var mediaTitle: String?
-        private var slavesAttached: Bool = false
         var onDismiss: (() -> Void)?
         var onExit: (() -> Void)?
         var onSwitch: ((Double) -> Void)?
@@ -120,6 +125,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             view.addSubview(videoView)
 
             playbackState.title = mediaTitle ?? ""
+            externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
+            playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
 
             // 2. Setup HUD Overlay (SwiftUI)
             setupHUD()
@@ -138,8 +145,13 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             let overlay = PlayerControlsOverlay(
                 data: playbackState,
                 onSelectSubtitle: { [weak self] trackId in
-                    self?.selectSubtitleTrack(at: trackId)
-                    self?.playbackState.currentSubtitleIndex = trackId
+                    guard let self else { return }
+                    if let option = self.externalSubtitleCatalog.option(for: trackId) {
+                        self.loadExternalSubtitle(option)
+                        return
+                    }
+                    self.selectSubtitleTrack(at: trackId)
+                    self.playbackState.currentSubtitleIndex = trackId
                 },
                 onSelectAudio: { [weak self] trackId in
                     self?.selectAudioTrack(at: trackId)
@@ -179,6 +191,89 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 self.playbackState.subtitleTracks = tracks
                 self.playbackState.currentSubtitleIndex = selected
             }
+        }
+
+        private func loadExternalSubtitle(_ option: ExternalSubtitleCatalog.Option) {
+            guard let url = URL(string: option.url),
+                  url.isFileURL || (["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host != nil)
+            else {
+                showExternalSubtitleError(ExternalSubtitleDownloadError.invalidURL)
+                return
+            }
+            subtitleDownloadTask?.cancel()
+            subtitleSession?.invalidateAndCancel()
+            let requestID = UUID()
+            subtitleRequestID = requestID
+
+            if url.isFileURL {
+                attachExternalSubtitle(file: url, option: option, isDownloaded: false)
+                return
+            }
+
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCache = nil
+            let session = URLSession(configuration: configuration)
+            subtitleSession = session
+            let request = ExternalSubtitleDownload.request(for: url, playbackHeaders: headers)
+            let task = session.downloadTask(with: request) { [weak self] temporaryFile, response, error in
+                let result: Result<URL, Error>
+                if let error {
+                    result = .failure(error)
+                } else if let temporaryFile {
+                    result = Result { try ExternalSubtitleDownload.prepare(file: temporaryFile, response: response) }
+                } else {
+                    result = .failure(ExternalSubtitleDownloadError.invalidResponse)
+                }
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, !self.didRequestStop, self.subtitleRequestID == requestID else {
+                        if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                        return
+                    }
+                    self.subtitleSession?.finishTasksAndInvalidate()
+                    self.subtitleSession = nil
+                    self.subtitleDownloadTask = nil
+                    self.subtitleRequestID = nil
+                    switch result {
+                    case .success(let file):
+                        self.attachExternalSubtitle(file: file, option: option, isDownloaded: true)
+                    case .failure(let error):
+                        self.showExternalSubtitleError(error)
+                    }
+                }
+            }
+            subtitleDownloadTask = task
+            task.resume()
+        }
+
+        private func attachExternalSubtitle(file: URL, option: ExternalSubtitleCatalog.Option,
+                                            isDownloaded: Bool) {
+            guard !didRequestStop else { return }
+            let rc = mediaPlayer.addPlaybackSlave(file, type: .subtitle, enforce: true)
+            if rc == 0 {
+                if isDownloaded { downloadedSubtitleFiles.append(file) }
+                loadedExternalURLs.insert(option.url)
+                playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: loadedExternalURLs)
+                TrackPreferences.shared.subtitlesOff = false
+                TrackPreferences.shared.subtitleName = option.name
+                updateSubtitleTracks()
+                // VLCKit can publish the new text track after addPlaybackSlave returns.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self, !self.didRequestStop else { return }
+                    self.updateSubtitleTracks()
+                    self.broadcastTracks()
+                }
+            } else {
+                if isDownloaded { try? FileManager.default.removeItem(at: file) }
+                showExternalSubtitleError(ExternalSubtitleDownloadError.attachmentFailed)
+            }
+        }
+
+        private func showExternalSubtitleError(_ error: Error) {
+            let message = (error as? ExternalSubtitleDownloadError)?.message
+                ?? "The subtitle could not be loaded. Playback will continue."
+            let alert = UIAlertController(title: "Subtitle unavailable", message: message, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            present(alert, animated: true)
         }
 
         /// Select a subtitle track by list index, or turn subtitles off when index < 0.
@@ -435,9 +530,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             #endif
             mediaPlayer.drawable = videoView
 
-            // Reset per-playback state so the new player re-attaches slaves/tracks and resumes.
+            // Reset per-playback state so the new player refreshes its tracks and resumes.
             lastReportedState = nil
-            slavesAttached = false
+            loadedExternalURLs = []
+            playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
             didFetchTracks = false
             initialTime = resumeSec
             initialTimeApplied = false
@@ -445,22 +541,6 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             startMedia(playURL: playURL, useNativeHeaders: useNativeHeaders, viaProxy: viaProxy)
         }
         
-        private func attachSlavesIfNeeded() {
-            guard !slavesAttached else { return }
-            slavesAttached = true
-            // Senders (e.g. Stremio) attach dozens of subtitle URLs. Adding every one as a VLC
-            // slave fetches each over the network and bogs the player down — switching audio or
-            // subtitle tracks then lags badly. Attach only the first (the sender orders them by
-            // preference); the media's own embedded tracks remain available in the menu.
-            guard let first = subtitles?.first, let url = URL(string: first) else { return }
-            let rc = mediaPlayer.addPlaybackSlave(url, type: .subtitle, enforce: false)
-            debugLogNetworkRequest("VLC subtitle", url: url)
-            print("VLC: addPlaybackSlave rc=\(rc)")
-            // The slave arrives after the initial parse — refresh the track list so the new
-            // entry appears in the Subtitles menu.
-            updateSubtitleTracks()
-        }
-
         private func applyPreBufferingState() {
             mediaPlayer.audio?.isMuted = isPreBuffering
             if isPreBuffering {
@@ -506,11 +586,6 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     userInfo: ["isPlaying": newState == .playing && self.mediaPlayer.isPlaying])
                 self.broadcastStatus()
 
-                // libvlc needs the input running before slaves attach to the current playback;
-                // hook .opening (with .playing as fallback). attachSlavesIfNeeded is idempotent.
-                if newState == .opening || newState == .playing {
-                    self.attachSlavesIfNeeded()
-                }
                 if newState == .playing {
                     self.playbackState.userPaused = false   // clear when VLC resumes
                     self.updateSubtitleTracks()
@@ -941,10 +1016,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 broadcastTracks()
             case let c where c.hasPrefix("add_subtitle:"):
                 let urlStr = String(c.dropFirst("add_subtitle:".count))
-                guard let url = URL(string: urlStr) else { break }
-                _ = mediaPlayer.addPlaybackSlave(url, type: .subtitle, enforce: true)
-                updateSubtitleTracks()
-                broadcastTracks()
+                guard URL(string: urlStr) != nil else { break }
+                loadExternalSubtitle(.init(id: -2, url: urlStr, name: "External subtitle"))
             case let c where c.hasPrefix("switch_player:"):
                 // Any non-vlc target hands off to PlayerView's engine cycle.
                 if String(c.dropFirst("switch_player:".count)) != "vlc" { onSwitch?(playbackState.currentTime) }
@@ -967,7 +1040,12 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             statusTimer = nil
             NotificationCenter.default.removeObserver(self)
             didRequestStop = true   // suppress end-of-video handling for our own stop (4.0 ".stopped")
+            subtitleDownloadTask?.cancel()
+            subtitleSession?.invalidateAndCancel()
+            subtitleRequestID = nil
             mediaPlayer.stop()
+            for file in downloadedSubtitleFiles { try? FileManager.default.removeItem(at: file) }
+            downloadedSubtitleFiles = []
             proxyServer?.stop()
             proxyServer = nil
         }

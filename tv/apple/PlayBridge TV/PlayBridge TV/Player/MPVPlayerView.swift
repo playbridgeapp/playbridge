@@ -93,6 +93,7 @@ class MPVViewController: UIViewController {
     private let mpvQueue = DispatchQueue(label: "mpv.playbridge.tvos", qos: .userInitiated)
     private var isMpvStopped = false
     private var pendingExternalSubtitles: [String] = []
+    private var externalSubtitleCatalog = ExternalSubtitleCatalog(urls: [])
     /// Opaque pointer to a +1-retained `self` handed to mpv's wakeup callback. Keeping self
     /// alive while the callback is installed means the callback never forms a weak reference
     /// to a deallocating object. Balanced (released) once in `teardown()`.
@@ -140,6 +141,8 @@ class MPVViewController: UIViewController {
         videoView.layer.addSublayer(displayLayer)
 
         playbackState.title = mediaTitle ?? ""
+        externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
+        playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
         setupHUD()
         setupMPV()
         startRemoteSync()
@@ -312,6 +315,8 @@ class MPVViewController: UIViewController {
         playbackState.userPaused = false
         playbackState.audioTracks = []
         playbackState.subtitleTracks = []
+        externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
+        playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
 
         loadFile(url)
     }
@@ -424,11 +429,8 @@ class MPVViewController: UIViewController {
         // hops its UI assignment to main.)
         updateTracks()
 
-        // Attach only the FIRST external subtitle. Senders like Stremio attach dozens of subtitle
-        // URLs; adding them all makes mpv open each over the network and bloats the track list, so
-        // switching audio/subtitle tracks lags badly. The sender orders them by preference, so the
-        // first is the best match; the media's own embedded tracks remain selectable. Async so the
-        // one fetch never blocks this serial event queue.
+        // Attach only the sender's first/preferred external subtitle. Others remain in
+        // the picker and load only on selection, avoiding many simultaneous fetches.
         if let firstSub = pendingExternalSubtitles.first {
             mpvCommandAsync(handle, ["sub-add", firstSub, "auto"])
         }
@@ -557,6 +559,7 @@ class MPVViewController: UIViewController {
 
         var audioTracks: [(id: Int, name: String)] = []
         var subtitleTracks: [(id: Int, name: String)] = []
+        var loadedExternalURLs = Set<String>()
 
         for i in 0..<count {
             let prefix = "track-list/\(i)"
@@ -578,7 +581,11 @@ class MPVViewController: UIViewController {
 
             switch type {
             case "audio": audioTracks.append((id: Int(trackId), name: displayName))
-            case "sub":   subtitleTracks.append((id: Int(trackId), name: displayName))
+            case "sub":
+                subtitleTracks.append((id: Int(trackId), name: displayName))
+                if let filename = stringProperty(handle, "\(prefix)/external-filename") {
+                    loadedExternalURLs.insert(filename)
+                }
             default:      break
             }
         }
@@ -592,6 +599,7 @@ class MPVViewController: UIViewController {
             guard let self else { return }
             self.playbackState.audioTracks = audioTracks
             self.playbackState.subtitleTracks = subtitleTracks
+            self.playbackState.externalSubtitleTracks = self.externalSubtitleCatalog.unloadedTracks(excluding: loadedExternalURLs)
             self.playbackState.currentAudioIndex = Int(currentAid)
             self.playbackState.currentSubtitleIndex = Int(currentSid)
 
@@ -696,6 +704,17 @@ class MPVViewController: UIViewController {
             data: playbackState,
             onSelectSubtitle: { [weak self] trackId in
                 guard let self else { return }
+                if let option = self.externalSubtitleCatalog.option(for: trackId) {
+                    // `cached` selects an existing file if the user taps again while loading.
+                    // The track-list observer replaces this menu entry once loading succeeds.
+                    self.mpvQueue.async { [weak self] in
+                        guard let self, let handle = self.mpv else { return }
+                        self.mpvCommandAsync(handle, ["sub-add", option.url, "cached", option.name])
+                    }
+                    TrackPreferences.shared.subtitlesOff = false
+                    TrackPreferences.shared.subtitleName = option.name
+                    return
+                }
                 self.setPropertyAsync("sid", value: trackId < 0 ? "no" : String(trackId))
                 self.playbackState.currentSubtitleIndex = trackId
                 self.recordSubtitlePreference(id: trackId)
@@ -763,14 +782,16 @@ class MPVViewController: UIViewController {
     private func togglePlayPause() {
         // Use cached state (kept current by the "pause" property observer) instead of querying
         // mpv synchronously — a main-thread mpv_* call can deadlock against vo=avfoundation.
-        if playbackState.isPlaying {
-            setPropertyAsync("pause", value: "yes")
-            playbackState.userPaused = true
+        setPlaybackPaused(playbackState.isPlaying)
+    }
+
+    private func setPlaybackPaused(_ paused: Bool) {
+        setPropertyAsync("pause", value: paused ? "yes" : "no")
+        playbackState.userPaused = paused
+        if paused {
             mpvQueue.async { [weak self] in self?.updateTracks() }
             showUI(autoHide: false)
         } else {
-            setPropertyAsync("pause", value: "no")
-            playbackState.userPaused = false
             showUI(autoHide: true)
         }
     }
@@ -1073,9 +1094,12 @@ class MPVViewController: UIViewController {
     /// Map a phone `control` command to the player. Runs on main (posted from the WS server).
     /// Speed/scaling/filter/audio_boost/sub_offset are not yet supported on Apple MPV → ignored.
     private func handleControlCommand(_ cmd: String) {
+        if let paused = PlaybackPauseCommand.targetPaused(
+            for: cmd, isPlaying: playbackState.isPlaying) {
+            setPlaybackPaused(paused)
+            return
+        }
         switch cmd {
-        case "play", "pause", "play_pause", "toggle":
-            togglePlayPause()
         case "stop":
             onExit?()
         case "loop_on":

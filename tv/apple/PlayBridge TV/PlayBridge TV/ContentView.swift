@@ -13,8 +13,8 @@ import UIKit
 
 
 struct ContentView: View {
-    @StateObject private var historyStore = HistoryStore()
-    @StateObject private var playlistStore = PlaylistStore()
+    @StateObject private var historyStore: HistoryStore
+    @StateObject private var playlistStore: PlaylistStore
     @StateObject private var server: WebSocketServer
     @StateObject private var stillWatching = StillWatchingController()
     @AppStorage("enable_history") var enableHistory: Bool = true
@@ -151,6 +151,7 @@ struct ContentView: View {
                 server.start()
                 stillWatching.foregroundChanged(true)
             case .background:
+                historyStore.flushProgress()
                 server.stop()
                 stillWatching.foregroundChanged(false)
             default: break

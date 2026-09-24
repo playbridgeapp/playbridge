@@ -9,5 +9,9 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Models/PairingCredentialState.swift" \
   "$source_root/Data/HistoryStore.swift" \
   "$source_root/Player/PlaybackTime.swift" \
+  "$source_root/Player/PlaybackPauseCommand.swift" \
+  "$source_root/Player/ExternalSubtitleCatalog.swift" \
+  "$source_root/Player/ExternalSubtitleDownload.swift" \
+  "$source_root/Player/ExternalSubtitleCues.swift" \
   "$repo_root/tv/apple/tests/ReceiverReviewTests.swift" -o "$test_dir/check"
 "$test_dir/check"

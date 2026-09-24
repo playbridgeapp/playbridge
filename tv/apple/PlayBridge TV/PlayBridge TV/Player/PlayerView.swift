@@ -102,6 +102,9 @@ struct PlayerView: View {
     private func handleNext() {
         stillWatching.reset()
         mediaGeneration &+= 1
+        // A player may also advance after a stream error. Completion is inferred from
+        // the last position instead of marking every advance as a successful finish.
+        historyStore.flushProgress()
         consumeStartPosition(at: playlistStore.currentIndex)
         if let nextRequest = playlistStore.next(), let nextURL = nextRequest.validURL {
             if !nextRequest.skipHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
@@ -114,12 +117,28 @@ struct PlayerView: View {
     private func handleJump(to index: Int) {
         stillWatching.reset()
         mediaGeneration &+= 1
+        historyStore.flushProgress()
         consumeStartPosition(at: playlistStore.currentIndex)
         if let jumpRequest = playlistStore.jumpTo(index: index), let jumpURL = jumpRequest.validURL {
             if !jumpRequest.skipHistory { historyStore.addToHistory(url: jumpURL, title: jumpRequest.titleOrNil, headers: jumpRequest.headersOrNil) }
             resumeTime = 0
             withAnimation { showPlaylist = false }
         }
+    }
+
+    private func broadcast(_ json: [String: Any], for item: Playbridge_PlayPayload) {
+        server.broadcast(json)
+        guard !isPreBuffering, !item.skipHistory, let url = item.validURL,
+              url == (playlistStore.currentItem ?? payload).validURL,
+              json["type"] as? String == "status",
+              let position = json["position"] as? Int,
+              let duration = json["duration"] as? Int else { return }
+        historyStore.updateProgress(url: url, positionMs: position, durationMs: duration)
+    }
+
+    private func exitPlayback() {
+        historyStore.flushProgress()
+        onDismiss()
     }
 
     var body: some View {
@@ -137,9 +156,9 @@ struct PlayerView: View {
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,
-                        onExit: onDismiss,
+                        onExit: exitPlayback,
                         onSwitch: handleSwitch,
-                        onBroadcast: { server.broadcast($0) }
+                        onBroadcast: { broadcast($0, for: currentRequest) }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -154,9 +173,9 @@ struct PlayerView: View {
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,
-                        onExit: onDismiss,
+                        onExit: exitPlayback,
                         onSwitch: handleSwitch,
-                        onBroadcast: { server.broadcast($0) }
+                        onBroadcast: { broadcast($0, for: currentRequest) }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -169,13 +188,14 @@ struct PlayerView: View {
                     NativePlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
+                        subtitles: currentRequest.subtitlesOrNil,
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
                         onDismiss: handleNext,  // end-of-video → try next item
-                        onExit: onDismiss,      // back button → always go home
+                        onExit: exitPlayback,    // back button → always go home
                         onSwitch: handleSwitch,
-                        onBroadcast: { server.broadcast($0) }
+                        onBroadcast: { broadcast($0, for: currentRequest) }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -213,6 +233,9 @@ struct PlayerView: View {
         }
         .onAppear {
             isPlayerFocused = true
+        }
+        .onDisappear {
+            historyStore.flushProgress()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("TogglePlaylist"))) { _ in
             guard !stillWatching.isPrompting else { return }

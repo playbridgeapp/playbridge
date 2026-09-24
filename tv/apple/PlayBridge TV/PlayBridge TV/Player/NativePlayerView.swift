@@ -16,6 +16,7 @@ final class ActivityAVPlayerViewController: AVPlayerViewController {
 struct NativePlayerView: UIViewControllerRepresentable {
     let url: URL
     let headers: [String: String]?
+    let subtitles: [String]?
     let initialTime: Double
     let isPreBuffering: Bool
     let title: String?
@@ -60,6 +61,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
 
         controller.player = player
         controller.allowsPictureInPicturePlayback = true
+        controller.loadViewIfNeeded()
+        context.coordinator.attachSubtitleOverlay(to: controller)
 
         let loopAction = UIAction(
             title: "Loop",
@@ -81,8 +84,25 @@ struct NativePlayerView: UIViewControllerRepresentable {
         ) { _ in
             NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
         }
-        
-        controller.transportBarCustomMenuItems = [loopAction, switchAction, playlistAction]
+
+        let subtitleOptions = ExternalSubtitleCatalog(urls: subtitles ?? []).options
+        let subtitleOffAction = UIAction(title: "No External Subtitle") { [weak coordinator = context.coordinator] _ in
+            coordinator?.clearExternalSubtitle(explicitOff: false)
+        }
+        var subtitleActions: [Int: UIAction] = [:]
+        for option in subtitleOptions {
+            subtitleActions[option.id] = UIAction(title: option.name) { [weak coordinator = context.coordinator] _ in
+                coordinator?.selectExternalSubtitle(option.id)
+            }
+        }
+        context.coordinator.configureSubtitleActions(off: subtitleOffAction, options: subtitleActions)
+        let externalSubtitleMenu = UIMenu(
+            title: "External Subtitles",
+            image: UIImage(systemName: "captions.bubble"),
+            children: [subtitleOffAction] + subtitleOptions.compactMap { subtitleActions[$0.id] })
+        controller.transportBarCustomMenuItems = subtitleOptions.isEmpty
+            ? [loopAction, switchAction, playlistAction]
+            : [loopAction, externalSubtitleMenu, switchAction, playlistAction]
 
         player.isMuted = isPreBuffering
         context.coordinator.attach(player: player)
@@ -96,7 +116,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(title: title, onDismiss: onDismiss, onExit: onExit, onSwitch: onSwitch, onBroadcast: onBroadcast)
+        Coordinator(title: title, onDismiss: onDismiss, onExit: onExit, onSwitch: onSwitch,
+                    headers: headers, subtitles: subtitles, onBroadcast: onBroadcast)
     }
 
     static func dismantleUIViewController(_ uiViewController: AVPlayerViewController, coordinator: Coordinator) {
@@ -111,10 +132,23 @@ struct NativePlayerView: UIViewControllerRepresentable {
         let onDismiss: () -> Void
         let onExit: () -> Void
         let onSwitch: (Double) -> Void
+        let headers: [String: String]?
+        let externalSubtitleCatalog: ExternalSubtitleCatalog
         let onBroadcast: ([String: Any]) -> Void
 
         private var timeObserver: Any?
+        private var subtitleTimeObserver: Any?
         private var timeControlObservation: NSKeyValueObservation?
+        private weak var playerController: AVPlayerViewController?
+        private weak var subtitleCaptionView: UIView?
+        private weak var subtitleLabel: UILabel?
+        private var subtitleOffAction: UIAction?
+        private var subtitleActions: [Int: UIAction] = [:]
+        private var selectedExternalSubtitleID: Int?
+        private var externalCues: ExternalSubtitleCues?
+        private var subtitleSession: URLSession?
+        private var subtitleDownloadTask: URLSessionDownloadTask?
+        private var subtitleRequestID: UUID?
         private var didBroadcastTracks = false
         // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
         // synchronously by broadcastTracks/selectTrack. Avoids the deprecated sync accessor.
@@ -122,11 +156,15 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var subtitleGroup: AVMediaSelectionGroup?
 
         init(title: String?, onDismiss: @escaping () -> Void, onExit: @escaping () -> Void,
-             onSwitch: @escaping (Double) -> Void, onBroadcast: @escaping ([String: Any]) -> Void) {
+             onSwitch: @escaping (Double) -> Void,
+             headers: [String: String]?, subtitles: [String]?,
+             onBroadcast: @escaping ([String: Any]) -> Void) {
             self.title = title
             self.onDismiss = onDismiss
             self.onExit = onExit
             self.onSwitch = onSwitch
+            self.headers = headers
+            self.externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
             self.onBroadcast = onBroadcast
             super.init()
 
@@ -155,7 +193,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             self.player = player
             timeControlObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) {
                 [weak self] _, _ in
-                DispatchQueue.main.async { self?.broadcastStatus() }
+                DispatchQueue.main.async {
+                    self?.broadcastStatus()
+                    self?.refreshExternalSubtitle()
+                }
             }
             timeObserver = player.addPeriodicTimeObserver(
                 forInterval: CMTime(seconds: 1, preferredTimescale: 1), queue: .main
@@ -163,6 +204,11 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         func teardown() {
+            subtitleDownloadTask?.cancel()
+            subtitleSession?.invalidateAndCancel()
+            subtitleRequestID = nil
+            if let token = subtitleTimeObserver { player?.removeTimeObserver(token); subtitleTimeObserver = nil }
+            subtitleCaptionView?.removeFromSuperview()
             timeControlObservation?.invalidate()
             timeControlObservation = nil
             if let token = timeObserver { player?.removeTimeObserver(token); timeObserver = nil }
@@ -183,6 +229,161 @@ struct NativePlayerView: UIViewControllerRepresentable {
         @objc func invokeSwitch() {
             NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
             onSwitch(player?.currentTime().seconds ?? 0)
+        }
+
+        func selectExternalSubtitle(_ id: Int) {
+            NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+            guard let option = externalSubtitleCatalog.option(for: id),
+                  let url = URL(string: option.url) else { return }
+            subtitleDownloadTask?.cancel()
+            subtitleSession?.invalidateAndCancel()
+            let requestID = UUID()
+            subtitleRequestID = requestID
+
+            if url.isFileURL {
+                DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                    let result = Result { () throws -> ExternalSubtitleCues in
+                        let size = try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber
+                        guard let size, size.uint64Value <= UInt64(ExternalSubtitleDownload.maximumBytes)
+                        else { throw ExternalSubtitleDownloadError.tooLarge }
+                        let data = try Data(contentsOf: url)
+                        guard let cues = ExternalSubtitleCues(data: data), !cues.cues.isEmpty
+                        else { throw ExternalSubtitleDownloadError.unsupportedFormat }
+                        return cues
+                    }
+                    DispatchQueue.main.async { self?.finishExternalSubtitleLoad(result, id: requestID, option: option) }
+                }
+                return
+            }
+
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCache = nil
+            let session = URLSession(configuration: configuration)
+            subtitleSession = session
+            let request = ExternalSubtitleDownload.request(for: url, playbackHeaders: headers)
+            let task = session.downloadTask(with: request) { [weak self] temporaryFile, response, error in
+                let result: Result<ExternalSubtitleCues, Error>
+                if let error {
+                    result = .failure(error)
+                } else if let temporaryFile {
+                    result = Result {
+                        let file = try ExternalSubtitleDownload.prepare(file: temporaryFile, response: response)
+                        defer { try? FileManager.default.removeItem(at: file) }
+                        let data = try Data(contentsOf: file)
+                        guard let cues = ExternalSubtitleCues(data: data), !cues.cues.isEmpty
+                        else { throw ExternalSubtitleDownloadError.unsupportedFormat }
+                        return cues
+                    }
+                } else {
+                    result = .failure(ExternalSubtitleDownloadError.invalidResponse)
+                }
+                DispatchQueue.main.async { self?.finishExternalSubtitleLoad(result, id: requestID, option: option) }
+            }
+            subtitleDownloadTask = task
+            task.resume()
+        }
+
+        func configureSubtitleActions(off: UIAction, options: [Int: UIAction]) {
+            subtitleOffAction = off
+            subtitleActions = options
+            updateSubtitleActionStates()
+        }
+
+        func attachSubtitleOverlay(to controller: AVPlayerViewController) {
+            playerController = controller
+            guard let content = controller.contentOverlayView else { return }
+            let caption = UIView()
+            caption.translatesAutoresizingMaskIntoConstraints = false
+            caption.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+            caption.layer.cornerRadius = 12
+            caption.isUserInteractionEnabled = false
+            caption.isHidden = true
+            let label = UILabel()
+            label.translatesAutoresizingMaskIntoConstraints = false
+            label.font = .systemFont(ofSize: 42, weight: .semibold)
+            label.textColor = .white
+            label.textAlignment = .center
+            label.numberOfLines = 3
+            caption.addSubview(label)
+            content.addSubview(caption)
+            NSLayoutConstraint.activate([
+                caption.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+                caption.bottomAnchor.constraint(equalTo: content.safeAreaLayoutGuide.bottomAnchor, constant: -50),
+                caption.widthAnchor.constraint(lessThanOrEqualTo: content.widthAnchor, multiplier: 0.82),
+                label.leadingAnchor.constraint(equalTo: caption.leadingAnchor, constant: 22),
+                label.trailingAnchor.constraint(equalTo: caption.trailingAnchor, constant: -22),
+                label.topAnchor.constraint(equalTo: caption.topAnchor, constant: 12),
+                label.bottomAnchor.constraint(equalTo: caption.bottomAnchor, constant: -12),
+            ])
+            subtitleCaptionView = caption
+            subtitleLabel = label
+        }
+
+        func clearExternalSubtitle(explicitOff: Bool) {
+            subtitleDownloadTask?.cancel()
+            subtitleSession?.invalidateAndCancel()
+            subtitleDownloadTask = nil
+            subtitleSession = nil
+            subtitleRequestID = nil
+            selectedExternalSubtitleID = nil
+            externalCues = nil
+            if let token = subtitleTimeObserver { player?.removeTimeObserver(token); subtitleTimeObserver = nil }
+            subtitleLabel?.text = nil
+            subtitleCaptionView?.isHidden = true
+            if explicitOff {
+                if let subtitleGroup { player?.currentItem?.select(nil, in: subtitleGroup) }
+                TrackPreferences.shared.subtitlesOff = true
+                TrackPreferences.shared.subtitleLanguage = nil
+                TrackPreferences.shared.subtitleName = nil
+            }
+            updateSubtitleActionStates()
+            broadcastTracks()
+        }
+
+        private func finishExternalSubtitleLoad(_ result: Result<ExternalSubtitleCues, Error>,
+                                                id: UUID, option: ExternalSubtitleCatalog.Option) {
+            guard subtitleRequestID == id, player != nil else { return }
+            subtitleSession?.finishTasksAndInvalidate()
+            subtitleSession = nil
+            subtitleDownloadTask = nil
+            subtitleRequestID = nil
+            switch result {
+            case .success(let cues):
+                selectedExternalSubtitleID = option.id
+                externalCues = cues
+                if let subtitleGroup { player?.currentItem?.select(nil, in: subtitleGroup) }
+                TrackPreferences.shared.subtitlesOff = false
+                TrackPreferences.shared.subtitleLanguage = nil
+                TrackPreferences.shared.subtitleName = nil
+                if subtitleTimeObserver == nil, let player {
+                    subtitleTimeObserver = player.addPeriodicTimeObserver(
+                        forInterval: CMTime(seconds: 0.2, preferredTimescale: 600), queue: .main
+                    ) { [weak self] _ in self?.refreshExternalSubtitle() }
+                }
+                refreshExternalSubtitle()
+                updateSubtitleActionStates()
+                broadcastTracks()
+            case .failure(let error):
+                let message = (error as? ExternalSubtitleDownloadError)?.message
+                    ?? "The subtitle could not be loaded. Playback will continue."
+                let alert = UIAlertController(title: "Subtitle unavailable", message: message,
+                                              preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                playerController?.present(alert, animated: true)
+            }
+        }
+
+        private func refreshExternalSubtitle() {
+            let text = externalCues?.text(at: player?.currentTime().seconds ?? .nan)
+            if subtitleLabel?.text != text { subtitleLabel?.text = text }
+            subtitleCaptionView?.isHidden = text == nil
+        }
+
+        private func updateSubtitleActionStates() {
+            subtitleOffAction?.state = selectedExternalSubtitleID == nil ? .on : .off
+            for (id, action) in subtitleActions {
+                action.state = id == selectedExternalSubtitleID ? .on : .off
+            }
         }
 
         @objc func itemDidFinish(notification: Notification) {
@@ -207,6 +408,18 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
                 onExit()
             }
+        }
+
+        func playerViewController(_ playerViewController: AVPlayerViewController,
+                                  didSelect mediaSelectionOption: AVMediaSelectionOption?,
+                                  in mediaSelectionGroup: AVMediaSelectionGroup) {
+            guard let subtitleGroup, mediaSelectionGroup == subtitleGroup else { return }
+            clearExternalSubtitle(explicitOff: false)
+            let prefs = TrackPreferences.shared
+            prefs.subtitlesOff = mediaSelectionOption == nil
+            prefs.subtitleLanguage = mediaSelectionOption?.locale?.identifier
+                ?? mediaSelectionOption?.extendedLanguageTag
+            prefs.subtitleName = mediaSelectionOption?.displayName
         }
 
         // MARK: - Phone Now-Playing Sync
@@ -335,6 +548,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         private func selectTrack(_ characteristic: AVMediaCharacteristic, id: String) {
+            if characteristic == .legible {
+                clearExternalSubtitle(explicitOff: id == "none" || id == "-1")
+            }
             guard let item = player?.currentItem else { return }
             guard let group = (characteristic == .audible) ? audioGroup : subtitleGroup else { return }
             let prefs = TrackPreferences.shared
@@ -387,7 +603,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 item.select(option, in: group)
             }
             if let group = subtitleGroup {
-                if prefs.subtitlesOff {
+                if selectedExternalSubtitleID != nil {
+                    item.select(nil, in: group)
+                } else if prefs.subtitlesOff {
                     item.select(nil, in: group)
                 } else if let option = match(
                     in: group, language: prefs.subtitleLanguage, name: prefs.subtitleName) {
