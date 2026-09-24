@@ -284,9 +284,14 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       serviceName: widget.store.deviceName,
       deviceId: widget.store.deviceId,
     );
-    _tray =
-        TrayController(player: _player, server: _server, store: widget.store);
     _sender = TvSenderController(identity: widget.store, store: widget.tvStore);
+    _tray = TrayController(
+      player: _player,
+      server: _server,
+      store: widget.store,
+      sender: _sender,
+      showSender: _showSenderScreen,
+    );
     _extBridge = ExtensionBridge(
       _sender,
       _player,
@@ -455,6 +460,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     await _tray.init();
     await Future<void>.delayed(const Duration(milliseconds: 300));
     if (!mounted) return;
+    await windowManager.show();
+    await windowManager.focus();
+  }
+
+  Future<void> _showSenderScreen() async {
+    if (!mounted) return;
+    setState(() {
+      _dest = _Dest.sendToTv;
+      _showingVideo = false;
+    });
     await windowManager.show();
     await windowManager.focus();
   }
