@@ -94,6 +94,9 @@ class TvSenderController extends ChangeNotifier {
   String _remoteState = '';
   int _remotePositionMs = 0;
   int _remoteDurationMs = 0;
+  String? _activePlaybackId;
+  String? _stoppedPlaybackId;
+  bool _awaitingFreshPlayback = false;
 
   // The playlist currently on the TV, from `playlist_status` echoes (or set
   // optimistically when we cast). Drives the Now Playing tab's item list.
@@ -279,7 +282,7 @@ class TvSenderController extends ChangeNotifier {
 
     _stateSub = _transport.state.listen(_onState);
     _credSub = _transport.credentials.listen(_onCredentials);
-    _msgSub = _transport.messages.listen(_onTvMessage);
+    _msgSub = _transport.messages.listen(handleReceiverMessage);
     _sasSub = _transport.sasCode.listen((sas) {
       _currentSas = sas;
       notifyListeners();
@@ -370,6 +373,10 @@ class TvSenderController extends ChangeNotifier {
   Future<bool> castVideo(PlayPayload video) async {
     final ok = await _transport.castVideo(_withHistoryPreference(video));
     if (ok) {
+      if (_transport.protocol != TvProtocol.playBridge) {
+        _awaitingFreshPlayback = false;
+        _stoppedPlaybackId = null;
+      }
       _castingTitle =
           video.hasTitle() && video.title.isNotEmpty ? video.title : null;
       notifyListeners();
@@ -387,13 +394,18 @@ class TvSenderController extends ChangeNotifier {
       ..skipHistory = true;
   }
 
-  Future<bool> castPlaylist(PlaylistPayload playlist) {
+  Future<bool> castPlaylist(PlaylistPayload playlist) async {
     final outgoing = PlaylistPayload()..mergeFromMessage(playlist);
     final items = playlist.items.map(_withHistoryPreference).toList();
     outgoing.items
       ..clear()
       ..addAll(items);
-    return _transport.castPlaylist(outgoing);
+    final ok = await _transport.castPlaylist(outgoing);
+    if (ok && _transport.protocol != TvProtocol.playBridge) {
+      _awaitingFreshPlayback = false;
+      _stoppedPlaybackId = null;
+    }
+    return ok;
   }
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
@@ -498,11 +510,16 @@ class TvSenderController extends ChangeNotifier {
       payload.title = title;
     }
     if (_transport case BrowserTransport browser) {
-      return browser.castBrowserMedia(
+      final ok = await browser.castBrowserMedia(
         url: targetUrl,
         title: title,
         contentType: targetContentType,
       );
+      if (ok) {
+        _awaitingFreshPlayback = false;
+        _stoppedPlaybackId = null;
+      }
+      return ok;
     }
     return await castVideo(payload);
   }
@@ -530,8 +547,28 @@ class TvSenderController extends ChangeNotifier {
   /// card disappears immediately (don't wait for a TV status that may not come).
   Future<bool> stopCast() async {
     final ok = await sendControl('stop');
+    if (!ok) return false;
+    _suppressStoppedPlayback();
     _clearNowCasting();
-    return ok;
+    return true;
+  }
+
+  void _suppressStoppedPlayback() {
+    if (_activePlaybackId != null) _stoppedPlaybackId = _activePlaybackId;
+    _activePlaybackId = null;
+    _awaitingFreshPlayback = true;
+  }
+
+  bool _acceptPlaybackFrame(String? playbackId) {
+    if (playbackId != null && playbackId == _stoppedPlaybackId) return false;
+    if (_awaitingFreshPlayback) {
+      // A different receiver-generated session ID proves this belongs to a
+      // new cast. Legacy receivers without IDs resume on `context: player`.
+      if (playbackId == null) return false;
+      _awaitingFreshPlayback = false;
+    }
+    if (playbackId != null) _activePlaybackId = playbackId;
+    return true;
   }
 
   /// Resets the now-casting snapshot and notifies (hides the card).
@@ -727,6 +764,9 @@ class TvSenderController extends ChangeNotifier {
       case SenderConnectionState.authFailed:
       case SenderConnectionState.pinMismatch:
         _activeTv = null;
+        _activePlaybackId = null;
+        _stoppedPlaybackId = null;
+        _awaitingFreshPlayback = false;
         _castingTitle = null;
         _remoteState = '';
         _remotePositionMs = 0;
@@ -770,17 +810,21 @@ class TvSenderController extends ChangeNotifier {
     'error',
   };
 
-  void _onTvMessage(String text) {
+  @visibleForTesting
+  void handleReceiverMessage(String text) {
     try {
       final obj = jsonDecode(text);
       if (obj is! Map) return;
       final type = obj['type'];
       if (type == 'status') {
+        final playbackId = obj['playbackId'] as String?;
+        if (!_acceptPlaybackFrame(playbackId)) return;
         final state = (obj['state'] as String?)?.toLowerCase();
         if (state != null && _terminalStates.contains(state)) {
           if (state == 'error') {
             _lastBrowserError ??= 'Browser playback failed';
           }
+          _suppressStoppedPlayback();
           _clearNowCasting();
           return;
         }
@@ -800,14 +844,30 @@ class TvSenderController extends ChangeNotifier {
         _lastBrowserError = (message == null || message.isEmpty)
             ? 'Browser playback failed'
             : message;
+        _suppressStoppedPlayback();
         _clearNowCasting();
         notifyListeners();
       } else if (type == 'context') {
         // The TV broadcasts context 'idle' when its player activity goes away
         // (playback ended or stopped on the TV) — mirror that here.
-        if ((obj['active'] as String?) == 'idle') _clearNowCasting();
+        if ((obj['active'] as String?) == 'idle') {
+          _suppressStoppedPlayback();
+          _clearNowCasting();
+        } else if ((obj['active'] as String?) == 'player') {
+          // A context event has no session ID and may have been queued before
+          // Stop. For receivers with IDs, wait for a different ID instead.
+          if (_stoppedPlaybackId == null) _awaitingFreshPlayback = false;
+        }
       } else if (type == 'playlist_status') {
+        final playbackId = obj['playbackId'] as String?;
+        if (playbackId != null && playbackId == _stoppedPlaybackId) return;
         final items = obj['items'];
+        if (items is List && items.isEmpty) {
+          _suppressStoppedPlayback();
+          _clearNowCasting();
+          return;
+        }
+        if (!_acceptPlaybackFrame(playbackId)) return;
         if (items is List) {
           _castPlaylist = [
             for (final it in items)

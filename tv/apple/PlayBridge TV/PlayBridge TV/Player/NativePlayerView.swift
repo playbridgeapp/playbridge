@@ -507,7 +507,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case "pause": player.pause()
             case "play_pause", "toggle":
                 if player.timeControlStatus == .playing { player.pause() } else { player.play() }
-            case "stop": onExit()
+            case "stop":
+                onExit()
+                return
             case "loop_on": isLooping = true
             case "loop_off": isLooping = false
             case "seek_forward": seek(by: 15)

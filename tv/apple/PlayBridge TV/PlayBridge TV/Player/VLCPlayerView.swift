@@ -968,6 +968,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             guard let cmd = note.userInfo?["command"] as? String else { return }
             if StillWatchingGate.isPrompting { return }
             handleControlCommand(cmd)
+            if cmd == "stop" { return }
             broadcastStatus()
         }
 
