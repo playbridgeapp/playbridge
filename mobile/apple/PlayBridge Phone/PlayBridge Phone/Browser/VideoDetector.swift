@@ -177,13 +177,26 @@ final class VideoDetector: ObservableObject {
         let kind = explicitKind ?? DetectedVideo.classify(url: url, contentType: contentType)
 
         let detectedBy = (body["detectedBy"] as? String) ?? "unknown"
+        let originUrl = body["originUrl"] as? String
+        let requestHeaders = Self.requestHeaders(
+            originUrl: originUrl,
+            userAgent: body["ua"] as? String,
+            // Only fetch/XHR requests carry an Origin; DOM media loads do not.
+            includeOrigin: detectedBy.hasPrefix("fetch") || detectedBy.hasPrefix("xhr")
+        )
         if seen.contains(url), let idx = videos.firstIndex(where: { $0.url == url }) {
             var updated = videos[idx]
             updated.lastSeen = now()
-            if CastStreamRanking.evidenceScore(detectedBy) > CastStreamRanking.evidenceScore(updated.detectedBy) {
+            let strongerEvidence = CastStreamRanking.evidenceScore(detectedBy) > CastStreamRanking.evidenceScore(updated.detectedBy)
+            if strongerEvidence {
                 updated.detectedBy = detectedBy
             }
             let oldKind = updated.kind
+            let oldHeaders = updated.headers
+            if !requestHeaders.isEmpty && (strongerEvidence || (oldHeaders["Origin"] == nil && requestHeaders["Origin"] != nil)) {
+                updated.originUrl = originUrl
+                updated.headers = requestHeaders
+            }
             if let explicitKind, explicitKind != updated.kind {
                 updated.contentType = contentType ?? updated.contentType
                 updated.kind = explicitKind
@@ -192,24 +205,16 @@ final class VideoDetector: ObservableObject {
                 updated.kind = DetectedVideo.classify(url: url, contentType: ct)
             }
             videos[idx] = updated
-            if oldKind != updated.kind { enrich(updated) }
+            if oldKind != updated.kind || oldHeaders != updated.headers { enrich(updated) }
             return
         }
         seen.insert(url)
-        let originUrl = body["originUrl"] as? String
         let video = DetectedVideo(
             url: url,
             contentType: contentType,
             detectedBy: detectedBy,
             originUrl: originUrl,
-            headers: VideoDetector.requestHeaders(
-                originUrl: originUrl,
-                userAgent: body["ua"] as? String,
-                // The browser only sends Origin on CORS requests (fetch/XHR), not
-                // on <video> element loads — mirror that so token-bound CDNs see
-                // the same headers the page's own request carried.
-                includeOrigin: detectedBy.hasPrefix("fetch") || detectedBy.hasPrefix("xhr")
-            ),
+            headers: requestHeaders,
             kind: kind,
             timestamp: now(),
             lastSeen: now(),

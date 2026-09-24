@@ -17,12 +17,14 @@ enum Thumbnailer {
 @MainActor
 final class Probe {
     var started: [String] = []
+    var startedHeaders: [[String: String]] = []
     var waiting: [Int: CheckedContinuation<Void, Never>] = [:]
     var maxActive = 0
 
-    func wait(_ name: String) async -> Int {
+    func wait(_ name: String, headers: [String: String]) async -> Int {
         let id = started.count
         started.append(name)
+        startedHeaders.append(headers)
         await withCheckedContinuation { waiting[id] = $0; maxActive = max(maxActive, waiting.count) }
         return id
     }
@@ -32,10 +34,10 @@ final class Probe {
 
     func detector(now: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1_000) }) -> VideoDetector {
         VideoDetector(loadQualities: { video in
-            let id = await self.wait("quality:\(video.id)")
+            let id = await self.wait("quality:\(video.id)", headers: VideoDetector.mediaHeaders(for: video))
             return StreamManifestInfo(qualities: [VideoQuality(label: "request-\(id)", bandwidth: 1, url: video.url)], validation: .verified)
         }, loadThumbnail: { video in
-            _ = await self.wait("thumbnail:\(video.id)")
+            _ = await self.wait("thumbnail:\(video.id)", headers: VideoDetector.mediaHeaders(for: video))
             return UIImage()
         }, now: now)
     }
@@ -67,6 +69,31 @@ struct VideoDetectorEnrichmentTests {
         await until { detector.thumbnailStates[url] == .ready }
         detector.ingest(["url": url])
         precondition(probe.started.count == 2, "Duplicate detection must reuse enrichment")
+
+        let headerProbe = Probe()
+        let headerDetector = headerProbe.detector()
+        let page = "https://player.example.test/watch?id=fixture"
+        headerDetector.ingest(["url": url, "detectedBy": "dom_source", "originUrl": page, "ua": "FixtureBrowser/1"])
+        await until { headerProbe.started.count == 2 }
+        precondition(headerDetector.videos[0].headers["Origin"] == nil)
+        headerDetector.ingest(["url": url, "detectedBy": "xhr_content_type", "originUrl": page,
+                               "contentType": "application/vnd.apple.mpegurl", "ua": "FixtureBrowser/1"])
+        precondition(headerDetector.videos[0].headers["Origin"] == "https://player.example.test")
+        precondition(headerDetector.videos[0].headers["Referer"] == page)
+        precondition(headerDetector.videos[0].detectedBy == "xhr_content_type")
+        await until { headerProbe.started.count == 3 }
+        headerProbe.finish(0); headerProbe.finish(1)
+        await until { headerProbe.started.count == 4 }
+        precondition(headerProbe.startedHeaders[2...3].allSatisfy { $0["Origin"] == "https://player.example.test" },
+                     "Upgraded thumbnail and manifest work must carry the CORS Origin")
+        headerProbe.finishAll()
+        await until { headerDetector.thumbnailStates[url] == .ready && headerDetector.qualities[url] != nil }
+        precondition(headerDetector.qualities[url]?.first?.label == "request-2",
+                     "Results from the original header set must not replace refreshed enrichment")
+        headerDetector.ingest(["url": url, "detectedBy": "dom_source", "originUrl": page])
+        precondition(headerDetector.videos[0].headers["Origin"] == "https://player.example.test")
+        precondition(headerProbe.started.count == 4, "Weaker observations must not clear Origin or restart enrichment")
+        headerDetector.clear()
 
         for index in 0..<5 { detector.ingest(["url": "https://example.test/\(index).m3u8"]) }
         await until { probe.started.count == 5 }
