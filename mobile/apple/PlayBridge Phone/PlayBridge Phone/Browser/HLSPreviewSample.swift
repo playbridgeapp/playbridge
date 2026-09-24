@@ -8,6 +8,16 @@ enum HLSPreviewSample {
         var segments: [URL]
     }
 
+    struct Sample {
+        let segmentFiles: [URL]
+        let combinedFile: URL?
+
+        func removeFiles() {
+            for file in segmentFiles { try? FileManager.default.removeItem(at: file) }
+            if let combinedFile { try? FileManager.default.removeItem(at: combinedFile) }
+        }
+    }
+
     static func plan(_ text: String, base: URL) -> Plan? {
         guard text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("#EXTM3U") else { return nil }
         var initialization: URL?
@@ -31,10 +41,14 @@ enum HLSPreviewSample {
                 guard let url = resolve(line, base: base) else { return nil }
                 segments.append(url)
                 expectsSegment = false
-                if segments.count == 3 { break }
             }
         }
-        return segments.isEmpty ? nil : Plan(initialization: initialization, segments: segments)
+        guard !segments.isEmpty else { return nil }
+        // Skip the opening credits/black lead-in in longer playlists; retain a
+        // bounded three-segment window so preview traffic cannot grow with them.
+        let start = Int(Double(segments.count - 1) * 0.25)
+        return Plan(initialization: initialization,
+                    segments: Array(segments[start..<min(segments.count, start + 3)]))
     }
 
     private static func resolve(_ path: String, base: URL) -> URL? {
@@ -43,7 +57,7 @@ enum HLSPreviewSample {
         return url
     }
 
-    static func download(from url: URL, headers: [String: String]) async -> URL? {
+    static func download(from url: URL, headers: [String: String]) async -> Sample? {
         var current = url
         var sample: Plan?
         // Resolve a small number of nested masters, preferring the cheapest variant.
@@ -62,26 +76,52 @@ enum HLSPreviewSample {
         }
         guard let sample else { StreamDebugTrace.record("No usable HLS sample plan (invalid layout or master depth limit)"); return nil }
         StreamDebugTrace.record("Sample plan: \(sample.segments.count) segments; initialization: \(sample.initialization != nil)")
-        let urls = sample.initialization.map { [$0] } ?? []
-        var data = Data()
         let limit = 12 * 1024 * 1024
-        for part in urls + sample.segments {
-            guard !Task.isCancelled,
-                  let bytes = await fetch(part, headers: headers, limit: limit - data.count) else { return nil }
-            data.append(bytes)
+        let initialization: Data
+        if let url = sample.initialization {
+            guard let bytes = await fetch(url, headers: headers, limit: limit) else { return nil }
+            initialization = bytes
+        } else {
+            initialization = Data()
         }
-        guard !Task.isCancelled else { return nil }
-        let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("playbridge-preview-\(UUID().uuidString)")
-            .appendingPathExtension(sample.initialization == nil ? "ts" : "mp4")
-        do {
-            try data.write(to: file, options: .atomic)
-            StreamDebugTrace.record("Sample saved for decoding: \(data.count) bytes, \(file.pathExtension)")
-            return file
-        } catch {
-            try? FileManager.default.removeItem(at: file)
-            return nil
+        var totalBytes = initialization.count
+        var segmentFiles: [URL] = []
+        var combined = initialization
+        let fileExtension = sample.initialization == nil ? "ts" : "mp4"
+        var failedSegment = false
+        for segment in sample.segments {
+            guard !Task.isCancelled else { break }
+            guard let bytes = await fetch(segment, headers: headers, limit: limit - totalBytes) else {
+                failedSegment = true
+                continue
+            }
+            totalBytes += bytes.count
+            combined.append(bytes)
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("playbridge-preview-\(UUID().uuidString)")
+                .appendingPathExtension(fileExtension)
+            do {
+                var data = initialization
+                data.append(bytes)
+                try data.write(to: file, options: .atomic)
+                segmentFiles.append(file)
+            } catch {
+                failedSegment = true
+                try? FileManager.default.removeItem(at: file)
+            }
         }
+        var combinedFile: URL?
+        if !failedSegment && segmentFiles.count > 1 && !Task.isCancelled {
+            let file = FileManager.default.temporaryDirectory
+                .appendingPathComponent("playbridge-preview-\(UUID().uuidString)")
+                .appendingPathExtension(fileExtension)
+            if (try? combined.write(to: file, options: .atomic)) != nil { combinedFile = file }
+            else { try? FileManager.default.removeItem(at: file) }
+        }
+        let result = Sample(segmentFiles: segmentFiles, combinedFile: combinedFile)
+        guard !Task.isCancelled, !segmentFiles.isEmpty else { result.removeFiles(); return nil }
+        StreamDebugTrace.record("Saved \(segmentFiles.count) preview segments for decoding: \(totalBytes) bytes")
+        return result
     }
 
     private static func fetch(_ url: URL, headers: [String: String], limit: Int) async -> Data? {

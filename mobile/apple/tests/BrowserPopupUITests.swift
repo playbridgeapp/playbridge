@@ -1,6 +1,80 @@
 import XCTest
 
 final class BrowserPopupUITests: XCTestCase {
+    func testBlockElementOnLiveImage() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
+        app.launchEnvironment["BROWSER_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        app.launchEnvironment["PICKER_MENU_UI"] = "1"
+        app.launchEnvironment["PICKER_LIVE_URL"] = "https://tube.perverzija.com/"
+        app.launch()
+        let menu = app.buttons["Browser menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 40), app.debugDescription)
+        menu.tap()
+        app.buttons["Block Element"].tap()
+        let state = app.staticTexts["pickerState"]
+        expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        app.webViews.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.75, dy: 0.2)).tap()
+        let block = app.buttons["Block selected element"]
+        XCTAssertTrue(block.waitForExistence(timeout: 5), app.debugDescription)
+        expectation(for: NSPredicate(format: "enabled == true"), evaluatedWith: block)
+        waitForExpectations(timeout: 5)
+        block.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        menu.tap()
+        app.buttons["Block Element"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        app.buttons["Cancel picker"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+    }
+
+    func testBlockElementFromMenu() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
+        app.launchEnvironment["BROWSER_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        app.launchEnvironment["PICKER_MENU_UI"] = "1"
+        app.launch()
+        let menu = app.buttons["Browser menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 25), app.debugDescription)
+        menu.tap()
+        let block = app.buttons["Block Element"]
+        XCTAssertTrue(block.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(block.isEnabled, "Block Element should be enabled on a loaded web page")
+        block.tap()
+        let state = app.staticTexts["pickerState"]
+        expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(app.buttons["Cancel picker"].waitForExistence(timeout: 5), app.debugDescription)
+        app.buttons["Cancel picker"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        menu.tap()
+        block.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        let link = app.webViews.links["Open"]
+        XCTAssertTrue(link.exists, app.debugDescription)
+        link.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["#link"].waitForExistence(timeout: 5),
+                      "A real touch did not select the page element")
+        app.buttons["Cancel picker"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        menu.tap()
+        block.tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+        link.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["#link"].waitForExistence(timeout: 5))
+        app.buttons["Block selected element"].tap()
+        expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
+        waitForExpectations(timeout: 10)
+    }
+
     func testTabRows() {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
@@ -50,6 +124,7 @@ final class BrowserPopupUITests: XCTestCase {
         app.launchEnvironment["BROWSER_FIXTURE"] = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
         app.launchEnvironment["NETWORK_LOG_UI"] = "1"
         app.launch()
+        XCTAssertTrue(app.buttons["Start detailed capture and reload"].waitForExistence(timeout: 5))
         let entry = app.staticTexts["ads.example"]
         XCTAssertTrue(entry.waitForExistence(timeout: 25))
         entry.tap()

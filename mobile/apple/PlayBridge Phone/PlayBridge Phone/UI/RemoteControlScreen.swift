@@ -2,13 +2,14 @@ import SwiftUI
 
 struct RemoteControlScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var nav: NavigationViewModel
     @State private var showCastLink = false
     @State private var castURL = ""
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 4) {
-                DashboardNavigationButton()
+                ScreenBackButton(destination: nav.remoteOrigin ?? .dashboard, accessibilityLabel: "Back")
                 Text("Remote").font(Theme.font(.title3).bold())
                 Spacer()
                 Button { showCastLink = true } label: {

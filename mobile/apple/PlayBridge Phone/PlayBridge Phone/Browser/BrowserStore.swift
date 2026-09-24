@@ -182,6 +182,8 @@ final class BrowserStore: ObservableObject {
         var title: String
         var isHome: Bool
         var desktop: Bool
+        var userAgentPreset: String? = nil
+        var customUserAgent: String? = nil
     }
     private struct SavedTabs: Codable { var tabs: [SavedTab]; var activeIndex: Int }
     private struct LegacyTabs: Codable { var urls: [String]; var activeIndex: Int }
@@ -195,6 +197,10 @@ final class BrowserStore: ObservableObject {
                 let tab = makeTab(url: item.isHome ? nil : item.url, activate: false)
                 tab.title = item.title.isEmpty ? (URL(string: item.url)?.host ?? "New Tab") : item.title
                 tab.isDesktopMode = item.desktop
+                tab.restoreUserAgent(
+                    preset: BrowserUserAgentPreset(rawValue: item.userAgentPreset ?? "") ?? .automatic,
+                    custom: item.customUserAgent
+                )
             }
             activeID = tabs[tabs.indices.contains(saved.activeIndex) ? saved.activeIndex : 0].id
         }
@@ -204,7 +210,10 @@ final class BrowserStore: ObservableObject {
 
     private func saveTabs() {
         guard !isRestoring else { return }
-        let items = tabs.map { SavedTab(url: $0.urlString, title: $0.title, isHome: $0.isHome, desktop: $0.isDesktopMode) }
+        let items = tabs.map {
+            SavedTab(url: $0.urlString, title: $0.title, isHome: $0.isHome, desktop: $0.isDesktopMode,
+                     userAgentPreset: $0.userAgentPreset.rawValue, customUserAgent: $0.customUserAgent)
+        }
         let payload = SavedTabs(tabs: items, activeIndex: tabs.firstIndex { $0.id == activeID } ?? 0)
         if let data = try? JSONEncoder().encode(payload) { try? data.write(to: tabsFileURL, options: .atomic) }
     }
@@ -270,10 +279,12 @@ final class BrowserStore: ObservableObject {
     private func applyRules(to tab: BrowserTab) {
         let cc = tab.configuration.userContentController
         cc.removeAllContentRuleLists()
-        // Skip blocking on anti-adblock sites (e.g. YouTube) so playback isn't broken.
+        // Skip automatic lists on anti-adblock sites (e.g. YouTube) so playback
+        // survives, but honor rules the user explicitly created in the picker.
         guard adBlockEnabled else { return }
         let exempt = isExempt(URL(string: tab.urlString))
-        for list in ruleLists where !exempt || ContentBlocker.isUserDomainRuleList(list) {
+        for list in ruleLists where !exempt || ContentBlocker.isUserDomainRuleList(list) ||
+            ContentBlocker.isUserCosmeticRuleList(list) {
             cc.add(list)
         }
     }
@@ -302,6 +313,7 @@ final class BrowserStore: ObservableObject {
         let duplicate = makeTab(url: source.isHome ? nil : source.urlString, activate: false, after: id)
         duplicate.title = source.title
         duplicate.isDesktopMode = source.isDesktopMode
+        duplicate.restoreUserAgent(preset: source.userAgentPreset, custom: source.customUserAgent)
         saveTabs()
         return duplicate
     }
@@ -359,7 +371,7 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
             return
         }
         if message.name == "networkLog" {
-            guard message.webView === tab?.loadedWebView else { return }
+            guard message.webView === tab?.loadedWebView, tab?.networkCaptureEnabled == true else { return }
             tab?.networkLog.ingest(message.body, page: message.frameInfo.request.url?.absoluteString ?? "", isSubframe: !message.frameInfo.isMainFrame)
             return
         }
@@ -375,6 +387,9 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
             tab?.requestPageCast(payload, source: source)
         case "pickerState":
             if message.frameInfo.isMainFrame, body["active"] as? Bool == false { tab?.pickerDidFinish() }
+        case "pickerSelection":
+            guard message.frameInfo.isMainFrame, let selector = body["selector"] as? String else { return }
+            tab?.pickerDidSelect(selector, hasSource: body["hasSource"] as? Bool == true)
         case "pickedElement":
             guard tab?.isPickingElement == true, message.frameInfo.isMainFrame,
                   let host = message.frameInfo.request.url?.host else { return }

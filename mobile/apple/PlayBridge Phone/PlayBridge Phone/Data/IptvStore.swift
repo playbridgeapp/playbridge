@@ -6,29 +6,43 @@ import Combine
 @MainActor
 final class IptvStore: ObservableObject {
     @Published private(set) var playlists: [IptvPlaylist] = []
+    @Published private(set) var isLoading = true
+    private var saveRevision = 0
 
-    private let fileURL: URL = {
+    private static func defaultFileURL() -> URL {
         let fm = FileManager.default
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("iptv_playlists.json")
-    }()
+    }
+    private let fileURL: URL
 
-    init() { load() }
+    private lazy var persistence = IptvPersistence(fileURL: fileURL)
+
+    init(fileURL: URL? = nil) {
+        self.fileURL = fileURL ?? Self.defaultFileURL()
+        Task { await finishLoading() }
+    }
 
     func playlist(_ id: UUID) -> IptvPlaylist? { playlists.first { $0.id == id } }
 
     // MARK: - Persistence
 
-    private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let decoded = try? JSONDecoder().decode([IptvPlaylist].self, from: data) else { return }
-        playlists = decoded
+    private func finishLoading() async {
+        guard isLoading else { return }
+        let loaded = await persistence.load()
+        guard isLoading else { return }
+        playlists = loaded
+        isLoading = false
     }
 
-    private func save() {
-        guard let data = try? JSONEncoder().encode(playlists) else { return }
-        try? data.write(to: fileURL, options: .atomic)
+    @discardableResult
+    private func enqueueSave() -> Task<Void, Never> {
+        saveRevision += 1
+        let revision = saveRevision
+        let snapshot = playlists
+        let persistence = persistence
+        return Task { await persistence.save(snapshot, revision: revision) }
     }
 
     // MARK: - Mutations
@@ -39,28 +53,33 @@ final class IptvStore: ObservableObject {
         let text = try await Self.fetchText(url)
         let channels = await Self.parse(text)
         guard !channels.isEmpty else { throw IptvError.noChannels }
+        await finishLoading()
         let pl = IptvPlaylist(name: name, source: trimmed, sourceType: .url,
                               addedAt: Date(), updatedAt: Date(), channels: channels)
         playlists.insert(pl, at: 0)
-        save()
+        await enqueueSave().value
     }
 
     func addFilePlaylist(name: String, fileURL pickedURL: URL) async throws {
-        let scoped = pickedURL.startAccessingSecurityScopedResource()
-        defer { if scoped { pickedURL.stopAccessingSecurityScopedResource() } }
-        guard let text = try? String(contentsOf: pickedURL, encoding: .utf8) else { throw IptvError.decode }
+        let (text, bookmark) = try await Task.detached(priority: .userInitiated) {
+            let scoped = pickedURL.startAccessingSecurityScopedResource()
+            defer { if scoped { pickedURL.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: pickedURL, encoding: .utf8) else { throw IptvError.decode }
+            let bookmark = try? pickedURL.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+            return (text, bookmark?.base64EncodedString() ?? "")
+        }.value
         let channels = await Self.parse(text)
         guard !channels.isEmpty else { throw IptvError.noChannels }
-        let bookmark = try? pickedURL.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
-        let pl = IptvPlaylist(name: name, source: bookmark?.base64EncodedString() ?? "",
+        await finishLoading()
+        let pl = IptvPlaylist(name: name, source: bookmark,
                               sourceType: .file, addedAt: Date(), updatedAt: Date(), channels: channels)
         playlists.insert(pl, at: 0)
-        save()
+        await enqueueSave().value
     }
 
     func refresh(_ id: UUID) async throws {
-        guard let idx = playlists.firstIndex(where: { $0.id == id }) else { return }
-        let pl = playlists[idx]
+        await finishLoading()
+        guard let pl = playlist(id) else { return }
         let text: String
 
         switch pl.sourceType {
@@ -68,29 +87,33 @@ final class IptvStore: ObservableObject {
             guard let url = URL(string: pl.source) else { throw IptvError.invalidURL }
             text = try await Self.fetchText(url)
         case .file:
-            guard let data = Data(base64Encoded: pl.source) else { throw IptvError.fileUnavailable }
-            var stale = false
-            guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
-                throw IptvError.fileUnavailable
-            }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let t = try? String(contentsOf: url, encoding: .utf8) else { throw IptvError.fileUnavailable }
-            text = t
+            text = try await Task.detached(priority: .userInitiated) {
+                guard let data = Data(base64Encoded: pl.source) else { throw IptvError.fileUnavailable }
+                var stale = false
+                guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
+                    throw IptvError.fileUnavailable
+                }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                guard let text = try? String(contentsOf: url, encoding: .utf8) else { throw IptvError.fileUnavailable }
+                return text
+            }.value
         }
 
         let channels = await Self.parse(text)
         guard !channels.isEmpty else { throw IptvError.noChannels }
-        var updated = pl
+        guard let idx = playlists.firstIndex(where: { $0.id == id }) else { return }
+        var updated = playlists[idx]
         updated.channels = channels
         updated.updatedAt = Date()
         playlists[idx] = updated
-        save()
+        await enqueueSave().value
     }
 
     func delete(_ id: UUID) {
+        guard !isLoading else { return }
         playlists.removeAll { $0.id == id }
-        save()
+        enqueueSave()
     }
 
     // MARK: - Helpers (off main)
@@ -108,5 +131,26 @@ final class IptvStore: ObservableObject {
         }
         guard let text = String(data: data, encoding: .utf8) else { throw IptvError.decode }
         return text
+    }
+}
+
+/// Serializes large JSON writes away from SwiftUI and ignores snapshots overtaken by newer edits.
+private actor IptvPersistence {
+    let fileURL: URL
+    private var latestRevision = 0
+
+    init(fileURL: URL) { self.fileURL = fileURL }
+
+    func load() -> [IptvPlaylist] {
+        guard let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode([IptvPlaylist].self, from: data) else { return [] }
+        return decoded
+    }
+
+    func save(_ playlists: [IptvPlaylist], revision: Int) {
+        guard revision > latestRevision else { return }
+        latestRevision = revision
+        guard let data = try? JSONEncoder().encode(playlists) else { return }
+        try? data.write(to: fileURL, options: .atomic)
     }
 }

@@ -52,6 +52,7 @@ private struct ActiveTabView: View {
     @State private var address = ""
     @State private var showDetected = false
     @State private var showMenu = false
+    @State private var pendingMenuAction: (() -> Void)?
     @State private var showDeviceSheet = false
     @FocusState private var addressFocused: Bool
 
@@ -59,8 +60,8 @@ private struct ActiveTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-            if tab.isLoading && tab.progress < 1 {
+            if !tab.isBrowserChromeHidden { topBar }
+            if !tab.isBrowserChromeHidden && tab.isLoading && tab.progress < 1 {
                 ProgressView(value: tab.progress).tint(Theme.primary)
                     .scaleEffect(x: 1, y: 0.6, anchor: .center)
             }
@@ -69,6 +70,12 @@ private struct ActiveTabView: View {
                     BrowserHomeView { url in tab.load(url) }
                 } else {
                     WebViewContainer(tab: tab)
+                    if tab.isPickingElement {
+                        PickerTouchOverlay { point, size in
+                            tab.pickElement(atNormalizedX: Double(point.x / size.width),
+                                            y: Double(point.y / size.height))
+                        }
+                    }
                 }
                 if let failure = tab.navigationFailure {
                     BrowserFailureView(failure: failure, retry: { tab.reload() }, back: {
@@ -83,13 +90,50 @@ private struct ActiveTabView: View {
                         tab.load(url)
                     }
                 }
+                if tab.isBrowserChromeHidden {
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Button { tab.isBrowserChromeHidden = false } label: {
+                                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundColor(Theme.onSurface)
+                                    .frame(width: 44, height: 44)
+                                    .background(Theme.surfaceContainerHigh.opacity(0.92), in: Circle())
+                                    .contentShape(Circle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Exit full screen")
+                            .accessibilityHint("Shows browser controls")
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                }
             }
             if tab.isPickingElement {
-                HStack {
-                    Text("Tap an element to block").font(Theme.font(.caption))
-                    Spacer()
-                    Button("Cancel") { tab.stopElementPicker() }
-                }.padding(10).background(Theme.surfaceContainer)
+                VStack(spacing: 8) {
+                    HStack {
+                        Text(tab.pickerSelector ?? "Tap an element to block")
+                            .font(Theme.font(.caption))
+                            .lineLimit(1)
+                        Spacer()
+                        Button("Cancel") { tab.stopElementPicker() }
+                        Button("Block") { tab.blockPickedElement() }
+                            .disabled(tab.pickerSelector == nil)
+                    }
+                    HStack(spacing: 16) {
+                        Button("Up") { tab.pickerAction("up") }
+                        Button("Down") { tab.pickerAction("down") }
+                        Button("Preview") { tab.pickerAction("preview") }
+                        Button("Block source") { tab.pickerAction("source") }
+                            .disabled(!tab.pickerHasSource)
+                    }
+                    .font(Theme.font(.caption))
+                    .frame(maxWidth: .infinity)
+                }
+                .padding(10)
+                .background(Theme.surfaceContainer)
             }
             if tab.popupBlocked {
                 HStack {
@@ -101,8 +145,9 @@ private struct ActiveTabView: View {
                         .accessibilityLabel("Dismiss popup notice")
                 }.padding(10).background(Theme.surfaceContainer)
             }
-            toolbar
+            if !tab.isBrowserChromeHidden { toolbar }
         }
+        .statusBarHidden(tab.isBrowserChromeHidden)
         .sheet(isPresented: $showDetected) {
             CastSheet(detector: tab.detector, tab: tab, store: store)
                 .presentationDetents([.large])
@@ -113,8 +158,15 @@ private struct ActiveTabView: View {
         .onChange(of: showDetected) { isPresented in
             if isPresented { tab.pauseMedia() }
         }
-        .sheet(isPresented: $showMenu) {
-            MenuSheet(tab: tab, store: store, isPresented: $showMenu)
+        .sheet(isPresented: $showMenu, onDismiss: {
+            let action = pendingMenuAction
+            pendingMenuAction = nil
+            action?()
+        }) {
+            MenuSheet(tab: tab, store: store, isPresented: $showMenu) { action in
+                pendingMenuAction = action
+                showMenu = false
+            }
         }
         .sheet(isPresented: $showDeviceSheet) {
             DeviceConnectionSheet()

@@ -54,6 +54,15 @@ struct BrowserNetworkLogView: View {
                 Section {
                     Text("Requests observed in this tab, including frames and navigation events. WebKit may omit some blocked, cached, or background requests. URLs are redacted; headers and bodies are not recorded.")
                         .font(Theme.font(.caption)).foregroundStyle(.secondary)
+                    if tab.networkCaptureEnabled {
+                        Button("Stop detailed capture") { tab.setNetworkCaptureEnabled(false) }
+                        Text("Stopping capture reloads this page. Recorded entries remain until cleared or the tab closes.")
+                            .font(Theme.font(.caption)).foregroundStyle(.secondary)
+                    } else {
+                        Button("Start detailed capture and reload") { tab.setNetworkCaptureEnabled(true) }
+                        Text("Detailed fetch, XHR, and resource capture is off during normal browsing. Starting it reloads this page.")
+                            .font(Theme.font(.caption)).foregroundStyle(.secondary)
+                    }
                     if !store.adBlockEnabled {
                         Button("Enable ad blocking") { store.toggleAdBlock() }
                     }

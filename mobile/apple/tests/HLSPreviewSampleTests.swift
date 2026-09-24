@@ -14,6 +14,10 @@ enum StreamHTTP {
         let ts = HLSPreviewSample.plan("#EXTM3U\n#EXTINF:2,\na.ts\n#EXTINF:2,\nb.ts\n#EXTINF:2,\nc.ts\n#EXTINF:2,\nd.ts", base: base)
         precondition(ts?.segments.count == 3)
         precondition(ts?.segments.first?.absoluteString == "https://example.test/video/a.ts")
+        let longer = "#EXTM3U\n" + (0..<12).map { "#EXTINF:2,\n\($0).ts" }.joined(separator: "\n")
+        let later = HLSPreviewSample.plan(longer, base: base)
+        precondition(later?.segments.map(\.lastPathComponent) == ["2.ts", "3.ts", "4.ts"],
+                     "Long HLS playlists should sample past the opening segments without extra downloads")
         let fmp4 = HLSPreviewSample.plan("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2,\na.m4s", base: base)
         precondition(fmp4?.initialization?.lastPathComponent == "init.mp4")
         precondition(fmp4?.segments.first?.lastPathComponent == "a.m4s")

@@ -3,6 +3,54 @@ import WebKit
 import Combine
 import UIKit
 
+enum BrowserUserAgentPreset: String, CaseIterable, Identifiable {
+    case automatic
+    case chromeAndroid
+    case chromeWindows
+    case chromeMac
+    case firefoxAndroid
+    case firefoxWindows
+    case safariMac
+    case samsungInternet
+    case custom
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .automatic: return "Automatic"
+        case .chromeAndroid: return "Chrome — Android"
+        case .chromeWindows: return "Chrome — Windows"
+        case .chromeMac: return "Chrome — macOS"
+        case .firefoxAndroid: return "Firefox — Android"
+        case .firefoxWindows: return "Firefox — Windows"
+        case .safariMac: return "Safari — macOS"
+        case .samsungInternet: return "Samsung Internet — Android"
+        case .custom: return "Custom"
+        }
+    }
+
+    var value: String? {
+        switch self {
+        case .automatic, .custom: return nil
+        case .chromeAndroid:
+            return "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+        case .chromeWindows:
+            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        case .chromeMac:
+            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        case .firefoxAndroid:
+            return "Mozilla/5.0 (Android 14; Mobile; rv:128.0) Gecko/128.0 Firefox/128.0"
+        case .firefoxWindows:
+            return "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0"
+        case .safariMac:
+            return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+        case .samsungInternet:
+            return "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/122.0.0.0 Mobile Safari/537.36"
+        }
+    }
+}
+
 /// One browser tab: lazily owns a persistent `WKWebView`, publishes navigation state, and routes detection
 /// messages to its `VideoDetector`. Rough analogue of an entry in the Android `TabManager`.
 final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
@@ -19,17 +67,29 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
         view.isFindInteractionEnabled = true
-        view.customUserAgent = isDesktopMode ? Self.desktopUA : nil
+        view.customUserAgent = effectiveUserAgent
         observe()
         return view
     }
     let detector = VideoDetector()
     let networkLog = BrowserNetworkLog()
+    @Published private(set) var networkCaptureEnabled = false
+
+    /// Detailed request capture injects page-world hooks and is deliberately opt-in.
+    /// A reload is required both to install and to remove hooks in the current document.
+    func setNetworkCaptureEnabled(_ enabled: Bool) {
+        guard networkCaptureEnabled != enabled else { return }
+        networkCaptureEnabled = enabled
+        if enabled { networkLog.clear() }
+        installUserScripts()
+        if loadedWebView != nil, !isHome { reload() }
+    }
 
     @Published var urlString: String = ""
     @Published var title: String = "New Tab"
     @Published private(set) var isMediaPlaying = false
     private var playbackState = BrowserPlaybackState()
+    private var playbackExpiryTask: Task<Void, Never>?
 
     func recordPlaybackState(_ body: Any) {
         guard let body = body as? [String: Any], let frame = body["frame"] as? String,
@@ -39,8 +99,21 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     func refreshPlaybackState() {
-        let playing = playbackState.isPlaying(now: ProcessInfo.processInfo.systemUptime)
+        let now = ProcessInfo.processInfo.systemUptime
+        let playing = playbackState.isPlaying(now: now)
         if isMediaPlaying != playing { isMediaPlaying = playing }
+        guard playing else {
+            playbackExpiryTask?.cancel()
+            playbackExpiryTask = nil
+            return
+        }
+        guard playbackExpiryTask == nil, let expiry = playbackState.nextExpiry(now: now) else { return }
+        playbackExpiryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(max(0.01, expiry - now) * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            self.playbackExpiryTask = nil
+            self.refreshPlaybackState()
+        }
     }
 
     /// Stops page-owned playback without waking a lazily restored tab.
@@ -59,6 +132,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published var canGoBack: Bool = false
     @Published var canGoForward: Bool = false
     @Published var isDesktopMode: Bool = false
+    @Published private(set) var userAgentPreset: BrowserUserAgentPreset = .automatic
+    @Published private(set) var customUserAgent: String?
+    @Published var isBrowserChromeHidden = false
     @Published var blockedAdMessage: String? = nil {
         didSet {
             if blockedAdMessage == nil { noticeDismissal?.cancel(); noticeDismissal = nil }
@@ -88,6 +164,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published var popupBlocked = false
     @Published private(set) var blockedPopupOrigin: URL?
     @Published private(set) var isPickingElement = false
+    @Published private(set) var pickerSelector: String?
+    @Published private(set) var pickerHasSource = false
     private var pickerGeneration = UUID()
     var isActive: () -> Bool = { false }
     var onDownload: ((WKDownload, WKWebView) -> Void)?
@@ -168,26 +246,61 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private var observations: [NSKeyValueObservation] = []
     private var cancellables = Set<AnyCancellable>()
 
-    init(configuration: WKWebViewConfiguration, handler: WKScriptMessageHandler) {
-        // Each tab installs the detection script + message handler into its own content controller,
-        // so detections are attributed to this tab.
+    /// On iPhone, WebKit's desktop content mode still honors width=device-width.
+    /// Give responsive pages a desktop layout viewport while this mode is on.
+    private static let desktopViewportScript = #"""
+    (() => {
+        const head = document.head;
+        if (!head) return;
+        const apply = () => {
+            let viewport = head.querySelector('meta[name="viewport"]');
+            if (!viewport) {
+                viewport = document.createElement('meta');
+                viewport.name = 'viewport';
+                head.appendChild(viewport);
+            }
+            if (viewport.content !== 'width=980') viewport.content = 'width=980';
+        };
+        new MutationObserver(apply).observe(head, {
+            childList: true, subtree: true, attributes: true,
+            attributeFilter: ['name', 'content']
+        });
+        apply();
+    })();
+    """#
+
+    private func installUserScripts() {
         let cc = configuration.userContentController
         cc.removeAllUserScripts()
         cc.addUserScript(WKUserScript(source: DetectionScript.source,
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
-        cc.add(handler, name: "playbridge")
-        cc.add(handler, name: "networkLog")
-        cc.add(handler, contentWorld: BrowserPlaybackScript.world, name: "playbackState")
         cc.addUserScript(WKUserScript(source: BrowserPlaybackScript.source,
             injectionTime: .atDocumentStart, forMainFrameOnly: false, in: BrowserPlaybackScript.world))
-        cc.addUserScript(WKUserScript(source: BrowserNetworkScript.source, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        if networkCaptureEnabled {
+            cc.addUserScript(WKUserScript(source: BrowserNetworkScript.source,
+                injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        }
         cc.addUserScript(WKUserScript(source: BrowserPopupInteraction.source,
             injectionTime: .atDocumentStart, forMainFrameOnly: false,
             in: BrowserPopupInteraction.world))
+        if isDesktopMode && UIDevice.current.userInterfaceIdiom == .phone {
+            cc.addUserScript(WKUserScript(source: Self.desktopViewportScript,
+                injectionTime: .atDocumentEnd, forMainFrameOnly: true, in: .defaultClient))
+        }
+    }
+
+    init(configuration: WKWebViewConfiguration, handler: WKScriptMessageHandler) {
+        // Each tab installs the detection script + message handler into its own content controller,
+        // so detections are attributed to this tab.
+        let cc = configuration.userContentController
+        cc.add(handler, name: "playbridge")
+        cc.add(handler, name: "networkLog")
+        cc.add(handler, contentWorld: BrowserPlaybackScript.world, name: "playbackState")
 
         self.configuration = configuration
         super.init()
+        installUserScripts()
         popupInteraction.tab = self
         cc.add(popupInteraction, contentWorld: BrowserPopupInteraction.world, name: "popupInteraction")
         // Surface detector changes (new videos) on the tab so views observing the tab refresh.
@@ -254,6 +367,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         popupInteraction.clear()
         pickerGeneration = UUID()
         let generation = pickerGeneration
+        pickerSelector = nil
+        pickerHasSource = false
         isPickingElement = true
         webView.evaluateJavaScript(ContentBlocker.elementPickerJS) { [weak self] _, error in
             guard let self, self.pickerGeneration == generation, error != nil else { return }
@@ -267,12 +382,33 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, self.pickerGeneration == generation else { return }
             self.isPickingElement = false
+            self.pickerSelector = nil
+            self.pickerHasSource = false
         }
+    }
+    func pickerDidSelect(_ selector: String, hasSource: Bool) {
+        guard isPickingElement else { return }
+        pickerSelector = selector
+        pickerHasSource = hasSource
+    }
+    func pickElement(atNormalizedX x: Double, y: Double) {
+        guard isPickingElement, x.isFinite, y.isFinite else { return }
+        webView.evaluateJavaScript("window.__pb_picker_select_at?.(\(x),\(y));", completionHandler: nil)
+    }
+    func blockPickedElement() {
+        guard isPickingElement, pickerSelector != nil else { return }
+        webView.evaluateJavaScript("window.__pb_picker_block?.();", completionHandler: nil)
+    }
+    func pickerAction(_ action: String) {
+        guard isPickingElement, ["up", "down", "preview", "source"].contains(action) else { return }
+        webView.evaluateJavaScript("window.__pb_picker_action?.('\(action)');", completionHandler: nil)
     }
     func stopElementPicker() {
         guard isPickingElement else { return }
         pickerGeneration = UUID()
         isPickingElement = false
+        pickerSelector = nil
+        pickerHasSource = false
         loadedWebView?.evaluateJavaScript("if(window.__pb_picker_cleanup) window.__pb_picker_cleanup();", completionHandler: nil)
     }
 
@@ -283,9 +419,53 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if let failure = navigationFailure { load(failure.address) }
         else { cancelPrompt(); webView.reload() }
     }
-    func stop() { loadedWebView?.stopLoading() }
+    func stop() {
+        playbackExpiryTask?.cancel()
+        playbackExpiryTask = nil
+        loadedWebView?.stopLoading()
+    }
 
     static let desktopUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15"
+
+    var effectiveUserAgent: String? {
+        if userAgentPreset == .custom { return customUserAgent }
+        return userAgentPreset.value ?? (isDesktopMode ? Self.desktopUA : nil)
+    }
+
+    func restoreUserAgent(preset: BrowserUserAgentPreset, custom: String?) {
+        let sanitized = Self.validCustomUserAgent(custom)
+        userAgentPreset = preset == .custom && sanitized == nil ? .automatic : preset
+        customUserAgent = sanitized
+        applyBrowserIdentity(reload: false)
+    }
+
+    @discardableResult
+    func selectUserAgent(_ preset: BrowserUserAgentPreset, custom: String? = nil) -> Bool {
+        let sanitized = Self.validCustomUserAgent(custom)
+        guard preset != .custom || sanitized != nil else { return false }
+        guard preset != userAgentPreset || (preset == .custom && sanitized != customUserAgent) else { return true }
+        userAgentPreset = preset
+        if preset == .custom { customUserAgent = sanitized }
+        applyBrowserIdentity(reload: true)
+        onMetadataChanged?()
+        return true
+    }
+
+    static func validCustomUserAgent(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.utf8.count <= 512,
+              !trimmed.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else { return nil }
+        return trimmed
+    }
+
+    private func applyBrowserIdentity(reload: Bool) {
+        configuration.defaultWebpagePreferences.preferredContentMode = isDesktopMode ? .desktop : .mobile
+        loadedWebView?.customUserAgent = effectiveUserAgent
+        installUserScripts()
+        // A site may cache distinct mobile/desktop responses at the same URL.
+        if reload && !isHome { loadedWebView?.reloadFromOrigin() }
+    }
 
     /// Kept as a safety net: force desktop on YouTube if its mobile player still
     /// misbehaves with the default UA.
@@ -298,10 +478,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     func toggleDesktopMode() {
         isDesktopMode.toggle()
-        webView.customUserAgent = isDesktopMode ? BrowserTab.desktopUA : nil
-        webView.configuration.defaultWebpagePreferences.preferredContentMode = isDesktopMode ? .desktop : .mobile
+        applyBrowserIdentity(reload: true)
         onMetadataChanged?()
-        webView.reload()
     }
 
     /// Turn an address-bar entry into a URL (add scheme) or a Google search query.
@@ -326,6 +504,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         documentID = UUID()
         playbackState = BrowserPlaybackState()
+        playbackExpiryTask?.cancel()
+        playbackExpiryTask = nil
         isMediaPlaying = false
         if let url = webView.url, url.scheme != "about" {
             hasCommittedPage = true
@@ -375,6 +555,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         isPickingElement = false
+        pickerSelector = nil
+        pickerHasSource = false
         pickerGeneration = UUID()
         cancelPrompt()
         detector.clear()
@@ -382,13 +564,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             message: "This page stopped responding. Reload it to continue.")
         isLoading = false
     }
-    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard !isPickingElement else { decisionHandler(.cancel); return }
-        guard let url = action.request.url else { decisionHandler(.cancel); return }
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                 preferences: WKWebpagePreferences,
+                 decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        // The configuration's default is captured when WKWebView is created. A live
+        // Desktop Site toggle needs preferences on every main-frame navigation/reload.
+        if action.targetFrame?.isMainFrame == true {
+            preferences.preferredContentMode = isDesktopMode ? .desktop : .mobile
+        }
+        guard !isPickingElement else { decisionHandler(.cancel, preferences); return }
+        guard let url = action.request.url else { decisionHandler(.cancel, preferences); return }
         if action.targetFrame == nil || action.targetFrame?.isMainFrame == true {
             let source = committedPageURL ?? popupOpenerURL ?? action.sourceFrame.request.url
             if blockAdNavigation(url, source: source, popup: action.targetFrame == nil || (popupOpenerURL != nil && !hasCommittedPage)) {
-                decisionHandler(.cancel)
+                decisionHandler(.cancel, preferences)
                 return
             }
         }
@@ -396,7 +585,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             kind: action.targetFrame == nil ? "popup" : (action.targetFrame?.isMainFrame == false ? "iframe navigation" : "navigation"), method: action.request.httpMethod ?? "GET", state: "Requested")
         let scheme = url.scheme?.lowercased() ?? ""
         if !["http", "https", "about", "blob", "data"].contains(scheme) {
-            decisionHandler(.cancel)
+            decisionHandler(.cancel, preferences)
             guard action.targetFrame == nil || action.targetFrame?.isMainFrame == true else { return }
             guard !["javascript", "file", "", "intent"].contains(scheme) else {
                 blockedAdMessage = "This type of link cannot be opened on iPhone."
@@ -412,12 +601,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
         if action.shouldPerformDownload {
             present(BrowserPrompt(title: "Download file?", message: "Save this file to PlayBridge Downloads?", acceptLabel: "Download") { accepted, _ in
-                decisionHandler(accepted ? .download : .cancel)
+                decisionHandler(accepted ? .download : .cancel, preferences)
             })
             return
         }
         if action.targetFrame?.isMainFrame == true { requestedAddress = url.absoluteString }
-        decisionHandler(.allow)
+        decisionHandler(.allow, preferences)
     }
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         // Also inspect the final response: server-side redirects do not always

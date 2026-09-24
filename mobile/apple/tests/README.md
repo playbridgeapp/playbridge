@@ -45,6 +45,9 @@ Run all standalone fixtures (macOS Swift toolchain and Node required):
 bash mobile/apple/tests/run-fixture-checks.sh
 ```
 
+This also exercises the IPTV store's asynchronous load, large file import,
+ordered background saves, deletion, and reopen behavior.
+
 Additional regression coverage mirrors Android's ranking scenarios: newest
 activity breaks equal-score ties; freshness decays 50 points per minute up to
 150; newest SPA lifecycle receives 400 points; current verified streams can
@@ -177,6 +180,10 @@ iCloud media and real receiver playback need physical-device acceptance.
 The browser fixture also extracts the current production element-picker script
 from ContentBlocker.swift. It exercises linked-element touchend/click suppression,
 picker message gating, hide/cancel, popup suppression and navigation after cleanup.
+`--picker-menu-ui` tests real simulator taps through the browser menu and native
+picker controls. `--picker-live-ui` repeats Block and Cancel on the reported
+overlay-heavy site; it needs external network access and is opt-in because that
+site's content can change.
 
 Run `bash mobile/apple/tests/run-browser-startup-checks.sh --popup-audit` from the
 repository root for popup-policy regression checks. It exercises automatic
@@ -199,7 +206,8 @@ fixture filter text replacing live downloads.
 
 
 Run `bash mobile/apple/tests/run-browser-startup-checks.sh --network-log` for
-per-tab network log checks. The WebKit fixture exercises fetch, XHR, images,
+per-tab network log checks. It verifies detailed capture is off during normal
+browsing, then enables capture and reloads. The WebKit fixture exercises fetch, XHR, images,
 iframe attribution, failed requests, blocked navigation records, redaction,
 request updates, log clearing, tab isolation, and the 1,000-entry bound.
 

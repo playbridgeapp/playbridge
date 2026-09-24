@@ -51,7 +51,13 @@ struct TabsScreen: View {
                                                checked: selected.contains(tab.id), onSelect: {
                                             if selecting {
                                                 if !selected.insert(tab.id).inserted { selected.remove(tab.id) }
-                                            } else { store.select(tab.id); dismiss() }
+                                            } else {
+                                                // Keep the row's active styling from animating during sheet dismissal.
+                                                var transaction = Transaction(animation: nil)
+                                                transaction.disablesAnimations = true
+                                                withTransaction(transaction) { store.select(tab.id) }
+                                                dismiss()
+                                            }
                                         }, onClose: { store.closeTab(tab.id) })
                                         .id(tab.id)
                                         .contextMenu {
@@ -219,14 +225,6 @@ private struct TabRow: View {
         }
         .background((active || checked ? Theme.primary.opacity(0.1) : Theme.surfaceContainerLow), in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(active ? Theme.primary : Theme.onSurfaceVariant.opacity(0.2), lineWidth: active ? 1.5 : 1))
-        .task {
-            // Expire reports from stopped/suspended frames while this row is visible.
-            while !Task.isCancelled {
-                tab.refreshPlaybackState()
-                do { try await Task.sleep(nanoseconds: 500_000_000) }
-                catch { return }
-            }
-        }
     }
 }
 

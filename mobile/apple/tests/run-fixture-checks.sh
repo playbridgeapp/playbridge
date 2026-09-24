@@ -20,9 +20,26 @@ compiler=(swiftc -module-cache-path "$build_dir/modules" "$source_root/Browser/S
   "$test_root/HLSPreviewSampleTests.swift" -o "$build_dir/sample"
 "$build_dir/sample"
 "${compiler[@]}" "$source_root/Browser/TransportStreamThumbnail.swift" \
+  "$source_root/Browser/ThumbnailFramePolicy.swift" \
   "$test_root/TransportStreamThumbnailTests.swift" -o "$build_dir/transport"
 "$build_dir/transport"
+if command -v ffmpeg >/dev/null 2>&1; then
+  if ffmpeg -hide_banner -loglevel error -f lavfi -i 'color=c=black:s=160x90:r=10:d=1' \
+       -an -c:v libx264 -f mpegts "$build_dir/black.ts" \
+     && ffmpeg -hide_banner -loglevel error -f lavfi -i 'color=c=white:s=160x90:r=10:d=1' \
+       -an -c:v libx264 -f mpegts "$build_dir/bright.ts"; then
+    "$build_dir/transport" "$build_dir/black.ts" "$build_dir/bright.ts"
+  fi
+fi
+"${compiler[@]}" "$source_root/Browser/ThumbnailFramePolicy.swift" \
+  "$test_root/ThumbnailFramePolicyTests.swift" -o "$build_dir/thumbnail-policy"
+"$build_dir/thumbnail-policy"
 node "$test_root/DetectionScriptLifecycleTests.js"
+
+swiftc -module-cache-path "$build_dir/modules" \
+  "$source_root/Models/IptvModels.swift" "$source_root/Data/IptvStore.swift" \
+  "$test_root/IptvStoreTests.swift" -o "$build_dir/iptv-store"
+"$build_dir/iptv-store"
 
 "${compiler[@]}" -D DEBUG "$test_root/StreamDebugTraceTests.swift" -o "$build_dir/debug-trace"
 "$build_dir/debug-trace"

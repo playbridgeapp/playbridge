@@ -8,7 +8,7 @@ final class UIImage: NSObject {
 }
 
 @main struct TransportStreamThumbnailTests {
-    static func main() {
+    static func main() async {
         let annex: [UInt8] = [0,0,0,1,0x67,1,2, 0,0,1,0x68,3,
                               0,0,1,0x65,0x80,4, 0,0,1,0x65,0x40,5,
                               0,0,1,0x65,0x80,6]
@@ -43,13 +43,27 @@ final class UIImage: NSObject {
         scrambled[3] |= 0x80
         precondition(TransportStreamThumbnail.avcFrame(in: Data(scrambled)) == nil)
         precondition(TransportStreamThumbnail.avcFrame(in: Data([0,1,2])) == nil)
-        // Optional locally generated fixture; never commit signed URLs or user media.
-        if let path = CommandLine.arguments.dropFirst().first {
+        // Optional locally generated fixtures; never commit signed URLs or user media.
+        for path in CommandLine.arguments.dropFirst() {
             guard let image = TransportStreamThumbnail.thumbnail(file: URL(fileURLWithPath: path)) else {
                 fatalError("Fixture did not decode")
             }
             precondition(image.cgImage.width > 0 && image.cgImage.width <= 640)
             precondition(image.cgImage.height > 0 && image.cgImage.height <= 360)
+        }
+        if CommandLine.arguments.count == 3 {
+            let files = CommandLine.arguments.dropFirst().map { URL(fileURLWithPath: $0) }
+            let dark = TransportStreamThumbnail.thumbnail(file: files[0])!
+            let bright = TransportStreamThumbnail.thumbnail(file: files[1])!
+            precondition(ThumbnailFramePolicy.isNearlyBlack(dark.cgImage), "Black TS fixture was not recognized")
+            precondition(!ThumbnailFramePolicy.isNearlyBlack(bright.cgImage), "Bright TS fixture was rejected")
+            let selected = await ThumbnailFramePolicy.selectCandidates(files) { _, file in
+                TransportStreamThumbnail.thumbnail(file: file)?.cgImage
+            }
+            precondition(selected.attempts == 2 && selected.image != nil &&
+                         !ThumbnailFramePolicy.isNearlyBlack(selected.image!),
+                         "HLS selection kept the black transport segment")
+            print("CHECK: black MPEG-TS segment was skipped for the later bright segment")
         }
         print("PASS: TS/PES extraction, AVC parameter sets, multi-slice IDR boundaries and invalid transport")
     }

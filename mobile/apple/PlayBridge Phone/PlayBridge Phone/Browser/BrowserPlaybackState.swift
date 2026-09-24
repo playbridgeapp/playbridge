@@ -11,6 +11,9 @@ struct BrowserPlaybackState {
         else { frames.removeValue(forKey: frame) }
     }
     func isPlaying(now: TimeInterval) -> Bool { frames.values.contains { now - $0 < 2.5 } }
+    func nextExpiry(now: TimeInterval) -> TimeInterval? {
+        frames.values.filter { now - $0 < 2.5 }.min().map { $0 + 2.5 }
+    }
 }
 
 enum BrowserPlaybackScript {

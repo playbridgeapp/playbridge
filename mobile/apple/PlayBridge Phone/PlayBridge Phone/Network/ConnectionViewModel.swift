@@ -183,7 +183,38 @@ final class ConnectionViewModel: ObservableObject {
         connect(to: device)
     }
 
-    /// Reconnect to the previously paired device (used on launch).
+    /// Retry the last chosen receiver after launch or a return from the background.
+    /// An explicit disconnect selects this phone, and pairing/security failures need
+    /// user action rather than an automatic retry.
+    func reconnectLastReceiverIfNeeded() {
+        switch state {
+        case .disconnected, .error:
+            break
+        default:
+            return
+        }
+
+        let route = UserDefaults.standard.string(forKey: "last_receiver_protocol")
+        if route == "google_cast" {
+            guard GoogleCastNativeAvailability.isAvailable else { return }
+            switch googleCast.state {
+            case .disconnected, .error:
+                if let device = savedExternalReceiverDevices.first { connectExternalReceiver(device) }
+            default:
+                break
+            }
+        } else if route == nil || route == "playbridge" {
+            guard pairedDevice != nil else { return }
+            switch ws.state {
+            case .disconnected, .error:
+                reconnectSaved()
+            default:
+                break
+            }
+        }
+    }
+
+    /// Reconnect to the previously paired PlayBridge device.
     func reconnectSaved() {
         let route = UserDefaults.standard.string(forKey: "last_receiver_protocol")
         guard route != "google_cast", route != "this_phone" else { return }

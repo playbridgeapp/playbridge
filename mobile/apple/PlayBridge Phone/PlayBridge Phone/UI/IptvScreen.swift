@@ -14,7 +14,10 @@ struct IptvScreen: View {
             VStack(alignment: .leading, spacing: 16) {
                 header
 
-                if iptv.playlists.isEmpty {
+                if iptv.isLoading {
+                    ProgressView("Loading playlists…")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if iptv.playlists.isEmpty {
                     emptyState
                 } else {
                     ScrollView {
@@ -133,18 +136,23 @@ struct IptvAddSheet: View {
                 } header: { Text("Playlist URL") }
 
                 Section {
-                    Button { showImporter = true } label: {
-                        HStack {
-                            Image(systemName: "doc.badge.plus")
-                            Text(pickedFile?.lastPathComponent ?? "Select .m3u file")
-                            Spacer()
-                            if pickedFile != nil {
-                                Button { pickedFile = nil } label: { Image(systemName: "xmark.circle.fill") }
-                                    .foregroundColor(Theme.onSurfaceVariant)
+                    HStack {
+                        Button { showImporter = true } label: {
+                            HStack {
+                                Image(systemName: "doc.badge.plus")
+                                Text(pickedFile?.lastPathComponent ?? "Select .m3u file")
+                                Spacer()
                             }
                         }
+                        .buttonStyle(.plain)
+                        .disabled(!urlString.trimmingCharacters(in: .whitespaces).isEmpty)
+                        if pickedFile != nil {
+                            Button { pickedFile = nil } label: { Image(systemName: "xmark.circle.fill") }
+                                .foregroundColor(Theme.onSurfaceVariant)
+                                .frame(width: 44, height: 44)
+                                .accessibilityLabel("Clear selected playlist file")
+                        }
                     }
-                    .disabled(!urlString.trimmingCharacters(in: .whitespaces).isEmpty)
                 } header: { Text("Or a file") } footer: {
                     Text("Provide a playlist URL or pick a file — not both.")
                 }

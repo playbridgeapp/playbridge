@@ -3,6 +3,62 @@ import SwiftUI
 import WebKit
 import Combine
 
+enum AppScreen { case bookmarks, history, browserSettings }
+final class NavigationViewModel: ObservableObject {
+    func navigate(to screen: AppScreen) {}
+}
+struct AdblockSettingsSheet: View {
+    let store: BrowserStore
+    var body: some View { EmptyView() }
+}
+struct BrowserDownloadsView: View {
+    let downloads: BrowserDownloads
+    var body: some View { EmptyView() }
+}
+
+private struct PickerMenuFixture: View {
+    @ObservedObject var tab: BrowserTab
+    @ObservedObject var store: BrowserStore
+    @State private var showMenu = false
+    @State private var pendingMenuAction: (() -> Void)?
+
+    var body: some View {
+        VStack {
+            Button("Browser menu") { showMenu = true }
+            ZStack {
+                WebViewContainer(tab: tab)
+                if tab.isPickingElement {
+                    PickerTouchOverlay { point, size in
+                        tab.pickElement(atNormalizedX: Double(point.x / size.width),
+                                          y: Double(point.y / size.height))
+                    }
+                }
+            }
+            if tab.isPickingElement {
+                HStack {
+                    Text(tab.pickerSelector ?? "Tap an element to block")
+                    Spacer()
+                    Button("Cancel picker") { tab.stopElementPicker() }
+                    Button("Block selected element") { tab.blockPickedElement() }
+                        .disabled(tab.pickerSelector == nil)
+                }
+            }
+            Text(tab.isPickingElement ? "Picker active" : "Picker inactive")
+                .accessibilityIdentifier("pickerState")
+        }
+        .sheet(isPresented: $showMenu, onDismiss: {
+            let action = pendingMenuAction
+            pendingMenuAction = nil
+            action?()
+        }) {
+            MenuSheet(tab: tab, store: store, isPresented: $showMenu) { action in
+                pendingMenuAction = action
+                showMenu = false
+            }
+        }
+    }
+}
+
 // Keep unrelated networking, ad-block downloads and detector enrichment out of
 // this fixture; BrowserStore/BrowserTab and WKWebView are production code.
 final class VideoDetector: ObservableObject {
@@ -21,6 +77,7 @@ enum ContentBlocker {
     static func compileAll() async -> [WKContentRuleList] { [] }
     static func ensureListsDownloaded() async {}
     static func isUserDomainRuleList(_ list: WKContentRuleList) -> Bool { false }
+    static func isUserCosmeticRuleList(_ list: WKContentRuleList) -> Bool { false }
     static func addUserRule(domain: String, selector: String) {}
     static var lastCompilationError: String?
     static var userDomainRuleIdentifier: String { "fixture-domain" }
@@ -49,7 +106,7 @@ enum ContentBlocker {
                             : "PASS: browser restore, navigation, consent, dialogs, popups, search and downloads")
             }
             catch { print("FAIL: \(error)"); exit(1) }
-            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" { exit(0) }
+            if ProcessInfo.processInfo.environment["POPUP_TOUCH"] != "1" && ProcessInfo.processInfo.environment["NETWORK_LOG_UI"] != "1" && ProcessInfo.processInfo.environment["TABS_UI"] != "1" && ProcessInfo.processInfo.environment["PICKER_MENU_UI"] != "1" { exit(0) }
         }
         return true
     }
@@ -127,30 +184,29 @@ enum ContentBlocker {
         window?.rootViewController?.view.addSubview(firstView)
         try await wait("first media page") { firstView.title == "Playback" && !firstView.isLoading }
         _ = try await firstView.evaluateJavaScript("document.querySelector('audio').play();void(0)")
-        try await wait("first tab playing") { first.refreshPlaybackState(); return first.isMediaPlaying }
+        try await wait("first tab playing") { first.isMediaPlaying }
         let second = browser.newTab(loading: base + "/playback")
         let secondView = second.webView
         secondView.frame = window!.bounds
         window?.rootViewController?.view.addSubview(secondView)
         try await wait("second media page") { secondView.title == "Playback" && !secondView.isLoading }
         _ = try await secondView.evaluateJavaScript("document.querySelector('audio').play();void(0)")
-        try await wait("second tab playing") { second.refreshPlaybackState(); return second.isMediaPlaying }
+        try await wait("second tab playing") { second.isMediaPlaying }
         _ = try await firstView.evaluateJavaScript("document.querySelector('audio').pause();void(0)")
-        try await wait("previous tab speaker clears") { first.refreshPlaybackState(); return !first.isMediaPlaying }
-        second.refreshPlaybackState()
+        try await wait("previous tab speaker clears") { !first.isMediaPlaying }
         try check(second.isMediaPlaying, "Pausing one tab cleared another tab's indicator")
         second.pauseMedia()
-        try await wait("cast-sheet media pause") { second.refreshPlaybackState(); return !second.isMediaPlaying }
+        try await wait("cast-sheet media pause") { !second.isMediaPlaying }
         second.load(base + "/playback-frame")
         try await wait("iframe media page") { secondView.title == "PlaybackFrame" && !secondView.isLoading }
         _ = try await secondView.evaluateJavaScript("document.querySelector('iframe').contentWindow.postMessage('play','*');void(0)")
-        try await wait("cross-origin iframe playing") { second.refreshPlaybackState(); return second.isMediaPlaying }
+        try await wait("cross-origin iframe playing") { second.isMediaPlaying }
         second.pauseMedia()
-        try await wait("cross-origin iframe cast-sheet pause") { second.refreshPlaybackState(); return !second.isMediaPlaying }
+        try await wait("cross-origin iframe cast-sheet pause") { !second.isMediaPlaying }
         _ = try await secondView.evaluateJavaScript("document.querySelector('iframe').contentWindow.postMessage('play','*');void(0)")
-        try await wait("cross-origin iframe resumed") { second.refreshPlaybackState(); return second.isMediaPlaying }
+        try await wait("cross-origin iframe resumed") { second.isMediaPlaying }
         _ = try await secondView.evaluateJavaScript("document.querySelector('iframe').remove();void(0)")
-        try await wait("removed iframe speaker clears") { second.refreshPlaybackState(); return !second.isMediaPlaying }
+        try await wait("removed iframe speaker clears without row polling") { !second.isMediaPlaying }
         try check(browser.tabs.filter { $0.loadedWebView != nil }.count == 3, "Playback tracking woke dormant tabs")
         firstView.removeFromSuperview(); secondView.removeFromSuperview()
         print("CHECK: per-tab playback, previous-tab pause, iframe playback/removal, expiry and dormant tabs passed")
@@ -181,6 +237,57 @@ enum ContentBlocker {
                   "Standalone image did not resolve to its media URL")
         try check(plainElement == "", "Plain element incorrectly produced a context target")
         print("CHECK: linked-logo and standalone-image context targets passed")
+    }
+
+    @MainActor func verifyDesktopMode(_ tab: BrowserTab, base: String) async throws {
+        let view = tab.webView
+        let originalCallback = tab.onPageFinished
+        var finished = 0
+        tab.onPageFinished = { url, title in
+            originalCallback?(url, title)
+            if url?.path == "/identity" { finished += 1 }
+        }
+        defer { tab.onPageFinished = originalCallback }
+
+        func metrics() async throws -> (width: Int, agent: String) {
+            let result = try await view.evaluateJavaScript("({width: innerWidth, agent: navigator.userAgent})") as? [String: Any]
+            guard let width = result?["width"] as? NSNumber, let agent = result?["agent"] as? String else {
+                throw Failure(message: "Could not read the page's viewport and user agent")
+            }
+            return (width.intValue, agent)
+        }
+        func lastRequestAgent() async throws -> String {
+            let (data, _) = try await URLSession.shared.data(from: URL(string: base + "/requests")!)
+            let requests = try JSONSerialization.jsonObject(with: data) as! [[String: String]]
+            return requests.last { $0["path"] == "/identity" }?["userAgent"] ?? ""
+        }
+
+        try check(!tab.isDesktopMode && tab.userAgentPreset == .automatic, "Desktop test did not start in mobile mode")
+        tab.load(base + "/identity")
+        try await wait("mobile identity page") { finished == 1 }
+        let mobile = try await metrics()
+        let mobileRequestAgent = try await lastRequestAgent()
+        try check(mobile.agent.contains("iPhone") && mobileRequestAgent.contains("iPhone"),
+                  "Mobile mode did not send and expose a mobile user agent")
+
+        tab.toggleDesktopMode()
+        try await wait("desktop identity reload") { finished == 2 }
+        let desktop = try await metrics()
+        let desktopRequestAgent = try await lastRequestAgent()
+        try check(desktop.agent == BrowserTab.desktopUA && desktopRequestAgent == BrowserTab.desktopUA,
+                  "Desktop mode did not send and expose the desktop user agent")
+        try check(desktop.width > mobile.width * 3 / 2,
+                  "Desktop mode did not widen the rendered viewport (mobile \(mobile.width), desktop \(desktop.width))")
+
+        tab.toggleDesktopMode()
+        try await wait("mobile identity reload") { finished == 3 }
+        let restored = try await metrics()
+        let restoredRequestAgent = try await lastRequestAgent()
+        try check(restored.agent.contains("iPhone") && restoredRequestAgent.contains("iPhone"),
+                  "Turning desktop mode off did not restore the mobile user agent")
+        try check(restored.width < desktop.width * 2 / 3,
+                  "Turning desktop mode off did not restore the mobile viewport")
+        print("CHECK: desktop toggle changes request and JavaScript identity plus rendered viewport in both directions")
     }
 
     @MainActor func run() async throws {
@@ -266,6 +373,15 @@ enum ContentBlocker {
         try await wait("parent load") { webView.title == "Parent" && !webView.isLoading }
         try await verifyContextTargets(webView)
         print("CHECK: parent loaded")
+        if ProcessInfo.processInfo.environment["PICKER_MENU_UI"] == "1" {
+            if let liveURL = ProcessInfo.processInfo.environment["PICKER_LIVE_URL"] {
+                parent.load(liveURL)
+                try await wait("live picker page") { webView.url?.absoluteString == liveURL && !webView.isLoading }
+            }
+            window?.rootViewController = UIHostingController(rootView: PickerMenuFixture(tab: parent, store: browser)
+                .environmentObject(NavigationViewModel()).environmentObject(browser.data))
+            return
+        }
         if ProcessInfo.processInfo.environment["TABS_UI"] == "1" {
             parent.title = "Example video with a longer title that wraps in the selected tab"
             window?.rootViewController = UIHostingController(rootView: TabsScreen(store: browser).preferredColorScheme(.dark))
@@ -429,13 +545,58 @@ extension BrowserStartupChecks {
         try check(!browser.downloads.items.contains { $0 === slow }, "Download removal failed")
         print("CHECK: downloads passed")
 
+        try await verifyDesktopMode(parent, base: base)
+
+        try check(BrowserTab.validCustomUserAgent("agent\nInjected: value") == nil,
+                  "Custom user agent accepted control characters")
+        try check(!parent.selectUserAgent(.custom, custom: "  "),
+                  "Empty custom user agent was accepted")
+        try check(parent.selectUserAgent(.chromeWindows) &&
+                  view.customUserAgent == BrowserUserAgentPreset.chromeWindows.value,
+                  "Preset user agent was not applied to the current tab")
+        if !parent.isDesktopMode { parent.toggleDesktopMode() }
+        try check(view.customUserAgent == BrowserUserAgentPreset.chromeWindows.value,
+                  "Desktop Site replaced the selected user agent")
+        try check(parent.selectUserAgent(.custom, custom: "PlayBridgeFixture/1.0") &&
+                  view.customUserAgent == "PlayBridgeFixture/1.0",
+                  "Custom user agent was not applied")
+        try check(parent.selectUserAgent(.automatic) &&
+                  parent.customUserAgent == "PlayBridgeFixture/1.0" &&
+                  view.customUserAgent == BrowserTab.desktopUA,
+                  "Switching presets lost the saved custom agent or ignored Desktop Site")
+        try check(parent.selectUserAgent(.custom, custom: parent.customUserAgent) &&
+                  view.customUserAgent == "PlayBridgeFixture/1.0",
+                  "Saved custom user agent could not be restored")
         parent.title = "Saved title"
-        parent.isDesktopMode = true
+        parent.isBrowserChromeHidden = true
+        let duplicate = browser.duplicateTab(parent.id)!
+        try check(duplicate.userAgentPreset == .custom &&
+                  duplicate.customUserAgent == "PlayBridgeFixture/1.0" &&
+                  duplicate.loadedWebView == nil && !duplicate.isBrowserChromeHidden,
+                  "Duplicate lost its user agent or copied session-only full screen")
         let home = browser.newTab()
+        try check(home.userAgentPreset == .automatic && !home.isBrowserChromeHidden &&
+                  home.effectiveUserAgent == nil, "New tab inherited another tab’s browser identity")
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("startup-tabs.json")
         let restored = BrowserStore(tabsFileURL: file)
         try check(restored.activeTab?.isHome == true && home.isHome, "Active home tab not restored")
-        try check(restored.tabs.contains { $0.title == "Saved title" && $0.isDesktopMode && $0.loadedWebView == nil }, "Dormant tab metadata lost")
+        try check(restored.tabs.contains {
+            $0.title == "Saved title" && $0.isDesktopMode && $0.loadedWebView == nil &&
+            $0.userAgentPreset == .custom && $0.customUserAgent == "PlayBridgeFixture/1.0" &&
+            !$0.isBrowserChromeHidden
+        }, "Dormant tab browser preferences were lost or full screen was persisted")
+        let restoredDesktop = restored.tabs.first { $0.title == "Saved title" && $0.isDesktopMode }!
+        let restoredView = restoredDesktop.webView
+        restoredView.frame = window!.bounds
+        window?.rootViewController?.view.addSubview(restoredView)
+        restored.browserVisible = true
+        restored.select(restoredDesktop.id)
+        try await wait("restored desktop page") { restoredView.title == "Identity" && !restoredView.isLoading }
+        let restoredWidth = try await restoredView.evaluateJavaScript("innerWidth") as? NSNumber
+        let restoredAgent = try await restoredView.evaluateJavaScript("navigator.userAgent") as? String
+        try check((restoredWidth?.intValue ?? 0) > 480 && restoredAgent == "PlayBridgeFixture/1.0",
+                  "Restored dormant desktop tab did not load with its desktop viewport and selected agent")
+        restoredView.removeFromSuperview()
         try check(BrowserDownloads.safeFilename("../../sample.bin") == "sample.bin", "Unsafe download filename")
         try check(BrowserDownloads.safeFilename("..") == "Download", "Dot filename allowed")
     }
@@ -660,8 +821,13 @@ extension BrowserStartupChecks {
 
 extension BrowserStartupChecks {
     @MainActor func verifyNetworkLog(_ browser: BrowserStore, parent: BrowserTab, base: String) async throws {
+        try check(!parent.networkCaptureEnabled, "Detailed network capture should be off during normal browsing")
         parent.load(base + "/network")
         let log = parent.networkLog
+        try await wait("normal browsing network page") { parent.webView.title == "Network" && !parent.webView.isLoading }
+        try check(!log.entries.contains { $0.url.contains("/fetch-test") }, "Normal browsing captured detailed requests")
+        parent.setNetworkCaptureEnabled(true)
+        try check(parent.networkCaptureEnabled, "Detailed network capture did not start")
         try await wait("fetch observation") { log.entries.contains { $0.kind == "fetch" && $0.url.contains("/fetch-test") && $0.status == 200 } }
         try await wait("XHR observation") { log.entries.contains { $0.kind == "XHR" && $0.method == "POST" && $0.status == 200 } }
         try await wait("image observation") { log.entries.contains { $0.kind == "img" && $0.url.contains("/image.svg") } }
@@ -683,6 +849,8 @@ extension BrowserStartupChecks {
             log.record(url: base + "/bounded/\(index)", page: base, kind: "fixture", state: "Observed")
         }
         try check(log.entries.count == BrowserNetworkLog.limit && log.discarded == 1, "Network log is unbounded")
+        parent.setNetworkCaptureEnabled(false)
+        try check(!parent.networkCaptureEnabled, "Detailed network capture did not stop")
         print("CHECK: network fetch/XHR/image/frame/failure capture, redaction, tab isolation and bounds passed")
     }
 }

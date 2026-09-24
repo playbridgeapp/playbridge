@@ -882,6 +882,11 @@ enum ContentBlocker {
         return !json.isEmpty && list.identifier == cacheIdentifier(for: json)
     }
 
+    static func isUserCosmeticRuleList(_ list: WKContentRuleList) -> Bool {
+        let text = userRulesText()
+        return !text.isEmpty && list.identifier == cacheIdentifier(for: text)
+    }
+
     private static func userDomainsJSON() -> String { domainsBlockJSON(userBlockedDomains()) }
     private static func builtinIframeAdJSON() -> String { domainsBlockJSON(iframeAdDomains) }
 
@@ -910,7 +915,8 @@ enum ContentBlocker {
       window.__pb_picker = true;
 
       var target = null, previewing = false, previewEls = [], currentHosts = [];
-      // Intercept taps above the page, including cross-origin iframe contents.
+      // Native controls and touch capture sit above the WKWebView. This shield
+      // remains as a fallback for direct script use and synthetic picker tests.
       var shield = document.createElement('div');
       shield.id = '__pb_picker_shield';
       shield.style.cssText = 'position:fixed;inset:0;z-index:2147483645;background:transparent;touch-action:none;';
@@ -937,6 +943,7 @@ enum ContentBlocker {
         + '<button id="pbsource" style="flex:1;padding:11px;border:none;border-radius:10px;background:#3A2330;color:#FF8A80;font-weight:700;">Block source</button>'
         + '</div>';
       document.documentElement.appendChild(panel);
+      panel.style.display='none';
 
       function isUI(el){ return el===shield || el===hl || el===panel || (el && panel.contains(el)); }
       function elAt(e){
@@ -993,6 +1000,7 @@ enum ContentBlocker {
         var n = 0; try { n = Array.from(document.querySelectorAll(s)).filter(function(el){return !isUI(el);}).length; } catch(_){}
         panel.querySelector('#pbcount').textContent = n>1 ? ('matches '+n+' elements') : '';
         currentHosts = resourceHosts(target);
+        try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickerSelection',selector:s,hasSource:currentHosts.length>0}); }catch(_){}
         var srcEl = panel.querySelector('#pbsrc');
         srcEl.textContent = currentHosts.length ? ('Sources: '+currentHosts.join(', ')) : 'No external source found';
         var srcBtn = panel.querySelector('#pbsource');
@@ -1004,6 +1012,7 @@ enum ContentBlocker {
       function cleanup(){
         if(!window.__pb_picker) return;
         window.__pb_picker=false; window.__pb_picker_cleanup=null;
+        window.__pb_picker_block=null; window.__pb_picker_select_at=null; window.__pb_picker_action=null;
         clearPreview(); shield.remove(); hl.remove(); panel.remove();
         blockedEvents.forEach(function(type){ window.removeEventListener(type,intercept,true); });
         window.removeEventListener('mousemove',hover,true);
@@ -1022,11 +1031,40 @@ enum ContentBlocker {
         var el=elAt(e); if(!el || isUI(el)) return;
         target=el; refresh();
       }
+      window.__pb_picker_select_at=function(xFraction,yFraction){
+        if(!window.__pb_picker) return;
+        var x=Math.max(0,Math.min(1,xFraction))*innerWidth;
+        var y=Math.max(0,Math.min(1,yFraction))*innerHeight;
+        var el=elAt({clientX:x,clientY:y});
+        if(el && !isUI(el)){ target=el; refresh(); }
+      };
       // Keep interception installed after selection, during Up/Down/Preview, and
       // until Block/Cancel. Capture on window precedes page document handlers.
       var blockedEvents=['pointerdown','pointerup','pointermove','touchstart','touchend','touchmove','mousedown','mouseup','click','auxclick','contextmenu'];
       blockedEvents.forEach(function(type){window.addEventListener(type,intercept,{capture:true,passive:false});});
       window.addEventListener('mousemove',hover,true);
+
+      function blockSelected(){
+        if(!target){ cleanup(); return; }
+        var s = sel(target); clearPreview();
+        try{ document.querySelectorAll(s).forEach(function(el){ if(!isUI(el)) el.style.setProperty('display','none','important'); }); }catch(_){}
+        try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickedElement', selector:s, host:location.hostname}); }catch(_){}
+        cleanup();
+      }
+      window.__pb_picker_block=blockSelected;
+
+      window.__pb_picker_action=function(action){
+        if(action==='up' && target && target.parentElement && target.parentElement.tagName!=='HTML'){
+          target=target.parentElement; refresh();
+        } else if(action==='down' && target && target.firstElementChild){
+          target=target.firstElementChild; refresh();
+        } else if(action==='preview'){
+          previewing=!previewing; applyPreview();
+        } else if(action==='source' && currentHosts && currentHosts.length){
+          try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickedResources',hosts:currentHosts}); }catch(_){}
+          cleanup();
+        }
+      };
 
       panel.addEventListener('click', function(e){
         var id = e.target && e.target.id; if(!id) return;
@@ -1036,12 +1074,7 @@ enum ContentBlocker {
         else if(id==='pbprev'){ previewing=!previewing; e.target.style.background = previewing ? '#5565F2' : '#241D54'; applyPreview(); }
         else if(id==='pbcancel'){ cleanup(); }
         else if(id==='pbblock'){
-          // Cosmetic: hide the selected element by selector.
-          if(!target){ cleanup(); return; }
-          var s = sel(target); clearPreview();
-          try{ document.querySelectorAll(s).forEach(function(el){ if(!isUI(el)) el.style.setProperty('display','none','important'); }); }catch(_){}
-          try{ window.webkit.messageHandlers.playbridge.postMessage({type:'pickedElement', selector:s, host:location.hostname}); }catch(_){}
-          cleanup();
+          blockSelected();
         }
         else if(id==='pbsource'){
           // Network: block every source domain found in the element.

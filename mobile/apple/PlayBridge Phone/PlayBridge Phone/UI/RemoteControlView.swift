@@ -215,7 +215,7 @@ struct RemoteControlView: View {
                     .font(Theme.font(.caption2).bold()).foregroundStyle(Theme.onSurfaceVariant)
                 ScrollViewReader { reader in
                     ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
+                        LazyHStack(spacing: 10) {
                             ForEach(playlist.items) { item in
                                 Button { vm.jump(to: item) } label: {
                                     VStack(alignment: .leading, spacing: 10) {

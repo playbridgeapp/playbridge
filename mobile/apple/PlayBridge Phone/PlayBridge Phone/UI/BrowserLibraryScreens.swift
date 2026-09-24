@@ -27,7 +27,6 @@ struct HistoryScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    DashboardNavigationButton()
                     ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
                     Text("History").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
@@ -78,7 +77,6 @@ struct BookmarksScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    DashboardNavigationButton()
                     ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
                     Text("Bookmarks").font(Theme.font(size: 22, weight: .bold)).foregroundColor(Theme.onSurface)
                     Spacer()
@@ -111,7 +109,6 @@ struct BookmarksScreen: View {
 // MARK: - Browser settings
 
 struct BrowserSettingsScreen: View {
-    @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var data: BrowserDataStore
     @State private var engine = SearchEngine.current
     @State private var confirmClearHistory = false
@@ -122,7 +119,6 @@ struct BrowserSettingsScreen: View {
             Theme.surface.ignoresSafeArea()
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    DashboardNavigationButton()
                     ScreenBackButton(destination: .browser, accessibilityLabel: "Back to Browser")
                     Text("Browser settings")
                         .font(Theme.font(size: 22, weight: .bold))

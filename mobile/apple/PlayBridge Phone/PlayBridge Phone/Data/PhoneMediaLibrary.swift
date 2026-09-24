@@ -16,6 +16,13 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
     let directory: URL
     private var downloadURLs: [String: URL] = [:]
     private var scanGeneration = UUID()
+    /// PhotoKit fetch snapshots are immutable while a detached scan reads them.
+    private struct PhotoScanResult: @unchecked Sendable {
+        let assets: PHFetchResult<PHAsset>
+        let records: [PhoneMedia]
+    }
+    private var photoFetchResult: PHFetchResult<PHAsset>?
+    private var photoScanTask: Task<PhotoScanResult?, Never>?
     private var observing = false
     var items: [PhoneMedia] { imported + photos + downloads }
     private var indexURL: URL { directory.appendingPathComponent("index.json") }
@@ -28,40 +35,97 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
             imported = records
         }
     }
-    deinit { if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) } }
+    deinit {
+        photoScanTask?.cancel()
+        if observing { PHPhotoLibrary.shared().unregisterChangeObserver(self) }
+    }
     nonisolated func photoLibraryDidChange(_ changeInstance: PHChange) {
-        Task { @MainActor [weak self] in self?.refreshPhotos() }
+        Task { @MainActor [weak self] in self?.applyPhotoChange(changeInstance) }
     }
     func requestPhotos() async {
         authorization = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        photoScanTask?.cancel()
+        photoScanTask = nil
+        photoFetchResult = nil
         refreshPhotos()
     }
     func refreshPhotos() {
-        authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        let permissionChanged = authorization != status
+        authorization = status
+        guard status == .authorized || status == .limited else {
+            photoScanTask?.cancel(); photoScanTask = nil
+            scanGeneration = UUID()
+            photoFetchResult = nil; photos = []; isScanning = false
+            return
+        }
+        if !observing { PHPhotoLibrary.shared().register(self); observing = true }
+        if permissionChanged {
+            photoScanTask?.cancel(); photoScanTask = nil
+            photoFetchResult = nil
+        }
+        guard photoFetchResult == nil, photoScanTask == nil else { return }
+        scanPhotos(assets: nil, changedIDs: [], reuseExisting: false)
+    }
+
+    private func applyPhotoChange(_ change: PHChange) {
+        guard authorization == .authorized || authorization == .limited else { return }
+        guard let previous = photoFetchResult else {
+            photoScanTask?.cancel()
+            photoScanTask = nil
+            refreshPhotos()
+            return
+        }
+        guard let details = change.changeDetails(for: previous) else { return }
+        let changedIDs = Set((details.insertedObjects + details.changedObjects).map(\.localIdentifier))
+        scanPhotos(assets: details.fetchResultAfterChanges, changedIDs: changedIDs,
+                   reuseExisting: details.hasIncrementalChanges)
+    }
+
+    private func scanPhotos(assets: PHFetchResult<PHAsset>?, changedIDs: Set<String>, reuseExisting: Bool) {
+        photoScanTask?.cancel()
         scanGeneration = UUID()
         let generation = scanGeneration
-        guard authorization == .authorized || authorization == .limited else { photos = []; isScanning = false; return }
-        if !observing { PHPhotoLibrary.shared().register(self); observing = true }
+        let cached = reuseExisting ? Dictionary(uniqueKeysWithValues: photos.map { ($0.id, $0) }) : [:]
         isScanning = true
-        Task {
-            let records = await Task.detached(priority: .userInitiated) {
+        let task = Task.detached(priority: .userInitiated) { () -> PhotoScanResult? in
+            let resolvedAssets: PHFetchResult<PHAsset>
+            if let assets {
+                resolvedAssets = assets
+            } else {
                 let options = PHFetchOptions()
                 options.predicate = NSPredicate(format: "mediaType == %d OR mediaType == %d", PHAssetMediaType.video.rawValue, PHAssetMediaType.image.rawValue)
                 options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-                let assets = PHAsset.fetchAssets(with: options)
-                var result: [PhoneMedia] = []
-                assets.enumerateObjects { asset, _, _ in
-                    let kind: PhoneMedia.Kind = asset.mediaType == .video ? .video : .image
-                    let filename = PHAssetResource.assetResources(for: asset).first?.originalFilename
-                    result.append(PhoneMedia(id: "photos:" + asset.localIdentifier,
-                        title: filename.map { ($0 as NSString).deletingPathExtension } ?? (kind == .video ? "Video" : "Photo"),
-                        kind: kind, source: .photos, addedAt: asset.creationDate ?? .distantPast,
-                        filename: filename, duration: kind == .video ? asset.duration : nil, assetIdentifier: asset.localIdentifier))
+                resolvedAssets = PHAsset.fetchAssets(with: options)
+            }
+            var result: [PhoneMedia] = []
+            result.reserveCapacity(resolvedAssets.count)
+            resolvedAssets.enumerateObjects { asset, _, stop in
+                if Task.isCancelled { stop.pointee = true; return }
+                let id = "photos:" + asset.localIdentifier
+                if !changedIDs.contains(asset.localIdentifier), let existing = cached[id] {
+                    result.append(existing)
+                    return
                 }
-                return result
-            }.value
+                let kind: PhoneMedia.Kind = asset.mediaType == .video ? .video : .image
+                let filename = PHAssetResource.assetResources(for: asset).first?.originalFilename
+                result.append(PhoneMedia(id: id,
+                    title: filename.map { ($0 as NSString).deletingPathExtension } ?? (kind == .video ? "Video" : "Photo"),
+                    kind: kind, source: .photos, addedAt: asset.creationDate ?? .distantPast,
+                    filename: filename, duration: kind == .video ? asset.duration : nil, assetIdentifier: asset.localIdentifier))
+            }
+            return Task.isCancelled ? nil : PhotoScanResult(assets: resolvedAssets, records: result)
+        }
+        photoScanTask = task
+        Task { @MainActor in
+            let result = await task.value
             guard scanGeneration == generation else { return }
-            photos = records; isScanning = false
+            photoScanTask = nil
+            if let result {
+                photoFetchResult = result.assets
+                photos = result.records
+            }
+            isScanning = false
         }
     }
     func refreshDownloads(_ records: [BrowserDownload]) {

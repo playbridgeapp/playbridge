@@ -24,7 +24,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == '/requests':
             data = json.dumps(requests).encode(); content = 'application/json'
         else:
-            requests.append({'path': path, 'method': self.command, 'body': body, 'cookie': self.headers.get('Cookie', '')})
+            requests.append({'path': path, 'method': self.command, 'body': body,
+                             'cookie': self.headers.get('Cookie', ''), 'userAgent': self.headers.get('User-Agent', '')})
             if path == '/playback.wav':
                 output = io.BytesIO()
                 with wave.open(output, 'wb') as audio:
@@ -36,6 +37,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 <script>addEventListener('message', e => { if(e.data==='play')document.querySelector('audio').play(); });</script></html>'''
             elif path == '/playback-frame':
                 data = ('<html><title>PlaybackFrame</title><iframe src="http://localhost:' + str(self.server.server_port) + '/playback"></iframe></html>').encode()
+            elif path == '/identity':
+                data = b'<html><head><title>Identity</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>Identity</body></html>'
             elif path == '/parent':
                 data = b'''<html><head><title>Parent</title></head><body>
                 <a id="link" href="/child" target="_blank">Open</a>
