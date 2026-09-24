@@ -22,7 +22,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
     let title: String?
     let onDismiss: () -> Void  // end-of-video: advance playlist or quit
     let onExit: () -> Void      // user pressed back: always quit
-    let onSwitch: (Double) -> Void
+    let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
 
@@ -71,12 +71,15 @@ struct NativePlayerView: UIViewControllerRepresentable {
             coordinator?.toggleLoop(action)
         }
         
-        let switchAction = UIAction(
+        let switchMenu = UIMenu(
             title: "Switch Player",
-            image: UIImage(systemName: "arrow.triangle.2.circlepath")
-        ) { [weak coordinator = context.coordinator] _ in
-            coordinator?.invokeSwitch()
-        }
+            image: UIImage(systemName: "arrow.triangle.2.circlepath"),
+            children: PlaybackEngine.menuOrder(current: .avplayer).map { engine in
+                UIAction(title: engine.name, state: engine == .avplayer ? .on : .off) {
+                    [weak coordinator = context.coordinator] _ in
+                    coordinator?.invokeSwitch(to: engine)
+                }
+            })
         
         let playlistAction = UIAction(
             title: "Playlist",
@@ -101,8 +104,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
             image: UIImage(systemName: "captions.bubble"),
             children: [subtitleOffAction] + subtitleOptions.compactMap { subtitleActions[$0.id] })
         controller.transportBarCustomMenuItems = subtitleOptions.isEmpty
-            ? [loopAction, switchAction, playlistAction]
-            : [loopAction, externalSubtitleMenu, switchAction, playlistAction]
+            ? [loopAction, switchMenu, playlistAction]
+            : [loopAction, externalSubtitleMenu, switchMenu, playlistAction]
 
         player.isMuted = isPreBuffering
         context.coordinator.attach(player: player)
@@ -131,7 +134,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         let title: String?
         let onDismiss: () -> Void
         let onExit: () -> Void
-        let onSwitch: (Double) -> Void
+        let onSwitch: (PlaybackEngine, Double) -> Void
         let headers: [String: String]?
         let externalSubtitleCatalog: ExternalSubtitleCatalog
         let onBroadcast: ([String: Any]) -> Void
@@ -156,7 +159,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var subtitleGroup: AVMediaSelectionGroup?
 
         init(title: String?, onDismiss: @escaping () -> Void, onExit: @escaping () -> Void,
-             onSwitch: @escaping (Double) -> Void,
+             onSwitch: @escaping (PlaybackEngine, Double) -> Void,
              headers: [String: String]?, subtitles: [String]?,
              onBroadcast: @escaping ([String: Any]) -> Void) {
             self.title = title
@@ -226,9 +229,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             action.state = isLooping ? .on : .off
         }
 
-        @objc func invokeSwitch() {
+        func invokeSwitch(to target: PlaybackEngine) {
+            guard target != .avplayer else { return }
             NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
-            onSwitch(player?.currentTime().seconds ?? 0)
+            onSwitch(target, player?.currentTime().seconds ?? 0)
         }
 
         func selectExternalSubtitle(_ id: Int) {
@@ -515,7 +519,9 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case let c where c.hasPrefix("sub_track:"):
                 selectTrack(.legible, id: String(c.dropFirst("sub_track:".count)))
             case let c where c.hasPrefix("switch_player:"):
-                if String(c.dropFirst("switch_player:".count)) != "avplayer" { invokeSwitch() }
+                if let target = PlaybackEngine(command: String(c.dropFirst("switch_player:".count))) {
+                    invokeSwitch(to: target)
+                }
             default:
                 break  // speed/scaling/filter/audio_boost/sub_offset: not supported on AVPlayer
             }

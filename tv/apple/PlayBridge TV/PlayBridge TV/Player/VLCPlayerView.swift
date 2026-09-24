@@ -12,7 +12,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
     let title: String?
     let onDismiss: () -> Void  // end-of-video: advance playlist or quit
     let onExit: () -> Void      // user pressed back: always quit
-    let onSwitch: (Double) -> Void
+    let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
 
@@ -35,6 +35,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         uiViewController.isPreBuffering = isPreBuffering
     }
 
+    static func dismantleUIViewController(_ uiViewController: VLCViewController, coordinator: ()) {
+        uiViewController.teardown()
+    }
+
     class VLCViewController: UIViewController, VLCMediaPlayerDelegate {
         var mediaPlayer: VLCMediaPlayer = VLCMediaPlayer()
         var url: URL?
@@ -50,7 +54,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         var mediaTitle: String?
         var onDismiss: (() -> Void)?
         var onExit: (() -> Void)?
-        var onSwitch: ((Double) -> Void)?
+        var onSwitch: ((PlaybackEngine, Double) -> Void)?
         var onBroadcast: (([String: Any]) -> Void)?
         private var statusTimer: Timer?
         /// The media we loaded, kept so we can restart it when looping (VLCKit 4.0 has no
@@ -160,14 +164,14 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 onTogglePlayPause: { [weak self] in
                     self?.togglePlayPause()
                 },
-                onSwitchEngine: { [weak self] in
+                onSwitchEngine: { [weak self] target in
                     guard let self = self else { return }
-                    self.onSwitch?(self.playbackState.currentTime)
+                    self.onSwitch?(target, self.playbackState.currentTime)
                 },
                 onTogglePlaylist: {
                     NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
                 },
-                engineLabel: "VLC")
+                engine: .vlc)
             let hosting = UIHostingController(rootView: overlay)
             hosting.view.backgroundColor = .clear
             hosting.view.frame = view.bounds
@@ -687,6 +691,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     playbackState.showAudioMenu = false
                     return
                 }
+                if playbackState.showEngineMenu {
+                    playbackState.showEngineMenu = false
+                    return
+                }
                 if playbackState.isVirtualScrubbing {
                     // Abort scrub: cancel the tick timer and restore original position
                     virtualScrubTickTimer?.invalidate()
@@ -704,7 +712,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             }
 
             // Let menus handle their own navigation input
-            if playbackState.showSubtitleMenu || playbackState.showAudioMenu {
+            if playbackState.showSubtitleMenu || playbackState.showAudioMenu || playbackState.showEngineMenu {
                 super.pressesBegan(presses, with: event)
                 return
             }
@@ -1019,8 +1027,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 guard URL(string: urlStr) != nil else { break }
                 loadExternalSubtitle(.init(id: -2, url: urlStr, name: "External subtitle"))
             case let c where c.hasPrefix("switch_player:"):
-                // Any non-vlc target hands off to PlayerView's engine cycle.
-                if String(c.dropFirst("switch_player:".count)) != "vlc" { onSwitch?(playbackState.currentTime) }
+                if let target = PlaybackEngine(command: String(c.dropFirst("switch_player:".count))),
+                   target != .vlc {
+                    onSwitch?(target, playbackState.currentTime)
+                }
             default:
                 break
             }
@@ -1036,13 +1046,29 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
+            teardown()
+        }
+
+        func teardown() {
+            guard !didRequestStop else { return }
+            didRequestStop = true   // explicit stop must not be treated as natural end-of-video
             statusTimer?.invalidate()
             statusTimer = nil
+            hideControlsTimer?.invalidate()
+            hideControlsTimer = nil
+            continuousSeekTimer?.invalidate()
+            continuousSeekTimer = nil
+            holdTimer?.invalidate()
+            holdTimer = nil
+            virtualScrubTickTimer?.invalidate()
+            virtualScrubTickTimer = nil
             NotificationCenter.default.removeObserver(self)
-            didRequestStop = true   // suppress end-of-video handling for our own stop (4.0 ".stopped")
             subtitleDownloadTask?.cancel()
             subtitleSession?.invalidateAndCancel()
             subtitleRequestID = nil
+            redirectResolver?.cancel()
+            redirectResolver = nil
+            mediaPlayer.delegate = nil
             mediaPlayer.stop()
             for file in downloadedSubtitleFiles { try? FileManager.default.removeItem(at: file) }
             downloadedSubtitleFiles = []
@@ -1069,6 +1095,12 @@ private final class RedirectResolver: NSObject, URLSessionDataDelegate {
         cfg.timeoutIntervalForResource = request.timeoutInterval
         session = URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
         session.dataTask(with: request).resume()
+    }
+
+    func cancel() {
+        guard !finished else { return }
+        finished = true
+        session.invalidateAndCancel()
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,

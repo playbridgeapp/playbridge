@@ -133,6 +133,16 @@ struct ReceiverReviewTests {
         assert(PlaybackPauseCommand.targetPaused(for: "stop", isPlaying: true) == nil)
         print("PASS: idempotent MPV play/pause and explicit toggle behavior")
 
+        assert(PlaybackEngine.allCases.map(\.name) == ["AVPlayer", "VLC", "MPV"])
+        assert(PlaybackEngine.allCases.map(\.menuID) == [0, 1, 2])
+        assert(PlaybackEngine.menuOrder(current: .vlc) == [.vlc, .avplayer, .mpv])
+        assert(PlaybackEngine(command: "native") == .avplayer)
+        assert(PlaybackEngine(command: "exo") == .avplayer)
+        assert(PlaybackEngine(command: "vlc") == .vlc)
+        assert(PlaybackEngine(command: "mpv") == .mpv)
+        assert(PlaybackEngine(command: "unsupported") == nil)
+        print("PASS: explicit player targets and current-player menu options")
+
         let subtitles = ExternalSubtitleCatalog(urls: [
             "https://example.com/first.srt", "https://example.com/second.vtt",
             "https://example.com/first.srt", "not a valid URL"

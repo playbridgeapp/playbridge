@@ -15,7 +15,7 @@ struct MPVPlayerView: UIViewControllerRepresentable {
     let title: String?
     let onDismiss: () -> Void
     let onExit: () -> Void
-    let onSwitch: (Double) -> Void
+    let onSwitch: (PlaybackEngine, Double) -> Void
     /// Sends a now-playing JSON message (status/tracks) to connected phones.
     let onBroadcast: ([String: Any]) -> Void
 
@@ -80,7 +80,7 @@ class MPVViewController: UIViewController {
     var mediaTitle: String?
     var onDismiss: (() -> Void)?
     var onExit: (() -> Void)?
-    var onSwitch: ((Double) -> Void)?
+    var onSwitch: ((PlaybackEngine, Double) -> Void)?
     var onBroadcast: (([String: Any]) -> Void)?
     private var statusTimer: Timer?
 
@@ -726,14 +726,14 @@ class MPVViewController: UIViewController {
                 self.recordAudioPreference(id: trackId)
             },
             onTogglePlayPause: { [weak self] in self?.togglePlayPause() },
-            onSwitchEngine: { [weak self] in
+            onSwitchEngine: { [weak self] target in
                 guard let self else { return }
-                self.onSwitch?(self.playbackState.currentTime)
+                self.onSwitch?(target, self.playbackState.currentTime)
             },
             onTogglePlaylist: {
                 NotificationCenter.default.post(name: NSNotification.Name("TogglePlaylist"), object: nil)
             },
-            engineLabel: "MPV"
+            engine: .mpv
         )
         let hosting = UIHostingController(rootView: overlay)
         hosting.view.backgroundColor = .clear
@@ -887,6 +887,7 @@ class MPVViewController: UIViewController {
         if type == .menu {
             if playbackState.showSubtitleMenu  { playbackState.showSubtitleMenu = false; return }
             if playbackState.showAudioMenu     { playbackState.showAudioMenu = false; return }
+            if playbackState.showEngineMenu    { playbackState.showEngineMenu = false; return }
             if playbackState.isVirtualScrubbing {
                 virtualScrubTickTimer?.invalidate()
                 virtualScrubTickTimer = nil
@@ -901,7 +902,7 @@ class MPVViewController: UIViewController {
             return
         }
 
-        if playbackState.showSubtitleMenu || playbackState.showAudioMenu {
+        if playbackState.showSubtitleMenu || playbackState.showAudioMenu || playbackState.showEngineMenu {
             super.pressesBegan(presses, with: event); return
         }
 
@@ -1145,8 +1146,10 @@ class MPVViewController: UIViewController {
             // Async: a remote sub-add opens a network fetch; never block the event queue.
             mpvQueue.async { [weak self] in self?.mpvCommandAsync(handle, ["sub-add", urlStr, "select"]) }
         case let c where c.hasPrefix("switch_player:"):
-            // MPV's only alternative engine is AVPlayer; any non-mpv target switches to it.
-            if String(c.dropFirst("switch_player:".count)) != "mpv" { onSwitch?(playbackState.currentTime) }
+            if let target = PlaybackEngine(command: String(c.dropFirst("switch_player:".count))),
+               target != .mpv {
+                onSwitch?(target, playbackState.currentTime)
+            }
         default:
             break
         }
@@ -1162,6 +1165,12 @@ class MPVViewController: UIViewController {
 
         statusTimer?.invalidate()
         statusTimer = nil
+        hideControlsTimer?.invalidate()
+        hideControlsTimer = nil
+        holdTimer?.invalidate()
+        holdTimer = nil
+        virtualScrubTickTimer?.invalidate()
+        virtualScrubTickTimer = nil
         NotificationCenter.default.removeObserver(self)
 
         guard let handle = mpv else {

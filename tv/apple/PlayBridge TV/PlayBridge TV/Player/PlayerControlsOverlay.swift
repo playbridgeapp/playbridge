@@ -30,6 +30,7 @@ class PlayerControlsData: ObservableObject {
     @Published var audioTracks: [(id: Int, name: String)] = []
     @Published var currentAudioIndex: Int = -1
     @Published var showAudioMenu: Bool = false
+    @Published var showEngineMenu: Bool = false
 }
 
 struct TrackMenuView: View {
@@ -38,6 +39,7 @@ struct TrackMenuView: View {
     let tracks: [(id: Int, name: String)]
     let currentId: Int
     let includeOff: Bool
+    var showCurrentLabel: Bool = false
     let onSelect: (Int) -> Void
 
     @FocusState private var focusedId: Int?
@@ -97,6 +99,11 @@ struct TrackMenuView: View {
                     .lineLimit(1)
                 Spacer()
                 if currentId == id {
+                    if showCurrentLabel {
+                        Text("Current")
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(Theme.accent)
+                    }
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 22))
                         .foregroundColor(Theme.accent)
@@ -115,11 +122,10 @@ struct PlayerControlsOverlay: View {
     let onSelectSubtitle: (Int) -> Void
     let onSelectAudio: (Int) -> Void
     let onTogglePlayPause: () -> Void
-    let onSwitchEngine: () -> Void
+    let onSwitchEngine: (PlaybackEngine) -> Void
     let onTogglePlaylist: () -> Void
-    /// Short name of the active playback engine (e.g. "MPV", "AVPlayer"). Shown in a small
-    /// badge while the controls are visible. Empty hides the badge.
-    var engineLabel: String = ""
+    /// Active playback engine, also shown in the controls badge.
+    let engine: PlaybackEngine
 
     var body: some View {
         ZStack {
@@ -143,7 +149,7 @@ struct PlayerControlsOverlay: View {
                                 .shadow(color: .black.opacity(0.5), radius: 6, y: 2)
                         }
                         Spacer(minLength: 0)
-                        if !engineLabel.isEmpty { playerBadge }
+                        playerBadge
                     }
                     .padding(.top, 50)
                     .padding(.horizontal, 60)
@@ -237,6 +243,7 @@ struct PlayerControlsOverlay: View {
                                     Button(action: {
                                         data.showSubtitleMenu.toggle()
                                         data.showAudioMenu = false
+                                        data.showEngineMenu = false
                                     }) {
                                         VStack(spacing: 6) {
                                             Image(systemName: "captions.bubble.fill")
@@ -254,6 +261,7 @@ struct PlayerControlsOverlay: View {
                                     Button(action: {
                                         data.showAudioMenu.toggle()
                                         data.showSubtitleMenu = false
+                                        data.showEngineMenu = false
                                     }) {
                                         VStack(spacing: 6) {
                                             Image(systemName: "waveform")
@@ -281,7 +289,11 @@ struct PlayerControlsOverlay: View {
                                 .buttonStyle(.card)
                                 
                                 // Switch Engine button
-                                Button(action: { onSwitchEngine() }) {
+                                Button(action: {
+                                    data.showEngineMenu.toggle()
+                                    data.showSubtitleMenu = false
+                                    data.showAudioMenu = false
+                                }) {
                                     VStack(spacing: 6) {
                                         Image(systemName: "arrow.triangle.2.circlepath")
                                             .font(.system(size: 26))
@@ -304,7 +316,7 @@ struct PlayerControlsOverlay: View {
                                 }
                                 .buttonStyle(.card)
                             }
-                            .disabled(data.showSubtitleMenu || data.showAudioMenu)
+                            .disabled(data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
                     }
@@ -347,19 +359,40 @@ struct PlayerControlsOverlay: View {
                 }
                 .transition(.scale(scale: 0.9).combined(with: .opacity))
             }
+
+            if data.showEngineMenu {
+                Color.black.opacity(0.6).ignoresSafeArea()
+                    .transition(.opacity)
+
+                TrackMenuView(
+                    title: "Switch Player",
+                    icon: "arrow.triangle.2.circlepath",
+                    tracks: PlaybackEngine.menuOrder(current: engine).map { ($0.menuID, $0.name) },
+                    currentId: engine.menuID,
+                    includeOff: false,
+                    showCurrentLabel: true
+                ) { id in
+                    data.showEngineMenu = false
+                    if let target = PlaybackEngine.allCases.first(where: { $0.menuID == id }), target != engine {
+                        onSwitchEngine(target)
+                    }
+                }
+                .transition(.scale(scale: 0.9).combined(with: .opacity))
+            }
         }
         .animation(.easeInOut(duration: 0.3), value: data.showUI)
         .animation(.easeInOut(duration: 0.3), value: data.userPaused)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showSubtitleMenu)
         .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showAudioMenu)
-        .allowsHitTesting(data.showUI || data.showSubtitleMenu || data.showAudioMenu)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: data.showEngineMenu)
+        .allowsHitTesting(data.showUI || data.showSubtitleMenu || data.showAudioMenu || data.showEngineMenu)
     }
 
     private var playerBadge: some View {
         HStack(spacing: 8) {
             Image(systemName: "play.rectangle.fill")
                 .font(.system(size: 18))
-            Text(engineLabel)
+            Text(engine.name)
                 .font(.system(size: 18, weight: .semibold))
         }
         .foregroundColor(.white.opacity(0.9))

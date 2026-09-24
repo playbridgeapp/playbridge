@@ -35,7 +35,7 @@ struct PlayerView: View {
     @AppStorage("preferredPlayer") var preferredPlayer: String = "avplayer"
     // Engine chosen via the on-screen switch this session. Takes precedence over both the
     // phone's player_mode and the stored preference, but is not persisted.
-    @State private var sessionEngine: String? = nil
+    @State private var sessionEngine: PlaybackEngine? = nil
     @State private var resumeTime: Double = 0.0
     @State private var showPlaylist: Bool = false
     @State private var latestPlaybackIsPlaying = false
@@ -54,30 +54,25 @@ struct PlayerView: View {
     // 1. Define focus state
     @FocusState private var isPlayerFocused: Bool
 
-    private func handleSwitch(currentTime: Double) {
-        resumeTime = currentTime
-        let current = effectiveEngine(for: playlistStore.currentItem ?? payload)
-        // Cycle AVPlayer → VLC → MPV → AVPlayer.
-        switch current {
-        case "avplayer": sessionEngine = "vlc"
-        case "vlc":      sessionEngine = "mpv"
-        default:         sessionEngine = "avplayer"
-        }
+    private func handleSwitch(to target: PlaybackEngine, currentTime: Double,
+                              from source: PlaybackEngine, generation: Int) {
+        guard isCurrentPlayback(source, generation: generation), target != source else { return }
+        resumeTime = currentTime.isFinite && currentTime > 0 ? currentTime : 0
+        sessionEngine = target
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
     /// `player_mode` ("avplayer"/"vlc"/"mpv"); "tv"/unset/unknown fall back to the stored default.
-    private func effectiveEngine(for item: Playbridge_PlayPayload) -> String {
+    private func effectiveEngine(for item: Playbridge_PlayPayload) -> PlaybackEngine {
         if let session = sessionEngine { return session }
-        if item.hasPlayerMode {
-            switch item.playerMode {
-            case "avplayer", "native": return "avplayer"
-            case "vlc": return "vlc"
-            case "mpv": return "mpv"
-            default: break
-            }
+        if item.hasPlayerMode, let requested = PlaybackEngine(command: item.playerMode) {
+            return requested
         }
-        return preferredPlayer
+        return PlaybackEngine(command: preferredPlayer) ?? .avplayer
+    }
+
+    private func isCurrentPlayback(_ engine: PlaybackEngine, generation: Int) -> Bool {
+        mediaGeneration == generation && effectiveEngine(for: playlistStore.currentItem ?? payload) == engine
     }
 
     /// Initial seek for `item` (seconds): an engine-switch resume wins; otherwise honor
@@ -147,7 +142,9 @@ struct PlayerView: View {
 
             let currentRequest = playlistStore.currentItem ?? payload
             if let currentURL = currentRequest.validURL {
-                if effectiveEngine(for: currentRequest) == "vlc" {
+                let currentEngine = effectiveEngine(for: currentRequest)
+                let currentGeneration = mediaGeneration
+                if currentEngine == .vlc {
                     VLCPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
@@ -155,15 +152,15 @@ struct PlayerView: View {
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
-                        onDismiss: handleNext,
-                        onExit: exitPlayback,
-                        onSwitch: handleSwitch,
-                        onBroadcast: { broadcast($0, for: currentRequest) }
+                        onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
+                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
+                        onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
+                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
                     .id("vlc-\(mediaGeneration)")
-                } else if effectiveEngine(for: currentRequest) == "mpv" {
+                } else if currentEngine == .mpv {
                     MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,
@@ -172,10 +169,10 @@ struct PlayerView: View {
                         mediaIdentity: mediaGeneration,
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
-                        onDismiss: handleNext,
-                        onExit: exitPlayback,
-                        onSwitch: handleSwitch,
-                        onBroadcast: { broadcast($0, for: currentRequest) }
+                        onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
+                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
+                        onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
+                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
@@ -192,15 +189,15 @@ struct PlayerView: View {
                         initialTime: initialSeekTime(for: currentRequest),
                         isPreBuffering: isPreBuffering,
                         title: currentRequest.titleOrNil,
-                        onDismiss: handleNext,  // end-of-video → try next item
-                        onExit: exitPlayback,    // back button → always go home
-                        onSwitch: handleSwitch,
-                        onBroadcast: { broadcast($0, for: currentRequest) }
+                        onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
+                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
+                        onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
+                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } }
                     )
                     .ignoresSafeArea()
                     .focused($isPlayerFocused)
                     .id("avplayer-\(mediaGeneration)")
-                    .onExitCommand { onDismiss() }
+                    .onExitCommand { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } }
                 }
             } else {
                 // Unreachable in normal flow: WebSocketServer rejects payloads with invalid URLs
