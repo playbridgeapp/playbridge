@@ -8,6 +8,7 @@ import UIKit
 final class CastSystemPlayback: NSObject, CastPlaybackRendering, AVAudioPlayerDelegate {
     static let shared = CastSystemPlayback()
     var onAction: ((CastRemoteAction) -> Bool)?
+    var onLocalPlaybackBegan: (() -> Void)?
     private var snapshot: CastNowPlayingSnapshot?
     private var wantsKeepAlive = false
     private var silentPlayer: AVAudioPlayer?
@@ -65,14 +66,15 @@ final class CastSystemPlayback: NSObject, CastPlaybackRendering, AVAudioPlayerDe
 
     /// Local AVPlayer UI has priority over the remote cast's system controls.
     /// A token prevents one dismissed player from deactivating another's session.
-    func beginLocalPlayback() throws -> UUID {
+    func beginLocalPlayback(externalAirPlay: Bool = false) throws -> UUID {
+        if !externalAirPlay { onLocalPlaybackBegan?() }
         let id = UUID()
         localOwners.insert(id)
         stopSilentAudio(deactivate: false)
         clearNowPlaying()
         do {
             let audio = AVAudioSession.sharedInstance()
-            try audio.setCategory(.playback, mode: .moviePlayback)
+            try audio.setCategory(.playback, mode: .moviePlayback, policy: externalAirPlay ? .longFormVideo : .default)
             try audio.setActive(true)
             ownsAudioSession = true
             return id

@@ -109,6 +109,10 @@ struct CastSheet: View {
                     if castAction == "browse" { capabilitySelectors }
                     if castAction != "browse" {
                         tabsSection
+                        if vm.isAirPlay {
+                            Text("AirPlay uses this phone for protected streams and added subtitles.")
+                                .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                        }
                     }
                 }
                 .padding(.top, 24)
@@ -193,6 +197,7 @@ struct CastSheet: View {
                 tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)
                 selectedTab = tabOrder.first ?? .video
                 if vm.isExternalReceiver { castAction = "play"; attachedSubtitles.removeAll() }
+                if !vm.supportsBrowser && castAction == "browse" { castAction = "play" }
             }
             .onAppear {
                 tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)
@@ -733,6 +738,7 @@ struct CastSheet: View {
         let configuration = proxyConfiguration
         let subtitleURLs = subtitles.map(\.url).filter { attachedSubtitles.contains($0) && video.isVideo }
         let queue = castAction == "queue"
+        let airPlayRequest = vm.isAirPlay ? vm.airPlay.beginRequest(queue: queue) : nil
         let destination = vm.destinationID
         playbackPreparation = Task { @MainActor in
             defer { if playbackPreparationID == attempt { playbackPreparationID = nil } }
@@ -757,7 +763,8 @@ struct CastSheet: View {
                 if route == .phone, media.url.host == "127.0.0.1" {
                     throw StreamRoutingError.message("Connect to Wi-Fi to send via phone.")
                 }
-                try await vm.sendRoutedStream(media, video: video, subtitles: subtitles, queue: queue)
+                let subtitleTitles = subtitleURLs.map { url in self.subtitles.first { $0.url == url }?.displayTitle ?? "Subtitle" }
+                try await vm.sendRoutedStream(media, video: video, subtitles: subtitles, queue: queue, subtitleTitles: subtitleTitles, airPlayRequest: airPlayRequest)
                 if !queue { nav.navigate(to: .remote) }
                 dismiss()
             } catch {

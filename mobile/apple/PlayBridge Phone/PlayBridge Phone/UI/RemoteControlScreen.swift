@@ -25,6 +25,9 @@ struct RemoteControlScreen: View {
                 }.accessibilityLabel("Cast a link").disabled(!vm.isConnected)
             }
             statusChip
+            if vm.isAirPlay && !vm.airPlay.routeAvailable {
+                AirPlayDestinationRow()
+            }
             RemoteControlView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.horizontal, 16).padding(.bottom, 12)
@@ -52,9 +55,9 @@ struct RemoteControlScreen: View {
         let connected = vm.isConnected
         let accent = connected ? Color.green : Theme.onSurfaceVariant
         let name = vm.receiverName ?? (vm.isExternalReceiver ? "receiver" : "TV")
-        let label = vm.isExternalReceiver ? "Casting to \(name)" : (connected ? "Watching on \(name)" : "Not connected")
+        let label = connected ? (vm.isExternalReceiver || vm.isAirPlay ? "Casting to \(name)" : "Watching on \(name)") : "Not connected"
         return HStack(spacing: 8) {
-            Image(systemName: vm.isExternalReceiver ? "airplayvideo" : "tv")
+            Image(systemName: vm.isExternalReceiver || vm.isAirPlay ? "airplayvideo" : "tv")
                 .font(Theme.font(size: 14, weight: .semibold))
             Text(label).font(Theme.font(size: 14, weight: .medium)).lineLimit(1)
             if let protocolName = vm.externalReceiver?.protocolName {

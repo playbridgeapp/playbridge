@@ -10,7 +10,7 @@ struct DeviceConnectionSheet: View {
     @State private var pendingExternalID: String?
 
     private var activePairedDeviceKey: String? {
-        guard vm.isConnected, !vm.isExternalReceiver, let device = vm.pairedDevice else { return nil }
+        guard vm.isConnected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice else { return nil }
         return vm.deviceKey(device)
     }
 
@@ -41,12 +41,14 @@ struct DeviceConnectionSheet: View {
                     }
 
                     ConnectionThisPhoneRow(
-                        selected: !vm.isConnected && !vm.connectionIsConnecting,
+                        selected: !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
                         compact: true
                     ) {
                         vm.disconnect()
                         dismiss()
                     }
+
+                    AirPlayDestinationRow()
 
                     HStack {
                         ConnectionSectionLabel("PlayBridge")
@@ -191,7 +193,13 @@ struct ConnectionNowDestinationCard: View {
 
     var body: some View {
         Group {
-            if case .connected(let name, let secure) = vm.state {
+            if vm.isAirPlay {
+                activeShell(name: vm.airPlay.routeName,
+                    subtitle: vm.airPlay.routeAvailable ? "Ready to cast" : "Choose an AirPlay output to resume",
+                    systemImage: "airplayvideo", badge: "AirPlay",
+                    status: vm.airPlay.routeAvailable ? "Selected" : "Disconnected",
+                    statusFilled: vm.airPlay.routeAvailable, secure: nil)
+            } else if case .connected(let name, let secure) = vm.state {
                 activeCard(name: name, secure: secure)
             } else if vm.connectionIsConnecting {
                 activeShell(
@@ -296,7 +304,7 @@ struct ConnectionNowDestinationCard: View {
                         .font(Theme.font(size: 14, weight: .semibold))
                         .foregroundColor(Theme.primary)
                 }
-                Button("Disconnect", action: onDisconnect)
+                Button(vm.isAirPlay ? "Stop using AirPlay" : "Disconnect", action: onDisconnect)
                     .font(Theme.font(size: 14, weight: .semibold))
                     .foregroundColor(Theme.danger)
             }

@@ -21,7 +21,7 @@ enum RemoteMode: String, CaseIterable, Identifiable {
     }
 
     static func supportsExternalSeek(externalProtocol: String?) -> Bool {
-        externalProtocol == "google_cast" || externalProtocol == "dlna"
+        externalProtocol == "google_cast" || externalProtocol == "dlna" || externalProtocol == "airplay"
     }
 
     static func available(context: String, external: Bool, supportsRemote: Bool) -> [Self] {

@@ -19,6 +19,9 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Theme.surface.ignoresSafeArea()
+            AirPlayPlayerHost(player: vm.airPlay.player)
+                .frame(width: 1, height: 1).opacity(0.01)
+                .allowsHitTesting(false).accessibilityHidden(true)
             currentScreen
                 .id(nav.currentScreen)
                 .transition(.opacity)

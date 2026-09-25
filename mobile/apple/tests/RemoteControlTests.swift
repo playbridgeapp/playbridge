@@ -13,6 +13,10 @@ struct RemoteControlTests {
         precondition(!RemoteMode.canSeek(context: "player", externalProtocol: nil, duration: 1000, isLive: true, isSeekable: true))
         precondition(!RemoteMode.canSeek(context: "player", externalProtocol: "roku", duration: 1000, isLive: false, isSeekable: true))
         precondition(RemoteMode.canSeek(context: "player", externalProtocol: "google_cast", duration: 1000, isLive: false, isSeekable: true))
+        precondition(RemoteMode.canSeek(context: "player", externalProtocol: "airplay", duration: 1000, isLive: false, isSeekable: true))
+        precondition(!RemoteMode.canSeek(context: "player", externalProtocol: "airplay", duration: 0, isLive: true, isSeekable: false))
+        precondition(!RemoteMode.supportsRemote(externalProtocol: "airplay") && !RemoteMode.supportsVolume(externalProtocol: "airplay"),
+                     "AirPlay uses the system volume control and has no TV navigation commands")
         precondition(!RemoteMode.canSeek(context: "player", externalProtocol: nil, duration: 1000, isLive: false, isSeekable: true, isImage: true))
         precondition(!RemoteMode.canSeek(context: "idle", externalProtocol: nil, duration: 1000, isLive: false, isSeekable: true))
         precondition(RemoteMode.time(3_661_000) == "1:01:01" && RemoteMode.time(-1) == "00:00")

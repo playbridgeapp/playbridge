@@ -80,6 +80,9 @@ final class BrowserStore: ObservableObject {
     private func makeTab(url: String?, activate: Bool = true, after openerID: UUID? = nil, windowConfiguration: WKWebViewConfiguration? = nil) -> BrowserTab {
         let handler = TabScriptHandler()
         let configuration = windowConfiguration ?? makeConfiguration()
+        // AirPlay is owned by the app's persistent casting player. Page players
+        // (including popups) must not take over that selected system route.
+        configuration.allowsAirPlayForMediaPlayback = false
         // WebKit may share the opener's content controller. Each tab needs its own
         // message handler without changing the supplied process pool/data store.
         if windowConfiguration != nil { configuration.userContentController = WKUserContentController() }

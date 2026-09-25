@@ -1,5 +1,17 @@
 # iPhone standalone fixture checks
 
+AirPlay queue and external subtitle packaging:
+
+```sh
+bash mobile/apple/tests/run-airplay-queue-checks.sh
+bash mobile/apple/tests/run-airplay-subtitle-checks.sh
+```
+
+These cover FIFO advance, replacement, subtitle updates, removal/reordering,
+HLS rendition preservation, name collisions, SRT/WebVTT conversion and timestamp
+mapping. Physical AirPlay route selection, captions and background transitions
+still require device testing; see `docs/ios-airplay.md` for scope and limitations.
+
 Background casting lifetime and Lock Screen command mapping:
 
 ```sh

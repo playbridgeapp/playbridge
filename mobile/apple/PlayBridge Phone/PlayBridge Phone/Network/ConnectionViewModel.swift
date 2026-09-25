@@ -11,17 +11,21 @@ final class ConnectionViewModel: ObservableObject {
     let rokuBrowser = DLNABrowser(kind: .roku)
     let dialBrowser = DLNABrowser(kind: .dial)
     let googleCast = GoogleCastController()
+    let airPlay = AirPlayController()
+    var isAirPlay: Bool { airPlay.selected }
     @Published private(set) var externalReceiver: ExternalReceiverDevice?
     @Published private(set) var savedExternalReceiverDevices: [ExternalReceiverDevice] = []
     @Published var operationError: String?
     var isExternalReceiver: Bool { externalReceiver != nil }
     var supportsQueue: Bool { !isExternalReceiver }
-    var supportsBrowser: Bool { !isExternalReceiver && pairedDevice?.browsers.isEmpty == false }
+    var supportsBrowser: Bool { !isAirPlay && !isExternalReceiver && pairedDevice?.browsers.isEmpty == false }
     func supportsNativeMediaKind(_ kind: String) -> Bool {
-        isExternalReceiver || kind == "video" || pairedDevice?.mediaKinds?.contains(kind) == true
+        if isAirPlay { return kind == "video" || kind == "audio" }
+        return isExternalReceiver || kind == "video" || pairedDevice?.mediaKinds?.contains(kind) == true
     }
-    var destinationID: String? { externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey) }
+    var destinationID: String? { isAirPlay ? "airplay" : externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey) }
     var receiverName: String? {
+        if isAirPlay { return airPlay.routeName }
         if case .connected(let name, _) = state { return name }
         return externalReceiver?.name ?? pairedDevice?.name
     }
@@ -55,6 +59,12 @@ final class ConnectionViewModel: ObservableObject {
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
 
     init() {
+        airPlay.onDestinationSelected = { [weak self] in self?.adoptAirPlayDestination() }
+        airPlay.onUpdate = { [weak self] in self?.updateAirPlayState() }
+        airPlay.onStop = { [weak self] in self?.releaseCastResources() }
+        CastSystemPlayback.shared.onLocalPlaybackBegan = { [weak self] in self?.airPlay.suspendForLocalPlayback() }
+        airPlay.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
+        airPlay.$error.compactMap { $0 }.receive(on: RunLoop.main).sink { [weak self] in self?.operationError = $0 }.store(in: &cancellables)
         castPlaybackSession.onCommand = { [weak self] command in
             guard let self, self.isConnected else { return false }
             self.control(command)
@@ -66,9 +76,10 @@ final class ConnectionViewModel: ObservableObject {
             self?.castPlaybackSession.perform(action) ?? false
         }
         googleCast.onReceiverEnded = { [weak self] in
-            self?.castPlaybackSession.stopLocally()
-            self?.releaseCastResources()
-            self?.coordinator.clear()
+            guard let self, isExternalReceiver else { return }
+            castPlaybackSession.stopLocally()
+            releaseCastResources()
+            coordinator.clear()
         }
         if let data = UserDefaults.standard.data(forKey: "google_cast_saved_devices") {
             savedExternalReceiverDevices = (try? JSONDecoder().decode([ExternalReceiverDevice].self, from: data)) ?? []
@@ -81,7 +92,7 @@ final class ConnectionViewModel: ObservableObject {
             store.saveSavedDevices(savedDevices)
         }
 
-        ws.onMessage = { [weak self] text in guard let self, !isExternalReceiver else { return }; coordinator.handle(text) }
+        ws.onMessage = { [weak self] text in guard let self, !isExternalReceiver, !isAirPlay else { return }; coordinator.handle(text) }
         ws.onCredentials = { [weak self] creds in self?.persistCredentials(creds) }
         ws.onCapabilities = { [weak self] caps in self?.persistCapabilities(caps) }
 
@@ -89,7 +100,7 @@ final class ConnectionViewModel: ObservableObject {
         ws.$state
             .receive(on: RunLoop.main)
             .sink { [weak self] value in
-                guard let self, !isExternalReceiver else { return }
+                guard let self, !isExternalReceiver, !isAirPlay else { return }
                 state = value
                 handleCastConnectionState(value)
                 if !value.isConnected {
@@ -187,6 +198,7 @@ final class ConnectionViewModel: ObservableObject {
 
     func connectExternalReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool = false) {
         guard device.protocolID != "dial" else { operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."; return }
+        airPlay.disconnect()
         let preservingPlayback = (preservingPlayback || castPlaybackSession.isActive) && externalReceiver?.identity == device.identity
         if !preservingPlayback { endCastSession() }
         endSavedReconnectDiscovery()
@@ -210,6 +222,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func usePlayBridge(preservingPlayback: Bool = false) {
+        airPlay.disconnect()
         if !preservingPlayback { endCastSession() }
         externalReceiver = nil
         googleCast.disconnect()
@@ -227,6 +240,7 @@ final class ConnectionViewModel: ObservableObject {
     /// An explicit disconnect selects this phone, and pairing/security failures need
     /// user action rather than an automatic retry.
     func reconnectLastReceiverIfNeeded() {
+        if isAirPlay { airPlay.refreshRoute(); return }
         switch state {
         case .disconnected, .error:
             break
@@ -472,6 +486,8 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func disconnect() {
+        airPlay.disconnect()
+        state = .disconnected
         endCastSession()
         UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
         pendingSubtitleConfirmations.values.forEach { $0.cancel() }
@@ -516,6 +532,7 @@ final class ConnectionViewModel: ObservableObject {
     func cast(urlString: String, title: String? = nil) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: [:], contentType: nil); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: nil, headers: [:]); return }
         SenderDebugNetwork.request("Cast output", url: trimmed)
         sendMediaCommand(WireProtocol.singleVideoCommand(url: trimmed, title: title))
@@ -523,6 +540,7 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
     func castLocalMedia(url: String, title: String, contentType: String) {
+        if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
         noteNewCast(mediaKind: kind, title: title)
         if isExternalReceiver, let mediaURL = URL(string: url) {
@@ -538,6 +556,7 @@ final class ConnectionViewModel: ObservableObject {
     func castMedia(url: String, title: String? = nil, headers: [String: String] = [:], contentType: String? = nil) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: headers, contentType: contentType); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: contentType, headers: headers); return }
         SenderDebugNetwork.request("Cast output", url: trimmed, headers: headers)
         sendMediaCommand(WireProtocol.singleVideoCommand(
@@ -553,6 +572,12 @@ final class ConnectionViewModel: ObservableObject {
     /// Cast a browser-detected stream: chosen quality URL (or the master), `mediaHeaders`,
     /// attached subtitles. Mirrors the Android `CastSheet` → `createSingleVideoCommandJson` path.
     func castStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
+        if isAirPlay {
+            sendAirPlayURL(quality?.url ?? video.url, title: video.displayTitle,
+                headers: VideoDetector.mediaHeaders(for: video), contentType: video.contentType,
+                subtitles: subtitles.compactMap { URL(string: $0).map { AirPlaySubtitleSource(url: $0, headers: [:], title: "Subtitle") } })
+            return
+        }
         if isExternalReceiver {
             guard subtitles.isEmpty else { operationError = "External subtitles are not supported by this receiver adapter yet."; return }
             sendExternalReceiverURL(quality?.url ?? video.url, title: video.displayTitle, contentType: video.contentType, headers: VideoDetector.mediaHeaders(for: video))
@@ -576,16 +601,33 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Retain phone routes beyond sheet dismissal and across queued items.
     @MainActor
-    func sendRoutedStream(_ media: RoutedStream, video: DetectedVideo, subtitles: [RoutedStream], queue: Bool) async throws {
+    func sendRoutedStream(_ media: RoutedStream, video: DetectedVideo, subtitles: [RoutedStream], queue: Bool, subtitleTitles: [String] = [], airPlayRequest: UUID? = nil) async throws {
         let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
         let contentType = video.contentType ?? ((video.isImage || video.isAudio)
             ? URL(string: video.url).map(LocalFileServer.mimeType(for:)) : nil)
         let historyCommand = WireProtocol.singleVideoCommand(
             url: media.sourceURL ?? video.url, title: video.displayTitle,
             contentType: contentType, subtitles: subtitles.compactMap(\.sourceURL),
+            subtitleResources: subtitles.map { sub in
+                ["url": sub.sourceURL ?? sub.url.absoluteString,
+                 "headers": sub.sourceURL == nil ? sub.headers : sub.sourceHeaders] as [String: Any]
+            },
             mediaKind: kind,
             headers: media.sourceURL == nil ? VideoDetector.mediaHeaders(for: video) : media.sourceHeaders,
             detectedBy: video.detectedBy)
+        if isAirPlay {
+            let request = airPlayRequest ?? airPlay.beginRequest(queue: queue)
+            guard airPlay.generation == request else { throw CancellationError() }
+            let routed = try await prepareAirPlayMedia(media, contentType: contentType)
+            guard isAirPlay else { throw CancellationError() }
+            let sources = subtitles.enumerated().map { index, sub in
+                AirPlaySubtitleSource(url: sub.url, headers: sub.headers,
+                    title: subtitleTitles.indices.contains(index) ? subtitleTitles[index] : "Subtitle \(index + 1)")
+            }
+            try await airPlay.send(media: routed, title: video.displayTitle, kind: kind, subtitles: sources, queue: queue, request: request)
+            if !queue { recordCast(historyCommand) }
+            return
+        }
         if isExternalReceiver {
             guard !queue, subtitles.isEmpty else { throw StreamRoutingError.message("Queueing and external subtitles are not supported by this receiver adapter yet.") }
             let target = destinationID
@@ -619,6 +661,12 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Queue a browser-detected stream.
     func queueStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
+        if isAirPlay {
+            sendAirPlayURL(quality?.url ?? video.url, title: video.displayTitle,
+                headers: VideoDetector.mediaHeaders(for: video), contentType: video.contentType, queue: true,
+                subtitles: subtitles.compactMap { URL(string: $0).map { AirPlaySubtitleSource(url: $0, headers: [:], title: "Subtitle") } })
+            return
+        }
         guard !isExternalReceiver else { operationError = "Queueing is not supported by this receiver adapter yet."; return }
         let url = quality?.url ?? video.url
         let headers = VideoDetector.mediaHeaders(for: video)
@@ -652,6 +700,22 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func control(_ command: String) {
+        if isAirPlay {
+            switch command {
+            case "play": airPlay.play()
+            case "pause": airPlay.pause()
+            case "play_pause": airPlay.toggle()
+            case "stop": airPlay.stop()
+            case "next": airPlay.next()
+            case "seek_back": airPlay.seek(airPlay.position - 10)
+            case "seek_forward": airPlay.seek(airPlay.position + 10)
+            default:
+                if command.hasPrefix("seek_to:"), let ms = Double(command.dropFirst(8)) { airPlay.seek(ms / 1000) }
+                if command.hasPrefix("sub_track:") { airPlay.selectSubtitle(Int(command.dropFirst(10))) }
+                if command.hasPrefix("audio_track:"), let id = Int(command.dropFirst(12)) { airPlay.selectAudio(id) }
+            }
+            return
+        }
         guard isConnected else { operationError = "Reconnect to the receiver to control playback."; return }
         if command == "play" {
             castPlaybackSession.allowNewPlayback()
@@ -679,6 +743,12 @@ final class ConnectionViewModel: ObservableObject {
 
     func addSubtitle(url: String, headers: [String: String] = [:], label: String? = nil) -> Bool {
         guard isConnected, !isExternalReceiver else { return false }
+        if isAirPlay {
+            guard let source = URL(string: url), ["http", "https"].contains(source.scheme?.lowercased() ?? ""),
+                  airPlay.current != nil, !airPlay.preparing else { return false }
+            airPlay.addSubtitle(.init(url: source, headers: headers, title: label ?? "Added subtitle"))
+            return true
+        }
         guard pairedDevice?.features?.contains("subtitle_resource_add_v1") == true else {
             return headers.isEmpty && ws.send(WireProtocol.controlCommand("add_subtitle:\(url)"))
         }
@@ -756,6 +826,10 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func jump(to item: PlaylistEpisode) {
+        if isAirPlay {
+            if let itemId = item.itemId, let id = UUID(uuidString: itemId) { airPlay.jump(to: id) }
+            return
+        }
         ws.send(WireProtocol.playlistJumpCommand(
             index: item.index,
             itemId: supportsQueueV1 ? item.itemId : nil,
@@ -788,7 +862,10 @@ final class ConnectionViewModel: ObservableObject {
     }
     func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }
     func endPointerGesture() { ws.endPointerGesture() }
-    func queryContext() { if !isExternalReceiver { ws.send(WireProtocol.contextQuery()) } }
+    func queryContext() {
+        if isAirPlay { airPlay.refreshRoute() }
+        else if !isExternalReceiver { ws.send(WireProtocol.contextQuery()) }
+    }
     func queryUserScripts() { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userScriptQuery()) }
     func installUserScript(name: String, content: String) { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userScript(name: name, content: content)) }
     func queryUserAgents() { guard isConnected, supportsBrowser else { return }; ws.send(WireProtocol.userAgentQuery()) }
@@ -862,6 +939,26 @@ final class ConnectionViewModel: ObservableObject {
         let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
         let configuration = StreamProxySettingsStore.load()
         do {
+            if isAirPlay {
+                let request = airPlay.beginRequest(queue: false)
+                for (index, item) in items.enumerated() {
+                    let media = try await StreamRouteService().prepare(url: item["url"] as! String,
+                        headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
+                        route: route, configuration: configuration)
+                    let routed = try await prepareAirPlayMedia(media, contentType: item["contentType"] as? String)
+                    let resources = item["subtitleResources"] as? [[String: Any]] ?? []
+                    let sources = (item["subtitles"] as? [String] ?? []).enumerated().compactMap { offset, raw -> AirPlaySubtitleSource? in
+                        guard let url = URL(string: raw) else { return nil }
+                        let headers = resources.first { $0["url"] as? String == raw }?["headers"] as? [String: String] ?? [:]
+                        return .init(url: url, headers: headers, title: "Subtitle \(offset + 1)")
+                    }
+                    guard isAirPlay, destinationID == target else { throw CancellationError() }
+                    try await airPlay.send(media: routed, title: item["title"] as? String ?? "AirPlay media",
+                        kind: item["mediaKind"] as? String ?? "video", subtitles: sources, queue: index > 0, request: request)
+                }
+                recordCast(entry.command)
+                return
+            }
             if isExternalReceiver && (items.count != 1 || !(items[0]["subtitles"] as? [String] ?? []).isEmpty) {
                 throw StreamRoutingError.message("This receiver does not support replaying playlists or external subtitles.")
             }
@@ -913,6 +1010,73 @@ final class ConnectionViewModel: ObservableObject {
 
     // MARK: - System playback and background casting
 
+    private func adoptAirPlayDestination() {
+        endCastSession()
+        endSavedReconnectDiscovery()
+        externalReceiver = nil
+        googleCast.disconnect()
+        ws.disconnect()
+        connectingDevice = nil
+        operationError = nil
+        UserDefaults.standard.set("airplay", forKey: "last_receiver_protocol")
+        updateAirPlayState()
+    }
+
+    private func updateAirPlayState() {
+        guard isAirPlay else { return }
+        let nextState: ConnectionState = airPlay.routeAvailable ? .connected(serverName: airPlay.routeName, secure: false) : .disconnected
+        if state != nextState { state = nextState }
+        coordinator.activeContext = airPlay.current == nil ? "idle" : "player"
+        coordinator.mediaKind = airPlay.current?.kind ?? "video"
+        coordinator.playerIsLive = airPlay.current != nil && airPlay.duration == 0
+        coordinator.playerIsSeekable = airPlay.duration > 0 && airPlay.routeAvailable
+        coordinator.subtitleTracks = airPlay.tracks.map {
+            MediaTrack(id: String($0.id), name: $0.title, selected: airPlay.selectedTrack == $0.id)
+        }
+        coordinator.audioTracks = airPlay.audioTracks.map {
+            MediaTrack(id: String($0.id), name: $0.title, selected: airPlay.selectedAudioTrack == $0.id)
+        }
+        let entries = airPlay.current.map { [$0] + airPlay.upcoming } ?? []
+        coordinator.playlist = entries.isEmpty ? nil : PlaylistUiState(currentIndex: 0, totalCount: entries.count,
+            items: entries.enumerated().map { PlaylistEpisode(index: $0.offset, title: $0.element.title, itemId: $0.element.id.uuidString) })
+        coordinator.playback = airPlay.current.map {
+            TvPlaybackStatus(state: airPlay.buffering ? "buffering" : airPlay.playing ? "playing" : "paused",
+                positionMs: Int64(airPlay.position * 1000), durationMs: Int64(airPlay.duration * 1000),
+                title: $0.title, playbackId: $0.id.uuidString)
+        }
+    }
+
+    @MainActor
+    private func prepareAirPlayMedia(_ media: RoutedStream, contentType: String?) async throws -> RoutedStream {
+        // A receiver cannot rely on AVURLAsset's private header options. Keep
+        // protected upstream requests on the phone and expose an ordinary LAN URL.
+        guard !media.headers.isEmpty else { return media }
+        return try await StreamRouteService().prepare(url: media.url.absoluteString, headers: media.headers,
+            contentType: contentType, route: .phone, configuration: .init())
+    }
+
+    private func sendAirPlayURL(_ url: String, title: String?, headers: [String: String], contentType: String?,
+                               local: Bool = false, queue: Bool = false, subtitles: [AirPlaySubtitleSource] = []) {
+        let destination = destinationID
+        let attempt = airPlay.beginRequest(queue: queue)
+        let route = local ? StreamRoute.direct : StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
+        Task { @MainActor in
+            do {
+                let media = try await StreamRouteService().prepare(url: url, headers: headers, contentType: contentType,
+                    route: route, configuration: StreamProxySettingsStore.load())
+                let routed = try await prepareAirPlayMedia(media, contentType: contentType)
+                guard isAirPlay, destinationID == destination, airPlay.generation == attempt else { return }
+                let kind = contentType?.hasPrefix("image/") == true ? "image" : contentType?.hasPrefix("audio/") == true ? "audio" : "video"
+                try await airPlay.send(media: routed, title: title ?? "AirPlay media", kind: kind, subtitles: subtitles, queue: queue, request: attempt)
+                if !queue { recordCast(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, headers: headers)) }
+            } catch is CancellationError {} catch {
+                if isAirPlay, airPlay.generation == attempt {
+                    operationError = (error as? AirPlaySubtitleError)?.localizedDescription ?? (error as? StreamRoutingError)?.localizedDescription ?? "Couldn’t prepare this item for AirPlay."
+                }
+            }
+        }
+    }
+
 #if DEBUG
     var castPlaybackDiagnostics: String {
         "PlayBridge background casting\nConnected: \(isConnected)\nPlayback: \(coordinator.playback?.state ?? "none")\nPhone routes retained: \(routedStreamRegistrations.count)\n\(CastSystemPlayback.shared.diagnostics)"
@@ -941,6 +1105,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     private func refreshCastPlayback(_ playback: TvPlaybackStatus?) {
+        guard !isAirPlay else { return }
         castPlaybackSession.receive(playback,
             receiverName: receiverName ?? "TV",
             mediaKind: isExternalReceiver ? externalMediaKind : coordinator.mediaKind,

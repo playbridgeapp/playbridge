@@ -23,16 +23,17 @@ struct RemoteControlView: View {
     private var isAudio: Bool { vm.coordinator.mediaKind == "audio" }
     private var isLive: Bool { context == "player" && vm.coordinator.playerIsLive }
     private var duration: Double { max(0, Double(playback?.durationMs ?? 0)) }
-    private var protocolID: String? { vm.externalReceiver?.protocolID }
+    private var protocolID: String? { vm.isAirPlay ? "airplay" : vm.externalReceiver?.protocolID }
     private var videoActive: Bool {
         playback?.state == "playing" || playback?.state == "paused" || playback?.state == "buffering"
     }
     private var canSeek: Bool {
-        RemoteMode.canSeek(context: context, externalProtocol: protocolID, duration: playback?.durationMs ?? 0,
+        if vm.isAirPlay && !vm.airPlay.routeAvailable { return false }
+        return RemoteMode.canSeek(context: context, externalProtocol: protocolID, duration: playback?.durationMs ?? 0,
                            isLive: isLive, isSeekable: vm.coordinator.playerIsSeekable, isImage: isImage)
     }
     private var availableModes: [RemoteMode] {
-        RemoteMode.available(context: context, external: vm.isExternalReceiver, supportsRemote: RemoteMode.supportsRemote(externalProtocol: protocolID))
+        RemoteMode.available(context: context, external: vm.isExternalReceiver || vm.isAirPlay, supportsRemote: RemoteMode.supportsRemote(externalProtocol: protocolID))
     }
     private var mode: RemoteMode {
         let selected = modes[context] ?? (context == "browser" ? .touchpad : .context)
@@ -59,7 +60,7 @@ struct RemoteControlView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .disabled(!vm.isConnected)
+        .disabled(!vm.isConnected && !vm.isAirPlay)
         .overlay {
             if let seekFeedback {
                 RemoteSeekBar.FeedbackHUD(feedback: seekFeedback)
@@ -75,6 +76,7 @@ struct RemoteControlView: View {
             case .more: browserMore
             case .scripts: scripts
             case .agents: agents
+            case .airPlayQueue: AirPlayQueueSheet(controller: vm.airPlay)
             }
         }
         .fileImporter(isPresented: $importingScript, allowedContentTypes: [.javaScript, .plainText]) { result in
@@ -120,11 +122,13 @@ struct RemoteControlView: View {
                     if !vm.isExternalReceiver && !isImage { tracks }
                 }
                 episodes
+                if vm.isAirPlay && vm.airPlay.preparing { ProgressView("Preparing subtitles…") }
                 Spacer(minLength: 0)
                 if !isImage || duration > 0 {
                     seekBar(playing: playback?.state == nil || playback?.state == "playing" || playback?.state == "buffering", browser: false)
                 }
                 mediaControls
+                if vm.isAirPlay && vm.airPlay.routeAvailable { AirPlayVolumeControl().frame(height: 30).padding(.horizontal, 12) }
                 if protocolID == "google_cast" {
                     Button("End receiver session") { playerCommand("end_receiver") }
                         .font(Theme.font(.caption)).foregroundStyle(Theme.danger)
@@ -185,10 +189,12 @@ struct RemoteControlView: View {
                         .background(Theme.surfaceContainerHigh, in: Capsule())
                 }.buttonStyle(.plain)
             }
-            Button { presented = .settings } label: {
-                Image(systemName: "ellipsis").frame(width: 32, height: 32)
-                    .background(Theme.surfaceContainerHigh, in: Capsule())
-            }.accessibilityLabel("Player settings")
+            if !vm.isAirPlay {
+                Button { presented = .settings } label: {
+                    Image(systemName: "ellipsis").frame(width: 32, height: 32)
+                        .background(Theme.surfaceContainerHigh, in: Capsule())
+                }.accessibilityLabel("Player settings")
+            }
         }
     }
 
@@ -259,11 +265,15 @@ struct RemoteControlView: View {
                 action("gobackward.10", "-10s") { playerCommand("seek_back") }
                 action("goforward.10", "+10s") { playerCommand("seek_forward") }
             }
-            if !vm.isExternalReceiver && !isImage {
+            if !vm.isExternalReceiver && !vm.isAirPlay && !isImage {
                 action("repeat", "Loop", tint: looping ? Theme.primary : Theme.onSurface) {
                     looping.toggle()
                     playerCommand(looping ? "loop_on" : "loop_off")
                 }
+            }
+            if vm.isAirPlay {
+                action("forward.end.fill", "Next") { playerCommand("next") }.disabled(vm.airPlay.upcoming.isEmpty)
+                action("list.bullet", "Queue") { presented = .airPlayQueue }
             }
             action("stop.fill", "Stop", tint: Theme.danger) { playerCommand("stop") }
         }.padding(.vertical, 8).frame(minHeight: 64).background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 16))
@@ -449,10 +459,18 @@ struct RemoteControlView: View {
                 }
             }
             .navigationTitle("Subtitles").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if vm.isAirPlay {
+                    Text("Added SRT or WebVTT subtitles require a compatible HLS stream and Wi-Fi. Adding a track may briefly reload the video at its current position.")
+                        .font(Theme.font(.caption)).foregroundStyle(Theme.onSurfaceVariant)
+                        .padding().frame(maxWidth: .infinity).background(Theme.surface)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     if !vm.isExternalReceiver && !isAudio && !isImage {
                         Button { presented = .addSubtitle } label: { Label("Add", systemImage: "plus") }
+                            .disabled(vm.isAirPlay && vm.airPlay.preparing)
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } }
@@ -587,7 +605,7 @@ struct RemoteControlView: View {
         let remote = tracks.filter { isExternalSubtitle($0) && !$0.name.contains("OpenSubtitles #") }
         let external = tracks.filter { isExternalSubtitle($0) && $0.name.contains("OpenSubtitles #") }
         return [
-            SubtitleGroup(key: "embedded", label: "Embedded", tracks: embedded),
+            SubtitleGroup(key: "embedded", label: vm.isAirPlay ? "Available tracks" : "Embedded", tracks: embedded),
             SubtitleGroup(key: "remote", label: "Phone Remote", tracks: remote),
             SubtitleGroup(key: "external", label: "External", tracks: external),
         ].filter { !$0.tracks.isEmpty }
@@ -628,7 +646,7 @@ struct RemoteControlView: View {
     }
 
     private enum Presented: String, Identifiable {
-        case settings, subtitles, addSubtitle, more, scripts, agents
+        case settings, subtitles, addSubtitle, more, scripts, agents, airPlayQueue
         var id: String { rawValue }
     }
 }

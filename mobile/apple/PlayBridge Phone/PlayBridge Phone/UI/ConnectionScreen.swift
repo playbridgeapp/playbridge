@@ -29,10 +29,11 @@ struct ConnectionScreen: View {
                     onDisconnect: { vm.disconnect() }
                 )
                 ConnectionThisPhoneRow(
-                    selected: !vm.isConnected && !vm.connectionIsConnecting,
+                    selected: !vm.isAirPlay && !vm.isConnected && !vm.connectionIsConnecting,
                     compact: false,
                     onSelect: { vm.disconnect() }
                 )
+                AirPlayDestinationRow()
                 playBridgeSection
                 recentOtherSection
                 otherDevicesSection
@@ -58,7 +59,7 @@ struct ConnectionScreen: View {
     }
 
     private var activePlayBridgeKey: String? {
-        guard vm.isConnected, !vm.isExternalReceiver, let device = vm.pairedDevice else { return nil }
+        guard vm.isConnected, !vm.isExternalReceiver, !vm.isAirPlay, let device = vm.pairedDevice else { return nil }
         return vm.deviceKey(device)
     }
 
