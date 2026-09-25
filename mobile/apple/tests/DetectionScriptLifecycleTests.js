@@ -43,6 +43,14 @@ frame.history.pushState({}, '', '/ad');
 assert.equal(frame.messages.length, 0, 'Iframe navigation must not advance the tab lifecycle');
 
 async function subtitleChecks() {
+  const mediaDOM = fixture(true, { elements: [
+    { tagName: 'AUDIO', src: 'https://media.example/song.mp3' },
+    { tagName: 'SOURCE', src: 'https://media.example/alternate.m4a', parentElement: { tagName: 'AUDIO' } },
+    { tagName: 'IMG', src: 'https://media.example/cover.jpg', width: 320, height: 180, complete: true },
+    { tagName: 'IMG', src: 'https://media.example/favicon.png', width: 300, height: 300, complete: true },
+    { tagName: 'IMG', src: 'https://media.example/pixel.png', width: 1, height: 1, complete: true },
+  ] });
+  assert.deepEqual(mediaDOM.messages.map(message => message.mediaKind), ['audio', 'audio', 'image']);
   const track = fixture(true, { elements: [{ tagName: 'TRACK', src: 'https://subs.example/english.vtt' }] });
   assert.equal(track.messages.length, 1);
   assert.equal(track.messages[0].detectedBy, 'dom_track_element');

@@ -3,12 +3,12 @@ import UniformTypeIdentifiers
 
 struct RemoteControlView: View {
     @EnvironmentObject private var vm: ConnectionViewModel
+    @EnvironmentObject private var browserStore: BrowserStore
     @State private var modes: [String: RemoteMode] = [:]
     @State private var looping = false
     @State private var maximized = false
     @State private var presented: Presented?
     @State private var keyboardText = ""
-    @State private var subtitleURL = ""
     @State private var agentName = ""
     @State private var agentValue = ""
     @State private var addingAgent = false
@@ -173,8 +173,10 @@ struct RemoteControlView: View {
 
     private var tracks: some View {
         HStack(spacing: 8) {
-            trackMenu("Audio", icon: "waveform", tracks: vm.coordinator.audioTracks, command: "audio_track:")
-            if !isAudio {
+            if !isImage {
+                trackMenu("Audio", icon: "waveform", tracks: vm.coordinator.audioTracks, command: "audio_track:")
+            }
+            if !isAudio && !isImage {
                 Button { presented = .subtitles } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "captions.bubble")
@@ -422,9 +424,6 @@ struct RemoteControlView: View {
                 Section("Player engine") {
                     chipRow([("ExoPlayer", "exo"), ("MPV", "mpv")], selected: vm.coordinator.playerEngine) { playerCommand("switch_player:\($0)") }
                 }
-                if !isAudio {
-                    Button { presented = .addSubtitle } label: { Label("Add subtitle…", systemImage: "captions.bubble") }
-                }
             }
             .navigationTitle("Player settings").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
@@ -434,7 +433,7 @@ struct RemoteControlView: View {
     private var subtitles: some View {
         NavigationStack {
             List {
-                Button("Off") { playerCommand("sub_track:none"); presented = nil }
+                Button("Off") { playerCommand("sub_track:\(subtitleOffID)"); presented = nil }
                 ForEach(groupedSubtitles, id: \.key) { group in
                     Section(group.label) {
                         ForEach(group.tracks) { track in
@@ -450,30 +449,29 @@ struct RemoteControlView: View {
                 }
             }
             .navigationTitle("Subtitles").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if !vm.isExternalReceiver && !isAudio && !isImage {
+                        Button { presented = .addSubtitle } label: { Label("Add", systemImage: "plus") }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { presented = nil } }
+            }
         }
     }
 
     private var addSubtitle: some View {
-        NavigationStack {
-            Form {
-                TextField("Subtitle URL (.srt / .vtt)", text: $subtitleURL)
-                    .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-            }
-            .navigationTitle("Add subtitle").navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { presented = nil } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
-                        let url = subtitleURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !url.isEmpty else { return }
-                        playerCommand("add_subtitle:\(url)")
-                        subtitleURL = ""
-                        presented = nil
-                    }.disabled(subtitleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }
+        let detector = browserStore.activeTab?.detector
+        return SubtitleSourcePickerView(detector: detector,
+            detected: detector?.videos.filter(\.isSubtitle) ?? [], title: "Add subtitle",
+            onDetected: { item in
+                vm.addSubtitle(url: item.url, headers: VideoDetector.subtitleHeaders(for: item), label: item.displayTitle)
+            },
+            onLocal: { file in
+                guard let served = await vm.serveLocalSubtitle(file) else { return false }
+                return vm.addSubtitle(url: served, label: file.lastPathComponent)
+            },
+            onURL: { vm.addSubtitle(url: $0) })
     }
 
     private var browserMore: some View {
@@ -584,7 +582,7 @@ struct RemoteControlView: View {
     }
 
     private var groupedSubtitles: [SubtitleGroup] {
-        let tracks = vm.coordinator.subtitleTracks.filter { $0.id != "off" && $0.id != "none" }
+        let tracks = vm.coordinator.subtitleTracks.filter { !["off", "none", "no", "-1"].contains($0.id.lowercased()) }
         let embedded = tracks.filter { !isExternalSubtitle($0) }
         let remote = tracks.filter { isExternalSubtitle($0) && !$0.name.contains("OpenSubtitles #") }
         let external = tracks.filter { isExternalSubtitle($0) && $0.name.contains("OpenSubtitles #") }
@@ -593,6 +591,10 @@ struct RemoteControlView: View {
             SubtitleGroup(key: "remote", label: "Phone Remote", tracks: remote),
             SubtitleGroup(key: "external", label: "External", tracks: external),
         ].filter { !$0.tracks.isEmpty }
+    }
+
+    private var subtitleOffID: String {
+        vm.coordinator.subtitleTracks.first { ["off", "none", "no", "-1"].contains($0.id.lowercased()) }?.id ?? "none"
     }
 
     private func isExternalSubtitle(_ track: MediaTrack) -> Bool {

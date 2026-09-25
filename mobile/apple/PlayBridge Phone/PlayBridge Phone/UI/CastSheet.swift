@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import UniformTypeIdentifiers
 
 /// Single source of truth for the player/browser picker options on iOS.
 struct TvCapabilityOptions {
@@ -65,7 +66,10 @@ struct CastSheet: View {
     @State private var attachedSubtitles = Set<String>()
     @State private var castAction = "play"
     @State private var browseUrl = ""
-    @State private var selectedTab = 0
+    @State private var selectedTab: CastMediaTab = .video
+    @State private var tabOrder = CastMediaTab.allCases
+    @State private var extraSubtitles: [DetectedVideo] = []
+    @State private var showAddSubtitles = false
     @State private var browserMode = "tv"
     @AppStorage("stream_route_default") private var routePreference = StreamRoute.direct.rawValue
     @State private var proxyConfiguration = StreamProxySettingsStore.load()
@@ -78,15 +82,21 @@ struct CastSheet: View {
     @State private var playbackPreparationID: UUID?
     @State private var playbackError: String?
 
-    private var streams: [DetectedVideo] { videos.filter { !$0.isSubtitle } }
-    private var subtitles: [DetectedVideo] { SubtitleOrdering.newestFirst(videos) }
+    private var streams: [DetectedVideo] { videos.filter(\.isVideo) }
+    private var audio: [DetectedVideo] { videos.filter(\.isAudio).sorted { $0.timestamp > $1.timestamp } }
+    private var images: [DetectedVideo] { videos.filter(\.isImage).sorted { $0.timestamp > $1.timestamp } }
+    private var subtitles: [DetectedVideo] { SubtitleOrdering.newestFirst(videos + extraSubtitles) }
+    private var media: [DetectedVideo] { streams + audio + images }
+    private var preferredMedia: DetectedVideo? { sortedStreams(streams).first ?? audio.first ?? images.first }
 
     private var sendEnabled: Bool {
         if playbackPreparationID != nil { return false }
         if castAction == "browse" {
             return vm.isConnected && !browseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         } else {
-            return vm.isConnected && selectedVideo != nil
+            guard let selectedVideo else { return false }
+            let kind = selectedVideo.isAudio ? "audio" : selectedVideo.isImage ? "image" : "video"
+            return vm.isConnected && vm.supportsNativeMediaKind(kind)
         }
     }
 
@@ -109,8 +119,12 @@ struct CastSheet: View {
                     VStack(alignment: .leading, spacing: 16) {
                         if castAction == "browse" {
                             browseSection
-                        } else if selectedTab == 0 {
+                        } else if selectedTab == .video {
                             videosListSection
+                        } else if selectedTab == .audio {
+                            simpleMediaSection(audio, kind: .audio)
+                        } else if selectedTab == .image {
+                            simpleMediaSection(images, kind: .image)
                         } else {
                             subtitlesListSection
                         }
@@ -123,6 +137,24 @@ struct CastSheet: View {
             .toolbar(.hidden, for: .navigationBar)
             .accessibilityAction(.escape) { dismiss() }
             .sheet(isPresented: $showDestination) { DeviceConnectionSheet() }
+            .sheet(isPresented: $showAddSubtitles) {
+                SubtitleSourcePickerView(detector: nil, detected: [], title: "Add subtitles",
+                    onDetected: { _ in false },
+                    onLocal: { url in
+                        guard let served = await vm.serveLocalSubtitle(url) else {
+                            playbackError = "Couldn’t share that subtitle file. Check Wi-Fi and Local Network access."
+                            return false
+                        }
+                        addSubtitleSelection(url: served, title: url.lastPathComponent,
+                                             type: LocalFileServer.mimeType(for: url), local: true)
+                        return true
+                    },
+                    onURL: { url in
+                        addSubtitleSelection(url: url, type: nil)
+                        return true
+                    })
+                .presentationDetents([.medium, .large])
+            }
             .alert("Couldn’t start playback", isPresented: Binding(
                 get: { playbackError != nil },
                 set: { if !$0 { playbackError = nil } }
@@ -158,20 +190,24 @@ struct CastSheet: View {
                 }
             }
             .onChange(of: vm.destinationID) { _ in
-                if vm.isExternalReceiver { castAction = "play"; selectedTab = 0; attachedSubtitles.removeAll() }
+                tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)
+                selectedTab = tabOrder.first ?? .video
+                if vm.isExternalReceiver { castAction = "play"; attachedSubtitles.removeAll() }
             }
             .onAppear {
-                if vm.isExternalReceiver { castAction = "play"; selectedTab = 0; attachedSubtitles.removeAll() }
+                tabOrder = CastMediaTab.prioritized(videos: videos, includeSubtitles: !vm.isExternalReceiver)
+                selectedTab = tabOrder.first ?? .video
+                if vm.isExternalReceiver { castAction = "play"; attachedSubtitles.removeAll() }
                 if streamRoute == .proxy, (try? proxyConfiguration.validatedURL()) == nil {
                     routePreference = StreamRoute.direct.rawValue
                 }
-                if selectedVideo == nil, let firstStream = sortedStreams(streams).first {
+                if selectedVideo == nil, let firstStream = preferredMedia {
                     selectVideo(firstStream)
                 }
                 if browseUrl.isEmpty {
                     browseUrl = tab.urlString
                 }
-                if streams.isEmpty && vm.supportsBrowser {
+                if media.isEmpty && vm.supportsBrowser {
                     castAction = "browse"
                 }
             }
@@ -180,7 +216,7 @@ struct CastSheet: View {
                     self.selectedVideo = nil
                     selectedQuality = nil
                 }
-                if selectedVideo == nil, let first = sortedStreams(streams).first {
+                if selectedVideo == nil, let first = preferredMedia {
                     selectVideo(first)
                 }
             }
@@ -383,25 +419,46 @@ struct CastSheet: View {
                 .padding(.horizontal, 16)
 
             VStack(spacing: 0) {
-                HStack(spacing: 0) {
-                    mediaTab("Videos", icon: "play.fill", count: streams.count, index: 0)
-                    if !vm.isExternalReceiver { mediaTab("Subtitles", icon: "captions.bubble", count: subtitles.count, index: 1) }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(tabOrder.filter { !vm.isExternalReceiver || $0 != .subtitle }, id: \.self) { tab in
+                            mediaTab(tab, count: tabCount(tab))
+                        }
+                    }
+                    .padding(.horizontal, 8)
                 }
-                .padding(.horizontal, 8)
                 Divider().background(Theme.outlineVariant)
             }
         }
     }
 
-    private func mediaTab(_ title: String, icon: String, count: Int, index: Int) -> some View {
-        let selected = selectedTab == index
+    private func tabCount(_ tab: CastMediaTab) -> Int {
+        switch tab {
+        case .video: return streams.count
+        case .audio: return audio.count
+        case .subtitle: return subtitles.count
+        case .image: return images.count
+        }
+    }
+
+    private func mediaTab(_ tab: CastMediaTab, count: Int) -> some View {
+        let selected = selectedTab == tab
         return Button {
-            withAnimation { selectedTab = index }
+            selectedTab = tab
+            let candidates: [DetectedVideo] = switch tab {
+            case .video: sortedStreams(streams)
+            case .audio: audio
+            case .image: images
+            case .subtitle: []
+            }
+            if let first = candidates.first, !candidates.contains(where: { $0.id == selectedVideo?.id }) {
+                selectVideo(first)
+            }
         } label: {
             VStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Image(systemName: icon).font(Theme.font(size: 14))
-                    Text(title).font(Theme.font(.subheadline).weight(.semibold))
+                    Image(systemName: tab.icon).font(Theme.font(size: 14))
+                    Text(tab.title).font(Theme.font(.subheadline).weight(.semibold))
                     Text("\(count)")
                         .font(Theme.font(.caption2).bold())
                         .padding(.horizontal, 6)
@@ -410,7 +467,7 @@ struct CastSheet: View {
                 }
                 .foregroundColor(selected ? Theme.primary : Theme.onSurfaceVariant)
                 .frame(minHeight: 44)
-                .frame(maxWidth: .infinity)
+                .padding(.horizontal, 12)
                 Rectangle()
                     .fill(selected ? Theme.primary : Color.clear)
                     .frame(height: 2)
@@ -418,7 +475,7 @@ struct CastSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(title), \(count)")
+        .accessibilityLabel("\(tab.title), \(count)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
@@ -468,6 +525,54 @@ struct CastSheet: View {
 #endif
                         }
                     )
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+    }
+
+    private func simpleMediaSection(_ items: [DetectedVideo], kind: CastMediaTab) -> some View {
+        LazyVStack(spacing: 12) {
+            if items.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: kind.icon).font(Theme.font(size: 40))
+                    Text("No \(kind.title.lowercased()) detected yet").font(Theme.font(.subheadline))
+                }
+                    .foregroundColor(Theme.onSurfaceVariant)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 32)
+            } else {
+                ForEach(items) { item in
+                    Button { selectVideo(item) } label: {
+                        HStack(spacing: 12) {
+                            if kind == .image, let url = URL(string: item.url) {
+                                AsyncImage(url: url) { image in image.resizable().scaledToFill() }
+                                    placeholder: { Image(systemName: kind.icon).resizable().scaledToFit().padding(15) }
+                                    .frame(width: 64, height: 64).clipped().clipShape(RoundedRectangle(cornerRadius: 8))
+                            } else {
+                                Image(systemName: kind.icon).font(Theme.font(size: 26))
+                                    .frame(width: 64, height: 64)
+                                    .background(Theme.surfaceContainerHigh, in: RoundedRectangle(cornerRadius: 8))
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(item.displayTitle).font(Theme.font(.subheadline).weight(.semibold)).lineLimit(2)
+                                Text(item.host).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                                Text(item.detectedBy).font(Theme.font(.caption2)).foregroundColor(Theme.onSurfaceVariant)
+                            }
+                            Spacer(minLength: 0)
+                            if selectedVideo?.id == item.id { Image(systemName: "checkmark.circle.fill").foregroundColor(Theme.primary) }
+                        }
+                        .foregroundColor(Theme.onSurface)
+                        .padding(12)
+                        .background(selectedVideo?.id == item.id ? Theme.secondaryContainer : Theme.surfaceContainer,
+                                    in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu { Button("Copy URL") { UIPasteboard.general.string = item.url } }
+                }
+                if !vm.supportsNativeMediaKind(kind.rawValue) {
+                    Text("This receiver has not reported \(kind.title.lowercased()) support.")
+                        .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
                 }
             }
         }
@@ -550,6 +655,12 @@ struct CastSheet: View {
                     }
                 }
             }
+            Button { showAddSubtitles = true } label: {
+                Label("Add subtitles", systemImage: "plus.circle.fill")
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+            }
+            .buttonStyle(.bordered)
         }
         .padding(16)
     }
@@ -559,6 +670,18 @@ struct CastSheet: View {
     private func selectVideo(_ video: DetectedVideo) {
         selectedVideo = video
         selectedQuality = nil
+    }
+
+    private func addSubtitleSelection(url: String, title: String? = nil, type: String?, local: Bool = false) {
+        guard !subtitles.contains(where: { $0.url == url }) else {
+            attachedSubtitles.insert(url)
+            return
+        }
+        let item = DetectedVideo(url: url, contentType: type, detectedBy: local ? "local_subtitle" : "manual_subtitle",
+                                 originUrl: nil, headers: [:], kind: .subtitle,
+                                 timestamp: Int64(Date().timeIntervalSince1970 * 1_000), title: title)
+        extraSubtitles.append(item)
+        attachedSubtitles.insert(item.url)
     }
 
     private func playOnPhone(_ video: DetectedVideo) {
@@ -608,22 +731,25 @@ struct CastSheet: View {
         let url = selectedQuality?.url ?? video.url
         let route = streamRoute
         let configuration = proxyConfiguration
-        let subtitleURLs = Array(attachedSubtitles)
+        let subtitleURLs = subtitles.map(\.url).filter { attachedSubtitles.contains($0) && video.isVideo }
         let queue = castAction == "queue"
         let destination = vm.destinationID
         playbackPreparation = Task { @MainActor in
             defer { if playbackPreparationID == attempt { playbackPreparationID = nil } }
             do {
                 let router = StreamRouteService()
+                let mediaType = video.contentType ?? ((video.isAudio || video.isImage)
+                    ? URL(string: video.url).map(LocalFileServer.mimeType(for:)) : nil)
                 let media = try await router.prepare(url: url, headers: VideoDetector.mediaHeaders(for: video),
-                    contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType,
+                    contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : mediaType,
                     route: route, configuration: configuration)
                 var subtitles: [RoutedStream] = []
                 for url in subtitleURLs {
-                    let detected = detector.videos.first { $0.url == url }
+                    let detected = self.subtitles.first { $0.url == url }
                     subtitles.append(try await router.prepare(url: url,
-                        headers: detected.map(VideoDetector.mediaHeaders) ?? [:], contentType: detected?.contentType,
-                        route: route, configuration: configuration))
+                        headers: detected.map(VideoDetector.subtitleHeaders) ?? [:], contentType: detected?.contentType,
+                        route: detected?.detectedBy == "local_subtitle" ? .direct : route,
+                        configuration: configuration))
                 }
                 try Task.checkCancellation()
                 guard playbackPreparationID == attempt, vm.isConnected,
@@ -643,6 +769,122 @@ struct CastSheet: View {
 
     private func sortedStreams(_ list: [DetectedVideo]) -> [DetectedVideo] {
         CastStreamRanking.sorted(list, qualities: detector.qualities, thumbnails: detector.thumbnailStates, manifests: detector.manifests)
+    }
+}
+
+/// The same source choices are used before casting and for late subtitle attachment.
+struct SubtitleSourcePickerView: View {
+    let detector: VideoDetector?
+    let detected: [DetectedVideo]
+    let title: String
+    let onDetected: (DetectedVideo) -> Bool
+    let onLocal: (URL) async -> Bool
+    let onURL: (String) -> Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var source = "Local"
+    @State private var urlText = ""
+    @State private var importing = false
+    @State private var working = false
+    @State private var error: String?
+
+    private var sources: [String] { (detected.isEmpty ? [] : ["Detected"]) + ["Local", "URL"] }
+
+    var body: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 16) {
+                Picker("Subtitle source", selection: $source) {
+                    ForEach(sources, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                if let error {
+                    Text(error).font(Theme.font(.caption)).foregroundColor(.red)
+                }
+                switch source {
+                case "Detected":
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(SubtitleOrdering.newestFirst(detected)) { subtitle in
+                                Button {
+                                    if onDetected(subtitle) { dismiss() }
+                                    else { error = "Couldn’t add this subtitle. Check the receiver connection." }
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(subtitle.displayTitle).font(Theme.font(.subheadline).weight(.semibold))
+                                        Text("Detected \(Date(timeIntervalSince1970: Double(subtitle.timestamp) / 1_000).formatted(date: .omitted, time: .standard))")
+                                            .font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
+                                        if let detector {
+                                            DetectedSubtitlePreview(detector: detector, subtitle: subtitle)
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(12)
+                                    .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 10))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                case "URL":
+                    TextField("Subtitle URL (.srt / .vtt)", text: $urlText)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                    Button("Add URL") {
+                        let entered = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard let parsed = URL(string: entered), ["http", "https"].contains(parsed.scheme?.lowercased() ?? ""),
+                              parsed.host != nil else { error = "Enter a valid HTTP or HTTPS URL."; return }
+                        if onURL(entered) { dismiss() }
+                        else { error = "Couldn’t add this subtitle. Check the receiver connection." }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                default:
+                    Text("Choose a .srt or .vtt file from this phone. The receiver will load it through the phone.")
+                        .font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
+                    Button { importing = true } label: {
+                        if working { ProgressView() } else { Label("Choose local file", systemImage: "folder") }
+                    }
+                    .buttonStyle(.borderedProminent).disabled(working)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(16)
+            .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
+            .onAppear { source = sources.first ?? "Local" }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.item]) { result in
+                guard case .success(let file) = result else { return }
+                guard ["srt", "vtt"].contains(file.pathExtension.lowercased()) else {
+                    error = "Choose an SRT or WebVTT subtitle file."
+                    return
+                }
+                working = true
+                Task { @MainActor in
+                    let scoped = file.startAccessingSecurityScopedResource()
+                    let sent = await onLocal(file)
+                    if scoped { file.stopAccessingSecurityScopedResource() }
+                    working = false
+                    if sent { dismiss() }
+                    else { error = "Couldn’t share this subtitle. Check Wi-Fi and the receiver connection." }
+                }
+            }
+        }
+    }
+}
+
+private struct DetectedSubtitlePreview: View {
+    @ObservedObject var detector: VideoDetector
+    let subtitle: DetectedVideo
+
+    var body: some View {
+        Group {
+            if case .ready(let preview, let language) = detector.subtitlePreviews[subtitle.id] {
+                if let language { Text("Likely \(language)").foregroundColor(Theme.primary) }
+                Text(preview).lineLimit(2).foregroundColor(Theme.onSurfaceVariant)
+            }
+        }
+        .font(Theme.font(.caption))
+        .task(id: subtitle.id) { await detector.loadSubtitlePreview(for: subtitle) }
     }
 }
 

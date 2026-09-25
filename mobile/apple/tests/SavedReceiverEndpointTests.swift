@@ -11,6 +11,8 @@ import Foundation
         precondition(updated.name == live.name && updated.uuid == saved.uuid)
         precondition(updated.token == saved.token && updated.certFingerprint == saved.certFingerprint)
         precondition(updated.players == saved.players && updated.browsers == saved.browsers && updated.lastConnected == saved.lastConnected)
+        precondition((try? JSONDecoder().decode(PairedDevice.self, from: JSONEncoder().encode(saved)))?.mediaKinds == nil,
+                     "Older paired-device records without mediaKinds must remain readable")
         precondition(!SavedReceiverEndpoint.sameAddress(saved, updated))
         let reusedAddress = DiscoveredDevice(ip: saved.ip, port: saved.port, name: saved.name, uuid: "different-receiver")
         precondition(SavedReceiverEndpoint.refresh(saved, from: [reusedAddress]) == saved)

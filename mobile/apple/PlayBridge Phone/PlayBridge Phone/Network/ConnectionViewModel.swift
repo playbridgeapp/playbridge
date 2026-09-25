@@ -17,6 +17,9 @@ final class ConnectionViewModel: ObservableObject {
     var isExternalReceiver: Bool { externalReceiver != nil }
     var supportsQueue: Bool { !isExternalReceiver }
     var supportsBrowser: Bool { !isExternalReceiver && pairedDevice?.browsers.isEmpty == false }
+    func supportsNativeMediaKind(_ kind: String) -> Bool {
+        isExternalReceiver || kind == "video" || pairedDevice?.mediaKinds?.contains(kind) == true
+    }
     var destinationID: String? { externalReceiver.map { $0.identity } ?? pairedDevice.map(deviceKey) }
     var receiverName: String? {
         if case .connected(let name, _) = state { return name }
@@ -35,6 +38,8 @@ final class ConnectionViewModel: ObservableObject {
 
     private let store = PairingStore.shared
     private var routedStreamRegistrations: [PhoneProxyRegistration] = []
+    private var subtitleFileServers: [LocalFileServer] = []
+    private var pendingSubtitleConfirmations: [String: AnyCancellable] = [:]
     private var cancellables = Set<AnyCancellable>()
     /// The device we're currently bringing up, so we can persist a full record once paired.
     private var connectingDevice: DiscoveredDevice?
@@ -66,7 +71,14 @@ final class ConnectionViewModel: ObservableObject {
         // Re-publish nested object changes so views observing the VM refresh.
         ws.$state
             .receive(on: RunLoop.main)
-            .sink { [weak self] value in guard let self, !isExternalReceiver else { return }; state = value }
+            .sink { [weak self] value in
+                guard let self, !isExternalReceiver else { return }
+                state = value
+                if !value.isConnected {
+                    pendingSubtitleConfirmations.values.forEach { $0.cancel() }
+                    pendingSubtitleConfirmations.removeAll()
+                }
+            }
             .store(in: &cancellables)
         googleCast.$state.receive(on: RunLoop.main).sink { [weak self] value in
             guard let self, isExternalReceiver else { return }
@@ -430,6 +442,10 @@ final class ConnectionViewModel: ObservableObject {
 
     func disconnect() {
         UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
+        pendingSubtitleConfirmations.values.forEach { $0.cancel() }
+        pendingSubtitleConfirmations.removeAll()
+        subtitleFileServers.forEach { $0.stop() }
+        subtitleFileServers.removeAll()
         if isExternalReceiver {
             // Clear routing intent before the transport publishes its disconnect state.
             externalReceiver = nil
@@ -509,12 +525,14 @@ final class ConnectionViewModel: ObservableObject {
         }
         let url = quality?.url ?? video.url
         let headers = VideoDetector.mediaHeaders(for: video)
+        let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
         SenderDebugNetwork.request("Browser cast output", url: url, headers: headers)
         sendMediaCommand(WireProtocol.singleVideoCommand(
             url: url,
             title: video.displayTitle,
             contentType: video.contentType,
             subtitles: subtitles,
+            mediaKind: kind,
             headers: headers,
             detectedBy: video.detectedBy,
             playerMode: playerMode
@@ -523,15 +541,19 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Retain phone routes beyond sheet dismissal and across queued items.
     func sendRoutedStream(_ media: RoutedStream, video: DetectedVideo, subtitles: [RoutedStream], queue: Bool) async throws {
+        let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
+        let contentType = video.contentType ?? ((video.isImage || video.isAudio)
+            ? URL(string: video.url).map(LocalFileServer.mimeType(for:)) : nil)
         let historyCommand = WireProtocol.singleVideoCommand(
             url: media.sourceURL ?? video.url, title: video.displayTitle,
-            contentType: video.contentType, subtitles: subtitles.compactMap(\.sourceURL),
+            contentType: contentType, subtitles: subtitles.compactMap(\.sourceURL),
+            mediaKind: kind,
             headers: media.sourceURL == nil ? VideoDetector.mediaHeaders(for: video) : media.sourceHeaders,
             detectedBy: video.detectedBy)
         if isExternalReceiver {
             guard !queue, subtitles.isEmpty else { throw StreamRoutingError.message("Queueing and external subtitles are not supported by this receiver adapter yet.") }
             let target = destinationID
-            try await googleCast.load(url: media.url, title: video.displayTitle, contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType)
+            try await googleCast.load(url: media.url, title: video.displayTitle, contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : contentType)
             guard destinationID == target, isExternalReceiver, googleCast.state.isConnected else { throw CancellationError() }
             routedStreamRegistrations = [media.registration].compactMap { $0 }
             recordCast(historyCommand)
@@ -540,11 +562,18 @@ final class ConnectionViewModel: ObservableObject {
         if !queue { routedStreamRegistrations.removeAll() }
         routedStreamRegistrations.append(contentsOf: ([media] + subtitles).compactMap(\.registration))
         let urls = subtitles.map { $0.url.absoluteString }
+        let resources: [[String: Any]] = subtitles.map { subtitle in
+            var resource: [String: Any] = ["url": subtitle.url.absoluteString]
+            if !subtitle.headers.isEmpty { resource["headers"] = subtitle.headers }
+            return resource
+        }
         let message = queue
             ? WireProtocol.queueVideoCommand(url: media.url.absoluteString, title: video.displayTitle,
-                contentType: video.contentType, subtitles: urls, headers: media.headers, detectedBy: video.detectedBy)
+                contentType: contentType, subtitles: urls, subtitleResources: resources,
+                mediaKind: kind, headers: media.headers, detectedBy: video.detectedBy)
             : WireProtocol.singleVideoCommand(url: media.url.absoluteString, title: video.displayTitle,
-                contentType: video.contentType, subtitles: urls, headers: media.headers, detectedBy: video.detectedBy)
+                contentType: contentType, subtitles: urls, subtitleResources: resources,
+                mediaKind: kind, headers: media.headers, detectedBy: video.detectedBy)
         if ws.send(message) { recordCast(historyCommand) }
     }
 
@@ -553,12 +582,14 @@ final class ConnectionViewModel: ObservableObject {
         guard !isExternalReceiver else { operationError = "Queueing is not supported by this receiver adapter yet."; return }
         let url = quality?.url ?? video.url
         let headers = VideoDetector.mediaHeaders(for: video)
+        let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
         SenderDebugNetwork.request("Browser queue output", url: url, headers: headers)
         sendMediaCommand(WireProtocol.queueVideoCommand(
             url: url,
             title: video.displayTitle,
             contentType: video.contentType,
             subtitles: subtitles,
+            mediaKind: kind,
             headers: headers,
             detectedBy: video.detectedBy,
             playerMode: playerMode,
@@ -586,6 +617,43 @@ final class ConnectionViewModel: ObservableObject {
             do { try await googleCast.control(command) }
             catch { operationError = error.localizedDescription }
         }
+    }
+
+    func addSubtitle(url: String, headers: [String: String] = [:], label: String? = nil) -> Bool {
+        guard isConnected, !isExternalReceiver else { return false }
+        guard pairedDevice?.features?.contains("subtitle_resource_add_v1") == true else {
+            return headers.isEmpty && ws.send(WireProtocol.controlCommand("add_subtitle:\(url)"))
+        }
+        let requestID = UUID().uuidString
+        guard ws.send(WireProtocol.addSubtitleCommand(url: url, headers: headers, label: label,
+                                                      requestID: requestID)) else { return false }
+        pendingSubtitleConfirmations[requestID] = coordinator.$lastCommandResult
+            .compactMap { $0 }
+            .filter { $0.requestId == requestID }
+            .first()
+            .sink { [weak self] result in
+                guard let self else { return }
+                self.pendingSubtitleConfirmations.removeValue(forKey: requestID)
+                if !result.ok {
+                    self.operationError = result.error == "no_active_playback" ? "No video is playing on the receiver."
+                        : result.error == "subtitle_unavailable" ? "The receiver could not load this subtitle."
+                        : "The receiver did not accept this subtitle."
+                }
+            }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, let pending = self.pendingSubtitleConfirmations.removeValue(forKey: requestID) else { return }
+            pending.cancel()
+            self.operationError = "The receiver did not confirm this subtitle."
+        }
+        return true
+    }
+
+    func serveLocalSubtitle(_ fileURL: URL) async -> String? {
+        let server = LocalFileServer()
+        guard let url = await server.serve(fileURL: fileURL) else { return nil }
+        if subtitleFileServers.count >= 16 { subtitleFileServers.removeFirst().stop() }
+        subtitleFileServers.append(server)
+        return url
     }
 
     func setCastVolume(_ level: Double) {
@@ -796,6 +864,7 @@ final class ConnectionViewModel: ObservableObject {
         )
         device.players = pairedDevice?.players ?? []
         device.browsers = pairedDevice?.browsers ?? []
+        device.mediaKinds = pairedDevice?.mediaKinds ?? []
         device.features = pairedDevice?.features
         // Store token alongside the rest of the record (the whole struct lives in the Keychain).
         var stored = device
@@ -811,6 +880,7 @@ final class ConnectionViewModel: ObservableObject {
             guard var device = self.pairedDevice ?? self.store.loadPairedDevice() else { return }
             device.players = caps.players
             device.browsers = caps.browsers
+            device.mediaKinds = caps.mediaKinds
             device.features = caps.features
             self.store.savePairedDevice(device)
             self.upsertSaved(device)

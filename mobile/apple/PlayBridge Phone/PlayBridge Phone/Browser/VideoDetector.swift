@@ -104,7 +104,7 @@ final class VideoDetector: ObservableObject {
         manifests[video.id] = nil
         thumbnails[video.id] = nil
         thumbnailStates[video.id] = nil
-        if video.isSubtitle {
+        if video.isSubtitle || video.isAudio || video.isImage {
             subtitlePreviews[video.id] = nil
             return
         }
@@ -198,9 +198,7 @@ final class VideoDetector: ObservableObject {
         }
 
         let contentType = (body["contentType"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        let explicitKind: StreamKind? = body["mediaKind"] as? String == StreamKind.subtitle.rawValue
-            ? .subtitle
-            : nil
+        let explicitKind = (body["mediaKind"] as? String).flatMap(StreamKind.init(rawValue:))
         let kind = explicitKind ?? DetectedVideo.classify(url: url, contentType: contentType)
 
         let detectedBy = (body["detectedBy"] as? String) ?? "unknown"
@@ -250,6 +248,19 @@ final class VideoDetector: ObservableObject {
             lifecycleIndex: lifecycleIndex
         )
         videos.append(video)
+        let limit = video.isImage || video.isAudio ? 30 : 50
+        while videos.count(where: { $0.kind == video.kind }) > limit,
+              let oldest = videos.firstIndex(where: { $0.kind == video.kind }) {
+            let removed = videos.remove(at: oldest)
+            seen.remove(removed.url)
+            revisions.removeValue(forKey: removed.id)
+            pending.removeAll { $0.video.id == removed.id }
+            subtitlePreviews.removeValue(forKey: removed.id)
+            qualities.removeValue(forKey: removed.id)
+            thumbnails.removeValue(forKey: removed.id)
+            thumbnailStates.removeValue(forKey: removed.id)
+            manifests.removeValue(forKey: removed.id)
+        }
         enrich(video)
     }
 
@@ -313,5 +324,15 @@ final class VideoDetector: ObservableObject {
             result["User-Agent"] = fallbackUA
         }
         return result
+    }
+
+    /// A subtitle carries its own observed request context, not the video's fallback UA.
+    static func subtitleHeaders(for subtitle: DetectedVideo) -> [String: String] {
+        var headers = subtitle.headers.filter { !skipHeaders.contains($0.key.lowercased()) }
+        if let origin = subtitle.originUrl, !origin.isEmpty,
+           !headers.keys.contains(where: { $0.caseInsensitiveCompare("Referer") == .orderedSame }) {
+            headers["Referer"] = origin
+        }
+        return headers
     }
 }

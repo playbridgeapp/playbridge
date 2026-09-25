@@ -56,8 +56,6 @@ private struct ActiveTabView: View {
     @State private var showDeviceSheet = false
     @FocusState private var addressFocused: Bool
 
-    private var streams: [DetectedVideo] { tab.detector.videos.filter { !$0.isSubtitle } }
-
     var body: some View {
         VStack(spacing: 0) {
             if !tab.isBrowserChromeHidden { topBar }
@@ -292,7 +290,7 @@ private struct ActiveTabView: View {
     }
 
     private var playButton: some View {
-        let count = streams.count
+        let count = tab.detector.videos.count
         let enabled = count > 0 || vm.isConnected
         return Button { showDetected = true } label: {
             ZStack(alignment: .topTrailing) {
@@ -311,7 +309,7 @@ private struct ActiveTabView: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
-        .accessibilityLabel("Detected media, \(count) streams")
+        .accessibilityLabel("Detected media, \(count) items")
     }
 
     // MARK: - Bottom bar (back / forward / refresh, matching Android)

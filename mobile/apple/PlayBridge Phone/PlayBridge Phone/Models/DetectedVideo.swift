@@ -3,13 +3,15 @@ import Foundation
 /// Classification of a detected stream. Mirrors the `detectedBy`/content-type buckets the Android
 /// `VideoDetector` works with.
 enum StreamKind: String {
-    case hls, dash, mp4, subtitle, other
+    case hls, dash, mp4, audio, image, subtitle, other
 
     var badge: String {
         switch self {
         case .hls: return "HLS"
         case .dash: return "DASH"
         case .mp4: return "MP4"
+        case .audio: return "AUDIO"
+        case .image: return "IMAGE"
         case .subtitle: return "SUB"
         case .other: return "VID"
         }
@@ -29,11 +31,16 @@ struct DetectedVideo: Identifiable, Hashable {
     var timestamp: Int64 = 0
     var lastSeen: Int64 = 0
     var lifecycleIndex: Int = 0
+    var title: String? = nil
 
     var isSubtitle: Bool { kind == .subtitle }
+    var isAudio: Bool { kind == .audio }
+    var isImage: Bool { kind == .image }
+    var isVideo: Bool { !isSubtitle && !isAudio && !isImage }
 
     /// A short display title derived from the URL's last path component (or host).
     var displayTitle: String {
+        if let title, !title.isEmpty { return title }
         guard let comps = URLComponents(string: url) else { return url }
         let last = (comps.path as NSString).lastPathComponent
         if !last.isEmpty, last != "/" { return last }
@@ -43,15 +50,19 @@ struct DetectedVideo: Identifiable, Hashable {
     var host: String { URLComponents(string: url)?.host ?? "" }
 
     static func classify(url: String, contentType: String?) -> StreamKind {
-        let lower = url.lowercased().components(separatedBy: "?").first ?? url.lowercased()
+        let lower = url.lowercased().components(separatedBy: CharacterSet(charactersIn: "?#")).first ?? url.lowercased()
         let ct = contentType?.lowercased() ?? ""
         if lower.hasSuffix(".vtt") || lower.hasSuffix(".srt") || ct.contains("vtt") || ct.contains("subrip") {
             return .subtitle
         }
+        let audioExts = [".mp3", ".m4a", ".aac", ".ogg", ".oga", ".opus", ".wav", ".flac", ".weba"]
+        let imageExts = [".jpg", ".jpeg", ".png", ".webp", ".avif", ".gif", ".bmp", ".heic", ".heif"]
         if lower.contains(".m3u8") || ct.contains("mpegurl") { return .hls }
         if lower.hasSuffix(".mpd") || ct.contains("application/dash") { return .dash }
+        if ct.hasPrefix("audio/") || audioExts.contains(where: lower.hasSuffix) { return .audio }
         let videoExts = [".mp4", ".m4v", ".mov", ".mkv", ".webm", ".avi", ".flv", ".wmv", ".3gp"]
         if videoExts.contains(where: lower.hasSuffix) || ct.hasPrefix("video/") { return .mp4 }
+        if ct.hasPrefix("image/") || imageExts.contains(where: lower.hasSuffix) { return .image }
         return .other
     }
 }
@@ -67,6 +78,42 @@ enum SubtitleOrdering {
                     : lhs.element.timestamp > rhs.element.timestamp
             }
             .map(\.element)
+    }
+}
+
+enum CastMediaTab: String, CaseIterable {
+    case video, audio, subtitle, image
+
+    var title: String {
+        switch self {
+        case .video: return "Videos"
+        case .audio: return "Audio"
+        case .subtitle: return "Subtitles"
+        case .image: return "Images"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .video: return "play.fill"
+        case .audio: return "music.note"
+        case .subtitle: return "captions.bubble"
+        case .image: return "photo"
+        }
+    }
+
+    static func prioritized(videos: [DetectedVideo], includeSubtitles: Bool = true) -> [Self] {
+        let kinds = videos.map(\.kind)
+        let available: Set<Self> = Set(kinds.map { kind in
+            switch kind {
+            case .audio: return .audio
+            case .image: return .image
+            case .subtitle: return .subtitle
+            default: return .video
+            }
+        })
+        let tabs = allCases.filter { includeSubtitles || $0 != .subtitle }
+        return tabs.filter { available.contains($0) } + tabs.filter { !available.contains($0) }
     }
 }
 

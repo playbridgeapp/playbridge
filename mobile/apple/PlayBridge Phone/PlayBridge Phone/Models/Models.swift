@@ -29,6 +29,7 @@ struct PairedDevice: Codable, Equatable {
     /// player_mode / browser_mode ids the receiver reported at the last auth.
     var players: [String] = []
     var browsers: [String] = []
+    var mediaKinds: [String]? = nil
     var features: [String]? = nil
     var lastConnected: Date = Date()
 }

@@ -81,6 +81,8 @@ enum WireProtocol {
         title: String? = nil,
         contentType: String? = nil,
         subtitles: [String] = [],
+        subtitleResources: [[String: Any]] = [],
+        mediaKind: String? = nil,
         headers: [String: String] = [:],
         detectedBy: String? = nil,
         playerMode: String? = nil
@@ -89,6 +91,8 @@ enum WireProtocol {
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
+        if !subtitleResources.isEmpty { item["subtitleResources"] = subtitleResources }
+        if let mediaKind { item["mediaKind"] = mediaKind }
         if !headers.isEmpty { item["headers"] = headers }
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
         if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
@@ -101,6 +105,8 @@ enum WireProtocol {
         title: String? = nil,
         contentType: String? = nil,
         subtitles: [String] = [],
+        subtitleResources: [[String: Any]] = [],
+        mediaKind: String? = nil,
         headers: [String: String] = [:],
         detectedBy: String? = nil,
         playerMode: String? = nil,
@@ -111,6 +117,8 @@ enum WireProtocol {
         if let title, !title.isEmpty { item["title"] = title }
         if let contentType, !contentType.isEmpty { item["contentType"] = contentType }
         if !subtitles.isEmpty { item["subtitles"] = subtitles }
+        if !subtitleResources.isEmpty { item["subtitleResources"] = subtitleResources }
+        if let mediaKind { item["mediaKind"] = mediaKind }
         if !headers.isEmpty { item["headers"] = headers }
         if let detectedBy, !detectedBy.isEmpty { item["detectedBy"] = detectedBy }
         if let playerMode, playerMode != "tv" { item["playerMode"] = playerMode }
@@ -139,6 +147,15 @@ enum WireProtocol {
 
     static func controlCommand(_ command: String) -> String {
         envelope(action: "control", payload: ["command": command])
+    }
+
+    static func addSubtitleCommand(url: String, headers: [String: String] = [:], label: String? = nil,
+                                   requestID: String? = nil) -> String {
+        var resource: [String: Any] = ["url": url]
+        if !headers.isEmpty { resource["headers"] = headers }
+        if let label, !label.isEmpty { resource["label"] = label }
+        return envelope(action: "control", payload: ["command": "add_subtitle", "subtitleResource": resource],
+                        requestID: requestID)
     }
 
     static func remoteCommand(key: String) -> String {

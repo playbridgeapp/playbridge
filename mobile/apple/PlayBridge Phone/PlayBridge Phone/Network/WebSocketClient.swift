@@ -20,6 +20,7 @@ final class WebSocketClient: NSObject, ObservableObject {
     struct TvCapabilities {
         let players: [String]
         let browsers: [String]
+        let mediaKinds: [String]
         let features: [String]
     }
 
@@ -490,9 +491,11 @@ final class WebSocketClient: NSObject, ObservableObject {
     private func emitCapabilities(_ json: [String: Any]) {
         let players = (json["players"] as? [String]) ?? []
         let browsers = (json["browsers"] as? [String]) ?? []
+        let mediaKinds = (json["mediaKinds"] as? [String]) ?? []
         let features = (json["features"] as? [String]) ?? []
-        if !players.isEmpty || !browsers.isEmpty || !features.isEmpty {
-            onCapabilities?(TvCapabilities(players: players, browsers: browsers, features: features))
+        if !players.isEmpty || !browsers.isEmpty || !mediaKinds.isEmpty || !features.isEmpty {
+            onCapabilities?(TvCapabilities(players: players, browsers: browsers,
+                                           mediaKinds: mediaKinds, features: features))
         }
     }
 

@@ -60,6 +60,17 @@ struct CastStreamRankingTests {
         newerSubtitle.lastSeen = 2_000
         precondition(SubtitleOrdering.newestFirst([olderSubtitle, file, newerSubtitle]).map(\.id) ==
                      [newerSubtitle.id, olderSubtitle.id], "Repeat observations must not move older subtitles above new ones")
+        let sound = video("song.mp3", .audio)
+        let picture = video("cover.jpg", .image)
+        precondition(DetectedVideo.classify(url: sound.url, contentType: nil) == .audio)
+        precondition(DetectedVideo.classify(url: picture.url, contentType: nil) == .image)
+        precondition(DetectedVideo.classify(url: "https://example.test/opaque", contentType: "audio/aac") == .audio)
+        precondition(DetectedVideo.classify(url: "https://example.test/opaque", contentType: "image/webp") == .image)
+        precondition(CastMediaTab.prioritized(videos: [sound, newerSubtitle, picture]) ==
+                     [.audio, .subtitle, .image, .video])
+        precondition(CastMediaTab.prioritized(videos: [picture]) == [.image, .video, .audio, .subtitle])
+        precondition(CastMediaTab.prioritized(videos: [file, newerSubtitle], includeSubtitles: false) ==
+                     [.video, .audio, .image])
         let pending = CastStreamRanking.sorted(input, qualities: [:])
         precondition(pending.map(\.id) == [child.id, ladder.id, dash.id, file.id], "Pending ties preserve detection order")
         let enriched = CastStreamRanking.sorted(input, qualities: [ladder.id: hlsQualities, dash.id: dashQualities])

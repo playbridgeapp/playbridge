@@ -20,8 +20,9 @@ enum DetectionScript {
       var __pb_safe = /(^|\.)(youtube\.com|youtube-nocookie\.com|googlevideo\.com|youtu\.be)$/.test(__pb_host);
 
       var SEGMENT = /\.(ts|m4s|fmp4|cmfv|cmfa)(\?|$)/i;
-      var MEDIA = /\.(m3u8|mpd|mp4|m4v|mov|mkv|webm|avi|flv|wmv|3gp|vtt|srt)(\?|$)/i;
-      var MEDIA_CT = /(video\/|mpegurl|application\/dash|application\/octet-stream|text\/vtt|application\/x-subrip)/i;
+      var MEDIA = /\.(m3u8|mpd|mp4|m4v|mov|mkv|webm|avi|flv|wmv|3gp|mp3|m4a|aac|ogg|oga|opus|wav|flac|weba|vtt|srt)(\?|$)/i;
+      var MEDIA_CT = /(video\/|audio\/|mpegurl|application\/dash|application\/octet-stream|text\/vtt|application\/x-subrip)/i;
+      var IMAGE_NOISE = /(?:^|[/_.-])(?:favicon|apple-touch-icon|sprite|spacer|pixel|beacon|analytics|tracking)(?:[/_.-]|$)/i;
       var SUBTITLE_SCAN_LIMIT = 256 * 1024;
 
       function post(msg) {
@@ -35,6 +36,7 @@ enum DetectionScript {
         if (window !== window.top || location.href === lastPageURL) return;
         lastPageURL = location.href;
         post({type: 'mediaLifecycle'});
+        scanAll();
       }
       ['pushState', 'replaceState'].forEach(function (name) {
         var original = history[name];
@@ -216,13 +218,30 @@ enum DetectionScript {
       // ── DOM scan (port of content.js) ─────────────────────────────────────────
       function scanEl(el) {
         if (!el || !el.tagName) return;
-        if (el.tagName === 'VIDEO' || el.tagName === 'SOURCE') {
-          if (el.src && el.src.indexOf('http') === 0) report(el.src, '', 'dom_video_element');
+        if (el.tagName === 'VIDEO') {
+          if (el.currentSrc || el.src) report(el.currentSrc || el.src, '', 'dom_video_element', 'video');
+          if (el.poster) report(el.poster, '', 'dom_image_element', 'image');
+        } else if (el.tagName === 'SOURCE') {
+          if (el.src) report(el.src, el.type || '', el.parentElement && el.parentElement.tagName === 'AUDIO' ? 'dom_audio_element' : 'dom_video_element',
+                             el.parentElement && el.parentElement.tagName === 'AUDIO' ? 'audio' : 'video');
+        } else if (el.tagName === 'AUDIO') {
+          if (el.src) report(el.src, '', 'dom_audio_element', 'audio');
+        } else if (el.tagName === 'IMG') {
+          var imageURL = el.currentSrc || el.src;
+          var width = el.naturalWidth || el.width || el.clientWidth || 0;
+          var height = el.naturalHeight || el.height || el.clientHeight || 0;
+          if (imageURL && !IMAGE_NOISE.test(imageURL) && width >= 64 && height >= 64 && width * height >= 16384) {
+            report(imageURL, '', 'dom_image_element', 'image');
+          }
+          if (!el.complete && !el.__pb_waiting_image) {
+            el.__pb_waiting_image = true;
+            el.addEventListener('load', function () { scanEl(el); }, {once: true});
+          }
         } else if (el.tagName === 'TRACK') {
           if (el.src && el.src.indexOf('http') === 0) report(el.src, '', 'dom_track_element', 'subtitle');
         }
       }
-      function scanAll() { document.querySelectorAll('video, source, track').forEach(scanEl); }
+      function scanAll() { document.querySelectorAll('video, audio, source, track, img').forEach(scanEl); }
       if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', scanAll);
       } else { scanAll(); }
@@ -234,7 +253,7 @@ enum DetectionScript {
               var n = m.addedNodes[j];
               if (n.nodeType !== 1) continue;
               scanEl(n);
-              if (n.querySelectorAll) n.querySelectorAll('video, source, track').forEach(scanEl);
+              if (n.querySelectorAll) n.querySelectorAll('video, audio, source, track, img').forEach(scanEl);
             }
             if (m.type === 'attributes' && m.target && m.target.nodeType === 1) scanEl(m.target);
           }

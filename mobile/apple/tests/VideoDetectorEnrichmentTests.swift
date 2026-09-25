@@ -161,6 +161,8 @@ struct VideoDetectorEnrichmentTests {
         precondition(subtitleDetector.videos.first?.isSubtitle == true)
         precondition(subtitleDetector.videos.first?.headers["Origin"] == "https://player.example")
         precondition(subtitleDetector.videos.first?.headers["Referer"] == "https://player.example/watch")
+        precondition(VideoDetector.subtitleHeaders(for: subtitleDetector.videos[0])["User-Agent"] == nil,
+                     "Subtitle resources must not inherit an invented media user agent")
         precondition(subtitleProbe.started.isEmpty, "Body-confirmed subtitles must not start preview work")
 
         let dispositionSubtitle = "https://subs.example/resource/43"
@@ -180,6 +182,16 @@ struct VideoDetectorEnrichmentTests {
         precondition(subtitleDetector.videos.last?.contentType == "application/x-subrip")
         subtitleDetector.clear()
         subtitleProbe.finishAll()
+
+        let mediaDetector = VideoDetector()
+        mediaDetector.ingest(["url": "https://media.example/movie.mp4", "mediaKind": "video"])
+        for index in 0..<35 {
+            mediaDetector.ingest(["url": "https://media.example/image-\(index).jpg", "mediaKind": "image"])
+        }
+        precondition(mediaDetector.videos.filter(\.isImage).count == 30)
+        precondition(mediaDetector.videos.contains(where: { $0.isVideo }),
+                     "Image trimming must not evict playable video")
+        mediaDetector.clear()
 
         print("PASS: eager enrichment, subtitle body/disposition upgrades, deduplication, concurrency, navigation invalidation and detector teardown")
     }
