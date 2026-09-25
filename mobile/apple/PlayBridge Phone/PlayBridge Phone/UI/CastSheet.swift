@@ -1100,7 +1100,7 @@ struct FullScreenVideoPlayerView: View {
     @State private var copiedDiagnostics = false
 #endif
     @State private var audioSessionError: String?
-    @State private var activatedAudioSession = false
+    @State private var localAudioOwner: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1163,10 +1163,7 @@ struct FullScreenVideoPlayerView: View {
         .background(Color.black.ignoresSafeArea())
         .onAppear {
             do {
-                let audio = AVAudioSession.sharedInstance()
-                try audio.setCategory(.playback, mode: .moviePlayback)
-                try audio.setActive(true)
-                activatedAudioSession = true
+                if localAudioOwner == nil { localAudioOwner = try CastSystemPlayback.shared.beginLocalPlayback() }
             } catch {
                 audioSessionError = error.localizedDescription
             }
@@ -1177,9 +1174,9 @@ struct FullScreenVideoPlayerView: View {
         }
         .onDisappear {
             session.close()
-            if activatedAudioSession {
-                try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-                activatedAudioSession = false
+            if let localAudioOwner {
+                CastSystemPlayback.shared.endLocalPlayback(localAudioOwner)
+                self.localAudioOwner = nil
             }
         }
         .alert("Couldn’t enable playback audio", isPresented: Binding(

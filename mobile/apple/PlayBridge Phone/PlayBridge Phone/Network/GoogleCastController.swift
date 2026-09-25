@@ -70,6 +70,7 @@ private final class CastRequestCancellation: @unchecked Sendable {
 final class GoogleCastController: ObservableObject {
     @Published private(set) var state: ConnectionState = .disconnected
     @Published private(set) var playback: TvPlaybackStatus?
+    var onReceiverEnded: (() -> Void)?
     private let worker: GoogleCastWorker
     private var generation = 0
     private var device: ExternalReceiverDevice?
@@ -249,6 +250,7 @@ final class GoogleCastController: ObservableObject {
             // Rust emits Finished when the application/transport is actually
             // gone. A request-scoped timeout must not mark a healthy session dead.
         case "finished":
+            if ["receiver_ended", "receiver_exited"].contains(event["reason"] as? String ?? "") { onReceiverEnded?() }
             terminate("The receiver session ended. Reconnect to the receiver to send again.")
         default: break
         }

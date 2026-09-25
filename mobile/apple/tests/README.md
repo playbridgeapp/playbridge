@@ -1,5 +1,18 @@
 # iPhone standalone fixture checks
 
+Background casting lifetime and Lock Screen command mapping:
+
+```sh
+bash mobile/apple/tests/run-cast-playback-checks.sh
+bash mobile/apple/tests/run-google-cast-checks.sh
+```
+
+The first suite uses the production casting session with a fake renderer and clock.
+It checks receiver timing, bounded seeking, STOP fencing, proxy-release callbacks,
+reconnect grace, pause grace, and live/image behavior. These tests do not prove iOS
+background execution. See `docs/ios-background-casting.md` for physical-device checks
+and the Debug audio-session-only comparison.
+
 From the repository root, compile the production stream model and manifest parsers
 with the deterministic HTTP fixture in the test runner:
 

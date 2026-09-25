@@ -50,7 +50,7 @@ struct ContentView: View {
     private func reconnectOnActivation() {
         guard !attemptedReconnectInForeground else { return }
         attemptedReconnectInForeground = true
-        vm.reconnectLastReceiverIfNeeded()
+        vm.applicationBecameActive()
     }
 
     @ViewBuilder

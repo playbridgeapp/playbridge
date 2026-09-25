@@ -28,6 +28,8 @@ final class ConnectionViewModel: ObservableObject {
     let castHistory = CastHistoryStore()
     let ws = WebSocketClient()
     let coordinator = ConnectionCoordinator()
+    let castPlaybackSession = CastPlaybackSession(renderer: CastSystemPlayback.shared)
+    private var externalMediaKind = "video"
 
     @Published var state: ConnectionState = .disconnected
     @Published var pairedDevice: PairedDevice?
@@ -53,6 +55,21 @@ final class ConnectionViewModel: ObservableObject {
     func deviceKey(_ d: PairedDevice) -> String { d.uuid.isEmpty ? "\(d.ip):\(d.port)" : d.uuid }
 
     init() {
+        castPlaybackSession.onCommand = { [weak self] command in
+            guard let self, self.isConnected else { return false }
+            self.control(command)
+            return true
+        }
+        castPlaybackSession.onReconnect = { [weak self] in self?.reconnectActiveCast() }
+        castPlaybackSession.onReleaseResources = { [weak self] in self?.releaseCastResources() }
+        CastSystemPlayback.shared.onAction = { [weak self] action in
+            self?.castPlaybackSession.perform(action) ?? false
+        }
+        googleCast.onReceiverEnded = { [weak self] in
+            self?.castPlaybackSession.stopLocally()
+            self?.releaseCastResources()
+            self?.coordinator.clear()
+        }
         if let data = UserDefaults.standard.data(forKey: "google_cast_saved_devices") {
             savedExternalReceiverDevices = (try? JSONDecoder().decode([ExternalReceiverDevice].self, from: data)) ?? []
         }
@@ -74,6 +91,7 @@ final class ConnectionViewModel: ObservableObject {
             .sink { [weak self] value in
                 guard let self, !isExternalReceiver else { return }
                 state = value
+                handleCastConnectionState(value)
                 if !value.isConnected {
                     pendingSubtitleConfirmations.values.forEach { $0.cancel() }
                     pendingSubtitleConfirmations.removeAll()
@@ -83,6 +101,7 @@ final class ConnectionViewModel: ObservableObject {
         googleCast.$state.receive(on: RunLoop.main).sink { [weak self] value in
             guard let self, isExternalReceiver else { return }
             state = value
+            handleCastConnectionState(value)
             if case .connected(let name, _) = value, var device = externalReceiver {
                 device.name = name
                 externalReceiver = device
@@ -91,16 +110,13 @@ final class ConnectionViewModel: ObservableObject {
                 savedExternalReceiverDevices = Array(savedExternalReceiverDevices.prefix(20))
                 UserDefaults.standard.set(try? JSONEncoder().encode(savedExternalReceiverDevices), forKey: "google_cast_saved_devices")
             }
-            if !value.isConnected {
-                coordinator.clear()
-                coordinator.activeContext = "idle"
-                routedStreamRegistrations.removeAll()
-            }
+            // The receiver may still be fetching media while its control socket
+            // reconnects. The casting session owns bounded retention and cleanup.
         }.store(in: &cancellables)
         googleCast.$playback.receive(on: RunLoop.main).sink { [weak self] playback in
-            guard let self, isExternalReceiver else { return }
+            guard let self, isExternalReceiver, let playback else { return }
             coordinator.playback = playback
-            coordinator.activeContext = playback == nil || playback?.state == "stopped" ? "idle" : "player"
+            coordinator.activeContext = playback.state == "stopped" ? "idle" : "player"
         }.store(in: &cancellables)
         rokuBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
         dialBrowser.objectWillChange.receive(on: RunLoop.main).sink { [weak self] in self?.objectWillChange.send() }.store(in: &cancellables)
@@ -109,6 +125,10 @@ final class ConnectionViewModel: ObservableObject {
         coordinator.objectWillChange
             .receive(on: RunLoop.main)
             .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        coordinator.$playback
+            .receive(on: RunLoop.main)
+            .sink { [weak self] playback in self?.refreshCastPlayback(playback) }
             .store(in: &cancellables)
         browser.$devices
             .receive(on: RunLoop.main)
@@ -146,7 +166,10 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Connect to a device found via Bonjour. Reuses a saved token/pin if we've paired with it.
     func connect(to device: DiscoveredDevice) {
-        usePlayBridge()
+        let sameReceiver = !isExternalReceiver && pairedDevice.map { saved in
+            (!device.uuid.isEmpty && saved.uuid == device.uuid) || (saved.ip == device.ip && saved.port == device.port)
+        } == true
+        usePlayBridge(preservingPlayback: sameReceiver && castPlaybackSession.isActive)
         endSavedReconnectDiscovery()
         connectingDevice = device
         let saved = matchingSaved(for: device)
@@ -162,15 +185,19 @@ final class ConnectionViewModel: ObservableObject {
         )
     }
 
-    func connectExternalReceiver(_ device: ExternalReceiverDevice) {
+    func connectExternalReceiver(_ device: ExternalReceiverDevice, preservingPlayback: Bool = false) {
         guard device.protocolID != "dial" else { operationError = "DIAL devices require a supported receiver app; generic video sending is unavailable."; return }
+        let preservingPlayback = (preservingPlayback || castPlaybackSession.isActive) && externalReceiver?.identity == device.identity
+        if !preservingPlayback { endCastSession() }
         endSavedReconnectDiscovery()
         let device = (googleCastBrowser.devices + dlnaBrowser.devices + rokuBrowser.devices).first { $0.identity == device.identity } ?? device
         externalReceiver = device
         connectingDevice = nil
         ws.disconnect()
-        coordinator.clear()
-        coordinator.activeContext = "idle"
+        if !preservingPlayback {
+            coordinator.clear()
+            coordinator.activeContext = "idle"
+        }
         operationError = nil
         state = .connecting
         UserDefaults.standard.set("google_cast", forKey: "last_receiver_protocol")
@@ -182,10 +209,11 @@ final class ConnectionViewModel: ObservableObject {
         UserDefaults.standard.set(try? JSONEncoder().encode(savedExternalReceiverDevices), forKey: "google_cast_saved_devices")
     }
 
-    private func usePlayBridge() {
+    private func usePlayBridge(preservingPlayback: Bool = false) {
+        if !preservingPlayback { endCastSession() }
         externalReceiver = nil
         googleCast.disconnect()
-        routedStreamRegistrations.removeAll()
+        if !preservingPlayback { routedStreamRegistrations.removeAll() }
         UserDefaults.standard.set("playbridge", forKey: "last_receiver_protocol")
     }
 
@@ -211,7 +239,9 @@ final class ConnectionViewModel: ObservableObject {
             guard GoogleCastNativeAvailability.isAvailable else { return }
             switch googleCast.state {
             case .disconnected, .error:
-                if let device = savedExternalReceiverDevices.first { connectExternalReceiver(device) }
+                if let device = externalReceiver ?? savedExternalReceiverDevices.first {
+                    connectExternalReceiver(device, preservingPlayback: castPlaybackSession.isActive)
+                }
             default:
                 break
             }
@@ -251,7 +281,8 @@ final class ConnectionViewModel: ObservableObject {
     func connectSaved(_ device: PairedDevice) {
         let current = savedDevices.first { deviceKey($0) == deviceKey(device) } ?? device
         let device = SavedReceiverEndpoint.refresh(current, from: browser.devices)
-        usePlayBridge()
+        let sameReceiver = !isExternalReceiver && pairedDevice.map { deviceKey($0) == deviceKey(device) } == true
+        usePlayBridge(preservingPlayback: sameReceiver && castPlaybackSession.isActive)
         endSavedReconnectDiscovery()
         pairedDevice = device
         connectingDevice = DiscoveredDevice(ip: device.ip, port: device.port, name: device.name,
@@ -441,6 +472,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func disconnect() {
+        endCastSession()
         UserDefaults.standard.set("this_phone", forKey: "last_receiver_protocol")
         pendingSubtitleConfirmations.values.forEach { $0.cancel() }
         pendingSubtitleConfirmations.removeAll()
@@ -465,6 +497,7 @@ final class ConnectionViewModel: ObservableObject {
     func submitPairingCode(_ code: String) { ws.submitPairingCode(code) }
 
     func forgetDevice() {
+        endCastSession()
         if let active = pairedDevice { forget(active); return }
         ws.disconnect()
         store.clearPairedDevice()
@@ -490,12 +523,14 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
     func castLocalMedia(url: String, title: String, contentType: String) {
+        let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
+        noteNewCast(mediaKind: kind, title: title)
         if isExternalReceiver, let mediaURL = URL(string: url) {
-            Task {
+            Task { @MainActor in
                 do { try await googleCast.load(url: mediaURL, title: title, contentType: contentType) }
                 catch { operationError = "Couldn’t send this file to the connected device. Check the connection and supported media formats." }
             }
-        } else { ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType)) }
+        } else { ws.send(WireProtocol.singleVideoCommand(url: url, title: title, contentType: contentType, mediaKind: kind)) }
     }
 
     /// Cast an arbitrary media URL with optional request headers (IPTV channels and
@@ -540,6 +575,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     /// Retain phone routes beyond sheet dismissal and across queued items.
+    @MainActor
     func sendRoutedStream(_ media: RoutedStream, video: DetectedVideo, subtitles: [RoutedStream], queue: Bool) async throws {
         let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
         let contentType = video.contentType ?? ((video.isImage || video.isAudio)
@@ -553,13 +589,17 @@ final class ConnectionViewModel: ObservableObject {
         if isExternalReceiver {
             guard !queue, subtitles.isEmpty else { throw StreamRoutingError.message("Queueing and external subtitles are not supported by this receiver adapter yet.") }
             let target = destinationID
+            noteNewCast(mediaKind: kind, title: video.displayTitle)
             try await googleCast.load(url: media.url, title: video.displayTitle, contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : contentType)
             guard destinationID == target, isExternalReceiver, googleCast.state.isConnected else { throw CancellationError() }
             routedStreamRegistrations = [media.registration].compactMap { $0 }
             recordCast(historyCommand)
             return
         }
-        if !queue { routedStreamRegistrations.removeAll() }
+        if !queue {
+            noteNewCast(mediaKind: kind, title: video.displayTitle)
+            routedStreamRegistrations.removeAll()
+        }
         routedStreamRegistrations.append(contentsOf: ([media] + subtitles).compactMap(\.registration))
         let urls = subtitles.map { $0.url.absoluteString }
         let resources: [[String: Any]] = subtitles.map { subtitle in
@@ -612,9 +652,27 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func control(_ command: String) {
-        guard isExternalReceiver else { ws.send(WireProtocol.controlCommand(command)); return }
+        guard isConnected else { operationError = "Reconnect to the receiver to control playback."; return }
+        if command == "play" {
+            castPlaybackSession.allowNewPlayback()
+            CastSystemPlayback.shared.userRequestedPlayback()
+        }
+        guard isExternalReceiver else {
+            if ws.send(WireProtocol.controlCommand(command)), command == "stop" {
+                castPlaybackSession.stopLocally()
+                releaseCastResources()
+            }
+            return
+        }
+        let target = destinationID
         Task { @MainActor in
-            do { try await googleCast.control(command) }
+            do {
+                try await googleCast.control(command)
+                if destinationID == target, command == "stop" || command == "end_receiver" {
+                    castPlaybackSession.stopLocally()
+                    releaseCastResources()
+                }
+            }
             catch { operationError = error.localizedDescription }
         }
     }
@@ -673,6 +731,7 @@ final class ConnectionViewModel: ObservableObject {
                 let media = try await StreamRouteService().prepare(url: url, headers: headers, contentType: contentType, route: route, configuration: configuration)
                 guard destinationID == target, isExternalReceiver else { return }
                 if media.registration != nil && media.url.host == "127.0.0.1" { throw StreamRoutingError.message("Connect to Wi-Fi to send via phone.") }
+                noteNewCast(mediaKind: contentType?.hasPrefix("image/") == true ? "image" : contentType?.hasPrefix("audio/") == true ? "audio" : "video", title: title)
                 try await googleCast.load(url: media.url, title: title, contentType: contentType)
                 guard destinationID == target, isExternalReceiver else { return }
                 routedStreamRegistrations = [media.registration].compactMap { $0 }
@@ -775,7 +834,15 @@ final class ConnectionViewModel: ObservableObject {
 
     private func sendMediaCommand(_ command: String) {
         guard isConnected else { operationError = "Connect a device before casting."; return }
-        if ws.send(command) { recordCast(command) }
+        if ws.send(command) {
+            if let json = try? JSONSerialization.jsonObject(with: Data(command.utf8)) as? [String: Any],
+               json["action"] as? String == "playlist" {
+                let first = (json["payload"] as? [String: Any])?["items"] as? [[String: Any]]
+                noteNewCast(mediaKind: first?.first?["mediaKind"] as? String ?? "video", title: first?.first?["title"] as? String)
+                routedStreamRegistrations.removeAll()
+            }
+            recordCast(command)
+        }
     }
 
     private func recordCast(_ command: String) {
@@ -820,6 +887,7 @@ final class ConnectionViewModel: ObservableObject {
                 prepared.append(item)
             }
             guard destinationID == target, isConnected else { throw CancellationError() }
+            noteNewCast(mediaKind: prepared.first?["mediaKind"] as? String ?? "video", title: prepared.first?["title"] as? String)
             if isExternalReceiver {
                 let item = prepared[0]
                 try await googleCast.load(url: URL(string: item["url"] as! String)!,
@@ -841,6 +909,69 @@ final class ConnectionViewModel: ObservableObject {
         } catch is CancellationError {
             operationError = "The receiver connection changed. Try replaying again."
         } catch { operationError = error.localizedDescription }
+    }
+
+    // MARK: - System playback and background casting
+
+#if DEBUG
+    var castPlaybackDiagnostics: String {
+        "PlayBridge background casting\nConnected: \(isConnected)\nPlayback: \(coordinator.playback?.state ?? "none")\nPhone routes retained: \(routedStreamRegistrations.count)\n\(CastSystemPlayback.shared.diagnostics)"
+    }
+#endif
+
+    func applicationBecameActive() {
+        castPlaybackSession.tick()
+        reconnectLastReceiverIfNeeded()
+    }
+
+    private func noteNewCast(mediaKind: String, title: String? = nil) {
+        externalMediaKind = mediaKind
+        castPlaybackSession.beginPlayback(title: title, receiverName: receiverName ?? "TV", mediaKind: mediaKind)
+        CastSystemPlayback.shared.userRequestedPlayback()
+    }
+
+    private func handleCastConnectionState(_ value: ConnectionState) {
+        castPlaybackSession.connectionChanged(connected: value.isConnected)
+        switch value {
+        case .authFailed, .pinMismatch, .pairingDenied, .waitingForApproval, .waitingForCodeInput, .verifyingCode:
+            // Background reconnect must never bypass pairing or certificate checks.
+            endCastSession()
+        default: break
+        }
+    }
+
+    private func refreshCastPlayback(_ playback: TvPlaybackStatus?) {
+        castPlaybackSession.receive(playback,
+            receiverName: receiverName ?? "TV",
+            mediaKind: isExternalReceiver ? externalMediaKind : coordinator.mediaKind,
+            speed: Double(coordinator.playerSpeed),
+            isLive: coordinator.playerIsLive,
+            canSeek: coordinator.playerIsSeekable)
+    }
+
+    private func reconnectActiveCast() {
+        guard castPlaybackSession.isActive else { return }
+        switch state {
+        case .disconnected, .error:
+            if let device = externalReceiver { connectExternalReceiver(device, preservingPlayback: true) }
+            else { reconnectSaved() }
+        default: break // Connecting/retrying and security states own their lifecycle.
+        }
+    }
+
+    private func releaseCastResources() {
+        routedStreamRegistrations.removeAll()
+        subtitleFileServers.forEach { $0.stop() }
+        subtitleFileServers.removeAll()
+        LocalFileServer.shared.stop()
+    }
+
+    private func endCastSession() {
+        castPlaybackSession.end()
+        castPlaybackSession.allowNewPlayback()
+        releaseCastResources()
+        coordinator.clear()
+        coordinator.activeContext = "idle"
     }
 
     // MARK: - Persistence

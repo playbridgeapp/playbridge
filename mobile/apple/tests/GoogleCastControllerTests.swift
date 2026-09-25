@@ -43,6 +43,8 @@ final class FakeCastSession: GoogleCastSessionTransport {
         precondition(ExternalReceiverDevice.parse(serviceName: "bad", addresses: ["192.0.2.1"], port: 65536, txt: [:]) == nil)
         let native = FakeCastSession()
         let controller = GoogleCastController(native: native)
+        var receiverEndedCount = 0
+        controller.onReceiverEnded = { receiverEndedCount += 1 }
         controller.connect(device)
         await wait { native.startCount == 1 }
         do {
@@ -104,9 +106,17 @@ final class FakeCastSession: GoogleCastSessionTransport {
         cancelled.cancel()
         do { try await cancelled.value; fatalError("Cancellation ignored") } catch is CancellationError {}
         native.acknowledge(native.last("play")!)
-        native.emit(["event": "finished", "reason": "receiver_exited"])
+        native.emit(["event": "finished", "reason": "connection_lost"])
         await wait { !controller.state.isConnected }
+        precondition(receiverEndedCount == 0, "Transport loss must not be treated as media ending")
         do { try await controller.control("play"); fatalError("Dead session accepted command") } catch {}
+        controller.connect(device)
+        await wait { native.startCount == 3 }
+        native.emit(["event": "connected"])
+        await wait { controller.state.isConnected }
+        native.emit(["event": "finished", "reason": "receiver_ended"])
+        await wait { !controller.state.isConnected }
+        precondition(receiverEndedCount == 1, "Actual receiver exit must end background casting")
         controller.disconnect()
         print("Google Cast discovery parsing, readiness, load acknowledgement, status, controls, errors, cancellation and reconnect checks passed")
     }

@@ -12,6 +12,14 @@ struct RemoteControlScreen: View {
                 ScreenBackButton(destination: nav.remoteOrigin ?? .dashboard, accessibilityLabel: "Back")
                 Text("Remote").font(Theme.font(.title3).bold())
                 Spacer()
+#if DEBUG
+                Button {
+                    UIPasteboard.general.setItems([[UIPasteboard.typeAutomatic: vm.castPlaybackDiagnostics]],
+                        options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(900)])
+                } label: {
+                    Image(systemName: "doc.on.doc").frame(width: 44, height: 44)
+                }.accessibilityLabel("Copy background casting diagnostics")
+#endif
                 Button { showCastLink = true } label: {
                     Image(systemName: "link").frame(width: 44, height: 44)
                 }.accessibilityLabel("Cast a link").disabled(!vm.isConnected)
