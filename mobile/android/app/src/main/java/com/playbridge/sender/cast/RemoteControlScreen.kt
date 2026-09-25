@@ -106,6 +106,13 @@ data class MediaTrack(
     val type: String? = null
 )
 
+private val subtitleOffIds = setOf("off", "none", "no", "-1")
+
+/** Use the receiver's own Off ID; Apple receivers omit the row, but accept `none`. */
+internal fun subtitleOffTrack(tracks: List<MediaTrack>): MediaTrack =
+    tracks.firstOrNull { it.id.lowercase() in subtitleOffIds }
+        ?: MediaTrack(id = "none", name = "Off", selected = tracks.none { it.selected })
+
 /** TV player settings synced via `player_settings` messages. */
 data class TvPlayerSettings(
     val speed: Float = 1.0f,
@@ -121,12 +128,6 @@ data class TvPlayerSettings(
     val scalingAvailable: Boolean = true,
     val audioBoostAvailable: Boolean = true,
     val qualityAvailable: Boolean = false,
-)
-
-/** A subtitle search result the user can add to the TV. */
-data class SubtitleOption(
-    val label: String,
-    val url: String
 )
 
 /**
@@ -177,7 +178,8 @@ fun RemoteControlScreen(
     onAdjustSubtitleOffset: (Long) -> Unit = {},
     onSwitchEngine: (String) -> Unit = {},
     onAddSubtitleUrl: (String) -> Unit = {},
-    onSearchSubtitles: (suspend () -> List<SubtitleOption>)? = null,
+    onAddSubtitleResource: (playbridge.SubtitleResource) -> Boolean = { false },
+    detectedSubtitles: List<DetectedVideo> = emptyList(),
     tvName: String? = null,
     connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected
 ) {
@@ -280,6 +282,7 @@ fun RemoteControlScreen(
                                     TrackChipsRow(
                                         audioTracks = audioTracks,
                                         subtitleTracks = if (isAudio) emptyList() else subtitleTracks,
+                                        showSubtitles = !isAudio,
                                         onSelectAudio = onSelectAudio,
                                         onSubtitlesClick = { showSubtitlesSheet = true },
                                         onMore = { showSettingsSheet = true }
@@ -384,17 +387,22 @@ fun RemoteControlScreen(
             onToggleAudioBoost = onToggleAudioBoost,
             onAdjustSubtitleOffset = onAdjustSubtitleOffset,
             onSwitchEngine = onSwitchEngine,
-            onAddSubtitle = { showAddSubtitle = true },
             onDismiss = { showSettingsSheet = false }
         )
     }
     if (showAddSubtitle && resolvedMediaKind == "video") {
         AddSubtitleDialog(
-            onSearchSubtitles = onSearchSubtitles,
-            onAddUrl = { url ->
+            detectedSubtitles = detectedSubtitles,
+            onAddResource = { resource ->
+                val sent = onAddSubtitleResource(resource)
+                if (sent) {
+                    showAddSubtitle = false
+                }
+                sent
+            },
+            onAddLocalUrl = { url ->
                 onAddSubtitleUrl(url)
                 showAddSubtitle = false
-                showSettingsSheet = false
             },
             onDismiss = { showAddSubtitle = false }
         )
@@ -403,6 +411,10 @@ fun RemoteControlScreen(
         SubtitlesBottomSheet(
             tracks = subtitleTracks,
             onSelect = onSelectSubtitle,
+            onAdd = {
+                showSubtitlesSheet = false
+                showAddSubtitle = true
+            },
             onDismiss = { showSubtitlesSheet = false }
         )
     }
@@ -1555,6 +1567,7 @@ private fun EpisodesCarousel(
 private fun TrackChipsRow(
     audioTracks: List<MediaTrack>,
     subtitleTracks: List<MediaTrack>,
+    showSubtitles: Boolean,
     onSelectAudio: (String) -> Unit,
     onSubtitlesClick: () -> Unit,
     onMore: () -> Unit
@@ -1567,7 +1580,7 @@ private fun TrackChipsRow(
         if (audioTracks.isNotEmpty()) {
             TrackChip(icon = Icons.Default.VolumeUp, label = "Audio", tracks = audioTracks, onSelect = onSelectAudio, modifier = Modifier.weight(1f))
         }
-        if (subtitleTracks.isNotEmpty()) {
+        if (showSubtitles) {
             val selectedName = subtitleTracks.firstOrNull { it.selected }?.name ?: "—"
             Surface(
                 onClick = onSubtitlesClick,
@@ -1582,7 +1595,7 @@ private fun TrackChipsRow(
                 }
             }
         }
-        if (audioTracks.isEmpty() && subtitleTracks.isEmpty()) {
+        if (audioTracks.isEmpty() && !showSubtitles) {
             Spacer(modifier = Modifier.weight(1f))
         }
         Surface(
@@ -1660,7 +1673,6 @@ private fun PlayerSettingsSheet(
     onToggleAudioBoost: () -> Unit,
     onAdjustSubtitleOffset: (Long) -> Unit,
     onSwitchEngine: (String) -> Unit,
-    onAddSubtitle: () -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
@@ -1709,11 +1721,6 @@ private fun PlayerSettingsSheet(
                 ChipGroup(options = listOf("ExoPlayer" to "exo", "MPV" to "mpv"), selectedKey = settings.engine, onSelect = onSwitchEngine)
             }
 
-            FilledTonalButton(onClick = onAddSubtitle, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Add subtitle…")
-            }
         }
     }
 }
@@ -1737,82 +1744,114 @@ private fun ChipGroup(options: List<Pair<String, String>>, selectedKey: String, 
 
 @Composable
 private fun AddSubtitleDialog(
-    onSearchSubtitles: (suspend () -> List<SubtitleOption>)?,
-    onAddUrl: (String) -> Unit,
-    onDismiss: () -> Unit
+    detectedSubtitles: List<DetectedVideo>,
+    onAddResource: (playbridge.SubtitleResource) -> Boolean,
+    onAddLocalUrl: (String) -> Unit,
+    onDismiss: () -> Unit,
 ) {
     var url by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<SubtitleOption>>(emptyList()) }
-    var searching by remember { mutableStateOf(false) }
-    var searched by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val context = LocalContext.current
+    val sources = remember(detectedSubtitles.isNotEmpty()) {
+        if (detectedSubtitles.isNotEmpty()) SubtitleSource.entries.toList()
+        else SubtitleSource.entries.filterNot { it == SubtitleSource.DETECTED }
+    }
+    var source by remember(sources) { mutableStateOf(sources.first()) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
         if (uri != null) {
-            val fileName = runCatching {
-                val cursor = context.contentResolver.query(uri, null, null, null, null)
-                cursor?.use { c ->
-                    val nameIndex = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex != -1 && c.moveToFirst()) c.getString(nameIndex) else null
-                }
-            }.getOrNull() ?: uri.lastPathSegment ?: "subtitle.srt"
-
-            val extension = fileName.substringAfterLast('.', "").lowercase()
-            val supportedExtensions = setOf("srt", "vtt", "ass", "ssa", "sub")
-            if (extension !in supportedExtensions) {
-                android.widget.Toast.makeText(context, "Only subtitle files (.srt, .vtt, .ass) are supported", android.widget.Toast.LENGTH_SHORT).show()
-                return@rememberLauncherForActivityResult
-            }
-
-            val mime = when { fileName.endsWith(".vtt", ignoreCase = true) -> "text/vtt" else -> "application/x-subrip" }
-            val proxyServer = com.playbridge.sender.cast.dlna.DlnaProxyHolder.proxy(context)
-            val proxyUrl = proxyServer.publishLocal(uri, mime)
-            val urlWithFragment = "$proxyUrl#${java.net.URLEncoder.encode(fileName, "UTF-8")}"
-            onAddUrl(urlWithFragment)
+            publishLocalSubtitle(context, uri)?.let { (localUrl, _) -> onAddLocalUrl(localUrl) }
         }
     }
+
+    fun addResource(resource: playbridge.SubtitleResource) {
+        if (!onAddResource(resource)) {
+            android.widget.Toast.makeText(
+                context, "Could not add subtitle. Check the TV connection or update the receiver.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    val detected = remember(detectedSubtitles) { newestSubtitlesFirst(detectedSubtitles) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add subtitle") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = { filePickerLauncher.launch("*/*") }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.filledTonalButtonColors()) {
-                    Icon(imageVector = Icons.Default.UploadFile, contentDescription = "Upload local file", modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Choose Local Subtitle File")
-                }
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                OutlinedTextField(value = url, onValueChange = { url = it }, label = { Text("Subtitle URL (.srt / .vtt)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                if (onSearchSubtitles != null) {
-                    FilledTonalButton(
-                        onClick = {
-                            searching = true
-                            scope.launch {
-                                results = try { onSearchSubtitles() } catch (e: Exception) { emptyList() }
-                                searching = false
-                                searched = true
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                SubtitleSourceTabs(sources = sources, selected = source, onSelect = { source = it })
+                Spacer(Modifier.height(16.dp))
+                when (source) {
+                    SubtitleSource.DETECTED -> LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 390.dp)) {
+                        items(detected, key = { it.url }) { subtitle ->
+                            var preview by remember(subtitle.url) { mutableStateOf(subtitle.subtitlePreview) }
+                            var language by remember(subtitle.url) { mutableStateOf(subtitle.subtitleLanguage) }
+                            LaunchedEffect(subtitle.url) {
+                                preview = VideoDetector.fetchSubtitlePreview(subtitle)
+                                language = subtitle.subtitleLanguage
                             }
-                        },
-                        enabled = !searching,
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(if (searching) "Searching…" else "Search subtitles") }
-
-                    if (searched && results.isEmpty() && !searching) {
-                        Text("No subtitles found", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (results.isNotEmpty()) {
-                        LazyColumn(modifier = Modifier.heightIn(max = 220.dp)) {
-                            items(results) { opt ->
-                                Text(opt.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth().clickable { onAddUrl(opt.url) }.padding(vertical = 10.dp))
+                            Column(
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { addResource(subtitleResourceForDetected(subtitle)) }
+                                    .padding(vertical = 9.dp),
+                            ) {
+                                Text(
+                                    subtitle.title ?: subtitle.url.substringBefore('?').substringAfterLast('/'),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    buildString {
+                                        append("Detected ")
+                                        append(java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT)
+                                            .format(java.util.Date(subtitle.timestamp)))
+                                        language?.let { append(" · Likely ").append(it) }
+                                    },
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                preview?.takeIf(String::isNotBlank)?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall, maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis)
+                                }
                             }
                         }
                     }
+                    SubtitleSource.LOCAL -> Column {
+                        Text("Choose a subtitle file from this phone. The TV will load it through the phone.")
+                        Spacer(Modifier.height(12.dp))
+                        FilledTonalButton(
+                            onClick = { filePickerLauncher.launch("*/*") },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Choose local file") }
+                    }
+                    SubtitleSource.URL -> OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("Subtitle URL (.srt / .vtt)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { if (url.isNotBlank()) onAddUrl(url.trim()) }, enabled = url.isNotBlank()) { Text("Add") } },
+        confirmButton = {
+            if (source == SubtitleSource.URL) {
+                TextButton(
+                    onClick = {
+                        val entered = url.trim()
+                        if (entered.startsWith("https://", true) || entered.startsWith("http://", true)) {
+                            addResource(playbridge.SubtitleResource(url = entered))
+                        } else {
+                            android.widget.Toast.makeText(context, "Enter an HTTP or HTTPS subtitle URL",
+                                android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    enabled = url.isNotBlank(),
+                ) { Text("Add URL") }
+            }
+        },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -1866,7 +1905,7 @@ private val LANG_TOKENS: Map<String, String> = buildMap {
 private fun languageOf(segment: String): String? = LANG_TOKENS[segment.trim().lowercase()]
 
 private fun classifySub(t: MediaTrack): SubInfo {
-    if (t.id == "off" || t.id == "none") return SubInfo(OFF_KEY, "Off", "Off")
+    if (t.id.lowercase() in subtitleOffIds) return SubInfo(OFF_KEY, "Off", "Off")
     val isExternal = t.type == "external_sub" || t.id.startsWith("external_") || t.id.contains("://")
     if (!isExternal) return SubInfo(EMBEDDED_KEY, "Embedded", t.name)
 
@@ -1884,16 +1923,16 @@ private fun classifySub(t: MediaTrack): SubInfo {
 }
 
 private fun groupSubtitleTracks(tracks: List<MediaTrack>): List<SubGroup> {
-    val off = tracks.firstOrNull { it.id == "off" || it.id == "none" }
+    val off = subtitleOffTrack(tracks)
     val byLang = LinkedHashMap<String, Pair<String, MutableList<MediaTrack>>>()
     
-    tracks.filter { it.id != "off" && it.id != "none" }.forEach { t ->
+    tracks.filterNot { it.id.lowercase() in subtitleOffIds }.forEach { t ->
         val info = classifySub(t)
         byLang.getOrPut(info.langKey) { info.langDisplay to mutableListOf() }.second.add(t)
     }
     
     val groups = mutableListOf<SubGroup>()
-    if (off != null) groups.add(SubGroup(OFF_KEY, "Off", listOf(off), off.selected))
+    groups.add(SubGroup(OFF_KEY, "Off", listOf(off), off.selected))
     byLang[EMBEDDED_KEY]?.let { (display, list) -> groups.add(SubGroup(EMBEDDED_KEY, display, list, list.any { it.selected })) }
     byLang[REMOTE_KEY]?.let { (display, list) -> groups.add(SubGroup(REMOTE_KEY, display, list, list.any { it.selected })) }
     byLang.filterKeys { it != EMBEDDED_KEY && it != REMOTE_KEY && it != EXTERNAL_KEY }.forEach { (k, v) -> groups.add(SubGroup(k, v.first, v.second, v.second.any { it.selected })) }
@@ -1904,7 +1943,12 @@ private fun groupSubtitleTracks(tracks: List<MediaTrack>): List<SubGroup> {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SubtitlesBottomSheet(tracks: List<MediaTrack>, onSelect: (String) -> Unit, onDismiss: () -> Unit) {
+private fun SubtitlesBottomSheet(
+    tracks: List<MediaTrack>,
+    onSelect: (String) -> Unit,
+    onAdd: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val groups = remember(tracks) { groupSubtitleTracks(tracks) }
     val initialGroupKey = remember(groups) {
         groups.firstOrNull { g -> g.tracks.any { it.selected } && g.key != OFF_KEY }?.key
@@ -1923,7 +1967,18 @@ private fun SubtitlesBottomSheet(tracks: List<MediaTrack>, onSelect: (String) ->
         Column(
             modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 24.dp)
         ) {
-            Text("Subtitles", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "Subtitles", style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = onAdd) {
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Add")
+                }
+            }
             Spacer(modifier = Modifier.height(16.dp))
 
             Row(
@@ -1935,7 +1990,14 @@ private fun SubtitlesBottomSheet(tracks: List<MediaTrack>, onSelect: (String) ->
                     val isSelected = selectedGroupKey == group.key
                     FilterChip(
                         selected = isSelected,
-                        onClick = { selectedGroupKey = group.key },
+                        onClick = {
+                            if (group.key == OFF_KEY) {
+                                onSelect(group.tracks.first().id)
+                                onDismiss()
+                            } else {
+                                selectedGroupKey = group.key
+                            }
+                        },
                         label = {
                             val countSuffix = if (group.key != OFF_KEY && group.tracks.isNotEmpty()) " (${group.tracks.size})" else ""
                             Text(group.label + countSuffix)
@@ -1976,6 +2038,13 @@ private fun SubtitlesBottomSheet(tracks: List<MediaTrack>, onSelect: (String) ->
                         }
                     }
                 }
+            } else {
+                Text(
+                    "No subtitle tracks yet. Use Add to attach one without restarting playback.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp),
+                )
             }
         }
     }

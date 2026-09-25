@@ -5,7 +5,10 @@ import android.content.ClipData
 import androidx.core.net.toUri
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -63,8 +66,6 @@ import java.net.URLDecoder
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.launch
-import com.playbridge.sender.data.library.TmdbRepository
-import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
 
@@ -1071,138 +1072,81 @@ fun openInExternalPlayer(
     }
 }
 
-/**
- * UI state for [SubtitleSearchDialog]. Held by the parent (CastSheet) so query/results
- * persist across dialog open/close, matching the original inline behaviour.
- */
-internal class SubtitleSearchUiState {
-    var query by mutableStateOf("")
-    var isSearching by mutableStateOf(false)
-    var results by mutableStateOf<List<com.playbridge.sender.data.library.TmdbMultiSearchResult>>(emptyList())
-    var showResults by mutableStateOf(false)
-}
-
-/**
- * Dialog that searches TMDB for a title and pulls matching Stremio subtitles into the sheet.
- * Extracted verbatim from the CastSheet body; [onAddSubtitles] appends to the sheet's
- * `extraSubtitles`, [onDismiss] closes the dialog (the gate stays in the parent).
- */
 @Composable
-internal fun SubtitleSearchDialog(
-    state: SubtitleSearchUiState,
-    tmdbRepository: TmdbRepository,
-    subtitleService: StremioSubtitleService,
-    onAddSubtitles: (List<DetectedVideo>) -> Unit,
+internal fun CastSheetAddSubtitleDialog(
+    onAddSubtitles: (List<DetectedVideo>, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    PlayBridgeTheme {
-        AlertDialog(
-            onDismissRequest = {
-                state.showResults = false
-                state.results = emptyList()
+    var source by remember { mutableStateOf(SubtitleSource.LOCAL) }
+    var url by remember { mutableStateOf("") }
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
+        if (uri != null) {
+            publishLocalSubtitle(context, uri)?.let { (localUrl, name) ->
+                onAddSubtitles(listOf(DetectedVideo(
+                    url = localUrl,
+                    tabId = -1,
+                    timestamp = System.currentTimeMillis(),
+                    detectedBy = "local_file",
+                    title = name,
+                )), true)
                 onDismiss()
-            },
-            title = { Text("Search Subtitles") },
-            text = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = state.query,
-                        onValueChange = { state.query = it },
-                        label = { Text("Movie / TV Show Name") },
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add subtitles") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+                SubtitleSourceTabs(
+                    sources = listOf(SubtitleSource.LOCAL, SubtitleSource.URL),
+                    selected = source,
+                    onSelect = { source = it },
+                )
+                Spacer(Modifier.height(16.dp))
+                when (source) {
+                    SubtitleSource.LOCAL -> {
+                        Text("Choose a subtitle file from this phone. The TV will load it through the phone.")
+                        Spacer(Modifier.height(12.dp))
+                        FilledTonalButton(
+                            onClick = { filePicker.launch("*/*") },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Choose local file") }
+                    }
+                    SubtitleSource.URL -> OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("Subtitle URL (.srt / .vtt)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        trailingIcon = {
-                            if (state.isSearching) {
-                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            } else {
-                                IconButton(onClick = {
-                                    if (state.query.isNotBlank()) {
-                                        state.isSearching = true
-                                        state.showResults = true
-                                        scope.launch {
-                                            val response = tmdbRepository.searchMulti(state.query)
-                                            state.results = response.results.filter { it.isMovie || it.isTvShow }
-                                            state.isSearching = false
-                                        }
-                                    }
-                                }) {
-                                    Icon(Icons.Default.Search, contentDescription = "Search")
-                                }
-                            }
-                        }
                     )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    if (state.showResults) {
-                        LazyColumn(modifier = Modifier.heightIn(max = 250.dp)) {
-                            items(state.results) { item ->
-                                ListItem(
-                                    headlineContent = { Text(item.displayTitle) },
-                                    supportingContent = { Text("${item.mediaType.uppercase()} • ${item.year}") },
-                                    modifier = Modifier.clickable {
-                                        state.isSearching = true
-                                        scope.launch {
-                                            var imdbIdToUse: String? = null
-                                            if (item.isMovie) {
-                                                val details = tmdbRepository.getMovieDetails(item.id)
-                                                imdbIdToUse = details?.imdbId
-                                            } else {
-                                                val details = tmdbRepository.getTvDetails(item.id)
-                                                imdbIdToUse = details?.imdbId
-                                            }
-
-                                            if (imdbIdToUse != null) {
-                                                val streams = if (item.isMovie) {
-                                                    subtitleService.getSubtitlesForMovie(imdbIdToUse)
-                                                } else {
-                                                    // For series, just try season 1 episode 1 by default, or we'd need more UI.
-                                                    // For now, let's just query S01E01 if it's a TV show.
-                                                    subtitleService.getSubtitlesForEpisode(imdbIdToUse, 1, 1)
-                                                }
-
-                                                if (streams.isNotEmpty()) {
-                                                    val newSubs = streams.mapNotNull { stream ->
-                                                        stream.url?.let { url ->
-                                                            DetectedVideo(
-                                                                url = url,
-                                                                tabId = -1, // Global
-                                                                timestamp = System.currentTimeMillis(),
-                                                                contentType = "text/vtt",
-                                                                detectedBy = "stremio_addon"
-                                                            )
-                                                        }
-                                                    }
-                                                    onAddSubtitles(newSubs)
-                                                    Toast.makeText(context, "Added ${newSubs.size} subtitles", Toast.LENGTH_SHORT).show()
-                                                    onDismiss()
-                                                } else {
-                                                    Toast.makeText(context, "No subtitles found", Toast.LENGTH_SHORT).show()
-                                                }
-                                            } else {
-                                                Toast.makeText(context, "Could not find IMDB ID", Toast.LENGTH_SHORT).show()
-                                            }
-                                            state.isSearching = false
-                                        }
-                                    }
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.showResults = false
-                    state.results = emptyList()
-                    onDismiss()
-                }) {
-                    Text("Close")
+                    SubtitleSource.DETECTED -> Unit
                 }
             }
-        )
-    }
+        },
+        confirmButton = {
+            if (source == SubtitleSource.URL) {
+                TextButton(
+                    enabled = url.isNotBlank(),
+                    onClick = {
+                        val entered = url.trim()
+                        if (entered.startsWith("https://", true) || entered.startsWith("http://", true)) {
+                            onAddSubtitles(listOf(DetectedVideo(
+                                url = entered,
+                                tabId = -1,
+                                timestamp = System.currentTimeMillis(),
+                                detectedBy = "manual_url",
+                            )), true)
+                            onDismiss()
+                        } else {
+                            Toast.makeText(context, "Enter an HTTP or HTTPS subtitle URL", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                ) { Text("Add URL") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }

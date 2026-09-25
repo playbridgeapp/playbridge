@@ -22,6 +22,7 @@ import com.playbridge.player.R
 import com.playbridge.shared.logging.redactUrlForLog
 import com.playbridge.shared.protocol.IncomingMessage
 import com.playbridge.shared.protocol.createContextJson
+import com.playbridge.shared.protocol.encodeSubtitleResourceJson
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
 import kotlinx.coroutines.*
@@ -456,7 +457,8 @@ class ServerService : Service() {
         val isQueueV1 = msg is IncomingMessage.QueueAdd || msg is IncomingMessage.PlaylistJump ||
             msg is IncomingMessage.QueueQuery || msg is IncomingMessage.QueueRemove ||
             msg is IncomingMessage.QueueMove || msg is IncomingMessage.QueueClear
-        command.requestId?.takeIf { isQueueV1 }?.let { requestId ->
+        val isLateSubtitle = msg is IncomingMessage.Control && msg.payload.command == "add_subtitle"
+        command.requestId?.takeIf { isQueueV1 || isLateSubtitle }?.let { requestId ->
             val cached = synchronized(commandResultCache) { commandResultCache[requestId] }
             if (cached != null) {
                 scope.launch { webSocketServer?.sendTo(command.connectionId, cached) }
@@ -592,12 +594,27 @@ class ServerService : Service() {
             is IncomingMessage.Control -> {
                 FileLogger.i(TAG, "Control command: ${msg.payload.command}")
                 val targetPlayerEngine = activePlayerEngine
+                val lateSubtitle = msg.payload.subtitle_resource
+                if (msg.payload.command == "add_subtitle" && lateSubtitle == null) {
+                    FileLogger.w(TAG, "Ignoring subtitle add without a resource")
+                    completeLateSubtitleCommand(command.connectionId, command.requestId, false, "invalid_command")
+                    return
+                }
+                if (msg.payload.command == "add_subtitle" && activeContext != "player") {
+                    completeLateSubtitleCommand(command.connectionId, command.requestId, false, "no_active_playback")
+                    return
+                }
                 if (msg.payload.command == "stop") {
                     activeContext = "idle"
                     broadcastContext()
                 }
                 val intent = Intent(ACTION_CONTROL).apply {
                     putExtra(EXTRA_COMMAND, msg.payload.command)
+                    if (msg.payload.command == "add_subtitle" && lateSubtitle != null) {
+                        putExtra(EXTRA_SUBTITLE_RESOURCE, encodeSubtitleResourceJson(lateSubtitle))
+                        putExtra(EXTRA_SUBTITLE_REQUEST_ID, command.requestId)
+                        putExtra(EXTRA_SUBTITLE_CONNECTION_ID, command.connectionId)
+                    }
                     putExtra(EXTRA_TARGET_PLAYER_ENGINE, targetPlayerEngine)
                     setPackage(packageName)
                 }
@@ -1223,6 +1240,9 @@ class ServerService : Service() {
         const val EXTRA_SUBTITLES = "subtitles"
         const val EXTRA_HEADERS = "headers"
         const val EXTRA_COMMAND = "command"
+        const val EXTRA_SUBTITLE_RESOURCE = "subtitle_resource"
+        const val EXTRA_SUBTITLE_REQUEST_ID = "subtitle_request_id"
+        const val EXTRA_SUBTITLE_CONNECTION_ID = "subtitle_connection_id"
 
         fun screenMirrorController(): ScreenMirrorReceiverController? = _screenMirrorController
         const val EXTRA_REMOTE_KEY = "remote_key"
@@ -1447,6 +1467,29 @@ class ServerService : Service() {
         )
 
         val pendingQueueCommands = java.util.concurrent.ConcurrentLinkedQueue<PendingQueueCommand>()
+
+        /** Complete a late subtitle request after the TV has actually loaded the sidecar. */
+        fun completeLateSubtitleCommand(
+            connectionId: Long,
+            requestId: String?,
+            ok: Boolean,
+            error: String? = null,
+        ) {
+            if (requestId.isNullOrBlank()) return
+            val result = org.json.JSONObject().apply {
+                put("type", "command_result")
+                put("requestId", requestId)
+                put("ok", ok)
+                error?.let { put("error", it) }
+            }.toString()
+            _staticInstance?.let { service ->
+                service.pendingCommandIds.remove(requestId)
+                synchronized(service.commandResultCache) {
+                    service.commandResultCache[requestId] = result
+                }
+                service.scope.launch { service.webSocketServer?.sendTo(connectionId, result) }
+            }
+        }
 
         fun drainPendingQueueCommands(): List<PendingQueueCommand> {
             val commands = mutableListOf<PendingQueueCommand>()

@@ -197,6 +197,10 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> selectAudioTrackById(String id) async {}
   Future<void> selectSubtitleTrackById(String id) async {}
 
+  /// Attach an already downloaded sidecar to the currently playing item.
+  Future<bool> addExternalSubtitleFile(String path, String label) async =>
+      false;
+
   Future<void> open(QueueItem item);
   Future<void> openPlaylist(
     List<QueueItem> items,

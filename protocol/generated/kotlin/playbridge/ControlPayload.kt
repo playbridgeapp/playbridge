@@ -40,6 +40,16 @@ public class ControlPayload(
     schemaIndex = 0,
   )
   public val command: String = "",
+  /**
+   * Used by add_subtitle for late sidecar attachment without reloading playback.
+   */
+  @field:WireField(
+    tag = 2,
+    adapter = "playbridge.SubtitleResource#ADAPTER",
+    jsonName = "subtitleResource",
+    schemaIndex = 1,
+  )
+  public val subtitle_resource: SubtitleResource? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<ControlPayload, Nothing>(ADAPTER, unknownFields) {
   @Deprecated(
@@ -54,6 +64,7 @@ public class ControlPayload(
     if (other !is ControlPayload) return false
     if (unknownFields != other.unknownFields) return false
     if (command != other.command) return false
+    if (subtitle_resource != other.subtitle_resource) return false
     return true
   }
 
@@ -62,6 +73,7 @@ public class ControlPayload(
     if (result == 0) {
       result = unknownFields.hashCode()
       result = result * 37 + command.hashCode()
+      result = result * 37 + (subtitle_resource?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -70,11 +82,15 @@ public class ControlPayload(
   override fun toString(): String {
     val result = mutableListOf<String>()
     result += """command=${sanitize(command)}"""
+    if (subtitle_resource != null) result += """subtitle_resource=$subtitle_resource"""
     return result.joinToString(prefix = "ControlPayload{", separator = ", ", postfix = "}")
   }
 
-  public fun copy(command: String = this.command, unknownFields: ByteString = this.unknownFields):
-      ControlPayload = ControlPayload(command, unknownFields)
+  public fun copy(
+    command: String = this.command,
+    subtitle_resource: SubtitleResource? = this.subtitle_resource,
+    unknownFields: ByteString = this.unknownFields,
+  ): ControlPayload = ControlPayload(command, subtitle_resource, unknownFields)
 
   public companion object {
     @JvmField
@@ -91,6 +107,7 @@ public class ControlPayload(
         if (value.command != "") {
           size += ProtoAdapter.STRING.encodedSizeWithTag(1, value.command)
         }
+        size += SubtitleResource.ADAPTER.encodedSizeWithTag(2, value.subtitle_resource)
         return size
       }
 
@@ -98,11 +115,13 @@ public class ControlPayload(
         if (value.command != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 1, value.command)
         }
+        SubtitleResource.ADAPTER.encodeWithTag(writer, 2, value.subtitle_resource)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: ControlPayload) {
         writer.writeBytes(value.unknownFields)
+        SubtitleResource.ADAPTER.encodeWithTag(writer, 2, value.subtitle_resource)
         if (value.command != "") {
           ProtoAdapter.STRING.encodeWithTag(writer, 1, value.command)
         }
@@ -110,19 +129,23 @@ public class ControlPayload(
 
       override fun decode(reader: ProtoReader): ControlPayload {
         var command: String = ""
+        var subtitle_resource: SubtitleResource? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> command = ProtoAdapter.STRING.decode(reader)
+            2 -> subtitle_resource = SubtitleResource.ADAPTER.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
         return ControlPayload(
           command = command,
+          subtitle_resource = subtitle_resource,
           unknownFields = unknownFields
         )
       }
 
       override fun redact(`value`: ControlPayload): ControlPayload = value.copy(
+        subtitle_resource = value.subtitle_resource?.let(SubtitleResource.ADAPTER::redact),
         unknownFields = ByteString.EMPTY
       )
     }

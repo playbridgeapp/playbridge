@@ -23,6 +23,17 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
 
+/** Keep catalog searches in Library order and omit sources the user has switched off. */
+internal fun searchableCatalogs(
+    addons: List<InstalledAddonEntity>,
+): List<Pair<InstalledAddonEntity, StremioCatalogEntry>> =
+    addons.filter { it.isFeatureEnabled("catalog") }
+        .flatMap { addon ->
+            addon.parsedCatalogEntries()
+                .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
+                .map { addon to it }
+        }
+
 /**
  * Manages Stremio-compatible addons: installing from manifest URLs,
  * resolving streams via the Stremio addon protocol.
@@ -435,6 +446,9 @@ class AddonRepository(
 
     // ==================== Catalog Search ====================
 
+    private suspend fun searchableCatalogs(): List<Pair<InstalledAddonEntity, StremioCatalogEntry>> =
+        searchableCatalogs(addonDao.getAllSync())
+
     /**
      * Search a specific addon catalog using the Stremio extra protocol.
      * URL pattern: `{baseUrl}/catalog/{type}/{catalogId}/search={query}.json`
@@ -484,16 +498,10 @@ class AddonRepository(
      */
     suspend fun searchAllCatalogs(query: String): List<StremioMetaPreview> {
         if (query.isBlank()) return emptyList()
-        val addons = addonDao.getAllSync()
+        val catalogs = searchableCatalogs()
         return coroutineScope {
-            val deferreds = addons.flatMap { addon ->
-                addon.parsedCatalogEntries()
-                    .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
-                    .map { entry ->
-                        async(Dispatchers.IO) {
-                            searchCatalog(addon, entry.type, entry.id, query)
-                        }
-                    }
+            val deferreds = catalogs.map { (addon, entry) ->
+                async(Dispatchers.IO) { searchCatalog(addon, entry.type, entry.id, query) }
             }
             val seen = mutableSetOf<String>()
             deferreds.awaitAll()
@@ -508,18 +516,13 @@ class AddonRepository(
      */
     suspend fun searchAllCatalogsGrouped(query: String): List<AddonSearchResultGroup> {
         if (query.isBlank()) return emptyList()
-        val addons = addonDao.getAllSync()
+        val catalogs = searchableCatalogs()
         return coroutineScope {
             // One deferred per (addon, catalogEntry) pair, tagged with the addon name
-            val tagged = addons.flatMap { addon ->
-                addon.parsedCatalogEntries()
-                    .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
-                    .map { entry ->
-                        async(Dispatchers.IO) {
-                            val items = searchCatalog(addon, entry.type, entry.id, query)
-                            addon.name to items
-                        }
-                    }
+            val tagged = catalogs.map { (addon, entry) ->
+                async(Dispatchers.IO) {
+                    addon.name to searchCatalog(addon, entry.type, entry.id, query)
+                }
             }
             // Merge by addon name, dedup within each group
             val byAddon = mutableMapOf<String, MutableList<StremioMetaPreview>>()
@@ -547,33 +550,29 @@ class AddonRepository(
         onGroupsUpdated: suspend (List<AddonSearchResultGroup>) -> Unit
     ) {
         if (query.isBlank()) return
-        val addons = addonDao.getAllSync()
+        val catalogs = searchableCatalogs()
         val resultGroups = mutableMapOf<String, MutableList<StremioMetaPreview>>()
         val mutex = Mutex()
 
         coroutineScope {
-            val jobs = addons.flatMap { addon ->
-                addon.parsedCatalogEntries()
-                    .filter { it.supportsSearch && it.type.isNotBlank() && it.id.isNotBlank() }
-                    .map { entry ->
-                        launch(Dispatchers.IO) {
-                            val items = searchCatalog(addon, entry.type, entry.id, query)
-                            if (items.isNotEmpty()) {
-                                val (effectiveProvider, _) = parseCatalogTitle(addon.name, entry.name)
-                                val snapshot = mutex.withLock {
-                                    val bucket = resultGroups.getOrPut(effectiveProvider) { mutableListOf() }
-                                    val seen = bucket.map { it.id }.toMutableSet()
-                                    items.forEach { item ->
-                                        if (item.id.isNotBlank() && seen.add(item.id)) bucket += item
-                                    }
-                                    resultGroups.entries
-                                        .filter { it.value.isNotEmpty() }
-                                        .map { AddonSearchResultGroup(addonName = it.key, items = it.value.toList()) }
-                                }
-                                onGroupsUpdated(snapshot)
+            val jobs = catalogs.map { (addon, entry) ->
+                launch(Dispatchers.IO) {
+                    val items = searchCatalog(addon, entry.type, entry.id, query)
+                    if (items.isNotEmpty()) {
+                        val (effectiveProvider, _) = parseCatalogTitle(addon.name, entry.name)
+                        val snapshot = mutex.withLock {
+                            val bucket = resultGroups.getOrPut(effectiveProvider) { mutableListOf() }
+                            val seen = bucket.map { it.id }.toMutableSet()
+                            items.forEach { item ->
+                                if (item.id.isNotBlank() && seen.add(item.id)) bucket += item
                             }
+                            resultGroups.entries
+                                .filter { it.value.isNotEmpty() }
+                                .map { AddonSearchResultGroup(addonName = it.key, items = it.value.toList()) }
                         }
+                        onGroupsUpdated(snapshot)
                     }
+                }
             }
             jobs.joinAll()
         }
@@ -616,7 +615,9 @@ class AddonRepository(
 
         val cacheKey = "meta:$type:$id:${forcedSource ?: "any"}"
         val cached = metaCache[cacheKey]
-        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
+        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS &&
+            addonDao.getAllSync().any { it.name == cached.third && it.isFeatureEnabled("meta") }
+        ) {
             // Self-healing: if we have a directAddon match but the cache contains a different provider, bypass cache
             if (directAddon != null && !cached.third.equals(directAddon.name, ignoreCase = true)) {
                 Log.d(TAG, "Bypassing cached meta: forcedSource matches ${directAddon.name} but cache holds ${cached.third}")
@@ -716,17 +717,19 @@ class AddonRepository(
      * @param id IMDb ID for movies (e.g. "tt1234567") or "tt1234567:season:episode" for series
      */
     suspend fun resolveSubtitles(type: String, id: String): List<StremioStream> {
-        val cacheKey = "$type:$id"
-        val cached = subtitleCache[cacheKey]
-        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
-            Log.d(TAG, "Using cached subtitles for $cacheKey")
-            return cached.second
-        }
-
         val addons = addonDao.getAllSync().filter { addon ->
             addon.isFeatureEnabled("subtitles") &&
                 addon.supportsResource("subtitles") &&
                 addon.types.split(",").any { it.trim().matchesStremioType(type) }
+        }
+
+        // Include the currently enabled sources so a disabled or reordered add-on cannot
+        // continue supplying a stale cached result for the rest of the cache TTL.
+        val cacheKey = "$type:$id:${addons.joinToString("|") { it.manifestUrl }}"
+        val cached = subtitleCache[cacheKey]
+        if (cached != null && System.currentTimeMillis() - cached.first < CACHE_TTL_MS) {
+            Log.d(TAG, "Using cached subtitles for $type:$id")
+            return cached.second
         }
 
         if (addons.isEmpty()) {

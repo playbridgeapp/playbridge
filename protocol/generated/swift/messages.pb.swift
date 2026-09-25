@@ -829,9 +829,21 @@ nonisolated struct Playbridge_ControlPayload: Sendable {
   /// pause | play | seek | stop
   var command: String = String()
 
+  /// Used by add_subtitle for late sidecar attachment without reloading playback.
+  var subtitleResource: Playbridge_SubtitleResource {
+    get {_subtitleResource ?? Playbridge_SubtitleResource()}
+    set {_subtitleResource = newValue}
+  }
+  /// Returns true if `subtitleResource` has been explicitly set.
+  var hasSubtitleResource: Bool {self._subtitleResource != nil}
+  /// Clears the value of `subtitleResource`. Subsequent reads from it will return its default value.
+  mutating func clearSubtitleResource() {self._subtitleResource = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _subtitleResource: Playbridge_SubtitleResource? = nil
 }
 
 nonisolated struct Playbridge_RemotePayload: Sendable {
@@ -2248,7 +2260,7 @@ nonisolated extension Playbridge_BrowserPayload: SwiftProtobuf.Message, SwiftPro
 
 nonisolated extension Playbridge_ControlPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".ControlPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}command\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}command\0\u{3}subtitle_resource\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2257,20 +2269,29 @@ nonisolated extension Playbridge_ControlPayload: SwiftProtobuf.Message, SwiftPro
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.command) }()
+      case 2: try { try decoder.decodeSingularMessageField(value: &self._subtitleResource) }()
       default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.command.isEmpty {
       try visitor.visitSingularStringField(value: self.command, fieldNumber: 1)
     }
+    try { if let v = self._subtitleResource {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: Playbridge_ControlPayload, rhs: Playbridge_ControlPayload) -> Bool {
     if lhs.command != rhs.command {return false}
+    if lhs._subtitleResource != rhs._subtitleResource {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

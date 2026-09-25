@@ -197,6 +197,15 @@ Android receiver browser administration also uses standalone `user_script`, `use
 messages. Capability arrays are the feature-negotiation mechanism; senders should not offer an
 engine/browser absent from those arrays.
 
+Late network subtitle attachment uses `control` with `payload.command = "add_subtitle"`
+and `payload.subtitleResource` (URL, resource-scoped headers, optional label/language).
+Receivers supporting it advertise `subtitle_resource_add_v1` in `auth_response.features`.
+The older `add_subtitle:<url>` command remains supported for URL-only sidecars and
+phone-hosted local files. Senders must not put request headers into URLs or send
+credentialed sidecars through the legacy command. Receivers must apply the headers
+only to the subtitle's origin, strip them on cross-origin redirects, enforce their
+platform's media network policy, and clear late resource state when playback changes.
+
 `PlayPayload.headers`, subtitle URLs, media URLs, and bearer tokens may contain credentials. They
 must not be logged. `startPositionMs`, `status.position`, and `status.duration` are milliseconds.
 A one-item cast still uses `playlist`; the legacy `play` action is accepted by some receivers but

@@ -17,7 +17,6 @@ import com.playbridge.sender.cast.CastSheet
 import com.playbridge.sender.cast.DetectedVideo
 import com.playbridge.sender.data.debrid.DebridRepository
 import com.playbridge.sender.data.debrid.DebridUnrestrictedLink
-import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.library.MagnetParsingSheet
 import playbridge.PlayPayload
 import org.koin.compose.koinInject
@@ -76,8 +75,8 @@ fun SheetOverlayContainer(
     pendingContentPayload: PlayPayload?,
     isTvPlaying: Boolean,
     onDismissVideoSheet: () -> Unit,
-    onVideoClick: (DetectedVideo, List<String>?) -> Unit,
-    onQueueVideo: (DetectedVideo, List<String>?) -> Unit = { _, _ -> },
+    onVideoClick: (DetectedVideo, List<String>?, List<playbridge.SubtitleResource>) -> Unit,
+    onQueueVideo: (DetectedVideo, List<String>?, List<playbridge.SubtitleResource>) -> Unit = { _, _, _ -> },
     onDownloadVideo: (DetectedVideo) -> Unit,
     onClearVideos: () -> Unit,
     playerMode: String = "tv",
@@ -97,7 +96,6 @@ fun SheetOverlayContainer(
     onDismissMagnet: () -> Unit,
     onPlayMagnetLinks: (List<DebridUnrestrictedLink>) -> Unit
 ) {
-    val subtitleService: StremioSubtitleService = koinInject()
     val debridRepository: DebridRepository = koinInject()
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -203,7 +201,6 @@ fun SheetOverlayContainer(
                 onBrowseClick = onBrowseClick,
                 onOpenNewTab = onOpenNewTab,
                 initialMode = initialMode,
-                subtitleService = subtitleService,
                 contentPayload = pendingContentPayload,
                 onContentClick = onContentClick,
                 onQueueContent = onQueueContent,

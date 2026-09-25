@@ -73,7 +73,8 @@ sealed class Command {
 
 class ControlCmd extends Command {
   final String command;
-  const ControlCmd(this.command);
+  final SubtitleResource? subtitleResource;
+  const ControlCmd(this.command, {this.subtitleResource});
 }
 
 /// A remote key press from the phone (e.g. `volume_up` / `volume_down`). Most keys
@@ -288,7 +289,17 @@ Command parseCommand(String json) {
         final payload = root['payload'];
         switch (action) {
           case 'control':
-            return ControlCmd((payload?['command'] ?? '') as String);
+            if (payload is! Map<String, dynamic>) {
+              return const UnknownCmd('control_parse_error');
+            }
+            final control = ControlPayload()
+              ..mergeFromProto3Json(payload, ignoreUnknownFields: true);
+            return ControlCmd(
+              control.command,
+              subtitleResource: control.hasSubtitleResource()
+                  ? control.subtitleResource
+                  : null,
+            );
           case 'remote':
             return RemoteCmd((payload?['key'] ?? '') as String);
           case 'mouse':

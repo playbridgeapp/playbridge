@@ -11,6 +11,8 @@ struct ExternalSubtitleCatalog {
 
     let options: [Option]
 
+    private init(options: [Option]) { self.options = options }
+
     init(urls: [String]) {
         var seen = Set<String>()
         options = urls.compactMap { raw in
@@ -25,6 +27,12 @@ struct ExternalSubtitleCatalog {
 
     func option(for id: Int) -> Option? {
         options.first { $0.id == id }
+    }
+
+    func appending(url: String, name: String) -> (ExternalSubtitleCatalog, Option) {
+        if let existing = options.first(where: { $0.url == url }) { return (self, existing) }
+        let option = Option(id: -options.count - 2, url: url, name: name)
+        return (ExternalSubtitleCatalog(options: options + [option]), option)
     }
 
     func unloadedTracks(excluding loadedURLs: Set<String>) -> [(id: Int, name: String)] {

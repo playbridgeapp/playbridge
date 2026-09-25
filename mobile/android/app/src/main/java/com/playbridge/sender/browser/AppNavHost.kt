@@ -127,6 +127,8 @@ fun AppNavHost(
     onCastSheetInitialModeChange: (String) -> Unit,
     castSheetBrowseOverride: String?,
     onCastSheetBrowseOverrideChange: (String?) -> Unit,
+    remoteCastSourceTabId: String? = null,
+    remoteCastTitle: String? = null,
 
     // Coroutine scope
     scope: CoroutineScope,
@@ -188,7 +190,6 @@ fun AppNavHost(
     val addonRepository: AddonRepository = koinInject()
     val debridRepository: com.playbridge.sender.data.debrid.DebridRepository = koinInject()
     val subtitleService: com.playbridge.sender.data.library.StremioSubtitleService = koinInject()
-    val tmdbRepository: com.playbridge.sender.data.library.TmdbRepository = koinInject()
     val addonDao: AddonDao = koinInject()
     val settingsRepository: SettingsRepository = koinInject()
     val linkedPageCastCoordinator: LinkedPageCastCoordinator = koinInject()
@@ -930,10 +931,8 @@ fun AppNavHost(
                     val tvVideoTracks by connectionCoordinator.tvVideoTracks.collectAsStateWithLifecycle()
                     val tvAudioTracks by connectionCoordinator.tvAudioTracks.collectAsStateWithLifecycle()
                     val tvSubtitleTracks by connectionCoordinator.tvSubtitleTracks.collectAsStateWithLifecycle()
+                    val detectorRevision = VideoDetector.processingVersion
                     val tvPlayerSettings by connectionCoordinator.tvPlayerSettings.collectAsStateWithLifecycle()
-                    val nowPlayingTvId by connectionCoordinator.nowPlayingTvId.collectAsStateWithLifecycle()
-                    val nowPlayingSeason by connectionCoordinator.nowPlayingSeason.collectAsStateWithLifecycle()
-                    val nowPlayingEpisodeStart by connectionCoordinator.nowPlayingEpisodeStart.collectAsStateWithLifecycle()
                     val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
                     val externalMediaTitle by connectionViewModel.externalMediaTitle.collectAsStateWithLifecycle()
                     val external = activeExternalDevice
@@ -1000,6 +999,11 @@ fun AppNavHost(
                         videoTracks = tvVideoTracks,
                         audioTracks = tvAudioTracks,
                         subtitleTracks = tvSubtitleTracks,
+                        detectedSubtitles = remember(remoteCastSourceTabId, remoteCastTitle, tvPlayback?.title, detectorRevision) {
+                            if (remoteCastSourceTabId != null && remoteCastTitle == tvPlayback?.title) {
+                                VideoDetector.getVideosForTab(remoteCastSourceTabId).filter { it.isSubtitle }
+                            } else emptyList()
+                        },
                         onSeekTo = { positionMs ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("seek_to:$positionMs"))
                         },
@@ -1035,24 +1039,38 @@ fun AppNavHost(
                         onAddSubtitleUrl = { url ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:$url"))
                         },
-                        onSearchSubtitles = nowPlayingTvId?.let { tvId ->
-                            val suspendLambda: suspend () -> List<SubtitleOption> = {
-                                val isSeries = nowPlayingSeason != null
-                                val imdb = if (isSeries) tmdbRepository.getTvDetails(tvId)?.imdbId
-                                else tmdbRepository.getMovieDetails(tvId)?.imdbId
-                                if (imdb == null) emptyList()
-                                else {
-                                    val streams = if (isSeries) subtitleService.getSubtitlesForEpisode(
-                                        imdb,
-                                        nowPlayingSeason ?: 1,
-                                        nowPlayingEpisodeStart + (tvPlaylistState?.currentIndex ?: 0)
-                                    ) else subtitleService.getSubtitlesForMovie(imdb)
-                                    streams.mapNotNull { s ->
-                                        s.url?.let { u -> SubtitleOption(s.title ?: s.name ?: u.substringAfterLast('/'), u) }
+                        onAddSubtitleResource = { resource ->
+                            val features = connectionViewModel.webSocketClient.tvCapabilitiesState.value.features
+                            when {
+                                connectionState !is WebSocketClient.ConnectionState.Connected -> false
+                                "subtitle_resource_add_v1" in features -> {
+                                    val requestId = java.util.UUID.randomUUID().toString()
+                                    scope.launch {
+                                        val result = connectionCoordinator.sendConfirmedQueueCommand(
+                                            requestId,
+                                            com.playbridge.shared.protocol.createAddSubtitleCommandJson(
+                                                resource, requestId,
+                                            ),
+                                            timeoutMs = 30_000L,
+                                        )
+                                        if (result?.ok != true) {
+                                            val message = when (result?.error) {
+                                                "no_active_playback" -> "No video is playing on the TV"
+                                                "invalid_command" -> "The TV rejected this subtitle"
+                                                "subtitle_unavailable" -> "The TV could not load this subtitle"
+                                                else -> "The TV did not confirm the subtitle"
+                                            }
+                                            Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                                        }
                                     }
+                                    true
                                 }
+                                resource.headers.isEmpty() ->
+                                    connectionViewModel.webSocketClient.send(
+                                        com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:${resource.url}")
+                                    )
+                                else -> false
                             }
-                            suspendLambda
                         },
                         onBack = {
                             onScreenChange(remoteReturnScreen)

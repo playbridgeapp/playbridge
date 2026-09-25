@@ -94,6 +94,9 @@ class MPVViewController: UIViewController {
     private var isMpvStopped = false
     private var pendingExternalSubtitles: [String] = []
     private var externalSubtitleCatalog = ExternalSubtitleCatalog(urls: [])
+    private var lateSubtitleDownloads: [UUID: ScopedSubtitleDownload] = [:]
+    private var lateSubtitleFiles: [URL] = []
+    private var lateSubtitleSelectionID: UUID?
     /// Opaque pointer to a +1-retained `self` handed to mpv's wakeup callback. Keeping self
     /// alive while the callback is installed means the callback never forms a weak reference
     /// to a deallocating object. Balanced (released) once in `teardown()`.
@@ -299,6 +302,11 @@ class MPVViewController: UIViewController {
     /// state is reset; the handle, render context, and demuxer caches survive.
     func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
                      initialTime: Double, title: String?) {
+        lateSubtitleDownloads.values.forEach { $0.cancel() }
+        lateSubtitleDownloads.removeAll()
+        lateSubtitleSelectionID = nil
+        let oldSubtitleFiles = lateSubtitleFiles
+        lateSubtitleFiles.removeAll()
         debugLogNetworkRequest("MPV playback", url: url, headers: headers)
         self.url = url
         self.headers = headers
@@ -319,6 +327,9 @@ class MPVViewController: UIViewController {
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
 
         loadFile(url)
+        mpvQueue.async {
+            oldSubtitleFiles.forEach { try? FileManager.default.removeItem(at: $0) }
+        }
     }
 
     private func loadFile(_ url: URL) {
@@ -1077,6 +1088,61 @@ class MPVViewController: UIViewController {
 
     @objc private func onControlNotification(_ note: Notification) {
         guard let cmd = note.userInfo?["command"] as? String else { return }
+        if cmd == "add_subtitle" {
+            guard let resource = note.userInfo?["subtitleResource"] as? Playbridge_SubtitleResource,
+                  let completion = note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void),
+                  !isMpvStopped, mpv != nil else {
+                (note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void))?(false)
+                return
+            }
+            lateSubtitleDownloads.values.forEach { $0.cancel() }
+            lateSubtitleDownloads.removeAll()
+            let id = UUID()
+            lateSubtitleSelectionID = id
+            let download = ScopedSubtitleDownload(resource: resource)
+            lateSubtitleDownloads[id] = download
+            download.start { [weak self] result in
+                guard let self else { completion(false); return }
+                guard self.lateSubtitleDownloads.removeValue(forKey: id) != nil else {
+                    if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                    completion(false)
+                    return
+                }
+                guard !self.isMpvStopped, let handle = self.mpv else {
+                    if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                    completion(false)
+                    return
+                }
+                switch result {
+                case .failure: completion(false)
+                case .success(let file):
+                    self.mpvQueue.async { [weak self] in
+                        guard let self, self.mpv == handle,
+                              self.lateSubtitleSelectionID == id else {
+                            try? FileManager.default.removeItem(at: file)
+                            DispatchQueue.main.async { completion(false) }
+                            return
+                        }
+                        let label = resource.hasLabel && !resource.label.isEmpty
+                            ? resource.label : "External subtitle"
+                        let ok = self.mpvCommand(handle, ["sub-add", file.path, "select", label]) >= 0
+                        if ok { self.updateTracks() }
+                        DispatchQueue.main.async {
+                            guard self.lateSubtitleSelectionID == id else {
+                                if ok { self.lateSubtitleFiles.append(file) }
+                                else { try? FileManager.default.removeItem(at: file) }
+                                completion(false)
+                                return
+                            }
+                            if ok { self.lateSubtitleFiles.append(file) }
+                            else { try? FileManager.default.removeItem(at: file) }
+                            completion(ok)
+                        }
+                    }
+                }
+            }
+            return
+        }
         if StillWatchingGate.isPrompting { return }
         handleControlCommand(cmd)
     }
@@ -1162,6 +1228,11 @@ class MPVViewController: UIViewController {
     func teardown() {
         guard !isMpvStopped else { return }
         isMpvStopped = true
+        lateSubtitleDownloads.values.forEach { $0.cancel() }
+        lateSubtitleDownloads.removeAll()
+        lateSubtitleSelectionID = nil
+        let stagedSubtitles = lateSubtitleFiles
+        lateSubtitleFiles.removeAll()
 
         statusTimer?.invalidate()
         statusTimer = nil
@@ -1193,6 +1264,7 @@ class MPVViewController: UIViewController {
         let outputLayer = displayLayer
         mpvQueue.async {
             mpv_terminate_destroy(handle)
+            stagedSubtitles.forEach { try? FileManager.default.removeItem(at: $0) }
             withExtendedLifetime(outputLayer) {}
         }
 

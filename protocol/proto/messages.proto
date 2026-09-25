@@ -143,6 +143,8 @@ message BrowserPayload {
 message ControlPayload {
   // pause | play | seek | stop
   string command = 1;
+  // Used by add_subtitle for late sidecar attachment without reloading playback.
+  optional SubtitleResource subtitle_resource = 2 [json_name = "subtitleResource"];
 }
 
 message RemotePayload {

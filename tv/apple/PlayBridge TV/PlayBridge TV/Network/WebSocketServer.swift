@@ -792,7 +792,7 @@ class WebSocketServer: ObservableObject {
     /// shows "TV Default" + AVPlayer + VLC + MPV. A concrete choice is honored per cast in
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
     static let capabilityPlayers = ["avplayer", "vlc", "mpv"]
-    static let capabilityFeatures = ["queue_crud_v1", "stable_item_ids", "command_results"]
+    static let capabilityFeatures = ["queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1"]
 
     /// Posted (on main) when the phone sends a `control` command (userInfo["command"]) or a
     /// `remote` key (userInfo["key"]). The active player view observes these.
@@ -945,8 +945,10 @@ class WebSocketServer: ObservableObject {
             return
         }
         if let requestID, pendingCommandIDs.contains(requestID) { return }
+        let isLateSubtitle = action == "control"
+            && (payload as? [String: Any])?["command"] as? String == "add_subtitle"
         if let requestID,
-           action == "playlist_jump" || action.hasPrefix("queue_") {
+           action == "playlist_jump" || action.hasPrefix("queue_") || isLateSubtitle {
             pendingCommandIDs.insert(requestID)
         }
 
@@ -1130,6 +1132,31 @@ class WebSocketServer: ObservableObject {
         case "control":
             if let p = try? Playbridge_ControlPayload(jsonString: payloadJson), !p.command.isEmpty {
                 DispatchQueue.main.async {
+                    if p.command == "add_subtitle" {
+                        guard p.hasSubtitleResource,
+                              ExternalSubtitleDownload.isValid(p.subtitleResource) else {
+                            self.completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
+                            return
+                        }
+                        guard self.playlistStore?.playbackID != nil else {
+                            self.completeCommand(requestID, ok: false, error: "no_active_playback", to: connection)
+                            return
+                        }
+                        var completed = false
+                        let finish: (Bool) -> Void = { [weak self] ok in
+                            guard let self, !completed else { return }
+                            completed = true
+                            self.completeCommand(requestID, ok: ok,
+                                                 error: ok ? nil : "subtitle_unavailable", to: connection)
+                        }
+                        NotificationCenter.default.post(
+                            name: Self.controlCommand, object: nil,
+                            userInfo: ["command": p.command,
+                                       "subtitleResource": p.subtitleResource,
+                                       "subtitleCompletion": finish])
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 25) { finish(false) }
+                        return
+                    }
                     if StillWatchingGate.isPrompting {
                         if p.command == "stop" {
                             NotificationCenter.default.post(name: .playBridgeStillWatchingStop, object: nil)

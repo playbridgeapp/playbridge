@@ -223,6 +223,8 @@ class PlayerController extends ChangeNotifier {
       _engine.selectAudioTrackById(id);
   Future<void> selectSubtitleTrackById(String id) =>
       _engine.selectSubtitleTrackById(id);
+  Future<bool> addExternalSubtitleFile(String path, String label) =>
+      _engine.addExternalSubtitleFile(path, label);
 
   Future<void> playUrl(
     String url, {

@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.VideocamOff
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PhoneAndroid
@@ -65,8 +66,6 @@ import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
-import com.playbridge.sender.data.library.TmdbRepository
-import com.playbridge.sender.data.library.StremioSubtitleService
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.CastableMedia
@@ -89,8 +88,8 @@ fun CastSheet(
     videos: List<DetectedVideo>,
     mediaRevision: Int = 0,
     onDismiss: () -> Unit,
-    onVideoClick: (DetectedVideo, List<String>?) -> Unit,
-    onQueueVideo: (DetectedVideo, List<String>?) -> Unit = { _, _ -> },
+    onVideoClick: (DetectedVideo, List<String>?, List<playbridge.SubtitleResource>) -> Unit,
+    onQueueVideo: (DetectedVideo, List<String>?, List<playbridge.SubtitleResource>) -> Unit = { _, _, _ -> },
     onDownload: (DetectedVideo) -> Unit,
     isTvPlaying: Boolean = false,
     playerMode: String = "tv",
@@ -101,7 +100,6 @@ fun CastSheet(
     onBrowseClick: ((String, Boolean) -> Unit)? = null,
     onOpenNewTab: ((String) -> Unit)? = null,
     initialMode: String = "play",
-    subtitleService: StremioSubtitleService = StremioSubtitleService(),
     contentPayload: playbridge.PlayPayload? = null,
     onContentClick: (playbridge.PlayPayload) -> Unit = {},
     onQueueContent: (playbridge.PlayPayload) -> Unit = {},
@@ -201,14 +199,10 @@ fun CastSheet(
     }
     val selectedTab = if (isPlaylistMode) 0 else tabOrder.indexOf(selectedTabKind)
 
-    // State for subtitle search dialog. The gate + shared results live here; the dialog's
-    // own query/loading/results are bundled in SubtitleSearchUiState (held here so they
-    // persist across open/close).
-    var showSubtitleSearchDialog by remember { mutableStateOf(false) }
-    val subtitleSearch = remember { SubtitleSearchUiState() }
+    // Keep a manual source picker separate from the detected subtitle list.
+    var showAddSubtitleDialog by remember { mutableStateOf(false) }
     var extraSubtitles by remember { mutableStateOf<List<DetectedVideo>>(emptyList()) }
 
-    val tmdbRepository = remember { TmdbRepository(context) }
     val scope = rememberCoroutineScope()
     val videoListState = rememberLazyListState()
     var showUnavailableVideos by remember { mutableStateOf(false) }
@@ -367,6 +361,13 @@ fun CastSheet(
         }
     }
 
+    fun selectedSubtitleResources(): List<playbridge.SubtitleResource> {
+        val combined = allSubtitles + extraSubtitles
+        return selectedSubtitles.mapNotNull { url ->
+            combined.find { it.url == url }?.let(::subtitleResourceForDetected)
+        }
+    }
+
     // Play the given video on this phone via the in-app PlayerActivity.
     // Skips proxy rewriting (that's only for TV hand-off) — ExoPlayer applies
     // the request headers directly.
@@ -498,7 +499,7 @@ fun CastSheet(
                                         visualMetadata = payload.visual_metadata,
                                         startPositionMs = payload.start_position_ms ?: 0L,
                                     )
-                                    if (queue) onQueueVideo(asVideo, null) else onVideoClick(asVideo, null)
+                                    if (queue) onQueueVideo(asVideo, null, emptyList()) else onVideoClick(asVideo, null, emptyList())
                                 } else {
                                     val packagedPayload = payload.copy(
                                         url = prepared.url,
@@ -632,7 +633,9 @@ fun CastSheet(
                                 effectiveStreamRoute = prepared.effectiveRoute.mode.prefsValue,
                                 streamRouteReason = prepared.effectiveRoute.policyReason,
                             )
-                            if (queue) onQueueVideo(resolved, subs) else onVideoClick(resolved, subs)
+                            val subtitleResources = selectedSubtitleResources()
+                            if (queue) onQueueVideo(resolved, subs, subtitleResources)
+                            else onVideoClick(resolved, subs, subtitleResources)
                         } catch (e: StreamRouteException) {
                             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
                         } catch (e: Exception) {
@@ -1399,16 +1402,6 @@ fun CastSheet(
             } else if (selectedTabKind == DetectedMediaKind.SUBTITLE) {
                 // Subtitles Tab
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                    Button(
-                        onClick = { showSubtitleSearchDialog = true },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Search for Subtitles")
-                    }
-                    Spacer(Modifier.height(16.dp))
-
                     val combinedSubtitles = remember(allSubtitles, extraSubtitles) {
                         newestSubtitlesFirst(allSubtitles + extraSubtitles)
                     }
@@ -1427,7 +1420,7 @@ fun CastSheet(
                         }
                     } else {
                         LazyColumn(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(combinedSubtitles, key = { "sub:${it.url}" }, contentType = { "subtitle" }) { subtitle ->
@@ -1546,6 +1539,15 @@ fun CastSheet(
                             }
                         }
                     }
+                    Spacer(Modifier.height(16.dp))
+                    FilledTonalButton(
+                        onClick = { showAddSubtitleDialog = true },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Add subtitles")
+                    }
                 }
             }
             } // end else (non-browse mode)
@@ -1555,13 +1557,13 @@ fun CastSheet(
 }
 }
 
-    if (showSubtitleSearchDialog) {
-        SubtitleSearchDialog(
-            state = subtitleSearch,
-            tmdbRepository = tmdbRepository,
-            subtitleService = subtitleService,
-            onAddSubtitles = { newSubs -> extraSubtitles = extraSubtitles + newSubs },
-            onDismiss = { showSubtitleSearchDialog = false },
+    if (showAddSubtitleDialog) {
+        CastSheetAddSubtitleDialog(
+            onAddSubtitles = { newSubs, autoSelect ->
+                extraSubtitles = extraSubtitles + newSubs
+                if (autoSelect) selectedSubtitles = selectedSubtitles + newSubs.map { it.url }
+            },
+            onDismiss = { showAddSubtitleDialog = false },
         )
     }
 
@@ -1621,6 +1623,7 @@ fun CastSheet(
                                     streamRouteReason = prepared.effectiveRoute.policyReason,
                                 ),
                                 selectedSubtitles.toList(),
+                                selectedSubtitleResources(),
                             )
                         } catch (e: Exception) {
                             Toast.makeText(

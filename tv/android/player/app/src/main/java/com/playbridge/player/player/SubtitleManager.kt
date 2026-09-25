@@ -3,11 +3,13 @@ package com.playbridge.player.player
 import android.util.Log
 import com.playbridge.shared.logging.redactUrlForLog
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Collections
 
 class SubtitleManager(
@@ -41,6 +43,7 @@ class SubtitleManager(
         headers: Map<String, String>? = null,
         enforcePageNetworkPolicy: Boolean = false,
         allowedPrivateOrigins: List<String> = emptyList(),
+        onResult: ((Boolean) -> Unit)? = null,
     ) {
         Log.i(TAG, "Loading subtitle from: ${redactUrlForLog(url)}")
         subtitleJob?.cancel()
@@ -66,8 +69,12 @@ class SubtitleManager(
                 Log.i(TAG, "Loaded ${cues.size} cues")
 
                 startSyncing()
+                withContext(Dispatchers.Main) { onResult?.invoke(true) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to load subtitle", e)
+                Log.e(TAG, "Failed to load subtitle (${e.javaClass.simpleName})")
+                withContext(Dispatchers.Main) { onResult?.invoke(false) }
             }
         }
     }

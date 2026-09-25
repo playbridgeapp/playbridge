@@ -414,12 +414,18 @@ const ControlPayload$json = {
   '1': 'ControlPayload',
   '2': [
     {'1': 'command', '3': 1, '4': 1, '5': 9, '10': 'command'},
+    {'1': 'subtitle_resource', '3': 2, '4': 1, '5': 11, '6': '.playbridge.SubtitleResource', '9': 0, '10': 'subtitleResource', '17': true},
+  ],
+  '8': [
+    {'1': '_subtitle_resource'},
   ],
 };
 
 /// Descriptor for `ControlPayload`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List controlPayloadDescriptor = $convert.base64Decode(
-    'Cg5Db250cm9sUGF5bG9hZBIYCgdjb21tYW5kGAEgASgJUgdjb21tYW5k');
+    'Cg5Db250cm9sUGF5bG9hZBIYCgdjb21tYW5kGAEgASgJUgdjb21tYW5kEk4KEXN1YnRpdGxlX3'
+    'Jlc291cmNlGAIgASgLMhwucGxheWJyaWRnZS5TdWJ0aXRsZVJlc291cmNlSABSEHN1YnRpdGxl'
+    'UmVzb3VyY2WIAQFCFAoSX3N1YnRpdGxlX3Jlc291cmNl');
 
 @$core.Deprecated('Use remotePayloadDescriptor instead')
 const RemotePayload$json = {

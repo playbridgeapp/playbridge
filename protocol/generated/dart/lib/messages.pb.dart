@@ -1289,9 +1289,11 @@ class BrowserPayload extends $pb.GeneratedMessage {
 class ControlPayload extends $pb.GeneratedMessage {
   factory ControlPayload({
     $core.String? command,
+    SubtitleResource? subtitleResource,
   }) {
     final result = create();
     if (command != null) result.command = command;
+    if (subtitleResource != null) result.subtitleResource = subtitleResource;
     return result;
   }
 
@@ -1302,6 +1304,7 @@ class ControlPayload extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ControlPayload', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'command')
+    ..aOM<SubtitleResource>(2, _omitFieldNames ? '' : 'subtitleResource', subBuilder: SubtitleResource.create)
     ..hasRequiredFields = false
   ;
 
@@ -1331,6 +1334,18 @@ class ControlPayload extends $pb.GeneratedMessage {
   $core.bool hasCommand() => $_has(0);
   @$pb.TagNumber(1)
   void clearCommand() => $_clearField(1);
+
+  /// Used by add_subtitle for late sidecar attachment without reloading playback.
+  @$pb.TagNumber(2)
+  SubtitleResource get subtitleResource => $_getN(1);
+  @$pb.TagNumber(2)
+  set subtitleResource(SubtitleResource value) => $_setField(2, value);
+  @$pb.TagNumber(2)
+  $core.bool hasSubtitleResource() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearSubtitleResource() => $_clearField(2);
+  @$pb.TagNumber(2)
+  SubtitleResource ensureSubtitleResource() => $_ensure(1);
 }
 
 class RemotePayload extends $pb.GeneratedMessage {

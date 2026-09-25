@@ -575,7 +575,13 @@ components:
                     speed:<number>, scaling:<mode>, audio_boost, sub_offset:<milliseconds>,
                     video_quality:auto|<maximum-height>,
                     switch_player:<engine>. Tracks: audio_track:<id>, sub_track:<id>,
-                    add_subtitle:<url>.
+                    add_subtitle:<url> (legacy), or add_subtitle with subtitleResource.
+                subtitleResource:
+                  $ref: '#/components/schemas/SubtitleResource'
+                  description: |
+                    Used with command add_subtitle to attach a sidecar to current playback.
+                    Headers apply only to this subtitle URL and must not be inherited by
+                    another resource or forwarded across origins on redirects.
               additionalProperties: false
     RemoteCommand:
       allOf:
@@ -907,7 +913,7 @@ components:
         ok: { type: boolean }
         error:
           type: [string, 'null']
-          enum: [stale_playback, item_not_found, queue_full, invalid_command, unsupported, no_active_playback, null]
+          enum: [stale_playback, item_not_found, queue_full, invalid_command, unsupported, no_active_playback, subtitle_unavailable, null]
         message: { type: [string, 'null'], maxLength: 512 }
         playbackId: { type: [string, 'null'] }
         queueRevision: { type: [integer, 'null'], minimum: 0 }

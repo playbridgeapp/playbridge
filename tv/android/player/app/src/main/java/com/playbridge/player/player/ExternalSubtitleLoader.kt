@@ -9,6 +9,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.Dns
 import okhttp3.Request
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.net.InetAddress
@@ -30,6 +31,8 @@ internal enum class ExternalSubtitleFormat(val fileExtension: String) {
 
 /** Header-aware subtitle download shared by the overlay and native renderer staging path. */
 internal object ExternalSubtitleLoader {
+    private const val MAX_SUBTITLE_BYTES = 16 * 1024 * 1024
+
     fun download(
         url: String,
         headers: Map<String, String>? = null,
@@ -106,7 +109,23 @@ internal object ExternalSubtitleLoader {
 
         client.newCall(requestBuilder.build()).execute().use { response ->
             if (!response.isSuccessful) throw IOException("Unexpected HTTP code: ${response.code}")
-            val bytes = response.body?.bytes() ?: ByteArray(0)
+            val body = response.body ?: throw IOException("Subtitle response was empty")
+            if (body.contentLength() > MAX_SUBTITLE_BYTES) {
+                throw IOException("Subtitle response is too large")
+            }
+            val bytes = body.byteStream().use { input ->
+                val output = ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count == -1) break
+                    if (output.size() + count > MAX_SUBTITLE_BYTES) {
+                        throw IOException("Subtitle response is too large")
+                    }
+                    output.write(buffer, 0, count)
+                }
+                output.toByteArray()
+            }
             if (bytes.isEmpty()) throw IOException("Subtitle response was empty")
             return DownloadedSubtitle(
                 bytes = bytes,

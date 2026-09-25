@@ -152,6 +152,11 @@ struct ReceiverReviewTests {
         assert(subtitles.option(for: -1) == nil)
         assert(subtitles.option(for: -3)?.name == "External subtitle 2")
         assert(subtitles.unloadedTracks(excluding: ["https://example.com/first.srt"]).map(\.id) == [-3])
+        let (expanded, lateOption) = subtitles.appending(
+            url: "https://example.com/late.vtt", name: "Detected English")
+        assert(lateOption.id == -4 && lateOption.name == "Detected English")
+        assert(expanded.option(for: -2)?.url == "https://example.com/first.srt")
+        assert(expanded.appending(url: "https://example.com/late.vtt", name: "Again").0.options.count == 3)
         assert(ExternalSubtitleCatalog(urls: ["file:///tmp/local.srt"]).options.count == 1)
         assert(ExternalSubtitleCatalog(urls: ["javascript:alert(1)"]).options.isEmpty)
         print("PASS: external subtitle choices stay distinct from loaded tracks and Off")

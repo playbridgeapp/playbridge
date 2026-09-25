@@ -63,6 +63,7 @@ import com.playbridge.shared.protocol.MediaKind
 import com.playbridge.shared.protocol.createStatusJson
 import com.playbridge.shared.protocol.encodePlayPayloadListJson
 import com.playbridge.shared.protocol.resolveMediaKind
+import playbridge.SubtitleResource
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -197,6 +198,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private var audioTracks: List<RendererTrack> = emptyList()
     private var subtitleTracks: List<RendererTrack> = emptyList()
     private var externalSubtitleUrls: List<String> = emptyList()
+    private val lateSubtitleResources = mutableMapOf<String, SubtitleResource>()
+    private data class LateSubtitleRequest(
+        val connectionId: Long,
+        val requestId: String?,
+    )
+    private val pendingLateSubtitleRequests = mutableMapOf<String, LateSubtitleRequest>()
     private var currentExternalSubtitleUrl: String? = null
     private var externalSubtitleOverlayActive = false
     private val externalSubtitleStager by lazy { ExternalSubtitleStager(applicationContext) }
@@ -269,6 +276,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             when (intent.action) {
                 ServerService.ACTION_CONTROL -> handleControl(
                     intent.getStringExtra(ServerService.EXTRA_COMMAND),
+                    decodeLateSubtitleResource(intent.getStringExtra(ServerService.EXTRA_SUBTITLE_RESOURCE)),
+                    intent.getStringExtra(ServerService.EXTRA_SUBTITLE_REQUEST_ID),
+                    intent.getLongExtra(ServerService.EXTRA_SUBTITLE_CONNECTION_ID, 0L),
                 )
                 ServerService.ACTION_REMOTE -> handleRemote(
                     intent.getStringExtra(ServerService.EXTRA_REMOTE_KEY),
@@ -600,6 +610,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         renderer: IRendererService,
         sessionId: Long,
     ) {
+        failPendingLateSubtitleRequests()
         subtitleStageJob?.cancel()
         subtitleStageJob = null
         clearPendingNativeSubtitle()
@@ -621,6 +632,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         sessionId: Long,
     ) {
         if (url.isBlank()) return
+        failPendingLateSubtitleRequests(exceptUrl = url)
         externalSubtitleUrls = (externalSubtitleUrls + url).distinct()
         currentExternalSubtitleUrl = url
         clearInitialSubtitleHandled()
@@ -631,13 +643,41 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         broadcastTracks()
     }
 
+    private fun completeLateSubtitleRequest(url: String, ok: Boolean) {
+        val request = pendingLateSubtitleRequests.remove(url) ?: return
+        ServerService.completeLateSubtitleCommand(
+            request.connectionId,
+            request.requestId,
+            ok,
+            if (ok) null else "subtitle_unavailable",
+        )
+        if (!ok) {
+            lateSubtitleResources.remove(url)
+            externalSubtitleUrls = externalSubtitleUrls.filterNot { it == url }
+            if (currentExternalSubtitleUrl == url) {
+                currentExternalSubtitleUrl = null
+                externalSubtitleOverlayActive = false
+                controlsViewModel.clearSubtitle()
+            }
+            updateTrackControls()
+            broadcastTracks()
+        }
+    }
+
+    private fun failPendingLateSubtitleRequests(exceptUrl: String? = null) {
+        pendingLateSubtitleRequests.keys.toList().filterNot { it == exceptUrl }.forEach { url ->
+            completeLateSubtitleRequest(url, false)
+        }
+    }
+
     private fun applyExternalSubtitleSelection(
         renderer: IRendererService,
         sessionId: Long,
     ) {
         val url = currentExternalSubtitleUrl ?: return
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
-        val subtitleHeaders = item.headersForSubtitle(url)
+        val lateResource = lateSubtitleResources[url]
+        val subtitleHeaders = lateResource?.headers ?: item.headersForSubtitle(url)
         subtitleStageJob?.cancel()
         subtitleStageJob = null
         clearPendingNativeSubtitle()
@@ -658,7 +698,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         when (renderingMode) {
             SubtitleRenderingMode.PLAYBRIDGE_OVERLAY -> {
                 externalSubtitleOverlayActive = true
-                controlsViewModel.loadExternalSubtitle(url, subtitleHeaders)
+                controlsViewModel.loadExternalSubtitle(
+                    url, subtitleHeaders, forceNetworkPolicy = lateResource != null,
+                    onResult = { completeLateSubtitleRequest(url, it) },
+                )
             }
             SubtitleRenderingMode.AUTO,
             SubtitleRenderingMode.BUILT_IN,
@@ -670,7 +713,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         val file = externalSubtitleStager.stage(
                             url,
                             subtitleHeaders,
-                            enforcePageNetworkPolicy = item.isPageControlledMedia(),
+                            enforcePageNetworkPolicy = lateResource != null || item.isPageControlledMedia(),
                             allowedPrivateOrigins = item.allowed_private_origins,
                         )
                         if (session?.sessionId != sessionId || currentExternalSubtitleUrl != url) {
@@ -684,7 +727,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                         pendingNativeSubtitleMode = requestedMode
                         activeRenderer.addExternalSubtitle(
                             stagedUri,
-                            externalSubtitleName(url),
+                            lateResource?.label?.takeIf(String::isNotBlank) ?: externalSubtitleName(url),
                             sessionId,
                         )
                     } catch (error: CancellationException) {
@@ -697,8 +740,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             currentExternalSubtitleUrl == url
                         ) {
                             externalSubtitleOverlayActive = true
-                            controlsViewModel.loadExternalSubtitle(url, subtitleHeaders)
+                            controlsViewModel.loadExternalSubtitle(
+                                url, subtitleHeaders, forceNetworkPolicy = lateResource != null,
+                                onResult = { completeLateSubtitleRequest(url, it) },
+                            )
                         } else if (requestedMode == SubtitleRenderingMode.BUILT_IN) {
+                            completeLateSubtitleRequest(url, false)
                             Toast.makeText(
                                 this@PlayerHostActivity,
                                 "Unable to load subtitle with the built-in player",
@@ -897,6 +944,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         audioTracks = emptyList()
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
+        lateSubtitleResources.clear()
+        failPendingLateSubtitleRequests()
         currentExternalSubtitleUrl = null
         externalSubtitleOverlayActive = false
         subtitleStageJob?.cancel()
@@ -1056,6 +1105,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
         val initialExternalUrl = checkNotNull(externalUrl)
+        val initialLateResource = lateSubtitleResources[initialExternalUrl]
 
         cancelStartupWatchdog()
         subtitleStageJob?.cancel()
@@ -1063,8 +1113,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             try {
                 val file = externalSubtitleStager.stage(
                     initialExternalUrl,
-                    payload.headersForSubtitle(initialExternalUrl),
-                    enforcePageNetworkPolicy = payload.isPageControlledMedia(),
+                    initialLateResource?.headers ?: payload.headersForSubtitle(initialExternalUrl),
+                    enforcePageNetworkPolicy = initialLateResource != null || payload.isPageControlledMedia(),
                     allowedPrivateOrigins = payload.allowed_private_origins,
                 )
                 if (session?.sessionId != currentSession.sessionId ||
@@ -1086,7 +1136,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     payload,
                     currentSession.sessionId,
                     initialSubtitleUri = stagedUri,
-                    initialSubtitleLabel = externalSubtitleName(initialExternalUrl),
+                    initialSubtitleLabel = initialLateResource?.label?.takeIf(String::isNotBlank)
+                        ?: externalSubtitleName(initialExternalUrl),
                 )
             } catch (error: CancellationException) {
                 if (preparedSessionId == currentSession.sessionId) preparedSessionId = 0L
@@ -1102,7 +1153,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     externalSubtitleOverlayActive = true
                     controlsViewModel.loadExternalSubtitle(
                         initialExternalUrl,
-                        payload.headersForSubtitle(initialExternalUrl),
+                        initialLateResource?.headers ?: payload.headersForSubtitle(initialExternalUrl),
+                        forceNetworkPolicy = initialLateResource != null,
                     )
                 } else if (renderingMode == SubtitleRenderingMode.BUILT_IN) {
                     Toast.makeText(
@@ -1861,6 +1913,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         audioTracks = emptyList()
         subtitleTracks = emptyList()
         externalSubtitleUrls = emptyList()
+        lateSubtitleResources.clear()
+        failPendingLateSubtitleRequests()
         currentExternalSubtitleUrl = null
         externalSubtitleOverlayActive = false
         subtitleStageJob?.cancel()
@@ -1886,6 +1940,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun finishPlaybackSession() {
         if (finishingSession) return
         finishingSession = true
+        failPendingLateSubtitleRequests()
         logPlaybackContextCheckpoint("finishPlaybackSession")
         cancelStartupWatchdog()
         cancelPrePlayCountdown()
@@ -2140,7 +2195,10 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         if (subtitleUri != pendingNativeSubtitleUri) return
         val requestedMode = pendingNativeSubtitleMode
         clearPendingNativeSubtitle()
-        if (event.getBoolean(RendererProtocol.KEY_SUCCESS)) return
+        if (event.getBoolean(RendererProtocol.KEY_SUCCESS)) {
+            currentExternalSubtitleUrl?.let { completeLateSubtitleRequest(it, true) }
+            return
+        }
 
         val url = currentExternalSubtitleUrl ?: return
         val item = playbackCoordinator.playlist.getOrNull(playbackCoordinator.index) ?: return
@@ -2150,13 +2208,22 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 externalSubtitleOverlayActive = true
                 subtitleView.setCues(emptyList())
                 runCatching { rendererService?.setSubtitleTrack("off", sessionId) }
-                controlsViewModel.loadExternalSubtitle(url, item.headersForSubtitle(url))
+                val lateResource = lateSubtitleResources[url]
+                controlsViewModel.loadExternalSubtitle(
+                    url,
+                    lateResource?.headers ?: item.headersForSubtitle(url),
+                    forceNetworkPolicy = lateResource != null,
+                    onResult = { completeLateSubtitleRequest(url, it) },
+                )
             }
-            SubtitleRenderingMode.BUILT_IN -> Toast.makeText(
-                this,
-                "The built-in player could not display this subtitle",
-                Toast.LENGTH_SHORT,
-            ).show()
+            SubtitleRenderingMode.BUILT_IN -> {
+                completeLateSubtitleRequest(url, false)
+                Toast.makeText(
+                    this,
+                    "The built-in player could not display this subtitle",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
             else -> Unit
         }
     }
@@ -2188,7 +2255,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             } + externalSubtitleUrls.map { url ->
                 UnifiedTrack(
                     id = url,
-                    name = externalSubtitleName(url),
+                    name = lateSubtitleResources[url]?.label?.takeIf(String::isNotBlank)
+                        ?: externalSubtitleName(url),
                     isSelected = url == currentExternalSubtitleUrl,
                     type = "external_sub",
                 )
@@ -2218,7 +2286,8 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             externalSubtitleUrls.forEach { url ->
                 put(org.json.JSONObject().apply {
                     put("id", url)
-                    put("name", externalSubtitleName(url))
+                        put("name", lateSubtitleResources[url]?.label?.takeIf(String::isNotBlank)
+                            ?: externalSubtitleName(url))
                     put("selected", url == currentExternalSubtitleUrl)
                     put("type", "external_sub")
                 })
@@ -2378,13 +2447,24 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         prePlayCountdownJob = null
     }
 
-    private fun handleControl(command: String?) {
+    private fun handleControl(
+        command: String?,
+        subtitleResource: SubtitleResource? = null,
+        subtitleRequestId: String? = null,
+        subtitleConnectionId: Long = 0L,
+    ) {
         // Mode switches must also finish a host still waiting for its renderer to bind.
         if (command == "stop") {
             finishPlaybackSession()
             return
         }
         if (currentMediaKind == MediaKind.IMAGE) {
+            if (command == "add_subtitle") {
+                ServerService.completeLateSubtitleCommand(
+                    subtitleConnectionId, subtitleRequestId, false, "unsupported",
+                )
+                return
+            }
             val currentSession = session ?: return
             when (command) {
                 "play" -> {
@@ -2419,8 +2499,18 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
 
-        val currentSession = session ?: return
-        val renderer = rendererService ?: return
+        val currentSession = session ?: run {
+            if (command == "add_subtitle") ServerService.completeLateSubtitleCommand(
+                subtitleConnectionId, subtitleRequestId, false, "no_active_playback",
+            )
+            return
+        }
+        val renderer = rendererService ?: run {
+            if (command == "add_subtitle") ServerService.completeLateSubtitleCommand(
+                subtitleConnectionId, subtitleRequestId, false, "no_active_playback",
+            )
+            return
+        }
         when {
             command == "play" -> {
                 hostPlaying = true
@@ -2472,6 +2562,20 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val url = command.removePrefix("add_subtitle:")
                 if (url.isNotBlank()) {
                     selectExternalSubtitle(url, renderer, currentSession.sessionId)
+                }
+            }
+            command == "add_subtitle" -> {
+                if (subtitleResource != null) {
+                    completeLateSubtitleRequest(subtitleResource.url, false)
+                    lateSubtitleResources[subtitleResource.url] = subtitleResource
+                    pendingLateSubtitleRequests[subtitleResource.url] = LateSubtitleRequest(
+                        subtitleConnectionId, subtitleRequestId,
+                    )
+                    selectExternalSubtitle(subtitleResource.url, renderer, currentSession.sessionId)
+                } else {
+                    ServerService.completeLateSubtitleCommand(
+                        subtitleConnectionId, subtitleRequestId, false, "invalid_command",
+                    )
                 }
             }
             command?.startsWith("speed:") == true -> command

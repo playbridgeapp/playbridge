@@ -136,7 +136,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         let onExit: () -> Void
         let onSwitch: (PlaybackEngine, Double) -> Void
         let headers: [String: String]?
-        let externalSubtitleCatalog: ExternalSubtitleCatalog
+        var externalSubtitleCatalog: ExternalSubtitleCatalog
         let onBroadcast: ([String: Any]) -> Void
 
         private var timeObserver: Any?
@@ -152,6 +152,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
         private var subtitleSession: URLSession?
         private var subtitleDownloadTask: URLSessionDownloadTask?
         private var subtitleRequestID: UUID?
+        private var lateSubtitleDownload: ScopedSubtitleDownload?
         private var didBroadcastTracks = false
         // Media-selection groups loaded once (async, tvOS 16+) when the item is ready, then used
         // synchronously by broadcastTracks/selectTrack. Avoids the deprecated sync accessor.
@@ -207,6 +208,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         func teardown() {
+            lateSubtitleDownload?.cancel()
+            lateSubtitleDownload = nil
             subtitleDownloadTask?.cancel()
             subtitleSession?.invalidateAndCancel()
             subtitleRequestID = nil
@@ -324,6 +327,8 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         func clearExternalSubtitle(explicitOff: Bool) {
+            lateSubtitleDownload?.cancel()
+            lateSubtitleDownload = nil
             subtitleDownloadTask?.cancel()
             subtitleSession?.invalidateAndCancel()
             subtitleDownloadTask = nil
@@ -490,7 +495,10 @@ struct NativePlayerView: UIViewControllerRepresentable {
             onBroadcast([
                 "type": "tracks",
                 "audio": encode(audioGroup),
-                "subtitle": encode(subtitleGroup),
+                "subtitle": encode(subtitleGroup) + externalSubtitleCatalog.options.map { option in
+                    ["id": String(option.id), "name": option.name,
+                     "selected": selectedExternalSubtitleID == option.id]
+                },
             ])
         }
 
@@ -500,8 +508,62 @@ struct NativePlayerView: UIViewControllerRepresentable {
         }
 
         @objc private func onControl(_ note: Notification) {
-            guard let cmd = note.userInfo?["command"] as? String, let player else { return }
+            guard let cmd = note.userInfo?["command"] as? String else { return }
+            if cmd == "add_subtitle" {
+                guard let resource = note.userInfo?["subtitleResource"] as? Playbridge_SubtitleResource,
+                      let completion = note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void),
+                      player != nil else {
+                    (note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void))?(false)
+                    return
+                }
+                lateSubtitleDownload?.cancel()
+                subtitleDownloadTask?.cancel()
+                subtitleSession?.invalidateAndCancel()
+                subtitleDownloadTask = nil
+                subtitleSession = nil
+                let id = UUID()
+                subtitleRequestID = id
+                let download = ScopedSubtitleDownload(resource: resource)
+                lateSubtitleDownload = download
+                download.start { [weak self] result in
+                    guard let self, self.player != nil, self.subtitleRequestID == id else {
+                        if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                        completion(false)
+                        return
+                    }
+                    self.lateSubtitleDownload = nil
+                    switch result {
+                    case .failure: completion(false)
+                    case .success(let file):
+                        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                            let cuesResult = Result { () throws -> ExternalSubtitleCues in
+                            defer { try? FileManager.default.removeItem(at: file) }
+                            let data = try Data(contentsOf: file)
+                            guard let cues = ExternalSubtitleCues(data: data), !cues.cues.isEmpty
+                            else { throw ExternalSubtitleDownloadError.unsupportedFormat }
+                            return cues
+                            }
+                            DispatchQueue.main.async { [weak self] in
+                                guard let self, self.player != nil, self.subtitleRequestID == id else {
+                                    completion(false)
+                                    return
+                                }
+                                guard case .success = cuesResult else { completion(false); return }
+                                let name = resource.hasLabel && !resource.label.isEmpty
+                                    ? resource.label : "External subtitle"
+                                let (catalog, option) = self.externalSubtitleCatalog.appending(
+                                    url: resource.url, name: name)
+                                self.externalSubtitleCatalog = catalog
+                                self.finishExternalSubtitleLoad(cuesResult, id: id, option: option)
+                                completion(true)
+                            }
+                        }
+                    }
+                }
+                return
+            }
             if StillWatchingGate.isPrompting { return }
+            guard let player else { return }
             switch cmd {
             case "play": player.play()
             case "pause": player.pause()
@@ -519,7 +581,21 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case let c where c.hasPrefix("audio_track:"):
                 selectTrack(.audible, id: String(c.dropFirst("audio_track:".count)))
             case let c where c.hasPrefix("sub_track:"):
-                selectTrack(.legible, id: String(c.dropFirst("sub_track:".count)))
+                let id = String(c.dropFirst("sub_track:".count))
+                if let externalID = Int(id), externalID < -1 {
+                    selectExternalSubtitle(externalID)
+                } else {
+                    selectTrack(.legible, id: id)
+                }
+            case let c where c.hasPrefix("add_subtitle:"):
+                let rawURL = String(c.dropFirst("add_subtitle:".count))
+                guard let url = URL(string: rawURL),
+                      url.isFileURL || (["http", "https"].contains(url.scheme?.lowercased() ?? "")
+                          && url.host != nil) else { break }
+                let (catalog, option) = externalSubtitleCatalog.appending(
+                    url: rawURL, name: "External subtitle")
+                externalSubtitleCatalog = catalog
+                selectExternalSubtitle(option.id)
             case let c where c.hasPrefix("switch_player:"):
                 if let target = PlaybackEngine(command: String(c.dropFirst("switch_player:".count))) {
                     invokeSwitch(to: target)

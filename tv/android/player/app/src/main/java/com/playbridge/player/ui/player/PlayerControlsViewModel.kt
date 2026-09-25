@@ -597,7 +597,12 @@ class PlayerControlsViewModel : ViewModel() {
         }
     }
 
-    fun loadExternalSubtitle(url: String, headers: Map<String, String>? = null) {
+    fun loadExternalSubtitle(
+        url: String,
+        headers: Map<String, String>? = null,
+        forceNetworkPolicy: Boolean = false,
+        onResult: ((Boolean) -> Unit)? = null,
+    ) {
         if (subtitleManager == null) {
             subtitleManager = SubtitleManager(viewModelScope) { text ->
                 _controlsState.update { it.copy(currentSubtitleText = text) }
@@ -608,8 +613,9 @@ class PlayerControlsViewModel : ViewModel() {
         subtitleManager?.loadSubtitle(
             url,
             headers,
-            enforcePageSubtitleNetworkPolicy,
+            enforcePageSubtitleNetworkPolicy || forceNetworkPolicy,
             allowedPrivateSubtitleOrigins,
+            onResult,
         )
     }
 

@@ -51,6 +51,32 @@ enum ExternalSubtitleDownload {
         return request
     }
 
+#if canImport(SwiftProtobuf)
+    static func isValid(_ resource: Playbridge_SubtitleResource) -> Bool {
+        guard let url = URL(string: resource.url),
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              url.host != nil, url.user == nil, url.password == nil,
+              resource.headers.count <= 32,
+              resource.label.count <= 256, resource.language.count <= 64 else { return false }
+        var headerBytes = 0
+        for (name, value) in resource.headers {
+            guard name.range(of: #"^[A-Za-z0-9-]{1,64}$"#, options: .regularExpression) != nil,
+                  name.lowercased() != "host", value.count <= 4096,
+                  !value.contains("\r"), !value.contains("\n") else { return false }
+            headerBytes += name.count + value.count
+        }
+        return headerBytes <= 16_384
+    }
+
+    static func request(for resource: Playbridge_SubtitleResource) -> URLRequest? {
+        guard isValid(resource), let url = URL(string: resource.url) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        for (name, value) in resource.headers { request.setValue(value, forHTTPHeaderField: name) }
+        return request
+    }
+#endif
+
     static func subtitleExtension(for data: Data) -> String? {
         let start = String(decoding: data.prefix(4096), as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -85,3 +111,91 @@ enum ExternalSubtitleDownload {
         return destination
     }
 }
+
+#if canImport(SwiftProtobuf)
+/// Keeps a subtitle's own headers on same-origin redirects and strips them elsewhere.
+final class ScopedSubtitleDownload: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate {
+    private let resource: Playbridge_SubtitleResource
+    private var session: URLSession?
+    private var task: URLSessionDownloadTask?
+    private var completion: ((Result<URL, Error>) -> Void)?
+
+    init(resource: Playbridge_SubtitleResource) { self.resource = resource }
+
+    func start(_ completion: @escaping (Result<URL, Error>) -> Void) {
+        guard let request = ExternalSubtitleDownload.request(for: resource) else {
+            DispatchQueue.main.async { completion(.failure(ExternalSubtitleDownloadError.invalidURL)) }
+            return
+        }
+        self.completion = completion
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.timeoutIntervalForResource = 30
+        let session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
+        self.session = session
+        let task = session.downloadTask(with: request)
+        self.task = task
+        task.resume()
+    }
+
+    func cancel() { task?.cancel(); session?.invalidateAndCancel() }
+
+    private func finish(_ result: Result<URL, Error>) {
+        guard let completion else { return }
+        self.completion = nil
+        task = nil
+        session?.finishTasksAndInvalidate()
+        session = nil
+        DispatchQueue.main.async { completion(result) }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        finish(Result {
+            try ExternalSubtitleDownload.prepare(file: location, response: downloadTask.response)
+        })
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    didCompleteWithError error: Error?) {
+        if let error { finish(.failure(error)) }
+        else { finish(.failure(ExternalSubtitleDownloadError.invalidResponse)) }
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        if totalBytesWritten > Int64(ExternalSubtitleDownload.maximumBytes) ||
+            totalBytesExpectedToWrite > Int64(ExternalSubtitleDownload.maximumBytes) {
+            downloadTask.cancel()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let source = URL(string: resource.url), let target = request.url,
+              ["http", "https"].contains(target.scheme?.lowercased() ?? ""),
+              target.host != nil, target.user == nil, target.password == nil else {
+            completionHandler(nil)
+            return
+        }
+        func port(_ url: URL) -> Int? {
+            url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
+        }
+        let sameOrigin = source.scheme?.lowercased() == target.scheme?.lowercased()
+            && source.host?.lowercased() == target.host?.lowercased()
+            && port(source) == port(target)
+        if sameOrigin { completionHandler(request); return }
+        var stripped = request
+        for name in resource.headers.keys { stripped.setValue(nil, forHTTPHeaderField: name) }
+        for name in ["Authorization", "Cookie", "Origin", "Referer"] {
+            stripped.setValue(nil, forHTTPHeaderField: name)
+        }
+        completionHandler(stripped)
+    }
+}
+#endif

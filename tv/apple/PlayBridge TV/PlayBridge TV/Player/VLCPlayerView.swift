@@ -50,6 +50,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         private var subtitleDownloadTask: URLSessionDownloadTask?
         private var subtitleRequestID: UUID?
         private var downloadedSubtitleFiles: [URL] = []
+        private var lateSubtitleDownloads: [UUID: ScopedSubtitleDownload] = [:]
         var initialTime: Double = 0.0
         var mediaTitle: String?
         var onDismiss: (() -> Void)?
@@ -249,9 +250,10 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             task.resume()
         }
 
+        @discardableResult
         private func attachExternalSubtitle(file: URL, option: ExternalSubtitleCatalog.Option,
-                                            isDownloaded: Bool) {
-            guard !didRequestStop else { return }
+                                            isDownloaded: Bool) -> Bool {
+            guard !didRequestStop else { return false }
             let rc = mediaPlayer.addPlaybackSlave(file, type: .subtitle, enforce: true)
             if rc == 0 {
                 if isDownloaded { downloadedSubtitleFiles.append(file) }
@@ -266,9 +268,11 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                     self.updateSubtitleTracks()
                     self.broadcastTracks()
                 }
+                return true
             } else {
                 if isDownloaded { try? FileManager.default.removeItem(at: file) }
                 showExternalSubtitleError(ExternalSubtitleDownloadError.attachmentFailed)
+                return false
             }
         }
 
@@ -966,6 +970,48 @@ struct VLCPlayerView: UIViewControllerRepresentable {
 
         @objc private func onControlNotification(_ note: Notification) {
             guard let cmd = note.userInfo?["command"] as? String else { return }
+            if cmd == "add_subtitle" {
+                guard let resource = note.userInfo?["subtitleResource"] as? Playbridge_SubtitleResource,
+                      let completion = note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void),
+                      !didRequestStop else {
+                    (note.userInfo?["subtitleCompletion"] as? ((Bool) -> Void))?(false)
+                    return
+                }
+                subtitleDownloadTask?.cancel()
+                subtitleSession?.invalidateAndCancel()
+                subtitleDownloadTask = nil
+                subtitleSession = nil
+                subtitleRequestID = nil
+                lateSubtitleDownloads.values.forEach { $0.cancel() }
+                lateSubtitleDownloads.removeAll()
+                let id = UUID()
+                let download = ScopedSubtitleDownload(resource: resource)
+                lateSubtitleDownloads[id] = download
+                download.start { [weak self] result in
+                    guard let self else { completion(false); return }
+                    guard self.lateSubtitleDownloads.removeValue(forKey: id) != nil else {
+                        if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                        completion(false)
+                        return
+                    }
+                    guard !self.didRequestStop else {
+                        if case .success(let file) = result { try? FileManager.default.removeItem(at: file) }
+                        completion(false)
+                        return
+                    }
+                    switch result {
+                    case .failure: completion(false)
+                    case .success(let file):
+                        let name = resource.hasLabel && !resource.label.isEmpty
+                            ? resource.label : "External subtitle"
+                        let (catalog, option) = self.externalSubtitleCatalog.appending(
+                            url: resource.url, name: name)
+                        self.externalSubtitleCatalog = catalog
+                        completion(self.attachExternalSubtitle(file: file, option: option, isDownloaded: true))
+                    }
+                }
+                return
+            }
             if StillWatchingGate.isPrompting { return }
             handleControlCommand(cmd)
             if cmd == "stop" { return }
@@ -1051,6 +1097,8 @@ struct VLCPlayerView: UIViewControllerRepresentable {
         }
 
         func teardown() {
+            lateSubtitleDownloads.values.forEach { $0.cancel() }
+            lateSubtitleDownloads.removeAll()
             guard !didRequestStop else { return }
             didRequestStop = true   // explicit stop must not be treated as natural end-of-video
             statusTimer?.invalidate()

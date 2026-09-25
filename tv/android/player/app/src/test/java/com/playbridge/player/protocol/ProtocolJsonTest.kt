@@ -1,6 +1,7 @@
 package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
+import com.playbridge.shared.protocol.createAddSubtitleCommandJson
 import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createScreenMirrorCandidateCommandJson
@@ -19,10 +20,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import playbridge.PlayPayload
 import playbridge.PlaylistPayload
+import playbridge.SubtitleResource
 
 class ProtocolJsonTest {
 
     private fun obj(json: String) = Json.parseToJsonElement(json).jsonObject
+
+    @Test
+    fun lateSubtitleCarriesItsOwnHeadersWithoutChangingLegacyControl() {
+        val parsed = parseIncomingMessage(
+            createAddSubtitleCommandJson(
+                SubtitleResource(
+                    url = "https://subs.example/captions.vtt",
+                    headers = mapOf("Origin" to "https://page.example"),
+                    label = "English",
+                    language = "en",
+                ),
+            ),
+        ) as com.playbridge.shared.protocol.IncomingMessage.Control
+        assertEquals("add_subtitle", parsed.payload.command)
+        assertEquals("https://subs.example/captions.vtt", parsed.payload.subtitle_resource?.url)
+        assertEquals("https://page.example", parsed.payload.subtitle_resource?.headers?.get("Origin"))
+        assertEquals("English", parsed.payload.subtitle_resource?.label)
+
+        val legacy = parseIncomingMessage(
+            com.playbridge.shared.protocol.createControlCommandJson("add_subtitle:https://subs.example/old.vtt"),
+        ) as com.playbridge.shared.protocol.IncomingMessage.Control
+        assertNull(legacy.payload.subtitle_resource)
+    }
 
     @Test
     fun playlistSkipPreplayRoundTripsThroughTheParser() {

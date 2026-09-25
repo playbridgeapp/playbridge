@@ -1624,6 +1624,8 @@ class BrowserActivity : ComponentActivity() {
             var castSheetInitialMode by remember { mutableStateOf("play") }
             var castSheetBrowseOverride by remember { mutableStateOf<String?>(null) }
             var pendingContentPayload by remember { mutableStateOf<playbridge.PlayPayload?>(null) }
+            var remoteCastSourceTabId by remember { mutableStateOf<String?>(null) }
+            var remoteCastTitle by remember { mutableStateOf<String?>(null) }
 
             val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
             // Keep the revision as an explicit Compose input. DetectedVideo contains mutable probe
@@ -2475,6 +2477,8 @@ class BrowserActivity : ComponentActivity() {
                         onCastSheetInitialModeChange = { castSheetInitialMode = it },
                         castSheetBrowseOverride = castSheetBrowseOverride,
                         onCastSheetBrowseOverrideChange = { castSheetBrowseOverride = it },
+                        remoteCastSourceTabId = remoteCastSourceTabId,
+                        remoteCastTitle = remoteCastTitle,
                         scope = scope,
                         showFindBar = showFindBar,
                         onShowFindBarChange = { showFindBar = it },
@@ -2637,7 +2641,7 @@ class BrowserActivity : ComponentActivity() {
                         castSheetBrowseOverride = null
                         pendingContentPayload = null
                     },
-                    onVideoClick = onVideoClick@ { video, subs ->
+                    onVideoClick = onVideoClick@ { video, subs, subtitleResources ->
                          when (castRoute) {
                              is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice -> {
                                  Toast.makeText(this@BrowserActivity, "Choose a receiver first", Toast.LENGTH_SHORT).show()
@@ -2716,6 +2720,7 @@ class BrowserActivity : ComponentActivity() {
                                      media_kind = video.kind.protocolValue,
                                      detected_by = video.detectedBy,
                                      subtitles = subs.orEmpty(),
+                                     subtitle_resources = subtitleResources,
                                      player_mode = sheetPlayerMode.takeIf { it != "tv" },
                                      preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
                                      preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },
@@ -2739,12 +2744,16 @@ class BrowserActivity : ComponentActivity() {
                          if (sent) {
                              // Cast-sheet content is browser-detected — no library identity.
                              connectionCoordinator.startLocalPlaybackSession(null, null, null)
+                             remoteCastSourceTabId = selectedTabId.takeIf { video.playlistPayload == null }
+                             remoteCastTitle = if (video.playlistPayload == null) {
+                                 video.title ?: selectedTab?.content?.title ?: "Video from browser"
+                             } else null
                              Toast.makeText(this@BrowserActivity, "Play command sent to TV", Toast.LENGTH_SHORT).show()
                          }
                          showVideoSheet = false
                          forcePlaylistSheet = null
                     },
-                    onQueueVideo = onQueueVideo@ { video, subtitles ->
+                    onQueueVideo = onQueueVideo@ { video, subtitles, subtitleResources ->
                         if (castRoute !is com.playbridge.sender.cast.CastSessionManager.Route.NativeTv) {
                             val message = if (castRoute is com.playbridge.sender.cast.CastSessionManager.Route.External) {
                                 "Queue editing is only available with PlayBridge receivers"
@@ -2767,6 +2776,7 @@ class BrowserActivity : ComponentActivity() {
                                             media_kind = video.kind.protocolValue,
                                             detected_by = video.detectedBy,
                                             subtitles = subtitles.orEmpty(),
+                                            subtitle_resources = subtitleResources,
                                             player_mode = sheetPlayerMode.takeIf { it != "tv" },
                                             preferred_audio_language = preferredAudioLang.takeIf { it.isNotEmpty() },
                                             preferred_subtitle_language = preferredSubLang.takeIf { it.isNotEmpty() },

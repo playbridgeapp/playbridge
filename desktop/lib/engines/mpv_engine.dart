@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
@@ -74,6 +75,7 @@ class MpvEngine extends PlayerEngine {
   }
 
   final Player player = Player();
+  final List<File> _lateSubtitleFiles = [];
   final List<StreamSubscription> _subs = [];
   VoidCallback? onCompleted;
   void Function(String)? onError;
@@ -270,6 +272,35 @@ class MpvEngine extends PlayerEngine {
     if (match.isNotEmpty) await setSubtitleTrack(match.first);
   }
 
+  @override
+  Future<bool> addExternalSubtitleFile(String path, String label) async {
+    final native = player.platform;
+    if (native is! NativePlayer) return false;
+    try {
+      await native.command(['sub-add', path, 'select', label]);
+      _lateSubtitleFiles.add(File(path));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _clearLateSubtitleFiles() {
+    for (final file in _lateSubtitleFiles) {
+      unawaited(() async {
+        try {
+          if (file.parent.path
+              .split(Platform.pathSeparator)
+              .last
+              .startsWith('playbridge-subtitle-')) {
+            await file.parent.delete(recursive: true);
+          }
+        } catch (_) {/* Best-effort cache cleanup. */}
+      }());
+    }
+    _lateSubtitleFiles.clear();
+  }
+
   /// Re-apply remembered preferences once the new item's tracks are known.
   /// Called after every open; waits (bounded) for mpv to enumerate tracks.
   Future<void> _reapplyTrackPrefs() async {
@@ -334,6 +365,7 @@ class MpvEngine extends PlayerEngine {
     final medias = plans.map((p) => p.media).toList();
     final playlist = Playlist(medias, index: startIndex);
     await player.open(playlist, play: play);
+    _clearLateSubtitleFiles();
 
     // Companion demuxed audio (same live session). Prefer the open-plan audio
     // (from body extract or extension audioUrl) over opening a multivariant.
@@ -393,10 +425,14 @@ class MpvEngine extends PlayerEngine {
   @override
   Future<void> setVolume(double volume) => player.setVolume(volume * 100.0);
   @override
-  Future<void> stop() => player.stop();
+  Future<void> stop() async {
+    await player.stop();
+    _clearLateSubtitleFiles();
+  }
 
   @override
   Future<void> dispose() async {
+    _clearLateSubtitleFiles();
     _statsTimer?.cancel();
     stats.dispose();
     for (final s in _subs) {

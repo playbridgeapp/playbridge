@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:playbridge_cast_core/playbridge_cast_core.dart' as rust;
@@ -12,6 +13,7 @@ import 'protocol.dart';
 import 'screen_mirror_receiver.dart';
 import 'system_volume.dart';
 import 'extension_request_debug_log.dart';
+import 'late_subtitle_loader.dart';
 
 const int kDefaultPort = PairingStore.defaultReceiverPort;
 
@@ -124,6 +126,7 @@ class ReceiverServer extends ChangeNotifier {
           'queue_crud_v1',
           'stable_item_ids',
           'command_results',
+          'subtitle_resource_add_v1',
         ],
         screenMirrorWebRtc: true,
       ),
@@ -279,6 +282,8 @@ class ReceiverServer extends ChangeNotifier {
 
   Future<void> _commandSerial = Future<void>.value();
   final Map<String, Map<String, Object?>> _commandResults = {};
+  final Set<String> _pendingLateSubtitleIds = {};
+  int _lateSubtitleGeneration = 0;
 
   Future<void> _handleCommand(
     Command cmd,
@@ -455,8 +460,115 @@ class ReceiverServer extends ChangeNotifier {
         screenMirror.addCandidate(cmd, connectionId);
       case ScreenMirrorStopCmd():
         screenMirror.stop(cmd, connectionId);
-      case ControlCmd(:final command):
-        _handleControl(command);
+      case ControlCmd(:final command, :final subtitleResource):
+        if (command == 'add_subtitle' || command.startsWith('add_subtitle:')) {
+          final resource = subtitleResource != null
+              ? SubtitleRequest(
+                  url: subtitleResource.url,
+                  headers: Map<String, String>.from(subtitleResource.headers),
+                  label: subtitleResource.hasLabel()
+                      ? subtitleResource.label
+                      : null,
+                  language: subtitleResource.hasLanguage()
+                      ? subtitleResource.language
+                      : null,
+                )
+              : command.startsWith('add_subtitle:')
+                  ? SubtitleRequest(
+                      url: command.substring('add_subtitle:'.length))
+                  : null;
+          if (resource == null || !validLateSubtitleResource(resource)) {
+            _completeCommand(connectionId, requestId,
+                ok: false, error: 'invalid_command');
+            return;
+          }
+          if (player.playbackId == null ||
+              player.currentMediaKind != MediaKind.video ||
+              player.currentIndex < 0 ||
+              player.currentIndex >= player.queue.length) {
+            _completeCommand(connectionId, requestId,
+                ok: false, error: 'no_active_playback');
+            return;
+          }
+          final playbackId = player.playbackId;
+          final itemId = player.currentItemId;
+          final item = player.queue[player.currentIndex];
+          if (requestId != null && !_pendingLateSubtitleIds.add(requestId)) {
+            return;
+          }
+          final generation = ++_lateSubtitleGeneration;
+          // Network I/O must not hold the receiver's serial command queue: Stop or a
+          // replacement Play command needs to run while a sidecar is downloading.
+          unawaited(() async {
+            File? file;
+            try {
+              file = await downloadLateSubtitle(
+                resource,
+                allowedPrivateOrigins: item.enforcePageNetworkPolicy
+                    ? item.allowedPrivateOrigins
+                    : null,
+              );
+              if (player.playbackId != playbackId ||
+                  player.currentItemId != itemId ||
+                  _lateSubtitleGeneration != generation) {
+                _completeCommand(connectionId, requestId,
+                    ok: false,
+                    error: _lateSubtitleGeneration != generation
+                        ? 'subtitle_unavailable'
+                        : 'stale_playback');
+                return;
+              }
+              final stagedFile = file;
+              final attachment = Completer<bool>();
+              _commandSerial = _commandSerial.then((_) async {
+                try {
+                  if (player.playbackId != playbackId ||
+                      player.currentItemId != itemId ||
+                      _lateSubtitleGeneration != generation) {
+                    attachment.complete(false);
+                    return;
+                  }
+                  attachment.complete(await player.addExternalSubtitleFile(
+                    stagedFile.path,
+                    resource.label?.trim().isNotEmpty == true
+                        ? resource.label!.trim()
+                        : 'External subtitle',
+                  ));
+                } catch (_) {
+                  attachment.complete(false);
+                }
+              });
+              final attached = await attachment.future;
+              if (player.playbackId != playbackId ||
+                  player.currentItemId != itemId ||
+                  _lateSubtitleGeneration != generation) {
+                _completeCommand(connectionId, requestId,
+                    ok: false,
+                    error: _lateSubtitleGeneration != generation
+                        ? 'subtitle_unavailable'
+                        : 'stale_playback');
+                return;
+              }
+              if (attached) file = null; // The player now owns the staged file.
+              _completeCommand(connectionId, requestId,
+                  ok: attached,
+                  error: attached ? null : 'subtitle_unavailable');
+              _broadcastTracksIfChanged(force: true);
+            } catch (_) {
+              _completeCommand(connectionId, requestId,
+                  ok: false, error: 'subtitle_unavailable');
+            } finally {
+              if (requestId != null) _pendingLateSubtitleIds.remove(requestId);
+              if (file != null) {
+                try {
+                  await file.parent.delete(recursive: true);
+                } catch (_) {}
+              }
+            }
+          }());
+        } else {
+          _handleControl(command);
+        }
       case RemoteCmd(:final key):
         if (isPlaybackPromptActive?.call() ?? false) {
           onPromptContinue?.call();

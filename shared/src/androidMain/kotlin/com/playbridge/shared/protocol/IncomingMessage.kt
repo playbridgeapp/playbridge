@@ -32,6 +32,7 @@ import playbridge.QueueClearPayload
 import playbridge.QueueMovePayload
 import playbridge.QueueRemovePayload
 import playbridge.RemotePayload
+import playbridge.SubtitleResource
 import playbridge.VisualMetadata
 
 /**
@@ -105,6 +106,7 @@ private val queueRemoveAdapter = moshi.adapter(QueueRemovePayload::class.java)
 private val queueMoveAdapter = moshi.adapter(QueueMovePayload::class.java)
 private val queueClearAdapter = moshi.adapter(QueueClearPayload::class.java)
 private val controlAdapter = moshi.adapter(ControlPayload::class.java)
+private val subtitleResourceAdapter = moshi.adapter(SubtitleResource::class.java)
 private val remoteAdapter = moshi.adapter(RemotePayload::class.java)
 private val mouseAdapter = moshi.adapter(MousePayload::class.java)
 private val browserAdapter = moshi.adapter(BrowserPayload::class.java)
@@ -217,6 +219,17 @@ fun createBrowserCommandJson(url: String, browserMode: String? = null, desktopMo
 
 fun createControlCommandJson(command: String): String =
     envelope("control", controlAdapter.toJson(ControlPayload(command = command)))
+
+fun createAddSubtitleCommandJson(resource: SubtitleResource, requestId: String? = null): String =
+    envelope("control", controlAdapter.toJson(
+        ControlPayload(command = "add_subtitle", subtitle_resource = resource)
+    ), requestId)
+
+fun encodeSubtitleResourceJson(resource: SubtitleResource): String =
+    subtitleResourceAdapter.toJson(resource)
+
+fun decodeSubtitleResourceJson(json: String): SubtitleResource? =
+    runCatching { subtitleResourceAdapter.fromJson(json) }.getOrNull()
 
 fun createRemoteCommandJson(key: String): String =
     envelope("remote", remoteAdapter.toJson(RemotePayload(key = key)))
