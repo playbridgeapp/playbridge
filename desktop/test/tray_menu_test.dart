@@ -143,10 +143,22 @@ void main() {
         .singleWhere((item) => item.label == 'Saved devices')
         .submenu!
         .items!;
-    expect(devices.first.key, 'sender_device:${nearby.identityKey}');
-    expect(devices.first.label, 'Living room (Google Cast) · Nearby');
-    expect(devices.first.checked, isTrue);
-    expect(devices.first.disabled, isTrue);
+    expect(devices.where((item) => item.label == 'PlayBridge').single.disabled,
+        isTrue);
+    expect(devices.where((item) => item.label == 'Google Cast').single.disabled,
+        isTrue);
+    expect(
+        devices.map((item) => item.label).toList(),
+        containsAllInOrder([
+          'PlayBridge',
+          'Bedroom · Not found',
+          'Google Cast',
+          'Living room',
+        ]));
+    expect(menu.getMenuItem('sender_device:${nearby.identityKey}')!.checked,
+        isTrue);
+    expect(menu.getMenuItem('sender_device:${nearby.identityKey}')!.disabled,
+        isTrue);
     expect(menu.getMenuItem('sender_device:${older.identityKey}')!.disabled,
         isFalse);
     expect(menu.getMenuItem('sender_disconnect')!.disabled, isFalse);
@@ -167,6 +179,43 @@ void main() {
         isTrue);
     expect(menu.getMenuItem('sender_play_pause')!.label, 'Resume playback');
     expect(menu.getMenuItem('sender_stop')!.label, 'Stop playback');
+  });
+
+  test('saved devices group by protocol with found devices first', () {
+    final nearby = savedDevice('Zebra', 'nearby', TvProtocol.playBridge);
+    final missing = savedDevice('Alpha', 'missing', TvProtocol.playBridge);
+    final cast = savedDevice('Kitchen', 'cast', TvProtocol.googleCast);
+    final menu = buildTrayMenu(
+      senderStatus: 'Disconnected',
+      receiverStatus: 'Waiting for phone',
+      savedDevices: [missing, cast, nearby],
+      nearbyDeviceKeys: {nearby.identityKey},
+      activeDeviceKey: null,
+      canDisconnect: false,
+      routeThroughDesktop: false,
+      launchAtLogin: false,
+      hasRemotePlayback: false,
+      remoteTitle: null,
+      remotePlaybackState: '',
+    );
+
+    final labels = menu.items!
+        .singleWhere((item) => item.label == 'Saved devices')
+        .submenu!
+        .items!
+        .map((item) => item.label)
+        .toList();
+    expect(
+        labels,
+        containsAllInOrder([
+          'PlayBridge',
+          'Zebra',
+          'Alpha · Not found',
+          'Google Cast',
+          'Kitchen · Not found',
+        ]));
+    expect(menu.getMenuItem('sender_device:${missing.identityKey}')!.disabled,
+        isFalse);
   });
 
   test('playing menu offers pause and normalizes long titles', () {

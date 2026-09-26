@@ -11,6 +11,7 @@ import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'receiver_server.dart';
 import 'tv_connection_store.dart';
+import 'tv_discovery.dart';
 import 'tv_sender_client.dart';
 import 'tv_sender_controller.dart';
 
@@ -30,13 +31,19 @@ Menu buildTrayMenu({
   required String? remoteTitle,
   required String remotePlaybackState,
 }) {
+  bool isAvailable(TvRecord device) =>
+      nearbyDeviceKeys.contains(device.identityKey) ||
+      device.identityKey == activeDeviceKey;
+
   final devices = savedDevices.toList()
     ..sort((a, b) {
-      final availability = (nearbyDeviceKeys.contains(b.identityKey) ? 1 : 0)
-          .compareTo(nearbyDeviceKeys.contains(a.identityKey) ? 1 : 0);
+      final protocol = a.protocol.index.compareTo(b.protocol.index);
+      if (protocol != 0) return protocol;
+      final availability =
+          (isAvailable(b) ? 1 : 0).compareTo(isAvailable(a) ? 1 : 0);
       if (availability != 0) return availability;
       final name = a.name.toLowerCase().compareTo(b.name.toLowerCase());
-      return name != 0 ? name : a.protocol.label.compareTo(b.protocol.label);
+      return name != 0 ? name : a.identityKey.compareTo(b.identityKey);
     });
   return Menu(items: [
     MenuItem(key: 'show', label: 'Show window'),
@@ -67,15 +74,19 @@ Menu buildTrayMenu({
       submenu: Menu(items: [
         if (devices.isEmpty)
           MenuItem(label: 'No saved devices', disabled: true),
-        for (final device in devices)
-          MenuItem.checkbox(
-            key: 'sender_device:${device.identityKey}',
-            label: '${device.name.isEmpty ? 'Unnamed device' : device.name} '
-                '(${device.protocol.label})'
-                '${nearbyDeviceKeys.contains(device.identityKey) ? ' · Nearby' : ''}',
-            checked: device.identityKey == activeDeviceKey,
-            disabled: device.identityKey == activeDeviceKey,
-          ),
+        for (final protocol in TvProtocol.values)
+          if (devices.any((device) => device.protocol == protocol)) ...[
+            if (protocol != devices.first.protocol) MenuItem.separator(),
+            MenuItem(label: protocol.label, disabled: true),
+            for (final device in devices.where((d) => d.protocol == protocol))
+              MenuItem.checkbox(
+                key: 'sender_device:${device.identityKey}',
+                label: '${device.name.isEmpty ? 'Unnamed device' : device.name}'
+                    '${isAvailable(device) ? '' : ' · Not found'}',
+                checked: device.identityKey == activeDeviceKey,
+                disabled: device.identityKey == activeDeviceKey,
+              ),
+          ],
         MenuItem.separator(),
         MenuItem(key: 'sender_manage', label: 'Find or manage devices…'),
       ]),
