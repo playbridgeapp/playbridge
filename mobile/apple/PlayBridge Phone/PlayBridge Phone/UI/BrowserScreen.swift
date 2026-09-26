@@ -32,6 +32,7 @@ struct BrowserScreen: View {
                                       originUrl: origin,
                                       headers: VideoDetector.requestHeaders(originUrl: origin),
                                       kind: DetectedVideo.classify(url: url, contentType: payload["contentType"] as? String))
+                    .withCastTitle(pageTitle: payload["title"] as? String)
                 vm.castStream(v)
                 nav.navigate(to: .remote)
             }

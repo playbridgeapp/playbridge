@@ -47,6 +47,22 @@ struct DetectedVideo: Identifiable, Hashable {
         return comps.host ?? url
     }
 
+    /// Keep an explicit media title, otherwise use the page title at cast time.
+    /// A URL-derived name remains the fallback for pages without a useful title.
+    func withCastTitle(pageTitle: String?) -> Self {
+        var video = self
+        let mediaTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let browserTitle = pageTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let mediaTitle, !mediaTitle.isEmpty {
+            video.title = mediaTitle
+        } else if let browserTitle, !browserTitle.isEmpty, browserTitle != "New Tab" {
+            video.title = browserTitle
+        } else {
+            video.title = displayTitle
+        }
+        return video
+    }
+
     var host: String { URLComponents(string: url)?.host ?? "" }
 
     static func classify(url: String, contentType: String?) -> StreamKind {

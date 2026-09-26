@@ -92,7 +92,11 @@ final class BrowserStore: ObservableObject {
             guard let self, let tab else { return false }
             return self.browserVisible && self.activeID == tab.id
         }
-        tab.onPageCast = { [weak self] payload, origin in self?.onPageCast?(payload, origin) }
+        tab.onPageCast = { [weak self, weak tab] payload, origin in
+            var castPayload = payload
+            if castPayload["title"] == nil { castPayload["title"] = tab?.title }
+            self?.onPageCast?(castPayload, origin)
+        }
         tab.onDownload = { [weak self] download, view in self?.downloads.adopt(download, webView: view) }
         tab.onMetadataChanged = { [weak self] in self?.saveTabs() }
         tab.onBeforeLoad = { [weak self, weak tab] in
