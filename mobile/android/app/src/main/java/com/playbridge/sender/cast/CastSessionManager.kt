@@ -11,12 +11,17 @@ import com.playbridge.sender.cast.googlecast.GoogleCastTarget
 import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
 import com.playbridge.sender.cast.proxy.StreamRouteMode
+import com.playbridge.sender.cast.proxy.JniUpstreamHttpClient
 import com.playbridge.sender.cast.roku.RokuCastTarget
 import com.playbridge.sender.cast.routing.ExternalLoadEventGate
 import com.playbridge.sender.connection.ConnectionCoordinator
 import com.playbridge.sender.connection.ReceiverDiscoveryRepository
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.logging.DebugNetworkLogger
+import com.playbridge.sender.diagnostics.CastAttempt
+import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
+import com.playbridge.sender.history.CastReplayStore
+import com.playbridge.sender.history.replaySourceFromExternalMedia
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.model.CastProtocol
@@ -76,6 +81,7 @@ internal fun externalScreenMirrorMedia(
         hlsSegmentFormat = if (googleCast && urls.hasAudio) "ts_aac" else null,
         hlsVideoSegmentFormat = if (googleCast) "mpeg2_ts" else null,
         isScreenMirror = true,
+        mirrorHlsUrl = if (targetKind == TargetKind.DLNA) urls.hls else null,
     )
 }
 
@@ -108,8 +114,12 @@ class CastSessionManager(
     private val screenMirrorCoordinator: com.playbridge.sender.cast.mirror.ScreenMirrorCoordinator,
     private val externalScreenMirrorCoordinator:
         com.playbridge.sender.cast.mirror.ExternalScreenMirrorCoordinator,
+    private val castAttemptDiagnostics: CastAttemptDiagnostics,
+    private val castReplayStore: CastReplayStore,
 ) {
     private val TAG = "CastSessionManager"
+    private var activeExternalAttemptId: String? = null
+    val currentExternalDiagnosticAttemptId: String? get() = activeExternalAttemptId
     val screenMirrorState = combine(
         screenMirrorCoordinator.state,
         externalScreenMirrorCoordinator.state,
@@ -171,6 +181,7 @@ class CastSessionManager(
 
     /** Route phone-local. Keeps an idle native link, but stops any external receiver session. */
     fun selectThisDevice() {
+        castAttemptDiagnostics.clearNativePlaybackTracking()
         screenMirrorCoordinator.stop("target_changed")
         stopAndClearExternalTarget()
         _route.value = Route.ThisDevice
@@ -555,6 +566,16 @@ class CastSessionManager(
     }.stateIn(scope, SharingStarted.Eagerly, SessionInfo("TV", null))
 
     init {
+        scope.launch {
+            connectionCoordinator.tvPlayback.collect { playback ->
+                val id = castAttemptDiagnostics.activeNativeAttemptId ?: return@collect
+                when (playback?.state?.lowercase()) {
+                    "playing" -> castAttemptDiagnostics.mark(id, CastAttempt.AttemptOutcome.PLAYING)
+                    "paused" -> castAttemptDiagnostics.mark(id, CastAttempt.AttemptOutcome.PAUSED)
+                    "stopped" -> castAttemptDiagnostics.mark(id, CastAttempt.AttemptOutcome.STOPPED)
+                }
+            }
+        }
         // Reattach a dropped link whenever the app returns to the foreground (change 1).
         registerForegroundObserver()
         // Reattach as soon as Wi-Fi/Ethernet comes (back) up (change 5).
@@ -975,6 +996,7 @@ class CastSessionManager(
     // ------------------------------------------------------------------
 
     private fun selectExternalTarget(device: TvDevice, target: CastTarget) {
+        castAttemptDiagnostics.clearNativePlaybackTracking()
         screenMirrorCoordinator.stop("target_changed")
         if (_externalTarget.value != null) _externalInterrupts.tryEmit(Unit)
         detachExternalTarget(stopFirst = true)
@@ -1008,6 +1030,7 @@ class CastSessionManager(
                     return@collect
                 }
                 _externalStatus.value = status
+                castAttemptDiagnostics.markPlayback(activeExternalAttemptId, status.state, status.failure)
                 if (externalScreenMirrorCoordinator.state.value.isActive) {
                     when (status.state) {
                         PlaybackState.PLAYING -> externalScreenMirrorCoordinator.markMirroring()
@@ -1026,10 +1049,19 @@ class CastSessionManager(
 
     fun clearExternalTarget() = detachExternalTarget(stopFirst = false)
 
+    /** Replace a packaged native URL with its pre-proxy source when the caller has it. */
+    fun attachNativeReplaySource(media: MediaItem) {
+        val id = castAttemptDiagnostics.activeNativeAttemptId ?: return
+        replaySourceFromExternalMedia(media)?.let { castReplayStore.put(id, it) }
+    }
+
     /** Stop media before releasing transports that disconnect on release (notably CastV2). */
     fun stopAndClearExternalTarget() = detachExternalTarget(stopFirst = true)
 
     private fun detachExternalTarget(stopFirst: Boolean) {
+        castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
+        activeExternalAttemptId = null
+        JniUpstreamHttpClient.setDiagnosticAttempt(null, null)
         externalScreenMirrorCoordinator.stop("target_changed")
         externalLoadGeneration++
         externalLoadJob?.cancel()
@@ -1132,6 +1164,34 @@ class CastSessionManager(
         _externalNowPlayingMeta.value = media.visualMetadata
         externalLoadJob?.cancel()
         val generation = ++externalLoadGeneration
+        castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
+        activeExternalAttemptId = castAttemptDiagnostics.start(
+            receiver = when (target.kind) {
+                TargetKind.NATIVE -> CastAttempt.ReceiverKind.PLAYBRIDGE
+                TargetKind.DLNA -> CastAttempt.ReceiverKind.DLNA
+                TargetKind.ROKU -> CastAttempt.ReceiverKind.ROKU
+                TargetKind.GOOGLE_CAST -> CastAttempt.ReceiverKind.GOOGLE_CAST
+                TargetKind.WEB_BROWSER -> CastAttempt.ReceiverKind.WEB_BROWSER
+            },
+            route = when (route) {
+                StreamRouteMode.DIRECT -> CastAttempt.RouteKind.DIRECT
+                StreamRouteMode.VIA_PHONE -> CastAttempt.RouteKind.VIA_PHONE
+                StreamRouteMode.VIA_PROXY -> CastAttempt.RouteKind.VIA_PROXY
+            },
+            media = when {
+                media.isScreenMirror -> CastAttempt.MediaKind.SCREEN_MIRROR
+                media.mediaKind == MediaKind.AUDIO -> CastAttempt.MediaKind.AUDIO
+                media.mediaKind == MediaKind.IMAGE -> CastAttempt.MediaKind.IMAGE
+                else -> CastAttempt.MediaKind.VIDEO
+            },
+        )
+        val attemptId = activeExternalAttemptId
+        if (attemptId != null) {
+            replaySourceFromExternalMedia(media)?.let { castReplayStore.put(attemptId, it) }
+            castReplayStore.retainOnly(castAttemptDiagnostics.attempts.value.map { it.id }.toSet())
+        }
+        JniUpstreamHttpClient.setDiagnosticAttempt(castAttemptDiagnostics, attemptId)
+        castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.BUFFERING)
         val epochMedia = media.copy(loadEpoch = generation)
         _externalStatus.value = PlaybackStatus(
             state = PlaybackState.BUFFERING,
@@ -1159,6 +1219,7 @@ class CastSessionManager(
             primary.onFailure { error ->
                 if (error is CancellationException) return@onFailure
                 if (generation == externalLoadGeneration && _externalTarget.value === loadTarget) {
+                    castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.FAILED, error)
                     _externalStatus.value = PlaybackStatus(
                         PlaybackState.ERROR,
                         failure = error,
@@ -1214,6 +1275,8 @@ class CastSessionManager(
     }
 
     fun stop() {
+        castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
+        JniUpstreamHttpClient.setDiagnosticAttempt(null, null)
         _externalInterrupts.tryEmit(Unit)
         externalLoadGeneration++ // invalidate in-flight load callbacks
         externalLoadJob?.cancel()
@@ -1453,7 +1516,11 @@ class CastSessionManager(
                 projectionPermission = projectionPermission,
                 options = options,
                 receiverHost = device.ip,
-                waitForHlsSegment = target.kind == TargetKind.GOOGLE_CAST,
+                requiredHlsSegments = when (target.kind) {
+                    TargetKind.DLNA -> 2
+                    TargetKind.GOOGLE_CAST -> 1
+                    else -> 0
+                },
             ) { urls ->
                 val media = externalScreenMirrorMedia(target.kind, urls)
                 if (!load(media, userInitiated = false)) {

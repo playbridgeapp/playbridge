@@ -76,7 +76,7 @@ class ExternalScreenMirrorCoordinator(
         projectionPermission: Intent,
         options: ScreenMirrorCoordinator.Options,
         receiverHost: String,
-        waitForHlsSegment: Boolean,
+        requiredHlsSegments: Int,
         onReady: (Urls) -> Unit,
     ) {
         if (_state.value.isActive) return
@@ -109,7 +109,7 @@ class ExternalScreenMirrorCoordinator(
                     projectionPermission,
                     options,
                     receiverHost,
-                    waitForHlsSegment,
+                    requiredHlsSegments,
                     onReady,
                 )
             } catch (error: Throwable) {
@@ -150,7 +150,7 @@ class ExternalScreenMirrorCoordinator(
         permission: Intent,
         options: ScreenMirrorCoordinator.Options,
         receiverHost: String,
-        waitForHlsSegment: Boolean,
+        requiredHlsSegments: Int,
         onReady: (Urls) -> Unit,
     ) {
         val host = localIpv4ForReceiver(context, receiverHost)
@@ -169,7 +169,7 @@ class ExternalScreenMirrorCoordinator(
         val hub = LiveMpegTsHub(
             input = BufferedInputStream(ParcelFileDescriptor.AutoCloseInputStream(pipes[0])),
             executor = worker,
-            waitForHlsSegment = waitForHlsSegment,
+            requiredHlsSegments = requiredHlsSegments,
             onReady = {
                 if (captureGeneration == generation && _state.value.isActive) {
                     startupTimeoutJob?.cancel()
@@ -486,11 +486,14 @@ internal fun buildMirrorHlsManifest(segments: List<MirrorHlsSegment>): ByteArray
     }.toByteArray(Charsets.UTF_8)
 }
 
+internal fun mirrorTransportReady(requiredHlsSegments: Int, segmentCount: Int, tsJoinReady: Boolean): Boolean =
+    if (requiredHlsSegments > 0) segmentCount >= requiredHlsSegments else tsJoinReady
+
 /** Reads the recorder pipe once and exposes bounded HLS and continuous-TS views. */
 private class LiveMpegTsHub(
     private val input: BufferedInputStream,
     private val executor: ExecutorService,
-    private val waitForHlsSegment: Boolean,
+    private val requiredHlsSegments: Int,
     private val onReady: () -> Unit,
 ) {
     private val clients = linkedMapOf<Socket, MirrorClientBuffer>()
@@ -522,11 +525,11 @@ private class LiveMpegTsHub(
                             )
                             while (segments.size > RETAINED_SEGMENTS) segments.removeFirst()
                         }
-                        val transportReady = if (waitForHlsSegment) {
-                            segments.isNotEmpty()
-                        } else {
-                            joinBuffer.isReadyForJoin()
-                        }
+                        val transportReady = mirrorTransportReady(
+                            requiredHlsSegments,
+                            segments.size,
+                            joinBuffer.isReadyForJoin(),
+                        )
                         if (!readySent && transportReady) {
                             readySent = true
                             becameReady = true

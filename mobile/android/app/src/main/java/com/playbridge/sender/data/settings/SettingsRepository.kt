@@ -36,6 +36,7 @@ class SettingsRepository(
         val IPTV_SORT_ASCENDING = booleanPreferencesKey("iptv_sort_ascending")
         val IPTV_ACTIVE_FIRST = booleanPreferencesKey("iptv_active_first")
         val SEND_SUBTITLES_TO_TV = booleanPreferencesKey("send_subtitles_to_tv")
+        val HIDE_EMPTY_CAST_SHEET_TABS = booleanPreferencesKey("hide_empty_cast_sheet_tabs")
         val LOGS_EXCLUDE_FILTERS = stringSetPreferencesKey("logs_exclude_filters")
         /** A built-in [com.playbridge.sender.browser.UserAgentPresets] preset id, or a "custom:&lt;id&gt;" selection. */
         val USER_AGENT_PRESET = stringPreferencesKey("user_agent_preset")
@@ -75,6 +76,7 @@ class SettingsRepository(
     /** When exploring a playlist, float probe-confirmed live channels to the top. */
     val iptvActiveFirst: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.IPTV_ACTIVE_FIRST] ?: true }
     val sendSubtitlesToTv: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.SEND_SUBTITLES_TO_TV] ?: true }
+    val hideEmptyCastSheetTabs: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.HIDE_EMPTY_CAST_SHEET_TABS] ?: true }
     val logsExcludeFilters: Flow<Set<String>> = dataStore.data.catch { handleException(it) }.map { it[Keys.LOGS_EXCLUDE_FILTERS] ?: emptySet() }
     val userAgentPreset: Flow<String> = dataStore.data.catch { handleException(it) }.map { it[Keys.USER_AGENT_PRESET] ?: "default" }
     val customUserAgents: Flow<List<CustomUserAgent>> = dataStore.data.catch { handleException(it) }
@@ -105,6 +107,7 @@ class SettingsRepository(
     suspend fun setIptvSortAscending(value: Boolean) = write { it[Keys.IPTV_SORT_ASCENDING] = value }
     suspend fun setIptvActiveFirst(value: Boolean) = write { it[Keys.IPTV_ACTIVE_FIRST] = value }
     suspend fun setSendSubtitlesToTv(value: Boolean) = write { it[Keys.SEND_SUBTITLES_TO_TV] = value }
+    suspend fun setHideEmptyCastSheetTabs(value: Boolean) = write { it[Keys.HIDE_EMPTY_CAST_SHEET_TABS] = value }
     suspend fun setLogsExcludeFilters(value: Set<String>) = write { it[Keys.LOGS_EXCLUDE_FILTERS] = value }
     suspend fun setUserAgentPreset(value: String) = write { it[Keys.USER_AGENT_PRESET] = value }
     suspend fun setEnableLocalScrapers(value: Boolean) = write { it[Keys.ENABLE_LOCAL_SCRAPERS] = value }

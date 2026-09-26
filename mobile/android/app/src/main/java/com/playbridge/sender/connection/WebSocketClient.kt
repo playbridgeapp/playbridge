@@ -3,6 +3,10 @@ package com.playbridge.sender.connection
 import android.util.Log
 import com.playbridge.sender.cast.CastHistorySettings
 import com.playbridge.sender.cast.applyCastHistoryPreference
+import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
+import com.playbridge.sender.diagnostics.isNativePlaybackStartCommand
+import com.playbridge.sender.history.CastReplayStore
+import com.playbridge.sender.history.replaySourceFromNativeCommand
 import com.playbridge.sender.logging.DebugNetworkLogger
 import com.playbridge.shared.protocol.createAuthJson
 import com.playbridge.shared.protocol.createContextQueryJson
@@ -41,7 +45,11 @@ private const val POINTER_FLUSH_INTERVAL_MS = 16L
 /**
  * OkHttp-based WebSocket client for connecting to TV
  */
-class WebSocketClient(private val castHistorySettings: CastHistorySettings) {
+class WebSocketClient(
+    private val castHistorySettings: CastHistorySettings,
+    private val castAttemptDiagnostics: CastAttemptDiagnostics,
+    private val castReplayStore: CastReplayStore,
+) {
     
     private val client = OkHttpClient.Builder()
         .dns(LinkLocalDns())
@@ -593,16 +601,26 @@ class WebSocketClient(private val castHistorySettings: CastHistorySettings) {
     }
 
     fun send(message: String): Boolean {
+        val startsPlayback = isNativePlaybackStartCommand(message)
         val ws = webSocket
         if (ws == null) {
             Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
+            if (startsPlayback) recordPlaybackAttempt(message, false)
             return false
         }
         val outgoing = applyCastHistoryPreference(
             message, castHistorySettings.preventHistory.value,
         )
         DebugNetworkLogger.command(TAG, outgoing)
-        return ws.send(outgoing)
+        val sent = ws.send(outgoing)
+        if (startsPlayback) recordPlaybackAttempt(message, sent)
+        return sent
+    }
+
+    private fun recordPlaybackAttempt(message: String, sent: Boolean) {
+        val id = castAttemptDiagnostics.recordNativePlaybackCommand(sent)
+        replaySourceFromNativeCommand(message)?.let { castReplayStore.put(id, it) }
+        castReplayStore.retainOnly(castAttemptDiagnostics.attempts.value.map { it.id }.toSet())
     }
 
     fun send(bytes: ByteArray): Boolean {

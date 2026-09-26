@@ -9,6 +9,14 @@ import org.junit.Test
 
 class ExternalScreenMirrorTest {
     @Test
+    fun `dlna live hls waits for two completed segments`() {
+        assertFalse(mirrorTransportReady(requiredHlsSegments = 2, segmentCount = 1, tsJoinReady = true))
+        assertTrue(mirrorTransportReady(requiredHlsSegments = 2, segmentCount = 2, tsJoinReady = true))
+        assertTrue(mirrorTransportReady(requiredHlsSegments = 1, segmentCount = 1, tsJoinReady = false))
+        assertTrue(mirrorTransportReady(requiredHlsSegments = 0, segmentCount = 0, tsJoinReady = true))
+    }
+
+    @Test
     fun `late callback from stopped generation cannot fail replacement mirror`() {
         assertFalse(
             shouldHandleExternalMirrorCallback(

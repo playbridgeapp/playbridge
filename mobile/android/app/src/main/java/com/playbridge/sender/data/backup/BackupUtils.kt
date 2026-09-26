@@ -123,6 +123,7 @@ object BackupUtils {
             iptvSortAscending = settingsRepository.iptvSortAscending.first(),
             iptvActiveFirst = settingsRepository.iptvActiveFirst.first(),
             sendSubtitlesToTv = settingsRepository.sendSubtitlesToTv.first(),
+            hideEmptyCastSheetTabs = settingsRepository.hideEmptyCastSheetTabs.first(),
         )
 
         val exported = ExportedSettings(
@@ -230,6 +231,7 @@ object BackupUtils {
                 s.iptvSortAscending?.let { settingsRepository.setIptvSortAscending(it) }
                 s.iptvActiveFirst?.let { settingsRepository.setIptvActiveFirst(it) }
                 s.sendSubtitlesToTv?.let { settingsRepository.setSendSubtitlesToTv(it) }
+                s.hideEmptyCastSheetTabs?.let { settingsRepository.setHideEmptyCastSheetTabs(it) }
             }
 
             imported.addonUrls.forEach { url -> addonRepository.installAddon(url) }

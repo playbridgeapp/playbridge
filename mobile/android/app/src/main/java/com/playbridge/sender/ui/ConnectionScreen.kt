@@ -72,6 +72,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
+import com.playbridge.sender.diagnostics.CastAttempt
+import com.playbridge.sender.diagnostics.shareCastAttempt
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -124,9 +127,17 @@ fun ConnectionScreen(
     val isScanning by viewModel.isScanning.collectAsState()
     val networkStatus by viewModel.networkStatus.collectAsState()
     val browserRepo: BrowserReceiverRepository = koinInject()
+    val castDiagnostics: CastAttemptDiagnostics = koinInject()
+    val castAttempts by castDiagnostics.attempts.collectAsState()
+    val context = LocalContext.current
     val browserHost by browserRepo.state.collectAsState()
     val externalMediaTitle by viewModel.externalMediaTitle.collectAsState()
     val castSessionState by viewModel.castSessionState.collectAsState()
+    val recentFailedAttempt = castAttempts.firstOrNull { attempt ->
+        attempt.outcome == CastAttempt.AttemptOutcome.FAILED &&
+            attempt.id == viewModel.castSessionManager.currentExternalDiagnosticAttemptId &&
+            System.currentTimeMillis() - attempt.startedAtMs < 5 * 60 * 1000L
+    }
     val lastEffectiveStreamRoute by viewModel.lastEffectiveStreamRoute.collectAsState()
 
     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
@@ -373,6 +384,12 @@ fun ConnectionScreen(
                         castSessionState.phase == com.playbridge.sender.cast.SessionPhase.CONNECTING,
                     externalFailed =
                         castSessionState.phase == com.playbridge.sender.cast.SessionPhase.FAILED,
+                    showShareDiagnostics = recentFailedAttempt != null,
+                    onShareDiagnostics = {
+                        recentFailedAttempt?.let { attempt ->
+                            castDiagnostics.report(attempt.id)?.let { shareCastAttempt(context, it) }
+                        }
+                    },
                     streamRouteLabel = lastEffectiveStreamRoute?.label,
                 )
             }
@@ -768,6 +785,8 @@ fun NowDestinationCard(
     externalCasting: Boolean = false,
     externalConnecting: Boolean = false,
     externalFailed: Boolean = false,
+    showShareDiagnostics: Boolean = false,
+    onShareDiagnostics: () -> Unit = {},
     streamRouteLabel: String? = null,
     compact: Boolean = false,
 ) {
@@ -801,6 +820,7 @@ fun NowDestinationCard(
                 },
                 statusFilled = externalCasting,
                 onDisconnect = onDisconnectExternal,
+                secondaryAction = if (showShareDiagnostics) "Share diagnostics" to onShareDiagnostics else null,
                 compact = compact,
             )
         }

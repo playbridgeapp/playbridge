@@ -1,6 +1,7 @@
 package com.playbridge.sender.cast.dlna
 
 import android.media.MediaMetadataRetriever
+import android.util.Log
 import com.playbridge.sender.cast.Capability
 import androidx.core.net.toUri
 import com.playbridge.sender.cast.CastTarget
@@ -66,20 +67,33 @@ class DlnaCastTarget(
         activeIsLive = media.streamType.equals("LIVE", ignoreCase = true)
         cachedDurationMs = media.durationMs.coerceAtLeast(0L) // e.g. MediaStore for local files
         durationTries = 0
-        val loadUrl = resolveLoadUrl(media)
+        var loadUrl = resolveLoadUrl(media)
         currentProxyUrl = loadUrl
         // SetAVTransportURI resets the playhead to 0; Play then starts the hand-off.
         // SOAP/connection failures are control errors. Generic STOPPED is not enough to
         // distinguish an incompatible stream from normal renderer behavior.
         try {
-            avTransport.setAvTransportUri(
-                loadUrl,
-                metadata = if (media.isScreenMirror) {
-                    screenMirrorDidl(loadUrl, media.title ?: "Screen mirror")
-                } else {
-                    ""
-                },
-            )
+            try {
+                avTransport.setAvTransportUri(loadUrl, metadata = dlnaLoadMetadata(media, loadUrl))
+            } catch (error: DlnaActionFailure) {
+                when {
+                    shouldTryMirrorHlsFallback(media, error) -> {
+                        val hlsUrl = checkNotNull(media.mirrorHlsUrl)
+                        Log.i(TAG, "TV rejected continuous screen mirror; trying live HLS")
+                        avTransport.setAvTransportUri(
+                            hlsUrl,
+                            metadata = dlnaMediaDidl(hlsUrl, media.title ?: "Screen mirror", "application/x-mpegURL"),
+                        )
+                        loadUrl = hlsUrl
+                        currentProxyUrl = hlsUrl
+                    }
+                    shouldRetryHlsWithoutMetadata(media, error) -> {
+                        Log.i(TAG, "TV rejected HLS metadata; retrying URI without metadata")
+                        avTransport.setAvTransportUri(loadUrl)
+                    }
+                    else -> throw error
+                }
+            }
             avTransport.play()
         } catch (error: java.io.IOException) {
             _status.value = PlaybackStatus(
@@ -89,7 +103,8 @@ class DlnaCastTarget(
             )
             throw error
         }
-        _status.value = PlaybackStatus(PlaybackState.PLAYING, loadEpoch = media.loadEpoch)
+        // SOAP Play acknowledges the command, not decoded playback. Keep the
+        // hand-off buffering until GetTransportInfo reports the TV's state.
         startPolling(media.loadEpoch)
 
         // Resume point: seek once the renderer has begun playback (an immediate Seek is
@@ -180,6 +195,9 @@ class DlnaCastTarget(
                 runCatching {
                     val pos = avTransport.getPositionInfo()
                     val state = mapState(avTransport.getTransportState())
+                    if (state != _status.value.state) {
+                        Log.i(TAG, "TV transport state=$state")
+                    }
                     val live = activeIsLive || proxy.isLiveStream
                     // Duration, renderer-first: TrackDuration, else GetMediaInfo (a few tries),
                     // else the proxy's HLS duration, then the probed/seeded duration.
@@ -237,15 +255,6 @@ class DlnaCastTarget(
         } ?: 0L
     }
 
-    private fun screenMirrorDidl(url: String, title: String): String {
-        fun xml(value: String): String = value
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace("\"", "&quot;")
-        return """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="screen-mirror" parentID="0" restricted="1"><dc:title>${xml(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:video/mp2t:*">${xml(url)}</res></item></DIDL-Lite>"""
-    }
-
     private fun mapState(s: String?): PlaybackState = when (s?.uppercase()) {
         "PLAYING" -> PlaybackState.PLAYING
         "PAUSED_PLAYBACK", "PAUSED_RECORDING" -> PlaybackState.PAUSED
@@ -255,6 +264,7 @@ class DlnaCastTarget(
     }
 
     companion object {
+        private const val TAG = "DlnaCastTarget"
         private const val POLL_INTERVAL_MS = 1000L
 
         /** How long to wait for the renderer to reach PLAYING before the resume seek. */
@@ -281,4 +291,35 @@ class DlnaCastTarget(
             }
         }
     }
+}
+
+internal fun shouldTryMirrorHlsFallback(media: MediaItem, error: DlnaActionFailure): Boolean =
+    media.isScreenMirror &&
+        !media.mirrorHlsUrl.isNullOrBlank() &&
+        error.actionName == "SetAVTransportURI" &&
+        error.upnpCode == "501"
+
+internal fun shouldRetryHlsWithoutMetadata(media: MediaItem, error: DlnaActionFailure): Boolean =
+    !media.isScreenMirror &&
+        isDlnaHlsMedia(media) &&
+        error.actionName == "SetAVTransportURI" &&
+        error.upnpCode == "501"
+
+internal fun dlnaLoadMetadata(media: MediaItem, url: String): String = when {
+    media.isScreenMirror -> dlnaMediaDidl(url, media.title ?: "Screen mirror", "video/mp2t")
+    isDlnaHlsMedia(media) -> dlnaMediaDidl(url, media.title ?: "Video", "application/x-mpegURL")
+    else -> ""
+}
+
+private fun isDlnaHlsMedia(media: MediaItem): Boolean =
+    media.mimeType?.contains("mpegurl", ignoreCase = true) == true ||
+        media.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
+
+private fun dlnaMediaDidl(url: String, title: String, mimeType: String): String {
+    fun xml(value: String): String = value
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+    return """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="playbridge-media" parentID="0" restricted="1"><dc:title>${xml(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:${xml(mimeType)}:*">${xml(url)}</res></item></DIDL-Lite>"""
 }

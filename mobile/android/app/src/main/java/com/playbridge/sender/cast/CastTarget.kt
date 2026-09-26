@@ -126,6 +126,8 @@ data class MediaItem(
     val hlsVideoSegmentFormat: String? = null,
     /** Marks a manager-owned external screen-mirror load for lifecycle cleanup. */
     val isScreenMirror: Boolean = false,
+    /** Local live-HLS alternative when a DLNA renderer rejects continuous MPEG-TS. */
+    val mirrorHlsUrl: String? = null,
 )
 
 data class SubtitleRef(

@@ -68,6 +68,7 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
     val preferredSubLang by settingsRepository.preferredSubtitleLang.collectAsState(initial = "")
     var subExpanded by remember { mutableStateOf(false) }
     val sendSubtitlesToTv by settingsRepository.sendSubtitlesToTv.collectAsState(initial = true)
+    val hideEmptyCastSheetTabs by settingsRepository.hideEmptyCastSheetTabs.collectAsState(initial = true)
 
     var minSizeText by remember {
         mutableStateOf(browserPrefs.getString("auto_stream_min_gb", "") ?: "")
@@ -108,6 +109,23 @@ fun StreamingSettingsScreen(onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            Text("Cast Sheet", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            ListItem(
+                headlineContent = { Text("Hide empty Audio and Images tabs") },
+                supportingContent = { Text("Videos and Subtitles stay available; newly detected media updates the tab order.") },
+                trailingContent = {
+                    Switch(
+                        checked = hideEmptyCastSheetTabs,
+                        onCheckedChange = { checked ->
+                            scope.launch { settingsRepository.setHideEmptyCastSheetTabs(checked) }
+                        }
+                    )
+                },
+                modifier = Modifier.clickable {
+                    scope.launch { settingsRepository.setHideEmptyCastSheetTabs(!hideEmptyCastSheetTabs) }
+                }
+            )
+
             Text("Stream Selection & Quality", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
 
             // Preferred Resolution (MASTER setting)

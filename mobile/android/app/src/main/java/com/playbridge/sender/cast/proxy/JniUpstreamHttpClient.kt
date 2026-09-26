@@ -1,9 +1,11 @@
 package com.playbridge.sender.cast.proxy
 
 import android.util.Log
+import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import org.json.JSONObject
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.URI
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -28,7 +30,13 @@ internal object JniUpstreamHttpClient {
             "Chrome/120.0.0.0 Mobile Safari/537.36"
 
     private val nextHandle = AtomicLong(1)
+    private val nextRequestId = AtomicLong(1)
     private val openHandles = ConcurrentHashMap<Long, OpenHandle>()
+    @Volatile private var diagnosticAttempt: Pair<CastAttemptDiagnostics, String>? = null
+
+    internal fun setDiagnosticAttempt(store: CastAttemptDiagnostics?, id: String?) {
+        diagnosticAttempt = if (store != null && id != null) store to id else null
+    }
 
     private data class OpenHandle(
         val connection: HttpURLConnection,
@@ -85,23 +93,65 @@ internal object JniUpstreamHttpClient {
 
     private fun openWithRetry(url: String, headers: Map<String, String>): String {
         val filtered = filterHeaders(headers)
-        var lastError: String? = null
+        val requestId = nextRequestId.getAndIncrement()
+        val resourceType = resourceTypeForLog(url)
+        val attemptAtRequest = diagnosticAttempt
+        fun result(strategy: String, outcome: ConnectOutcome): String {
+            val message = "request=$requestId resource=$resourceType strategy=$strategy status=${outcome.status}"
+            attemptAtRequest?.let { (store, id) ->
+                store.recordUpstreamFetch(
+                    id,
+                    when (resourceType) {
+                        "hls_playlist", "dash_manifest" -> CastAttemptDiagnostics.UpstreamCategory.PLAYLIST
+                        "segment" -> CastAttemptDiagnostics.UpstreamCategory.SEGMENT
+                        else -> CastAttemptDiagnostics.UpstreamCategory.OTHER
+                    },
+                    outcome.status,
+                )
+            }
+            if (outcome.ok) debug(message) else warn("$message final=true")
+            return if (outcome.ok) outcome.json else errorJson(outcome.error ?: "HTTP ${outcome.status}")
+        }
 
-        // First try full headers; on 401/403/429 retry with minimal set (LocalProxy parity).
-        val attempts = listOf(filtered, minimalHeaders(filtered))
-        for ((index, attemptHeaders) in attempts.withIndex()) {
-            val result = connectOnce(url, attemptHeaders)
-            when {
-                result.ok -> return result.json
-                result.status in listOf(401, 403, 429, 500, 502, 503) && index == 0 -> {
-                    lastError = result.error
-                    warn("upstream HTTP ${result.status}; retrying with minimal headers")
-                    continue
-                }
-                else -> return if (result.ok) result.json else errorJson(result.error ?: "HTTP ${result.status}")
+        val first = connectOnce(url, filtered)
+        if (first.ok || first.status !in RETRYABLE_STATUSES) return result("captured", first)
+
+        // A captured Origin with no Referer may be insufficient for a guarded
+        // segment CDN. Try its origin-only Referer before dropping Origin.
+        if (first.status == 403) {
+            originRefererHeaders(filtered)?.let { withReferer ->
+                warn("request=$requestId resource=$resourceType strategy=captured status=403; retrying=origin_referer")
+                val retried = connectOnce(url, withReferer)
+                if (retried.ok) return result("origin_referer", retried)
+                warn("request=$requestId resource=$resourceType strategy=origin_referer status=${retried.status}; retrying=minimal")
             }
         }
-        return errorJson(lastError ?: "upstream open failed")
+
+        val minimal = connectOnce(url, minimalHeaders(filtered))
+        return result("minimal", minimal)
+    }
+
+    /** Synthesizes only an origin-level Referer, never a page path or signed query. */
+    internal fun originRefererHeaders(headers: Map<String, String>): Map<String, String>? {
+        if (headers.keys.any { it.equals("Referer", ignoreCase = true) }) return null
+        val origin = headers.entries.firstOrNull { it.key.equals("Origin", ignoreCase = true) }?.value
+            ?: return null
+        val parsed = runCatching { URI(origin) }.getOrNull() ?: return null
+        if (parsed.scheme !in setOf("http", "https") || parsed.host.isNullOrBlank() ||
+            parsed.userInfo != null) return null
+        val referer = URI(parsed.scheme, null, parsed.host, parsed.port, "/", null, null).toString()
+        return headers + ("Referer" to referer)
+    }
+
+    /** A fixed category rather than a URL, path, host, or signed query. */
+    internal fun resourceTypeForLog(url: String): String {
+        val path = runCatching { URL(url).path.lowercase() }.getOrDefault("")
+        return when {
+            path.endsWith(".m3u8") -> "hls_playlist"
+            path.endsWith(".mpd") -> "dash_manifest"
+            listOf(".ts", ".m4s", ".jpg", ".jpeg", ".aac").any(path::endsWith) -> "segment"
+            else -> "media"
+        }
     }
 
     private data class ConnectOutcome(
@@ -234,4 +284,14 @@ internal object JniUpstreamHttpClient {
             // unit tests
         }
     }
+
+    private fun debug(message: String) {
+        try {
+            Log.d(TAG, message)
+        } catch (_: RuntimeException) {
+            // unit tests
+        }
+    }
+
+    private val RETRYABLE_STATUSES = setOf(401, 403, 429, 500, 502, 503)
 }

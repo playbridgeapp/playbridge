@@ -23,6 +23,7 @@ class ExternalScreenMirrorRoutingTest {
         assertEquals("LIVE", media.streamType)
         assertEquals("mpeg2_ts", media.hlsVideoSegmentFormat)
         assertEquals("ts_aac", media.hlsSegmentFormat)
+        assertNull(media.mirrorHlsUrl)
         assertEquals(StreamRouteMode.VIA_PHONE, media.effectiveRoute)
         assertTrue(media.isScreenMirror)
     }
@@ -44,6 +45,7 @@ class ExternalScreenMirrorRoutingTest {
 
         assertEquals(urls.continuousTs, media.url)
         assertEquals("video/mp2t", media.mimeType)
+        assertEquals(urls.hls, media.mirrorHlsUrl)
         assertEquals("LIVE", media.streamType)
         assertNull(media.hlsVideoSegmentFormat)
         assertNull(media.hlsSegmentFormat)

@@ -54,6 +54,8 @@ import com.playbridge.sender.data.library.InstalledAddonEntity
 import com.playbridge.sender.downloads.DownloadsScreen
 import com.playbridge.sender.history.BookmarksScreen
 import com.playbridge.sender.history.CastHistoryScreen
+import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
+import com.playbridge.sender.diagnostics.shareCastAttempt
 import com.playbridge.sender.history.HistoryScreen
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.TvDevice
@@ -766,20 +768,71 @@ fun AppNavHost(
                 Screen.CastHistory -> {
                     BackHandler { onScreenChange(Screen.Dashboard) }
                     val db = com.playbridge.sender.data.history.DatabaseProvider.getDatabase(context)
+                    val castDiagnostics: CastAttemptDiagnostics = koinInject()
+                    val replayStore: com.playbridge.sender.history.CastReplayStore = koinInject()
+                    val castAttempts by castDiagnostics.attempts.collectAsStateWithLifecycle()
+                    val replaySources by replayStore.sources.collectAsStateWithLifecycle()
                     val commandHistoryFlow = remember { db.commandHistoryDao().getAll() }
                     val commandHistory by commandHistoryFlow.collectAsStateWithLifecycle(initialValue = emptyList())
                     CastHistoryScreen(
                         historyItems = commandHistory,
+                        attempts = castAttempts,
+                        replaySources = replaySources,
                         onMenuClick = { onScreenChange(Screen.Dashboard) },
-                        onItemClick = { item ->
-                            onForcedVideosChange(listOf(
-                                DetectedVideo(
-                                    url = item.url,
-                                    title = item.title,
+                        onShareAttempt = { attempt ->
+                            castDiagnostics.report(attempt.id)?.let { shareCastAttempt(context, it) }
+                        },
+                        onRecastAttempt = { attempt ->
+                            val source = replaySources[attempt.id]
+                            if (source != null) {
+                                val playlist = source.playlistPayloadJson?.let {
+                                    com.playbridge.shared.protocol.decodePlaylistPayloadJson(it)?.items
+                                }
+                                val media = DetectedVideo(
+                                    url = if (playlist != null) "playlist://history-${attempt.id}" else source.url,
+                                    title = source.title,
+                                    contentType = source.contentType,
+                                    headers = source.headers,
+                                    mediaKind = source.mediaKind,
                                     detectedBy = "history",
-                                    timestamp = item.timestamp
+                                    timestamp = attempt.startedAtMs,
+                                    isPlayable = if (playlist != null) true else null,
+                                    playlistPayload = playlist,
                                 )
-                            ))
+                                val subtitles = if (playlist == null) source.subtitles.map { subtitleUrl ->
+                                    DetectedVideo(
+                                        url = subtitleUrl,
+                                        mediaKind = "subtitle",
+                                        detectedBy = "history",
+                                        timestamp = attempt.startedAtMs,
+                                    )
+                                } else emptyList()
+                                onForcedVideosChange(listOf(media) + subtitles)
+                                onCastSheetBrowseOverrideChange(null)
+                                onCastSheetInitialModeChange("play")
+                                onShowVideoSheetChange(true)
+                            }
+                        },
+                        onDeleteAttempt = { attempt ->
+                            castDiagnostics.delete(attempt.id)
+                            replayStore.delete(attempt.id)
+                        },
+                        onItemClick = { item ->
+                            if (item.commandType == "browser") {
+                                onForcedVideosChange(null)
+                                onCastSheetBrowseOverrideChange(item.url)
+                                onCastSheetInitialModeChange("browse")
+                            } else {
+                                onForcedVideosChange(listOf(
+                                    DetectedVideo(
+                                        url = item.url,
+                                        title = item.title,
+                                        detectedBy = "history",
+                                        timestamp = item.timestamp
+                                    )
+                                ))
+                                onCastSheetInitialModeChange("play")
+                            }
                             onShowVideoSheetChange(true)
                         },
                         onDelete = { item ->
@@ -787,6 +840,8 @@ fun AppNavHost(
                         },
                         onClearHistory = {
                             scope.launch(Dispatchers.IO) { db.commandHistoryDao().clear() }
+                            castDiagnostics.clear()
+                            replayStore.clear()
                         },
                         onBack = { onScreenChange(lastMainScreen) },
                         onAddToCollection = { item ->

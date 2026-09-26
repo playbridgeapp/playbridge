@@ -11,6 +11,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -19,23 +21,43 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.data.history.CommandHistoryEntity
+import com.playbridge.sender.diagnostics.CastAttempt
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import com.playbridge.sender.R
 import androidx.compose.foundation.Image
 
+private sealed interface CastHistoryRow {
+    val timestamp: Long
+    data class Attempt(val value: CastAttempt) : CastHistoryRow {
+        override val timestamp: Long get() = value.startedAtMs
+    }
+    data class Legacy(val value: CommandHistoryEntity) : CastHistoryRow {
+        override val timestamp: Long get() = value.timestamp
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CastHistoryScreen(
     historyItems: List<CommandHistoryEntity>,
+    attempts: List<CastAttempt>,
+    replaySources: Map<String, CastReplaySource>,
     onMenuClick: () -> Unit,
     onItemClick: (CommandHistoryEntity) -> Unit,
+    onShareAttempt: (CastAttempt) -> Unit,
+    onRecastAttempt: (CastAttempt) -> Unit,
+    onDeleteAttempt: (CastAttempt) -> Unit,
     onDelete: (CommandHistoryEntity) -> Unit,
     onClearHistory: () -> Unit,
     onBack: () -> Unit,
     onAddToCollection: (CommandHistoryEntity) -> Unit = {}
 ) {
+    val rows = remember(historyItems, attempts) {
+        (attempts.map { CastHistoryRow.Attempt(it) } + historyItems.map { CastHistoryRow.Legacy(it) })
+            .sortedByDescending { it.timestamp }
+    }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -48,7 +70,7 @@ fun CastHistoryScreen(
                     }
                 },
                 actions = {
-                    if (historyItems.isNotEmpty()) {
+                    if (historyItems.isNotEmpty() || attempts.isNotEmpty()) {
                         IconButton(onClick = onClearHistory) {
                             Icon(Icons.Default.Delete, contentDescription = "Clear History")
                         }
@@ -57,7 +79,7 @@ fun CastHistoryScreen(
             )
         }
     ) { innerPadding ->
-        if (historyItems.isEmpty()) {
+        if (historyItems.isEmpty() && attempts.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -84,18 +106,89 @@ fun CastHistoryScreen(
                 contentPadding = innerPadding,
                 modifier = Modifier.fillMaxSize()
             ) {
-                items(historyItems, key = { it.id }) { item ->
-                    CastHistoryItem(
-                        item = item,
-                        onClick = { onItemClick(item) },
-                        onDelete = { onDelete(item) },
-                        onAddToCollection = { onAddToCollection(item) }
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
+                items(rows, key = {
+                    when (it) {
+                        is CastHistoryRow.Attempt -> "attempt-${it.value.id}"
+                        is CastHistoryRow.Legacy -> "legacy-${it.value.id}"
+                    }
+                }) { row ->
+                    when (row) {
+                        is CastHistoryRow.Attempt -> CastAttemptHistoryItem(
+                            attempt = row.value,
+                            replaySource = replaySources[row.value.id],
+                            onRecast = { onRecastAttempt(row.value) },
+                            onShare = { onShareAttempt(row.value) },
+                            onDelete = { onDeleteAttempt(row.value) },
+                        )
+                        is CastHistoryRow.Legacy -> CastHistoryItem(
+                            item = row.value,
+                            onClick = { onItemClick(row.value) },
+                            onDelete = { onDelete(row.value) },
+                            onAddToCollection = { onAddToCollection(row.value) },
+                        )
+                    }
                 }
             }
         }
     }
+}
+
+@Composable
+private fun CastAttemptHistoryItem(
+    attempt: CastAttempt,
+    replaySource: CastReplaySource?,
+    onRecast: () -> Unit,
+    onShare: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuOpen by remember(attempt.id) { mutableStateOf(false) }
+    val date = remember(attempt.startedAtMs) {
+        SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(attempt.startedAtMs))
+    }
+    ListItem(
+        headlineContent = {
+            Text(
+                replaySource?.title?.takeIf { it.isNotBlank() }
+                    ?: attempt.media.name.replace('_', ' ').lowercase()
+                        .replaceFirstChar { it.titlecase(Locale.getDefault()) },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        supportingContent = {
+            val receiver = attempt.receiver.name.replace('_', ' ').lowercase()
+                .replaceFirstChar { it.titlecase(Locale.getDefault()) }
+            Text("$date · $receiver · ${attempt.outcome.name.lowercase()}")
+        },
+        leadingContent = { Icon(if (replaySource != null) Icons.Default.PlayArrow else Icons.Default.Tv, contentDescription = null) },
+        trailingContent = {
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
+                    Icon(Icons.Default.MoreVert, contentDescription = "Attempt options")
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    if (replaySource != null) {
+                        DropdownMenuItem(
+                            text = { Text("Cast again") },
+                            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                            onClick = { menuOpen = false; onRecast() },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("Share diagnostics") },
+                        leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
+                        onClick = { menuOpen = false; onShare() },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Remove from history") },
+                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
+                        onClick = { menuOpen = false; onDelete() },
+                    )
+                }
+            }
+        },
+        modifier = if (replaySource != null) Modifier.clickable(onClick = onRecast) else Modifier,
+    )
 }
 
 @Composable

@@ -1797,9 +1797,7 @@ class BrowserActivity : ComponentActivity() {
                                     max_bitrate_cap_mbps = maxBitrateCapMbps,
                                 )
                             )
-                            connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")
-                            linkedPageCastCoordinator.supersedeIfActive()
-                            if (connectionViewModel.webSocketClient.send(cmd)) {
+                            if (connectionViewModel.sendCommandAndRecord(cmd, "play", video.url, selectedTab?.content?.title ?: "Video from browser")) {
                                 connectionCoordinator.startLocalPlaybackSession(null, null, null) // browser content
                                 session?.let { tabManager.pauseMedia(it) }
                                 if (autoSwitchToRemote) {

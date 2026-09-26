@@ -1,5 +1,28 @@
 # Android phone — logcat tracking
 
+## End-user cast reports
+
+Dashboard → Cast History → cast row → Share diagnostics exports a short,
+structured report. A recent external failure also exposes Share
+diagnostics on the Devices screen. Reports are created locally for native and
+third-party receiver attempts, kept for at most 14 days/40 attempts, and shared
+only after a user chooses a destination. They include receiver protocol, route,
+media category, state transitions, and numeric DLNA HTTP/UPnP errors. They do
+include bounded phone-upstream HTTP counters; those may contain prefetches and
+must not be read as proof that the TV fetched a segment. Reports do not include
+media URLs, titles, receiver names, IP addresses, request headers,
+or raw exception messages. Clearing Cast History clears these reports too.
+
+When the original HTTP(S) source is usable, the same history row offers Cast
+again, which reopens the cast sheet. Source URLs, headers, and native playlist
+details needed for that action are stored separately with an Android Keystore
+device-bound key; they are never included in the shareable report. Proxy URLs,
+screen mirroring, and local content URIs are not persisted as recast sources.
+Old URL-only history rows remain available in the same chronological list.
+
+Settings → Logs → Share is a separate raw-log workflow and should not be used
+as the default public support attachment.
+
 Recipes for live-tailing PlayBridge phone (`mobile/android`) features via `adb logcat`.
 
 ## Prerequisites
@@ -42,6 +65,7 @@ adb logcat -c && adb logcat -v time 'VideoDetector:D' '*:S' | tee /tmp/playbridg
 | Stream route / Via phone | `StreamRouteService` | Header-name dumps yes |
 | Embedded Rust proxy / sender services | `PhoneSenderServices`, `SenderServicesNative`, `JniUpstreamHttp` | Mixed |
 | Local proxy (DLNA / fallback) | `LocalProxyServer` | Mixed |
+| DLNA TV playback status | `DlnaCastTarget` | No URLs or headers |
 | Google Cast | `GoogleCastTarget`, `RustCastSession`, `RustCastSessionNative` | Proxied URL log yes |
 | Cast session orchestration | `CastSessionManager`, `CastSessionService` | Mixed |
 | DLNA / UPnP | `AvTransportClient`, `RenderingControl`, `DeviceDescription` | Mixed |
@@ -235,7 +259,8 @@ adb logcat -c && adb logcat -v time \
 ```bash
 # DLNA
 adb logcat -c && adb logcat -v time \
-  'AvTransportClient:D' 'RenderingControl:D' 'DeviceDescription:D' 'LocalProxyServer:D' \
+  'AvTransportClient:D' 'DlnaCastTarget:D' 'RenderingControl:D' 'DeviceDescription:D' \
+  'LocalProxyServer:D' 'JniUpstreamHttp:D' \
   '*:S'
 
 # Roku
@@ -246,6 +271,18 @@ adb logcat -c && adb logcat -v time \
   'BrowserCastTarget:D' 'BrowserReceiverHostSvc:D' 'BrowserReceiverRepo:D' \
   '*:S'
 ```
+
+For DLNA failures, `AvTransportClient` reports the HTTP status and numeric UPnP
+error code without the SOAP body. `JniUpstreamHttp` assigns each upstream fetch a
+request ID and safe resource category; compare the first status with the final
+retry status (`captured`, optional `origin_referer`, then `minimal`). It does not
+log the URL, host, signed query, or header values. For screen mirroring, a DLNA
+`SetAVTransportURI` UPnP 501 on the continuous stream triggers one live-HLS
+handoff attempt. `DlnaCastTarget` reports TV transport-state changes after
+`Play` is accepted. Normal DLNA HLS loads advertise HLS in DIDL metadata and
+retry once without metadata if the renderer rejects that `SetAVTransportURI`
+with UPnP 501. DLNA mirroring waits for two complete live-HLS segments before
+handing off; Google Cast continues waiting for one.
 
 ---
 

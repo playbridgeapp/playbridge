@@ -119,6 +119,8 @@ fun CastSheet(
     }
     var packaging by remember { mutableStateOf(false) }
     val castSessionManager: CastSessionManager = org.koin.compose.koinInject()
+    val settingsRepository: com.playbridge.sender.data.settings.SettingsRepository = org.koin.compose.koinInject()
+    val hideEmptyAudioAndImages by settingsRepository.hideEmptyCastSheetTabs.collectAsState(initial = true)
     // Promote synthetic handoff into a dedicated first row; rank the rest below.
     val rankedVideos = remember(videos, mediaRevision) { buildCastSheetVideos(videos) }
     LaunchedEffect(videos, mediaRevision) {
@@ -169,22 +171,42 @@ fun CastSheet(
         }
     }
     val allSubtitles = remember(videos, mediaRevision) { videos.filter { it.isSubtitle } }
+    // User-added subtitles can arrive after the sheet opens, just like SPA detections.
+    var extraSubtitles by remember { mutableStateOf<List<DetectedVideo>>(emptyList()) }
 
     val isPlaylistMode = remember(playableVideos) {
         playableVideos.firstOrNull()?.playlistPayload != null
     }
 
-    // Keep the order fixed for this sheet session so late detector updates do not move tabs
-    // out from under someone using them. Selection follows the media kind, not its position.
-    val tabOrder = remember {
+    // Recompute when an SPA detects a new category. Keep a manually selected category selected
+    // when its position moves; if a hidden empty tab disappears, fall back to the first tab.
+    val tabOrder = remember(
+        playableVideos.size,
+        detectedAudio.size,
+        allSubtitles.size,
+        extraSubtitles.size,
+        detectedImages.size,
+        hideEmptyAudioAndImages,
+        contentPayload,
+    ) {
         prioritizedCastSheetTabs(
             videoCount = playableVideos.size + if (contentPayload != null) 1 else 0,
             audioCount = detectedAudio.size,
-            subtitleCount = allSubtitles.size,
+            subtitleCount = allSubtitles.size + extraSubtitles.size,
             imageCount = detectedImages.size,
+            hideEmptyAudioAndImages = hideEmptyAudioAndImages,
         )
     }
     var selectedTabKind by remember { mutableStateOf(tabOrder.first()) }
+    var manuallySelectedTab by remember { mutableStateOf(false) }
+    val visibleSelectedTabKind = selectedTabKind.takeIf { it in tabOrder } ?: tabOrder.first()
+    LaunchedEffect(tabOrder) {
+        val selectedTabDisappeared = selectedTabKind !in tabOrder
+        if (!manuallySelectedTab || selectedTabDisappeared) {
+            selectedTabKind = tabOrder.first()
+            if (selectedTabDisappeared) manuallySelectedTab = false
+        }
+    }
     val tabs: List<Pair<DetectedMediaKind?, String>> = if (isPlaylistMode) {
         listOf(null to "Playlist Bundle")
     } else {
@@ -197,11 +219,10 @@ fun CastSheet(
             }
         }
     }
-    val selectedTab = if (isPlaylistMode) 0 else tabOrder.indexOf(selectedTabKind)
+    val selectedTab = if (isPlaylistMode) 0 else tabOrder.indexOf(visibleSelectedTabKind)
 
     // Keep a manual source picker separate from the detected subtitle list.
     var showAddSubtitleDialog by remember { mutableStateOf(false) }
-    var extraSubtitles by remember { mutableStateOf<List<DetectedVideo>>(emptyList()) }
 
     val scope = rememberCoroutineScope()
     val videoListState = rememberLazyListState()
@@ -1000,7 +1021,12 @@ fun CastSheet(
 
                     Tab(
                         selected = tabSelected,
-                        onClick = { if (kind != null) selectedTabKind = kind },
+                        onClick = {
+                            if (kind != null) {
+                                selectedTabKind = kind
+                                manuallySelectedTab = true
+                            }
+                        },
                         selectedContentColor = accent,
                         unselectedContentColor = accent.copy(alpha = 0.72f),
                         modifier = Modifier
@@ -1050,7 +1076,7 @@ fun CastSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            if (isPlaylistMode || selectedTabKind == DetectedMediaKind.VIDEO) {
+            if (isPlaylistMode || visibleSelectedTabKind == DetectedMediaKind.VIDEO) {
                 if (
                     playableVideos.isEmpty() &&
                     unavailableVideos.isEmpty() &&
@@ -1310,7 +1336,7 @@ fun CastSheet(
                         }
                     }
                 }
-            } else if (selectedTabKind == DetectedMediaKind.AUDIO) {
+            } else if (visibleSelectedTabKind == DetectedMediaKind.AUDIO) {
                 if (detectedAudio.isEmpty()) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -1355,7 +1381,7 @@ fun CastSheet(
                         }
                     }
                 }
-            } else if (selectedTabKind == DetectedMediaKind.IMAGE) {
+            } else if (visibleSelectedTabKind == DetectedMediaKind.IMAGE) {
                 if (detectedImages.isEmpty()) {
                     Column(
                         modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
@@ -1399,7 +1425,7 @@ fun CastSheet(
                         }
                     }
                 }
-            } else if (selectedTabKind == DetectedMediaKind.SUBTITLE) {
+            } else if (visibleSelectedTabKind == DetectedMediaKind.SUBTITLE) {
                 // Subtitles Tab
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                     val combinedSubtitles = remember(allSubtitles, extraSubtitles) {

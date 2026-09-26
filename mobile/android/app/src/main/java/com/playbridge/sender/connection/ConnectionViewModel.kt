@@ -600,6 +600,7 @@ class ConnectionViewModel(
                         packaged.headers,
                     )
                     sendCommandAndRecord(cmd, "play", packaged.url, title)
+                    castSessionManager.attachNativeReplaySource(media)
                     castSessionManager.notifyNativePlaybackStarted()
                 } catch (e: Exception) {
                     android.util.Log.e("ConnectionViewModel", "castWebStream failed: ${e.message}")
@@ -645,7 +646,7 @@ class ConnectionViewModel(
 
 
 
-    fun sendCommandAndRecord(commandJson: String, type: String, url: String, title: String?) {
+    fun sendCommandAndRecord(commandJson: String, type: String, url: String, title: String?): Boolean {
         if (type == "playlist" || type == "play") {
             runCatching {
                 org.koin.core.context.GlobalContext.get()
@@ -653,17 +654,19 @@ class ConnectionViewModel(
                     .supersedeIfActive()
             }.onFailure { Log.w(TAG, "Could not supersede linked page queue: ${it.message}") }
         }
-        viewModelScope.launch(Dispatchers.IO) {
-            commandHistoryDb.commandHistoryDao().insert(
-                CommandHistoryEntity(
-                    commandType = type,
-                    url = url,
-                    title = title,
-                    payloadJson = commandJson
+        if (type != "play" && type != "playlist") {
+            viewModelScope.launch(Dispatchers.IO) {
+                commandHistoryDb.commandHistoryDao().insert(
+                    CommandHistoryEntity(
+                        commandType = type,
+                        url = url,
+                        title = title,
+                        payloadJson = commandJson
+                    )
                 )
-            )
+            }
         }
-        webSocketClient.send(commandJson)
+        return webSocketClient.send(commandJson)
     }
     /**
      * Hold a discovery session open while a UI surface is visible (Connection screen or

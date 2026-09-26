@@ -2,6 +2,7 @@ package com.playbridge.sender.cast.proxy
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 /**
@@ -33,5 +34,36 @@ class JniUpstreamHttpClientTest {
         assertFalse(filtered.containsKey("Sec-Fetch-Mode"))
         assertFalse(filtered.containsKey("Host"))
         assertFalse(filtered.containsKey("Accept-Encoding"))
+    }
+
+    @Test
+    fun logResourceTypeDoesNotExposeSignedUrl() {
+        assertEquals(
+            "hls_playlist",
+            JniUpstreamHttpClient.resourceTypeForLog("https://example.test/private/master.m3u8?token=secret"),
+        )
+        assertEquals(
+            "segment",
+            JniUpstreamHttpClient.resourceTypeForLog("https://example.test/private/001.jpg?token=secret"),
+        )
+        assertEquals("media", JniUpstreamHttpClient.resourceTypeForLog("not a URL"))
+    }
+
+    @Test
+    fun originRefererRetryUsesOnlyTheOrigin() {
+        val headers = mapOf("Origin" to "https://example.test:8443/private?token=secret", "User-Agent" to "UA")
+        val retried = JniUpstreamHttpClient.originRefererHeaders(headers)!!
+
+        assertEquals("https://example.test:8443/", retried["Referer"])
+        assertEquals("UA", retried["User-Agent"])
+        assertEquals(headers["Origin"], retried["Origin"])
+    }
+
+    @Test
+    fun originRefererRetryDoesNotOverrideCapturedReferer() {
+        assertNull(JniUpstreamHttpClient.originRefererHeaders(
+            mapOf("Origin" to "https://example.test", "referer" to "https://page.test/watch"),
+        ))
+        assertNull(JniUpstreamHttpClient.originRefererHeaders(mapOf("Origin" to "null")))
     }
 }

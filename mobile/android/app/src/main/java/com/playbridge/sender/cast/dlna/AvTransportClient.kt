@@ -9,6 +9,12 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.io.IOException
 
+internal class DlnaActionFailure(
+    val actionName: String,
+    val httpStatus: Int,
+    val upnpCode: String?,
+) : IOException("DLNA $actionName failed (HTTP $httpStatus, UPnP ${upnpCode ?: "unknown"})")
+
 /**
  * Minimal AVTransport (UPnP) SOAP control client. One instance per renderer
  * control URL.
@@ -54,11 +60,11 @@ class AvTransportClient(
     }
 
     private suspend fun requiredAction(name: String, args: String) {
-        if (action(name, args) == null) throw IOException("DLNA $name failed")
+        if (action(name, args, required = true) == null) throw IOException("DLNA $name failed")
     }
 
     /** POST a SOAP action; returns the response body on HTTP 200, else null (logged). */
-    private suspend fun action(name: String, args: String): String? = withContext(Dispatchers.IO) {
+    private suspend fun action(name: String, args: String, required: Boolean = false): String? = withContext(Dispatchers.IO) {
         val body = SOAP_HEAD + "<u:$name xmlns:u=\"$SERVICE\">$args</u:$name>" + SOAP_TAIL
         val req = Request.Builder()
             .url(controlUrl)
@@ -69,12 +75,16 @@ class AvTransportClient(
             http.newCall(req).execute().use { resp ->
                 val text = resp.body?.string().orEmpty()
                 if (!resp.isSuccessful) {
-                    Log.w(TAG, "$name -> HTTP ${resp.code}: ${text.take(300)}")
+                    val failure = DlnaActionFailure(name, resp.code, upnpErrorCode(text))
+                    Log.w(TAG, "$name -> HTTP ${resp.code}, UPnP error=${failure.upnpCode ?: "unknown"}")
+                    if (required) throw failure
                     return@use null
                 }
                 Log.d(TAG, "$name -> 200")
                 text
             }
+        } catch (e: DlnaActionFailure) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "$name failed", e)
             null
@@ -93,6 +103,11 @@ class AvTransportClient(
             .find(xml)?.groupValues?.get(1)?.trim()?.takeIf { it.isNotEmpty() }
 
     companion object {
+        /** Extract only the numeric UPnP code; fault descriptions may contain media URLs. */
+        internal fun upnpErrorCode(body: String): String? =
+            Regex("<(?:[\\w.-]+:)?errorCode\\b[^>]*>\\s*(\\d+)\\s*</(?:[\\w.-]+:)?errorCode\\s*>", RegexOption.IGNORE_CASE)
+                .find(body)?.groupValues?.get(1)
+
         private const val TAG = "AvTransportClient"
         private const val SERVICE = "urn:schemas-upnp-org:service:AVTransport:1"
         private val CONTENT_TYPE = "text/xml; charset=\"utf-8\"".toMediaType()

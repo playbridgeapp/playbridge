@@ -119,7 +119,9 @@ val appModule = module {
 
     // 4. WebSocket client, persistence, and the process-wide Rust discovery owner
     single { CastHistorySettings(androidContext()) }
-    single { WebSocketClient(get()) }
+    single { com.playbridge.sender.diagnostics.CastAttemptDiagnostics(androidContext()) }
+    single { com.playbridge.sender.history.CastReplayStore(androidContext(), get()) }
+    single { WebSocketClient(get(), get(), get()) }
     single { ConnectionStore(androidContext()) }
     single {
         com.playbridge.sender.connection.ReceiverDiscoveryRepository(
@@ -176,6 +178,8 @@ val appModule = module {
             settingsRepository = get(),
             screenMirrorCoordinator = get(),
             externalScreenMirrorCoordinator = get(),
+            castAttemptDiagnostics = get(),
+            castReplayStore = get(),
         )
     }
 
