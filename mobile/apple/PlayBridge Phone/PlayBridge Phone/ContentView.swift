@@ -4,12 +4,15 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var store: BrowserStore
+    @StateObject private var pageCasting = PageCastCoordinator()
     @State private var showDestinationPicker = false
     @State private var attemptedReconnectInForeground = false
 
     private var showsMiniBar: Bool {
         switch nav.currentScreen {
-        case .browser, .dashboard, .connection, .remote, .history, .bookmarks, .browserSettings:
+        case .browser: return pageCasting.isLinked
+        case .dashboard, .connection, .remote, .history, .bookmarks, .browserSettings:
             return false
         default:
             return true
@@ -31,15 +34,33 @@ struct ContentView: View {
                     }
                 }
         }
+        .environmentObject(pageCasting)
         .tint(Theme.primary)
         .sheet(isPresented: $showDestinationPicker) { DeviceConnectionSheet() }
+        .sheet(item: Binding(get: { pageCasting.presentation }, set: { if $0 == nil { pageCasting.dismissPresentation() } })) { _ in
+            PageCastRequestSheet(casting: pageCasting)
+        }
         .alert("Couldn’t complete cast action", isPresented: Binding(
             get: { vm.operationError != nil }, set: { if !$0 { vm.operationError = nil } }
         )) {
             Button("OK", role: .cancel) { vm.operationError = nil }
         } message: { Text(vm.operationError ?? "") }
         .onAppear {
+            pageCasting.attach(vm)
+            pageCasting.onError = { [weak vm] in vm?.operationError = $0 }
+            store.onWebsiteCast = { [weak pageCasting] tab, message in
+                MainActor.assumeIsolated { pageCasting?.receive(message, from: tab) }
+            }
+            store.onPageCastInvalidated = { [weak pageCasting] tab in
+                MainActor.assumeIsolated { pageCasting?.sourceInvalidated(tab) }
+            }
+            vm.onUserMediaAction = { [weak pageCasting] in
+                MainActor.assumeIsolated { pageCasting?.userStartedCast() }
+            }
             reconnectOnActivation()
+        }
+        .onReceive(vm.objectWillChange) { _ in
+            Task { @MainActor in pageCasting.refresh() }
         }
         .onChange(of: scenePhase) { phase in
             if phase == .background {

@@ -24,7 +24,7 @@ struct BrowserScreen: View {
         }
         .onAppear {
             store.browserVisible = true
-            // Website requests arrive only after consent, with their original page context.
+            // User-initiated link context-menu casts. Website API requests use PageCastCoordinator.
             store.onPageCast = { payload, origin in
                 guard let url = payload["url"] as? String, !url.isEmpty else { return }
                 let v = DetectedVideo(url: url, contentType: payload["contentType"] as? String,

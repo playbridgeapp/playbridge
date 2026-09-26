@@ -1,5 +1,19 @@
 # iPhone standalone fixture checks
 
+Website casting, remembered permissions, and linked/lazy playlists:
+
+```sh
+bash mobile/apple/tests/run-page-cast-model-checks.sh
+bash mobile/apple/tests/run-page-cast-coordinator-checks.sh
+node --test mobile/apple/tests/PageCastScriptTests.js
+```
+
+These test bounded payloads, headers/subtitle preservation, exact-origin grants,
+permission resets, session ownership, queue demand/retries, cancellation, and
+receiver changes. `run-browser-startup-checks.sh` additionally runs the production
+page API through WKWebView to a mock receiver. See
+`docs/ios-website-casting.md` for the API and physical-receiver test scope.
+
 AirPlay queue and external subtitle packaging:
 
 ```sh

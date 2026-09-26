@@ -113,6 +113,7 @@ struct BrowserSettingsScreen: View {
     @State private var engine = SearchEngine.current
     @State private var confirmClearHistory = false
     @State private var clearedMessage: String?
+    @State private var showCastPermissions = false
 
     var body: some View {
         ZStack {
@@ -138,6 +139,7 @@ struct BrowserSettingsScreen: View {
                         .onChange(of: engine) { newValue in SearchEngine.current = newValue }
                     }
                     Section("Privacy") {
+                        Button("Website casting permissions") { showCastPermissions = true }
                         Link("Privacy policy", destination: URL(string: "https://playbridge.app/privacy")!)
                         Button("Clear history") { confirmClearHistory = true }
                             .foregroundColor(Theme.danger)
@@ -151,6 +153,7 @@ struct BrowserSettingsScreen: View {
                 .scrollContentBackground(.hidden)
             }
         }
+        .sheet(isPresented: $showCastPermissions) { PageCastPermissionsView() }
         .alert("Clear all history?", isPresented: $confirmClearHistory) {
             Button("Clear", role: .destructive) { data.clearHistory(); flash("History cleared.") }
             Button("Cancel", role: .cancel) {}

@@ -30,6 +30,8 @@ final class ConnectionViewModel: ObservableObject {
         return externalReceiver?.name ?? pairedDevice?.name
     }
     let castHistory = CastHistoryStore()
+    /// A manual media/queue action takes playlist ownership back from a website.
+    var onUserMediaAction: (() -> Void)?
     let ws = WebSocketClient()
     let coordinator = ConnectionCoordinator()
     let castPlaybackSession = CastPlaybackSession(renderer: CastSystemPlayback.shared)
@@ -486,6 +488,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func disconnect() {
+        onUserMediaAction?()
         airPlay.disconnect()
         state = .disconnected
         endCastSession()
@@ -532,6 +535,7 @@ final class ConnectionViewModel: ObservableObject {
     func cast(urlString: String, title: String? = nil) {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: [:], contentType: nil); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: nil, headers: [:]); return }
         SenderDebugNetwork.request("Cast output", url: trimmed)
@@ -540,6 +544,7 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Local library media is already served by this phone; do not wrap its LAN URL in a remote proxy.
     func castLocalMedia(url: String, title: String, contentType: String) {
+        onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(url, title: title, headers: [:], contentType: contentType, local: true); return }
         let kind = contentType.hasPrefix("image/") ? "image" : contentType.hasPrefix("audio/") ? "audio" : "video"
         noteNewCast(mediaKind: kind, title: title)
@@ -556,6 +561,7 @@ final class ConnectionViewModel: ObservableObject {
     func castMedia(url: String, title: String? = nil, headers: [String: String] = [:], contentType: String? = nil) {
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        onUserMediaAction?()
         if isAirPlay { sendAirPlayURL(trimmed, title: title, headers: headers, contentType: contentType); return }
         if isExternalReceiver { sendExternalReceiverURL(trimmed, title: title, contentType: contentType, headers: headers); return }
         SenderDebugNetwork.request("Cast output", url: trimmed, headers: headers)
@@ -572,6 +578,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Cast a browser-detected stream: chosen quality URL (or the master), `mediaHeaders`,
     /// attached subtitles. Mirrors the Android `CastSheet` → `createSingleVideoCommandJson` path.
     func castStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
+        onUserMediaAction?()
         if isAirPlay {
             sendAirPlayURL(quality?.url ?? video.url, title: video.displayTitle,
                 headers: VideoDetector.mediaHeaders(for: video), contentType: video.contentType,
@@ -602,6 +609,7 @@ final class ConnectionViewModel: ObservableObject {
     /// Retain phone routes beyond sheet dismissal and across queued items.
     @MainActor
     func sendRoutedStream(_ media: RoutedStream, video: DetectedVideo, subtitles: [RoutedStream], queue: Bool, subtitleTitles: [String] = [], airPlayRequest: UUID? = nil) async throws {
+        onUserMediaAction?()
         let kind = video.isImage ? "image" : video.isAudio ? "audio" : "video"
         let contentType = video.contentType ?? ((video.isImage || video.isAudio)
             ? URL(string: video.url).map(LocalFileServer.mimeType(for:)) : nil)
@@ -661,6 +669,7 @@ final class ConnectionViewModel: ObservableObject {
 
     /// Queue a browser-detected stream.
     func queueStream(_ video: DetectedVideo, quality: VideoQuality? = nil, subtitles: [String] = [], playerMode: String? = nil) {
+        onUserMediaAction?()
         if isAirPlay {
             sendAirPlayURL(quality?.url ?? video.url, title: video.displayTitle,
                 headers: VideoDetector.mediaHeaders(for: video), contentType: video.contentType, queue: true,
@@ -691,6 +700,7 @@ final class ConnectionViewModel: ObservableObject {
         guard !isExternalReceiver else { operationError = "This receiver cannot open a browser page."; return }
         let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        onUserMediaAction?()
         SenderDebugNetwork.request("Browser command output", url: trimmed)
         ws.send(WireProtocol.browserCommand(
             url: trimmed,
@@ -700,6 +710,7 @@ final class ConnectionViewModel: ObservableObject {
     }
 
     func control(_ command: String) {
+        if command == "stop" || command == "end_receiver" { onUserMediaAction?() }
         if isAirPlay {
             switch command {
             case "play": airPlay.play()
@@ -843,6 +854,7 @@ final class ConnectionViewModel: ObservableObject {
     }
     func removeFromQueue(itemIds: [String]) {
         guard supportsQueueV1, !itemIds.isEmpty else { return }
+        onUserMediaAction?()
         ws.send(WireProtocol.queueRemove(
             itemIds: itemIds,
             playbackId: coordinator.playlist?.playbackId
@@ -850,6 +862,7 @@ final class ConnectionViewModel: ObservableObject {
     }
     func moveInQueue(itemId: String, beforeItemId: String?) {
         guard supportsQueueV1 else { return }
+        onUserMediaAction?()
         ws.send(WireProtocol.queueMove(
             itemId: itemId,
             beforeItemId: beforeItemId,
@@ -858,6 +871,7 @@ final class ConnectionViewModel: ObservableObject {
     }
     func clearQueue() {
         guard supportsQueueV1 else { return }
+        onUserMediaAction?()
         ws.send(WireProtocol.queueClear(playbackId: coordinator.playlist?.playbackId))
     }
     func mouse(event: String, dx: Float = 0, dy: Float = 0) { ws.sendMouse(event: event, dx: dx, dy: dy) }
@@ -935,6 +949,7 @@ final class ConnectionViewModel: ObservableObject {
             operationError = "Connect a device before replaying this cast."
             return
         }
+        onUserMediaAction?()
         let target = destinationID
         let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
         let configuration = StreamProxySettingsStore.load()
@@ -1182,6 +1197,47 @@ final class ConnectionViewModel: ObservableObject {
             self.upsertSaved(device)
             self.pairedDevice = device
         }
+    }
+}
+
+extension ConnectionViewModel: PageCastTransport {
+    var canReconnectWebsiteReceiver: Bool { !isAirPlay && !isExternalReceiver && pairedDevice != nil }
+    var websitePlayback: TvPlaybackStatus? { coordinator.playback }
+    var websitePlaylist: PlaylistUiState? { coordinator.playlist }
+    var websiteContext: String { coordinator.activeContext }
+    func reconnectWebsiteReceiver() { if let pairedDevice { connectSaved(pairedDevice) } }
+    func queryWebsiteState() {
+        guard isConnected, !isAirPlay, !isExternalReceiver else { return }
+        queryContext()
+        // Apple TV's context reply doesn't include its playlist. Recover a lost
+        // queue broadcast explicitly so linked prefetch can resume after reconnect.
+        if supportsQueueV1 { ws.send(WireProtocol.queueQuery()) }
+    }
+    func websiteMatchesReceiver(_ id: String) -> Bool {
+        guard !isAirPlay, !isExternalReceiver, let pairedDevice else { return false }
+        return deviceKey(pairedDevice) == id || "\(pairedDevice.ip):\(pairedDevice.port)" == id
+    }
+
+    func sendWebsiteCommand(action: String, payload: [String: Any]) -> Bool {
+        guard isConnected, !isAirPlay, !isExternalReceiver,
+              let data = try? JSONSerialization.data(withJSONObject: ["type": "command", "action": action, "payload": payload]) else { return false }
+        return ws.send(String(decoding: data, as: UTF8.self))
+    }
+
+    @MainActor
+    func sendWebsitePlaylist(_ request: PageCastRequest, allowedPrivateOrigins: Set<String>) async throws {
+        try Task.checkCancellation()
+        guard isConnected, ws.isConnected else { throw PageCastError(code: "connect_failed") }
+        guard !isAirPlay, !isExternalReceiver else { throw PageCastError(code: "unsupported_target") }
+        let command = request.playlistCommand(allowedPrivateOrigins: allowedPrivateOrigins)
+        guard !command.isEmpty else { throw PageCastError(code: "invalid_request") }
+        // Drop the previous queue snapshot before waiting for this playlist's echo.
+        coordinator.playlist = nil
+        guard ws.send(command) else { throw PageCastError(code: "connect_failed") }
+        let item = request.items[request.startIndex]
+        noteNewCast(mediaKind: item["mediaKind"] as? String ?? "video", title: item["title"] as? String)
+        routedStreamRegistrations.removeAll()
+        recordCast(command)
     }
 }
 

@@ -44,8 +44,9 @@ sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 source_dir="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser"
 xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.0-simulator" -module-cache-path "$test_dir/cache" \
  "$source_dir/BrowserPlaybackState.swift" "$source_dir/BrowserFavicon.swift" "$source_dir/BrowserStore.swift" "$source_dir/BrowserTab.swift" "$source_dir/BrowserInteraction.swift" "$source_dir/BrowserDownloads.swift" "$source_dir/WebViewContainer.swift" \
+ "$source_dir/PageCastSource.swift" "$source_dir/PageCastScript.swift" "$source_dir/PageCastRequest.swift" "$source_dir/PageCastPermissions.swift" "$source_dir/PageCastCoordinator.swift" "$source_dir/../Models/Models.swift" \
  "$source_dir/../UI/TabsScreen.swift" "$source_dir/../UI/Theme.swift" "$source_dir/../UI/MenuSheet.swift" "$source_dir/../UI/BrowserNetworkLogView.swift" "$source_dir/BrowserDomainRules.swift" "$source_dir/BrowserNetworkLog.swift" "$source_dir/NavigationAdRules.swift" "$source_dir/../Data/BrowserDataStore.swift" \
- "$repo_root/mobile/apple/tests/BrowserStartupTests.swift" -o "$app/BrowserChecks"
+ "$repo_root/mobile/apple/tests/BrowserPageCastIntegration.swift" "$repo_root/mobile/apple/tests/BrowserStartupTests.swift" -o "$app/BrowserChecks"
 codesign --force --sign - "$app" >/dev/null
 xcrun simctl install "$simulator" "$app"
 if [[ "${1:-}" == "--popup-touch" || "${1:-}" == "--network-log-ui" || "${1:-}" == "--tabs-ui" || "${1:-}" == "--picker-menu-ui" || "${1:-}" == "--picker-live-ui" ]]; then

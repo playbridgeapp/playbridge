@@ -271,10 +271,7 @@ enum DetectionScript {
         } catch (e) {}
       }
 
-      // ── window.playbridge.cast() bridge ───────────────────────────────────────
-      window.playbridge = {
-        cast: function (payload) { post({ type: 'cast', payload: payload }); }
-      };
+      // The main-frame website casting API is installed separately by PageCastScript.
     })();
     """#
 }

@@ -53,7 +53,7 @@ enum BrowserUserAgentPreset: String, CaseIterable, Identifiable {
 
 /// One browser tab: lazily owns a persistent `WKWebView`, publishes navigation state, and routes detection
 /// messages to its `VideoDetector`. Rough analogue of an entry in the Android `TabManager`.
-final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate {
+final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate, PageCastSource {
     let id = UUID()
 
     private(set) var loadedWebView: WKWebView?
@@ -172,6 +172,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     var onMetadataChanged: (() -> Void)?
     private var requestedAddress = ""
     private var documentID = UUID()
+    var onWebsiteCast: (([String: Any]) -> Void)?
+    var onPageCastInvalidated: (() -> Void)?
+    var pageCastDocumentID: UUID { documentID }
+    var pageCastOrigin: String? { BrowserSitePolicy.origin(loadedWebView?.url) }
+    var pageCastTitle: String { title }
+    var pageCastCanRequest: Bool { isActive() }
+
+    func deliverPageCast(_ message: [String: Any], documentID: UUID) {
+        guard self.documentID == documentID else { return }
+        loadedWebView?.callAsyncJavaScript("window.__playbridgePageCastReceive?.(message)",
+            arguments: ["message": message], in: nil, in: .page, completionHandler: nil)
+    }
     private let popupInteraction = BrowserPopupInteraction()
     var popupOpenerURL: URL?
     private(set) var hasCommittedPage = false
@@ -201,17 +213,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
     func requestPageCast(_ payload: [String: Any], source: URL) {
         guard isActive(), BrowserSitePolicy.origin(source) != nil,
-              BrowserSitePolicy.origin(source) == BrowserSitePolicy.origin(loadedWebView?.url),
-              let raw = payload["url"] as? String, let target = URL(string: raw),
-              BrowserSitePolicy.origin(target) != nil else { return }
-        let generation = documentID
-        // Show the actual destination host, including local-network destinations.
-        present(BrowserPrompt(title: "Allow website to cast?",
-            message: "\(BrowserSitePolicy.origin(source) ?? "Website") wants to play media from \(BrowserSitePolicy.origin(target) ?? "another server") on your connected device.",
-            acceptLabel: "Cast") { [weak self] accepted, _ in
-                guard let self, accepted, self.isActive(), self.documentID == generation else { return }
-                self.onPageCast?(payload, source.absoluteString)
-            })
+              BrowserSitePolicy.origin(source) == pageCastOrigin else { return }
+        onWebsiteCast?(["requestId": UUID().uuidString, "documentToken": documentID.uuidString,
+                        "operation": "cast", "payload": payload])
     }
     func allowPopupsForSite() {
         BrowserSitePolicy.setPopupsAllowed(true, url: blockedPopupOrigin)
@@ -275,6 +279,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         cc.addUserScript(WKUserScript(source: DetectionScript.source,
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
+        cc.addUserScript(WKUserScript(source: PageCastScript.source,
+                                      injectionTime: .atDocumentStart,
+                                      forMainFrameOnly: true))
         cc.addUserScript(WKUserScript(source: BrowserPlaybackScript.source,
             injectionTime: .atDocumentStart, forMainFrameOnly: false, in: BrowserPlaybackScript.world))
         if networkCaptureEnabled {
@@ -495,6 +502,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        onPageCastInvalidated?()
         navigationFailure = nil
         popupBlocked = false
         blockedPopupOrigin = nil
@@ -502,6 +510,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        onPageCastInvalidated?()
         documentID = UUID()
         playbackState = BrowserPlaybackState()
         playbackExpiryTask?.cancel()
@@ -554,6 +563,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         isLoading = false
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        onPageCastInvalidated?()
         isPickingElement = false
         pickerSelector = nil
         pickerHasSource = false

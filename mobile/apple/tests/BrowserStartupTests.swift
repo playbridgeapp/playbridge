@@ -456,28 +456,8 @@ extension BrowserStartupChecks {
         try await wait("retry navigation") { parent.navigationFailure == nil && !view.isLoading }
         parent.load(base + "/parent")
         try await wait("return to parent") { view.title == "Parent" && !view.isLoading }
-        var casts: [(String, String)] = []
-        browser.onPageCast = { payload, origin in casts.append((payload["url"] as! String, origin)) }
+        try await verifyWebsiteCasting(parent, browser: browser, base: base)
         let source = view.url!
-        parent.requestPageCast(["url": base + "/media"], source: source)
-        try check(parent.prompt != nil && casts.isEmpty, "Cast bypassed consent")
-        let consent = parent.prompt!
-        parent.prompt = nil
-        consent.finish(true)
-        consent.finish(true)
-        try check(casts.count == 1 && casts[0].1 == source.absoluteString, "Duplicate cast or wrong origin")
-        parent.requestPageCast(["url": base + "/media"], source: source)
-        browser.select(browser.tabs.first { $0.id != parent.id }!.id)
-        try check(parent.prompt == nil && casts.count == 1, "Switching tabs failed to reject consent")
-        parent.requestPageCast(["url": base + "/media"], source: source)
-        try check(parent.prompt == nil, "Background page requested consent")
-        browser.select(parent.id)
-        parent.requestPageCast(["url": base + "/media"], source: URL(string: "https://wrong.test")!)
-        try check(parent.prompt == nil, "Unverified origin accepted")
-        _ = try await view.evaluateJavaScript("var f=document.createElement('iframe'); f.srcdoc='<script>window.webkit.messageHandlers.playbridge.postMessage({type:\"cast\",payload:{url:\"https://media.test/video.mp4\"}})<\\/script>'; document.body.appendChild(f); void(0)")
-        try await Task.sleep(nanoseconds: 300_000_000)
-        try check(parent.prompt == nil, "Iframe initiated casting")
-        print("CHECK: consent passed")
         try await verifyElementPicker(parent, browser: browser, base: base)
 
 

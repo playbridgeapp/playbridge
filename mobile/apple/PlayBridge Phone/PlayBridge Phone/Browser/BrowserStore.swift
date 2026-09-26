@@ -9,6 +9,8 @@ final class BrowserStore: ObservableObject {
 
     /// Forwarded when any tab's page calls `window.playbridge.cast(...)`.
     var onPageCast: (([String: Any], String) -> Void)?
+    var onWebsiteCast: ((BrowserTab, [String: Any]) -> Void)?
+    var onPageCastInvalidated: ((BrowserTab) -> Void)?
     let downloads = BrowserDownloads()
     var browserVisible = false {
         didSet { if !browserVisible { activeTab?.cancelPrompt() } }
@@ -96,6 +98,14 @@ final class BrowserStore: ObservableObject {
             var castPayload = payload
             if castPayload["title"] == nil { castPayload["title"] = tab?.title }
             self?.onPageCast?(castPayload, origin)
+        }
+        tab.onWebsiteCast = { [weak self, weak tab] message in
+            guard let tab else { return }
+            self?.onWebsiteCast?(tab, message)
+        }
+        tab.onPageCastInvalidated = { [weak self, weak tab] in
+            guard let tab else { return }
+            self?.onPageCastInvalidated?(tab)
         }
         tab.onDownload = { [weak self] download, view in self?.downloads.adopt(download, webView: view) }
         tab.onMetadataChanged = { [weak self] in self?.saveTabs() }
@@ -340,6 +350,7 @@ final class BrowserStore: ObservableObject {
         let survivors = tabs.filter { !ids.contains($0.id) }
         let next = tabs.dropFirst(oldActiveIndex).first { !ids.contains($0.id) } ?? survivors.last
         for tab in closing {
+            onPageCastInvalidated?(tab)
             pendingInitialLoads.removeValue(forKey: tab.id)
             tab.detector.clear()
             tab.cancelPrompt()
@@ -384,12 +395,19 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
         }
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
+        case "pageCastRequest":
+            guard let tab, message.webView === tab.loadedWebView, message.frameInfo.isMainFrame,
+                  let frameOrigin = BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)),
+                  frameOrigin == tab.pageCastOrigin else { return }
+            tab.onWebsiteCast?(body)
         case "mediaLifecycle":
             if message.frameInfo.isMainFrame { tab?.detector.beginMediaLifecycle() }
         case "video":
             tab?.detector.ingest(body)
         case "cast":
-            guard message.frameInfo.isMainFrame, let payload = body["payload"] as? [String: Any],
+            guard message.webView === tab?.loadedWebView, message.frameInfo.isMainFrame,
+                  BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)) == tab?.pageCastOrigin,
+                  let payload = body["payload"] as? [String: Any],
                   let source = message.frameInfo.request.url else { return }
             tab?.requestPageCast(payload, source: source)
         case "pickerState":

@@ -5,6 +5,7 @@ import SwiftUI
 struct NowPlayingMiniBar: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var pageCasting: PageCastCoordinator
     @Binding var showDestinationPicker: Bool
 
     private var playback: TvPlaybackStatus? { vm.coordinator.playback }
@@ -23,6 +24,7 @@ struct NowPlayingMiniBar: View {
         return vm.isConnected ? deviceName : "This Device"
     }
     private var secondaryText: String {
+        if let site = pageCasting.controllerName { return "Controlled by \(site) · on \(deviceName)" }
         if playing { return "\(paused ? "Paused · " : "")on \(deviceName)" }
         if vm.isConnected {
             return vm.externalReceiver.map { "\($0.protocolName) · Ready to cast" } ?? "Ready to cast"
@@ -72,6 +74,16 @@ struct NowPlayingMiniBar: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Choose cast device")
+                }
+                if pageCasting.isLinked {
+                    Button { pageCasting.unlink() } label: {
+                        Text("Unlink")
+                            .font(Theme.font(size: 12, weight: .semibold))
+                            .frame(minWidth: 48, minHeight: 42)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Unlink website")
+                    .accessibilityHint("Stops website control while keeping the current media playing")
                 }
             }
             .foregroundColor(Theme.onSecondaryContainer)
