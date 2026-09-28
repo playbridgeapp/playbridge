@@ -8,6 +8,7 @@ export type PageCastItem = {
   url: string;
   title?: string;
   contentType?: string;
+  startPositionMs?: number;
   headers?: Record<string, string>;
   subtitles?: string[];
   subtitleResources?: SubtitleResource[];
@@ -58,6 +59,7 @@ const MAX_METADATA_DEPTH = 8;
 const MAX_METADATA_KEYS = 64;
 export const MAX_PAGE_CAST_REQUEST_BYTES = 64 * 1024;
 const MAX_ITEM_ID_LENGTH = 128;
+const MAX_START_POSITION_MS = 604_800_000;
 const ALLOWED_HEADERS = new Set([
   "authorization",
   "cookie",
@@ -226,10 +228,15 @@ function commonItem(value: Record<string, unknown>): PageCastItem | undefined {
   if (value.metadata !== undefined && !visualMetadata) return undefined;
   const title = optionalString(value.title);
   const contentType = shortString(value.contentType, 256);
+  const startPositionMs = value.startPositionMs;
+  if (startPositionMs !== undefined &&
+      (typeof startPositionMs !== "number" || !Number.isInteger(startPositionMs) ||
+        startPositionMs < 0 || startPositionMs > MAX_START_POSITION_MS)) return undefined;
   return {
     url: value.url,
     ...(title ? { title } : {}),
     ...(contentType ? { contentType } : {}),
+    ...(startPositionMs !== undefined ? { startPositionMs } : {}),
     ...(headers ? { headers } : {}),
     ...(subtitles ? { subtitles } : {}),
     ...(credentialedSubtitles ? { subtitleResources: credentialedSubtitles } : {}),

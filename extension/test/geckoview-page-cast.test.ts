@@ -50,6 +50,15 @@ test("preserves an explicit pre-play preference", () => {
   }), undefined);
 });
 
+test("preserves bounded resume positions for direct and linked casts", () => {
+  const direct = normalizePageCastPayload({ url: "https://media.example/movie.mkv", startPositionMs: 120_000 });
+  const linked = normalizeLinkedPageCastPayload({ items: [{ id: "episode-1", url: "https://media.example/episode.mkv", startPositionMs: 240_000 }] });
+  assert.equal(direct?.items[0].startPositionMs, 120_000);
+  assert.equal(linked?.items[0].startPositionMs, 240_000);
+  assert.equal(normalizePageCastPayload({ url: "https://media.example/movie.mkv", startPositionMs: -1 }), undefined);
+  assert.equal(normalizeLinkedPageCastPayload({ items: [{ id: "one", url: "https://media.example/one.mkv", startPositionMs: 604_800_001 }] }), undefined);
+});
+
 test("normalizes bounded exact private-origin requests", () => {
   const direct = normalizePageCastPayload({
     url: "http://media-box.local/video.mp4",

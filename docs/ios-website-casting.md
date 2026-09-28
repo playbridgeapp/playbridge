@@ -41,7 +41,7 @@ window.playbridge.capabilities
 
 `cast()` is the legacy, fire-and-forget API. It accepts one media object, an array
 of objects, or `{ items, startIndex, metadata, skipPreplay, privateNetworkOrigins }`.
-Each item supports `url`, `title`, `contentType`, explicit `headers`, `subtitles`,
+Each item supports `url`, `title`, `contentType`, `startPositionMs` (milliseconds), explicit `headers`, `subtitles`,
 `subtitleResources`, and `metadata`. iOS also preserves the receiver's
 `mediaKind` and `displayDurationMs` fields for audio/image items.
 

@@ -24,6 +24,10 @@ import Foundation
         precondition((payload["visualMetadata"] as? [String: Any])?["title"] as? String == "Series")
         precondition(item["allowedPrivateOrigins"] as? [String] == ["http://192.168.1.1:80"])
         precondition((item["subtitleResources"] as? [[String: Any]])?.first?["language"] as? String == "en")
+        let resumed = try PageCastRequest.parse(["url": media, "startPositionMs": 120_000])
+        precondition(resumed.items[0]["start_position_ms"] as? Int == 120_000)
+        rejects(["url": media, "startPositionMs": -1])
+        rejects(["url": media, "startPositionMs": 604_800_001])
         let array = try PageCastRequest.parse([["url": media], ["url": media]])
         precondition(array.items.count == 2)
         let mixed = try PageCastRequest.parse(["items": [["url": media, "mediaKind": "audio"],

@@ -56,6 +56,12 @@ struct PageCastRequest {
                 guard let duration = integer(value), duration >= 0 else { throw PageCastError(code: "invalid_request") }
                 item["displayDurationMs"] = duration
             }
+            if let value = source["startPositionMs"] {
+                guard let position = integer(value), position >= 0, position <= 604_800_000 else {
+                    throw PageCastError(code: "invalid_request")
+                }
+                item["start_position_ms"] = position
+            }
             var subtitleCount = 0
             if let value = source["subtitles"] {
                 guard let urls = value as? [String], urls.count <= 16, urls.allSatisfy(validateURL) else { throw PageCastError(code: "invalid_request") }

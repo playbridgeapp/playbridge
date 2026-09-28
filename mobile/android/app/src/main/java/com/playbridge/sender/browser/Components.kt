@@ -722,6 +722,11 @@ object Components {
                             }
                             val displayDurationMs = obj["displayDurationMs"]?.jsonPrimitive?.longOrNull
                             if (displayDurationMs != null && displayDurationMs < 0L) return@mapNotNull null
+                            val startPositionValue = obj["startPositionMs"]
+                            val startPositionMs = startPositionValue?.jsonPrimitive?.longOrNull
+                            if (startPositionValue != null && (startPositionMs == null || startPositionMs < 0 || startPositionMs > 604_800_000)) {
+                                return@mapNotNull null
+                            }
                             val headers = parsePageCastHeaders(obj["headers"] as? JsonObject)
                                 ?: return@mapNotNull null
                             val subtitles = obj["subtitles"]?.jsonArray?.mapNotNull { value ->
@@ -769,6 +774,7 @@ object Components {
                                 content_type = contentType,
                                 media_kind = mediaKind,
                                 display_duration_ms = displayDurationMs,
+                                start_position_ms = startPositionMs,
                                 subtitles = subtitles,
                                 subtitle_resources = subtitleResources,
                                 detected_by = "page_cast",

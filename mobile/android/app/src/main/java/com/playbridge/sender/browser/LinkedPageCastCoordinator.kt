@@ -683,6 +683,14 @@ class LinkedPageCastCoordinator(
                     val title = obj.optString("title").ifBlank { null }
                     val contentType = obj.optString("contentType").ifBlank { null }
                     if ((title?.length ?: 0) > 4_096 || (contentType?.length ?: 0) > 256) return null
+                    val startPositionValue = obj.opt("startPositionMs")
+                    val startPositionMs: Long? = if (startPositionValue == null || startPositionValue === JSONObject.NULL) {
+                        null
+                    } else {
+                        val value = (startPositionValue as? Number)?.toDouble() ?: return null
+                        if (!value.isFinite() || value < 0 || value > 604_800_000 || value % 1 != 0.0) return null
+                        value.toLong()
+                    }
                     val headers = parseHeaders(obj.optJSONObject("headers")) ?: return null
                     val subtitles = obj.optJSONArray("subtitles")?.let { values ->
                         if (values.length() > MAX_SUBTITLES) return null
@@ -722,6 +730,7 @@ class LinkedPageCastCoordinator(
                                 title = title,
                                 headers = headers,
                                 content_type = contentType,
+                                start_position_ms = startPositionMs,
                                 subtitles = subtitles,
                                 subtitle_resources = subtitleResources,
                                 detected_by = "linked_page",
