@@ -12,7 +12,21 @@ import 'stream_proxy_server.dart';
 import 'extension_request_debug_log.dart';
 
 /// Coordinator that delegates playback to the active [PlayerEngine].
+class PlaybackBoundary {
+  const PlaybackBoundary(this.event, this.sessionEnded);
+  final String event;
+  final bool sessionEnded;
+}
+
 class PlayerController extends ChangeNotifier {
+  final playbackBoundaries =
+      StreamController<PlaybackBoundary>.broadcast(sync: true);
+  void _playbackBoundary(String event, {bool sessionEnded = false}) {
+    if (_playbackId != null) {
+      playbackBoundaries.add(PlaybackBoundary(event, sessionEnded));
+    }
+  }
+
   static const int maxQueueItems = 200;
   static const int maxQueueBatchItems = 50;
 
@@ -279,6 +293,7 @@ class PlayerController extends ChangeNotifier {
         headers: items[index].headers,
       );
     }
+    _playbackBoundary('stopped', sessionEnded: true);
     // Mask before queue/reveal so stop→unfocus→play B never flashes video A.
     // Do not disable the mpv video track — that left a permanent black picture.
     _opening = true;
@@ -384,6 +399,10 @@ class PlayerController extends ChangeNotifier {
     final retainedQueue = retained.map((index) => _queue[index]).toList();
     final retainedIds = retained.map((index) => _queueItemIds[index]).toList();
     final removedCurrent = activeId != null && itemIds.contains(activeId);
+    if (removedCurrent) {
+      _playbackBoundary('stopped');
+      _opening = true;
+    }
     _queue
       ..clear()
       ..addAll(retainedQueue);
@@ -394,8 +413,13 @@ class PlayerController extends ChangeNotifier {
     if (!removedCurrent && activeId != null) {
       _setIndex(_queueItemIds.indexOf(activeId));
     } else {
-      _setIndex(oldIndex.clamp(0, _queue.length - 1));
-      await _openCurrentItem();
+      try {
+        _setIndex(oldIndex.clamp(0, _queue.length - 1));
+        await _openCurrentItem();
+      } finally {
+        _opening = false;
+        notifyListeners();
+      }
     }
     queueChanges.value++;
     notifyListeners();
@@ -435,9 +459,16 @@ class PlayerController extends ChangeNotifier {
   Future<void> _jumpToReady(int index) async {
     if (index < 0 || index >= _queue.length) return;
     if (index == _currentIndex) return;
-    _setIndex(index);
-    _queueRevision++;
-    await _openCurrentItem();
+    _playbackBoundary('stopped');
+    _opening = true;
+    try {
+      _setIndex(index);
+      _queueRevision++;
+      await _openCurrentItem();
+    } finally {
+      _opening = false;
+      notifyListeners();
+    }
   }
 
   Future<void> next() async {
@@ -581,6 +612,7 @@ class PlayerController extends ChangeNotifier {
       notifyListeners();
       if (_imagePositionMs >= _imageDurationMs) {
         timer.cancel();
+        _playbackBoundary('ended', sessionEnded: !hasNext);
         _imagePlaying = false;
         if (hasNext) {
           unawaited(next());
@@ -604,6 +636,7 @@ class PlayerController extends ChangeNotifier {
           '[player] ignoring early completed (pos=${pos}ms dur=${dur}ms) — still buffering?');
       return;
     }
+    _playbackBoundary('ended', sessionEnded: !hasNext);
     if (hasNext) {
       unawaited(next());
       return;
@@ -738,6 +771,7 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> stop() async {
     await _waitForProxyToggle();
+    _playbackBoundary('stopped', sessionEnded: true);
     _imageTimer?.cancel();
     _imageTimer = null;
     _imagePlaying = false;
@@ -863,6 +897,7 @@ class PlayerController extends ChangeNotifier {
       replacement = QueueItem(
         url: directUrl,
         title: item.title,
+        progressIdentity: item.progressIdentity,
         headers: item.originalHeaders,
         subtitles: item.subtitles,
         subtitleResources: item.subtitleResources,
@@ -921,6 +956,7 @@ class PlayerController extends ChangeNotifier {
       replacement = QueueItem(
         url: loopbackUrl,
         title: item.title,
+        progressIdentity: item.progressIdentity,
         headers: null,
         subtitles: item.subtitles,
         subtitleResources: item.subtitleResources,
@@ -1002,6 +1038,8 @@ class PlayerController extends ChangeNotifier {
 
   @override
   Future<void> dispose() async {
+    _playbackBoundary('stopped', sessionEnded: true);
+    await playbackBoundaries.close();
     indexChanges.dispose();
     queueChanges.dispose();
     playRequests.dispose();

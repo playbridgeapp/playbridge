@@ -14,6 +14,7 @@ import 'screen_mirror_receiver.dart';
 import 'system_volume.dart';
 import 'extension_request_debug_log.dart';
 import 'late_subtitle_loader.dart';
+import 'progress_webhook.dart';
 
 const int kDefaultPort = PairingStore.defaultReceiverPort;
 
@@ -85,6 +86,8 @@ class ReceiverServer extends ChangeNotifier {
   rust.ReceiverRuntime? _runtime;
   StreamSubscription<Map<String, Object?>>? _eventsSubscription;
   Timer? _statusTimer;
+  final _progressReporter = ProgressWebhookReporter();
+  StreamSubscription<PlaybackBoundary>? _playbackBoundaries;
   bool _disposed = false;
   bool _pairingInProgress = false;
   int _connectedClientCount = 0;
@@ -127,6 +130,7 @@ class ReceiverServer extends ChangeNotifier {
           'stable_item_ids',
           'command_results',
           'subtitle_resource_add_v1',
+          'progress_webhook_v1',
         ],
         screenMirrorWebRtc: true,
       ),
@@ -148,6 +152,10 @@ class ReceiverServer extends ChangeNotifier {
         '[server] Rust WSS receiver listening on 0.0.0.0:$boundPort '
         '(pin ${cert.fingerprint})',
       );
+      _playbackBoundaries = player.playbackBoundaries.stream.listen((boundary) {
+        _progressReporter.terminal(boundary.event,
+            sessionEnded: boundary.sessionEnded, snapshot: _progressSnapshot());
+      });
       player.addListener(_broadcastStatus);
       player.indexChanges.addListener(_broadcastPlaylistStatus);
       player.queueChanges.addListener(_broadcastPlaylistStatus);
@@ -244,6 +252,9 @@ class ReceiverServer extends ChangeNotifier {
   Future<void> stop() async {
     if (_disposed) return;
     _disposed = true;
+    _progressReporter.terminal('stopped',
+        sessionEnded: true, snapshot: _progressSnapshot());
+    await _playbackBoundaries?.cancel();
     _statusTimer?.cancel();
     player.removeListener(_broadcastStatus);
     player.indexChanges.removeListener(_broadcastPlaylistStatus);
@@ -322,6 +333,8 @@ class ReceiverServer extends ChangeNotifier {
           startIndex,
           isRemote: true,
         );
+        _progressReporter.configure(cmd.progressWebhook);
+        _progressReporter.update(_progressSnapshot());
         _broadcastPlaylistStatus();
       case PlaylistJumpCmd(:final index, :final itemId, :final ifPlaybackId):
         if (requestId != null && player.playbackId == null) {
@@ -743,7 +756,27 @@ class ReceiverServer extends ChangeNotifier {
     }
   }
 
+  ProgressSnapshot? _progressSnapshot() {
+    final index = player.currentIndex;
+    if (index < 0 ||
+        index >= player.queue.length ||
+        player.playbackId == null ||
+        player.currentItemId == null) {
+      return null;
+    }
+    final identity = player.queue[index].progressIdentity;
+    if (identity == null) return null;
+    return ProgressSnapshot(
+        playbackId: player.playbackId!,
+        itemId: player.currentItemId!,
+        content: identity,
+        state: player.state,
+        positionMs: player.positionMs,
+        durationMs: player.durationMs);
+  }
+
   void _broadcastStatus() {
+    if (!player.isOpening) _progressReporter.update(_progressSnapshot());
     _runtime?.broadcast(_statusMessage());
     _broadcastTracksIfChanged();
   }
@@ -842,6 +875,17 @@ QueueItem receiverQueueItemFromPayload(PlayPayload payload,
   );
   return QueueItem(
     url: payload.url,
+    progressIdentity: payload.hasProgressIdentity()
+        ? validProgressIdentity({
+            'type': payload.progressIdentity.type,
+            'contentId': payload.progressIdentity.contentId,
+            'videoId': payload.progressIdentity.videoId,
+            if (payload.progressIdentity.hasSeason())
+              'season': payload.progressIdentity.season,
+            if (payload.progressIdentity.hasEpisode())
+              'episode': payload.progressIdentity.episode,
+          })
+        : null,
     title: payload.titleOrNull ?? payload.url,
     headers: payload.headersOrNull,
     subtitles: payload.subtitlesOrNull,

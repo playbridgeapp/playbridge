@@ -344,6 +344,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             failEmptyInitialRequest()
             return
         }
+        ServerService.activatePlaybackWebhook(playbackRequestId(intent))
         playbackCoordinator.setPlaylist(playlist.items, playlist.start_index)
         activeHistoryId = intent.getStringExtra(PlayerLauncher.EXTRA_HISTORY_ID)
             ?: PlayerLauncher.historyId(playlist.items)
@@ -384,6 +385,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             return
         }
 
+        ServerService.activatePlaybackWebhook(playbackRequestId(intent))
         setIntent(intent)
         replacePlayback(intent, playlist)
     }
@@ -1825,11 +1827,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     duration = event.getLong(RendererProtocol.KEY_DURATION_MS).coerceAtLeast(0L),
                     title = event.getString(RendererProtocol.KEY_TITLE),
                     mediaKind = currentMediaKind.wireValue,
+                    playbackId = playbackCoordinator.playbackId,
+                    currentItemId = playbackCoordinator.itemIdAt(playbackCoordinator.index),
                 )
                 ServerService.broadcastStatus(this, status)
             }
             RendererProtocol.EVENT_ENDED -> {
                 if (sessionCoordinator.canHandleEnded(currentSession.sessionId)) {
+                    broadcastWebhookTerminalStatus("ended")
                     lifecycleScope.launch { playbackCoordinator.next() }
                 } else {
                     FileLogger.d(
@@ -1940,6 +1945,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun finishPlaybackSession() {
         if (finishingSession) return
         finishingSession = true
+        broadcastWebhookTerminalStatus("stopped")
         failPendingLateSubtitleRequests()
         logPlaybackContextCheckpoint("finishPlaybackSession")
         cancelStartupWatchdog()
@@ -1977,6 +1983,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     put("index", itemIndex)
                     put("title", item.title ?: "Item ${itemIndex + 1}")
                     playbackCoordinator.itemIdAt(itemIndex)?.let { put("itemId", it) }
+                    item.progress_identity?.let { put("progressIdentity", org.json.JSONObject(com.playbridge.player.server.progressIdentityJson(it))) }
                     item.visual_metadata?.season?.let { put("season", it) }
                     item.visual_metadata?.episode?.let { put("episode", it) }
                     item.visual_metadata?.imdb_id?.let { put("imdbId", it) }
@@ -2063,6 +2070,17 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 null
             },
         )
+    }
+
+    private fun broadcastWebhookTerminalStatus(state: String) {
+        ServerService.broadcastStatus(this, createStatusJson(
+            state = state,
+            position = lastPositionMs,
+            duration = lastDurationMs,
+            title = null,
+            playbackId = playbackCoordinator.playbackId,
+            currentItemId = playbackCoordinator.itemIdAt(playbackCoordinator.index),
+        ))
     }
 
     private fun broadcastPlaybackStatus() {

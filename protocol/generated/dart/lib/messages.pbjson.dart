@@ -190,6 +190,43 @@ final $typed_data.Uint8List subtitleResourceDescriptor = $convert.base64Decode(
     'oKDEhlYWRlcnNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6'
     'AjgBQggKBl9sYWJlbEILCglfbGFuZ3VhZ2U=');
 
+@$core.Deprecated('Use progressIdentityDescriptor instead')
+const ProgressIdentity$json = {
+  '1': 'ProgressIdentity',
+  '2': [
+    {'1': 'type', '3': 1, '4': 1, '5': 9, '10': 'type'},
+    {'1': 'content_id', '3': 2, '4': 1, '5': 9, '10': 'contentId'},
+    {'1': 'video_id', '3': 3, '4': 1, '5': 9, '10': 'videoId'},
+    {'1': 'season', '3': 4, '4': 1, '5': 5, '9': 0, '10': 'season', '17': true},
+    {'1': 'episode', '3': 5, '4': 1, '5': 5, '9': 1, '10': 'episode', '17': true},
+  ],
+  '8': [
+    {'1': '_season'},
+    {'1': '_episode'},
+  ],
+};
+
+/// Descriptor for `ProgressIdentity`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List progressIdentityDescriptor = $convert.base64Decode(
+    'ChBQcm9ncmVzc0lkZW50aXR5EhIKBHR5cGUYASABKAlSBHR5cGUSHQoKY29udGVudF9pZBgCIA'
+    'EoCVIJY29udGVudElkEhkKCHZpZGVvX2lkGAMgASgJUgd2aWRlb0lkEhsKBnNlYXNvbhgEIAEo'
+    'BUgAUgZzZWFzb26IAQESHQoHZXBpc29kZRgFIAEoBUgBUgdlcGlzb2RliAEBQgkKB19zZWFzb2'
+    '5CCgoIX2VwaXNvZGU=');
+
+@$core.Deprecated('Use progressWebhookDescriptor instead')
+const ProgressWebhook$json = {
+  '1': 'ProgressWebhook',
+  '2': [
+    {'1': 'url', '3': 1, '4': 1, '5': 9, '10': 'url'},
+    {'1': 'bearer_token', '3': 2, '4': 1, '5': 9, '10': 'bearerToken'},
+  ],
+};
+
+/// Descriptor for `ProgressWebhook`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List progressWebhookDescriptor = $convert.base64Decode(
+    'Cg9Qcm9ncmVzc1dlYmhvb2sSEAoDdXJsGAEgASgJUgN1cmwSIQoMYmVhcmVyX3Rva2VuGAIgAS'
+    'gJUgtiZWFyZXJUb2tlbg==');
+
 @$core.Deprecated('Use playPayloadDescriptor instead')
 const PlayPayload$json = {
   '1': 'PlayPayload',
@@ -214,6 +251,7 @@ const PlayPayload$json = {
     {'1': 'display_duration_ms', '3': 18, '4': 1, '5': 3, '9': 12, '10': 'displayDurationMs', '17': true},
     {'1': 'skip_history', '3': 19, '4': 1, '5': 8, '9': 13, '10': 'skipHistory', '17': true},
     {'1': 'item_id', '3': 20, '4': 1, '5': 9, '9': 14, '10': 'itemId', '17': true},
+    {'1': 'progress_identity', '3': 21, '4': 1, '5': 11, '6': '.playbridge.ProgressIdentity', '9': 15, '10': 'progressIdentity', '17': true},
   ],
   '3': [PlayPayload_HeadersEntry$json],
   '8': [
@@ -232,6 +270,7 @@ const PlayPayload$json = {
     {'1': '_display_duration_ms'},
     {'1': '_skip_history'},
     {'1': '_item_id'},
+    {'1': '_progress_identity'},
   ],
 };
 
@@ -264,13 +303,15 @@ final $typed_data.Uint8List playPayloadDescriptor = $convert.base64Decode(
     'ZVJlc291cmNlUhFzdWJ0aXRsZVJlc291cmNlcxIiCgptZWRpYV9raW5kGBEgASgJSAtSCW1lZG'
     'lhS2luZIgBARIzChNkaXNwbGF5X2R1cmF0aW9uX21zGBIgASgDSAxSEWRpc3BsYXlEdXJhdGlv'
     'bk1ziAEBEiYKDHNraXBfaGlzdG9yeRgTIAEoCEgNUgtza2lwSGlzdG9yeYgBARIcCgdpdGVtX2'
-    'lkGBQgASgJSA5SBml0ZW1JZIgBARo6CgxIZWFkZXJzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkS'
-    'FAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AUIICgZfdGl0bGVCDwoNX2NvbnRlbnRfdHlwZUIOCg'
-    'xfZGV0ZWN0ZWRfYnlCDgoMX3BsYXllcl9tb2RlQhsKGV9wcmVmZXJyZWRfYXVkaW9fbGFuZ3Vh'
-    'Z2VCHgocX3ByZWZlcnJlZF9zdWJ0aXRsZV9sYW5ndWFnZUIYChZfZGVmYXVsdF92aWRlb19xdW'
-    'FsaXR5QhcKFV9tYXhfYml0cmF0ZV9jYXBfbWJwc0ISChBfdmlzdWFsX21ldGFkYXRhQg4KDF9i'
-    'aW5nZV9ncm91cEIUChJfc3RhcnRfcG9zaXRpb25fbXNCDQoLX21lZGlhX2tpbmRCFgoUX2Rpc3'
-    'BsYXlfZHVyYXRpb25fbXNCDwoNX3NraXBfaGlzdG9yeUIKCghfaXRlbV9pZA==');
+    'lkGBQgASgJSA5SBml0ZW1JZIgBARJOChFwcm9ncmVzc19pZGVudGl0eRgVIAEoCzIcLnBsYXli'
+    'cmlkZ2UuUHJvZ3Jlc3NJZGVudGl0eUgPUhBwcm9ncmVzc0lkZW50aXR5iAEBGjoKDEhlYWRlcn'
+    'NFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgBQggKBl90'
+    'aXRsZUIPCg1fY29udGVudF90eXBlQg4KDF9kZXRlY3RlZF9ieUIOCgxfcGxheWVyX21vZGVCGw'
+    'oZX3ByZWZlcnJlZF9hdWRpb19sYW5ndWFnZUIeChxfcHJlZmVycmVkX3N1YnRpdGxlX2xhbmd1'
+    'YWdlQhgKFl9kZWZhdWx0X3ZpZGVvX3F1YWxpdHlCFwoVX21heF9iaXRyYXRlX2NhcF9tYnBzQh'
+    'IKEF92aXN1YWxfbWV0YWRhdGFCDgoMX2JpbmdlX2dyb3VwQhQKEl9zdGFydF9wb3NpdGlvbl9t'
+    'c0INCgtfbWVkaWFfa2luZEIWChRfZGlzcGxheV9kdXJhdGlvbl9tc0IPCg1fc2tpcF9oaXN0b3'
+    'J5QgoKCF9pdGVtX2lkQhQKEl9wcm9ncmVzc19pZGVudGl0eQ==');
 
 @$core.Deprecated('Use playlistPayloadDescriptor instead')
 const PlaylistPayload$json = {
@@ -280,10 +321,12 @@ const PlaylistPayload$json = {
     {'1': 'start_index', '3': 2, '4': 1, '5': 5, '10': 'startIndex'},
     {'1': 'visual_metadata', '3': 3, '4': 1, '5': 11, '6': '.playbridge.VisualMetadata', '9': 0, '10': 'visualMetadata', '17': true},
     {'1': 'skip_preplay', '3': 4, '4': 1, '5': 8, '9': 1, '10': 'skipPreplay', '17': true},
+    {'1': 'progress_webhook', '3': 5, '4': 1, '5': 11, '6': '.playbridge.ProgressWebhook', '9': 2, '10': 'progressWebhook', '17': true},
   ],
   '8': [
     {'1': '_visual_metadata'},
     {'1': '_skip_preplay'},
+    {'1': '_progress_webhook'},
   ],
 };
 
@@ -292,8 +335,10 @@ final $typed_data.Uint8List playlistPayloadDescriptor = $convert.base64Decode(
     'Cg9QbGF5bGlzdFBheWxvYWQSLQoFaXRlbXMYASADKAsyFy5wbGF5YnJpZGdlLlBsYXlQYXlsb2'
     'FkUgVpdGVtcxIfCgtzdGFydF9pbmRleBgCIAEoBVIKc3RhcnRJbmRleBJICg92aXN1YWxfbWV0'
     'YWRhdGEYAyABKAsyGi5wbGF5YnJpZGdlLlZpc3VhbE1ldGFkYXRhSABSDnZpc3VhbE1ldGFkYX'
-    'RhiAEBEiYKDHNraXBfcHJlcGxheRgEIAEoCEgBUgtza2lwUHJlcGxheYgBAUISChBfdmlzdWFs'
-    'X21ldGFkYXRhQg8KDV9za2lwX3ByZXBsYXk=');
+    'RhiAEBEiYKDHNraXBfcHJlcGxheRgEIAEoCEgBUgtza2lwUHJlcGxheYgBARJLChBwcm9ncmVz'
+    'c193ZWJob29rGAUgASgLMhsucGxheWJyaWRnZS5Qcm9ncmVzc1dlYmhvb2tIAlIPcHJvZ3Jlc3'
+    'NXZWJob29riAEBQhIKEF92aXN1YWxfbWV0YWRhdGFCDwoNX3NraXBfcHJlcGxheUITChFfcHJv'
+    'Z3Jlc3Nfd2ViaG9vaw==');
 
 @$core.Deprecated('Use queueAddPayloadDescriptor instead')
 const QueueAddPayload$json = {

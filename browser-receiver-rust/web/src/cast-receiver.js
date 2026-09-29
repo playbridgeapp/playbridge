@@ -1,3 +1,5 @@
+import { createProgressReporter } from './shared/progress.js';
+import progressWebhookOrigins from './progress-webhook-origins.json' with { type: 'json' };
 import { normalizeReceiverMedia } from './shared/media.js';
 import { classifyPlaybackError, createLoadLifecycle } from './shared/lifecycle.js';
 import { createReceiverPresentation, redactUrl, redactUrlsInText } from './shared/presentation.js';
@@ -19,7 +21,7 @@ function sanitizedErrorForLog(error) {
 function removeAuthenticationHints(media) {
   if (!media || !media.customData || typeof media.customData !== 'object') return;
   const customData = { ...media.customData };
-  for (const key of ['headers', 'httpHeaders', 'requestHeaders', 'authorization', 'credentials', 'cookies']) {
+  for (const key of ['headers', 'httpHeaders', 'requestHeaders', 'authorization', 'credentials', 'cookies', 'progressWebhook']) {
     delete customData[key];
   }
   media.customData = customData;
@@ -60,6 +62,10 @@ export function startCastReceiver(dependencies = {}) {
   const logger = dependencies.logger || console;
   const lifecycle = createLoadLifecycle();
   let currentMedia = null;
+  const progress = dependencies.progressReporter || createProgressReporter({ allowedOrigins: progressWebhookOrigins });
+  const sample = (state) => progress.observe(state,
+    Number(playerManager.getCurrentTimeSec?.()) * 1000,
+    Number(playerManager.getDurationSec?.()) * 1000);
 
   function log(event, details) {
     const method = event === 'error' ? 'error' : 'info';
@@ -71,7 +77,15 @@ export function startCastReceiver(dependencies = {}) {
   playerManager.setMessageInterceptor(messages.MessageType.LOAD, (request) => {
     const generation = lifecycle.begin();
     try {
+      // Read callback before removing it from all CAF-visible status/customData.
+      const data = request.customData || {};
+      const webhook = data.progressWebhook;
+      const identity = request.media?.customData?.progressIdentity;
+      const itemId = request.media?.customData?.itemId;
+      if (request.customData) { request.customData = { ...request.customData }; delete request.customData.progressWebhook; }
       const result = applyReceiverMediaToLoadRequest(request, messages);
+      sample('stopped');
+      progress.start(webhook, identity, itemId);
       currentMedia = result.normalized;
       presentation.showMedia(currentMedia, 'buffering');
       log('load', sanitizedMediaForLog(currentMedia));
@@ -106,14 +120,19 @@ export function startCastReceiver(dependencies = {}) {
   });
   addPlayerEvent(eventTypes.PLAYING, () => {
     if (currentMedia) presentation.showMedia(currentMedia, 'playing');
+    sample('playing');
     log('playing');
   });
+  addPlayerEvent(eventTypes.PAUSE, () => sample('paused'));
+  addPlayerEvent(eventTypes.TIME_UPDATE, () => sample(playerManager.getPlayerState?.() === 'PAUSED' ? 'paused' : 'playing'));
   addPlayerEvent(eventTypes.ERROR, (event) => {
+    sample('stopped');
     const classified = classifyPlaybackError(event && (event.detailedErrorCode || event.error) || event);
     presentation.showStatus(classified.message, true);
     log('error', sanitizedErrorForLog(classified));
   });
   const returnToReady = (reason) => {
+    sample(reason === 'finished' || reason === 'end_of_stream' ? 'ended' : 'stopped');
     lifecycle.cancel();
     currentMedia = null;
     presentation.showReady();
@@ -141,6 +160,7 @@ export function startCastReceiver(dependencies = {}) {
     }
     if (contextEvents.SHUTDOWN != null) {
       context.addEventListener(contextEvents.SHUTDOWN, (event) => {
+        sample('stopped');
         lifecycle.cancel();
         log('shutdown', { reason: event && event.reason });
       });

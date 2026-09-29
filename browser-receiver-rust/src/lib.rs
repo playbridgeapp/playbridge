@@ -1,3 +1,4 @@
+use playbridge_cast_core::progress::ProgressReporter;
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
@@ -141,6 +142,8 @@ struct SessionEntry {
     sender: mpsc::UnboundedSender<HostToBrowserFrame>,
     capabilities: RwLock<BrowserCapabilities>,
     status: RwLock<BrowserSessionStatus>,
+    progress: std::sync::Mutex<ProgressReporter>,
+    progress_load_id: std::sync::Mutex<String>,
 }
 
 impl SessionEntry {
@@ -250,15 +253,37 @@ impl BrowserReceiverService {
         Ok(())
     }
 
-    pub async fn load(&self, session_id: &str, media: BrowserMedia) -> Result<String, String> {
+    pub async fn load(&self, session_id: &str, mut media: BrowserMedia) -> Result<String, String> {
         let request_id = self.next_request_id();
+        let entry = self
+            .state
+            .sessions
+            .get(session_id)
+            .ok_or("browser session not found")?
+            .clone();
+        if !entry.approved.load(Ordering::Acquire) || entry.closed.load(Ordering::Acquire) {
+            return Err("browser session not approved".into());
+        }
+        let webhook = media.progress_webhook.take();
+        let identity = media.progress_identity.take();
+        let item_id = identity
+            .as_ref()
+            .map(|i| i.video_id.clone())
+            .unwrap_or_default();
+        let mut progress_load_id = entry.progress_load_id.lock().unwrap();
         self.send_approved(
             session_id,
             HostToBrowserFrame::Load {
                 request_id: request_id.clone(),
-                media,
+                media: Box::new(media),
             },
         )?;
+        *progress_load_id = request_id.clone();
+        entry
+            .progress
+            .lock()
+            .unwrap()
+            .start(webhook, item_id, identity);
         Ok(request_id)
     }
 
@@ -651,6 +676,8 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
         sender,
         capabilities: RwLock::new(BrowserCapabilities::default()),
         status: RwLock::new(BrowserSessionStatus::default()),
+        progress: std::sync::Mutex::new(ProgressReporter::new()),
+        progress_load_id: std::sync::Mutex::new(String::new()),
     });
     // Drop earlier sessions for this browser identity before advertising the
     // new one, so Desktop never accumulates multiple "waiting to pair" rows
@@ -736,6 +763,7 @@ async fn run_browser_socket(mut socket: WebSocket, service: BrowserReceiverServi
     }
 
     entry.closed.store(true, Ordering::Release);
+    entry.progress.lock().unwrap().finish("stopped");
     service.state.sessions.remove(&session_id);
     let receiver_id = entry.receiver_id.clone();
     let name = entry.name.clone();
@@ -771,6 +799,7 @@ async fn handle_browser_frame(
             }
         }
         BrowserToHostFrame::Status {
+            media_request_id,
             request_id,
             state,
             position_ms,
@@ -779,6 +808,20 @@ async fn handle_browser_frame(
             muted,
             title,
         } if entry.approved.load(Ordering::Acquire) => {
+            if media_request_id.as_ref() == Some(&*entry.progress_load_id.lock().unwrap()) {
+                entry.progress.lock().unwrap().observe(
+                    match state {
+                        BrowserPlaybackState::Playing => "playing",
+                        BrowserPlaybackState::Paused => "paused",
+                        BrowserPlaybackState::Stopped => "stopped",
+                        BrowserPlaybackState::Ended => "ended",
+                        BrowserPlaybackState::Error => "error",
+                        _ => "buffering",
+                    },
+                    position_ms,
+                    duration_ms,
+                );
+            }
             *entry.status.write().await = BrowserSessionStatus {
                 state,
                 position_ms,
@@ -793,6 +836,7 @@ async fn handle_browser_frame(
             });
         }
         BrowserToHostFrame::Ended if entry.approved.load(Ordering::Acquire) => {
+            // Final webhook sample comes from the correlated `status` frame.
             entry.status.write().await.state = BrowserPlaybackState::Ended;
             let _ = service.state.events.send(BrowserReceiverEvent::Ended {
                 session: entry.snapshot().await,
@@ -802,6 +846,9 @@ async fn handle_browser_frame(
             request_id,
             message,
         } if entry.approved.load(Ordering::Acquire) => {
+            if request_id.as_ref() == Some(&*entry.progress_load_id.lock().unwrap()) {
+                entry.progress.lock().unwrap().finish("stopped");
+            }
             entry.status.write().await.state = BrowserPlaybackState::Error;
             let _ = service.state.events.send(BrowserReceiverEvent::Error {
                 session: entry.snapshot().await,
@@ -994,6 +1041,8 @@ mod tests {
                         poster_url: None,
                         subtitle_url: None,
                         start_position_ms: None,
+                        progress_webhook: None,
+                        progress_identity: None,
                     }
                 )
                 .await
@@ -1070,6 +1119,8 @@ mod tests {
                     poster_url: None,
                     subtitle_url: None,
                     start_position_ms: None,
+                    progress_webhook: None,
+                    progress_identity: None,
                 },
             )
             .await
@@ -1083,6 +1134,7 @@ mod tests {
         socket
             .send(Message::Text(
                 serde_json::to_string(&BrowserToHostFrame::Status {
+                    media_request_id: None,
                     request_id: None,
                     state: BrowserPlaybackState::Playing,
                     position_ms: 1_000,

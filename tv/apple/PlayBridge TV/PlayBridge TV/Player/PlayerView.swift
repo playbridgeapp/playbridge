@@ -95,6 +95,7 @@ struct PlayerView: View {
     }
 
     private func handleNext() {
+        server.progressWebhook.advance()
         stillWatching.reset()
         mediaGeneration &+= 1
         // A player may also advance after a stream error. Completion is inferred from
@@ -110,6 +111,7 @@ struct PlayerView: View {
     }
 
     private func handleJump(to index: Int) {
+        server.progressWebhook.finish(clear: false)
         stillWatching.reset()
         mediaGeneration &+= 1
         historyStore.flushProgress()
@@ -123,6 +125,19 @@ struct PlayerView: View {
 
     private func broadcast(_ json: [String: Any], for item: Playbridge_PlayPayload) {
         server.broadcast(json)
+        if !isPreBuffering, !item.hasProgressIdentity { server.progressWebhook.finish(clear: false) }
+        if !isPreBuffering, item.hasProgressIdentity,
+           json["type"] as? String == "status",
+           let position = json["position"] as? Int,
+           let duration = json["duration"] as? Int {
+            let identity = item.progressIdentity
+            var content: [String: Any] = ["type": identity.type, "contentId": identity.contentID, "videoId": identity.videoID]
+            if identity.hasSeason { content["season"] = identity.season }
+            if identity.hasEpisode { content["episode"] = identity.episode }
+            server.progressWebhook.sample(itemID: playlistStore.currentItemID ?? identity.videoID,
+                                          content: content, state: json["state"] as? String ?? "",
+                                          position: position, duration: duration)
+        }
         guard !isPreBuffering, !item.skipHistory, let url = item.validURL,
               url == (playlistStore.currentItem ?? payload).validURL,
               json["type"] as? String == "status",
@@ -132,6 +147,7 @@ struct PlayerView: View {
     }
 
     private func exitPlayback() {
+        server.progressWebhook.finish(clear: true)
         historyStore.flushProgress()
         onDismiss()
     }

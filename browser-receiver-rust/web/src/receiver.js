@@ -623,8 +623,10 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
     });
   }
 
+  var progressLoadId = null;
   function loadMedia(requestId, media) {
     teardownPlayer();
+    progressLoadId = requestId;
     var generation = loadLifecycle.current();
     mediaActive = true;
     try {
@@ -1456,6 +1458,7 @@ import { createReceiverPresentation, redactUrl } from './shared/presentation.js'
     var playbackState = forcedState || state();
     send({
       type: 'status',
+      mediaRequestId: progressLoadId || undefined,
       requestId: requestId || undefined,
       state: playbackState,
       positionMs: Math.max(0, Math.round(((el && el.currentTime) || 0) * 1000)),

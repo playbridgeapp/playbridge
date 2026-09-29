@@ -111,6 +111,7 @@ struct ContentView: View {
                     // PlayerView always renders so it can buffer in the background.
                     // isPreBuffering=true keeps it muted and UI-hidden during preplay.
                     PlayerView(payload: request, isPreBuffering: isPreBuffering, stillWatching: stillWatching) {
+                        server.progressWebhook.finish(clear: true)
                         playlistStore.clear()
                         stillWatching.reset()
                         withAnimation { server.currentPlayRequest = nil }
@@ -126,6 +127,7 @@ struct ContentView: View {
                                 withAnimation { playerStarted = true }
                             },
                             onBack: {
+                                server.progressWebhook.finish(clear: true)
                                 playlistStore.clear()
                                 stillWatching.reset()
                                 server.currentPlayRequest = nil

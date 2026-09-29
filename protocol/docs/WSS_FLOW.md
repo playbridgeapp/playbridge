@@ -352,3 +352,62 @@ preference affects subsequently sent items, leaves existing history untouched,
 and does not disable sender-side watch tracking. Android TV, Apple TV, and Desktop implement this
 preference; older or other receivers may ignore it, so senders must not promise
 history suppression on those receivers.
+
+## Optional playback progress callback
+
+Receivers advertising `progress_webhook_v1` accept `progressWebhook` on an authenticated
+`command/playlist` payload and `progressIdentity` on each playlist item or later
+`queue_add` item. The callback configuration belongs to that playback session. A new
+playlist clears any previous callback when the field is absent. Queue items may retain
+their nonsecret identity for episode navigation and status; the callback URL and token
+must remain in memory only and must never appear in status, history, logs, media request
+headers, or the browser receiver's local WebSocket frames.
+
+```json
+{
+  "type": "command", "action": "playlist", "payload": {
+    "items": [{
+      "url": "https://media.example/video.mkv", "itemId": "episode-2",
+      "progressIdentity": {
+        "type": "series", "contentId": "tt123", "videoId": "tt123:1:2",
+        "season": 1, "episode": 2
+      }
+    }],
+    "progressWebhook": {
+      "url": "https://sync.example.com/v1/progress",
+      "bearerToken": "<session-token>"
+    }
+  }
+}
+```
+
+The receiver posts `ProgressWebhookEvent` JSON with `Authorization: Bearer
+<session-token>`. For example, the event body can be:
+
+```json
+{
+  "version": 1, "eventId": "e51d", "playbackId": "a82f", "itemId": "episode-2",
+  "event": "paused", "content": {
+    "type": "series", "contentId": "tt123", "videoId": "tt123:1:2",
+    "season": 1, "episode": 2
+  },
+  "positionMs": 420000, "durationMs": 3600000,
+  "occurredAt": "2026-09-28T12:00:00.000Z"
+}
+```
+
+`started` is sent when playback begins, `progress` about every 30 seconds while
+playing, and `paused`, `stopped`, or `ended` at those transitions. A retry uses the
+same `eventId`; a callback service should deduplicate by that ID. Playback with no
+known positive duration is omitted. Network delivery is best effort: receivers use
+short timeouts and bounded queues, and a receiver crash or network loss can drop the
+last event. The callback service owns provider credentials and translates these
+events into the Stremio, Nuvio, or other account APIs.
+
+Native receivers require HTTPS on port 443, reject local/private resolved addresses,
+pin each request to validated DNS answers, and do not follow redirects. The Google
+Cast web receiver can only call origins approved in its deployment's
+`browser-receiver-rust/web/src/progress-webhook-origins.json`; the service must allow
+cross-origin requests from that receiver. The default allowlist is empty. A browser
+receiver hosted on the sender posts through its native host so credentials do not
+enter the local browser connection.

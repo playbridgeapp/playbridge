@@ -61,6 +61,21 @@ message SubtitleResource {
   optional string language = 4;
 }
 
+// Nonsecret item identity for generic progress callbacks.
+message ProgressIdentity {
+  string type = 1;
+  string content_id = 2 [json_name = "contentId"];
+  string video_id = 3 [json_name = "videoId"];
+  optional int32 season = 4;
+  optional int32 episode = 5;
+}
+
+// Session-only credentials: NEVER persist, log, or echo in status/history.
+message ProgressWebhook {
+  string url = 1;
+  string bearer_token = 2 [json_name = "bearerToken"];
+}
+
 message PlayPayload {
   string url = 1;
   optional string title = 2;
@@ -96,6 +111,7 @@ message PlayPayload {
   optional bool skip_history = 19 [json_name = "skipHistory"];
   // Stable receiver queue identity. Receivers assign one when omitted.
   optional string item_id = 20 [json_name = "itemId"];
+  optional ProgressIdentity progress_identity = 21 [json_name = "progressIdentity"];
 }
 
 message PlaylistPayload {
@@ -105,6 +121,7 @@ message PlaylistPayload {
   // Presentation hint for receivers that normally show a metadata-rich pre-play screen.
   // Metadata remains available for playback controls and history when this is true.
   optional bool skip_preplay = 4      [json_name = "skipPreplay"];
+  optional ProgressWebhook progress_webhook = 5 [json_name = "progressWebhook"];
 }
 
 message QueueAddPayload {

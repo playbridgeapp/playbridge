@@ -215,6 +215,9 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
     })
 
     /** Live queue (incl. queue_add-appended episodes) for engine switches. */
+    override fun progressPlaybackId(): String? = coordinator.playbackId
+    override fun progressItemId(index: Int): String? = coordinator.itemIdAt(index)
+
     override fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
         coordinator.playlist to coordinator.index
 
@@ -901,6 +904,7 @@ class MpvPlayerActivity : PlayerActivity(), MPVLib.EventObserver {
                 }
 
                 runOnUiThread {
+                    broadcastWebhookEnded(positionMs, durationMs)
                     controlsViewModel.setBuffering(false)
                     if (!coordinator.isEmpty && coordinator.index < coordinator.playlist.size - 1) {
                         navigationJob?.cancel()

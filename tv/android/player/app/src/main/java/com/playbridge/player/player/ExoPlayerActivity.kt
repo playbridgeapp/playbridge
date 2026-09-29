@@ -181,6 +181,9 @@ class ExoPlayerActivity : PlayerActivity() {
     })
 
     /** Live queue (incl. queue_add-appended episodes) for engine switches. */
+    override fun progressPlaybackId(): String? = coordinator.playbackId
+    override fun progressItemId(index: Int): String? = coordinator.itemIdAt(index)
+
     override fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
         coordinator.playlist to coordinator.index
     private var lastVolume: Float = 1.0f
@@ -853,6 +856,7 @@ class ExoPlayerActivity : PlayerActivity() {
                     malformedContentRetryCount = 0
                 }
                 androidx.media3.common.Player.STATE_ENDED -> {
+                    broadcastWebhookEnded(player.currentPosition, player.duration)
                     FileLogger.i(TAG, "Playback ended")
                     controlsViewModel.setBuffering(false)
                     navigationJob?.cancel()

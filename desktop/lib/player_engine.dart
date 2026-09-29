@@ -10,6 +10,7 @@ class QueueItem {
     required this.url,
     required this.title,
     this.headers,
+    this.progressIdentity,
     this.subtitles,
     this.subtitleResources,
     this.startPositionMs,
@@ -42,6 +43,8 @@ class QueueItem {
     this.allowedPrivateOrigins = const [],
   });
 
+  /// Public title/episode identifiers only; no webhook URL or credentials.
+  final Map<String, Object?>? progressIdentity;
   final String url;
   final String title;
   final Map<String, String>? headers;

@@ -107,6 +107,31 @@ void main() {
 
   QueueItem item(int n) => QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n');
 
+  test(
+      'progress boundaries capture outgoing identity and position before mutation',
+      () async {
+    final engine = _FakeEngine();
+    final controller = PlayerController(engineForTest: engine);
+    final boundaries = <String>[];
+    final subscription = controller.playbackBoundaries.stream.listen((event) {
+      boundaries.add(
+          '${event.event}:${event.sessionEnded}:${controller.currentIndex}:${controller.positionMs}');
+    });
+    await controller.playPlaylist([item(1), item(2)], 0);
+    engine.positionMsValue = 500;
+    await controller.next();
+    expect(boundaries, ['stopped:false:0:500']);
+    engine.positionMsValue = 700;
+    await controller.playPlaylist([item(3)], 0);
+    expect(boundaries.last, 'stopped:true:1:700');
+    engine.positionMsValue = 800;
+    await controller.stop();
+    expect(boundaries.last, 'stopped:true:0:800');
+    expect(controller.playbackId, isNull);
+    await subscription.cancel();
+    await controller.dispose();
+  });
+
   test('mixed queue switches between timed media and static image', () async {
     final engine = _FakeEngine();
     final controller = PlayerController(engineForTest: engine);

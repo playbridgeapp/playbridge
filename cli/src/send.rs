@@ -2272,6 +2272,8 @@ pub(crate) async fn run_dashboard_browser_cast(
                 poster_url: None,
                 subtitle_url: None,
                 start_position_ms: None,
+                progress_webhook: None,
+                progress_identity: None,
             },
         )
         .await?;

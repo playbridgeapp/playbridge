@@ -711,6 +711,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
                 }
                 
                 // Exit the video
+                broadcastStatus()
                 onExit?()
                 return
             }
@@ -1040,6 +1041,7 @@ struct VLCPlayerView: UIViewControllerRepresentable {
             case "play_pause", "toggle":
                 togglePlayPause()
             case "stop":
+                broadcastStatus()
                 onExit?()
             case "loop_on":
                 playbackState.isLooping = true

@@ -242,6 +242,8 @@ abstract class PlayerActivity : ComponentActivity(), PlaybackProgressSource {
             val title = s.title.ifBlank { null }
             val json = org.json.JSONObject().apply {
                 put("type", "status")
+                progressPlaybackId()?.let { put("playbackId", it) }
+                progressItemId(playlistSnapshot().second)?.let { put("currentItemId", it) }
                 put("state", state)
                 put("position", s.currentPosition.coerceAtLeast(0L))
                 put("duration", duration)
@@ -289,6 +291,8 @@ abstract class PlayerActivity : ComponentActivity(), PlaybackProgressSource {
             items.forEachIndexed { i, item ->
                 itemsArray.put(org.json.JSONObject().apply {
                     put("index", i)
+                    progressItemId(i)?.let { put("itemId", it) }
+                    item.progress_identity?.let { put("progressIdentity", org.json.JSONObject(com.playbridge.player.server.progressIdentityJson(it))) }
                     put("title", item.title ?: "Item ${i + 1}")
                     item.visual_metadata?.season?.let { put("season", it) }
                     item.visual_metadata?.episode?.let { put("episode", it) }
@@ -298,6 +302,8 @@ abstract class PlayerActivity : ComponentActivity(), PlaybackProgressSource {
             }
             val statusJson = org.json.JSONObject().apply {
                 put("type", "playlist_status")
+                progressPlaybackId()?.let { put("playbackId", it) }
+                progressItemId(index)?.let { put("currentItemId", it) }
                 put("items", itemsArray)
                 put("currentIndex", if (items.isEmpty()) 0 else index)
                 put("totalCount", items.size)
@@ -719,6 +725,16 @@ abstract class PlayerActivity : ComponentActivity(), PlaybackProgressSource {
      * the only place that has queue_add-appended episodes (PlaylistStore only holds the
      * playlist as originally launched).
      */
+    protected open fun progressPlaybackId(): String? = null
+    protected open fun progressItemId(index: Int): String? = null
+
+    protected fun broadcastWebhookEnded(position: Long, duration: Long) {
+        ServerService.broadcastStatus(this, com.playbridge.shared.protocol.createStatusJson(
+            state = "ended", position = position, duration = duration, title = null,
+            playbackId = progressPlaybackId(), currentItemId = progressItemId(playlistSnapshot().second),
+        ))
+    }
+
     protected open fun playlistSnapshot(): Pair<List<playbridge.PlayPayload>, Int> =
         emptyList<playbridge.PlayPayload>() to 0
 

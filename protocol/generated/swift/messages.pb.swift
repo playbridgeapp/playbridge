@@ -422,6 +422,59 @@ nonisolated struct Playbridge_SubtitleResource: Sendable {
   fileprivate var _language: String? = nil
 }
 
+/// Nonsecret item identity for generic progress callbacks.
+nonisolated struct Playbridge_ProgressIdentity: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var type: String = String()
+
+  var contentID: String = String()
+
+  var videoID: String = String()
+
+  var season: Int32 {
+    get {_season ?? 0}
+    set {_season = newValue}
+  }
+  /// Returns true if `season` has been explicitly set.
+  var hasSeason: Bool {self._season != nil}
+  /// Clears the value of `season`. Subsequent reads from it will return its default value.
+  mutating func clearSeason() {self._season = nil}
+
+  var episode: Int32 {
+    get {_episode ?? 0}
+    set {_episode = newValue}
+  }
+  /// Returns true if `episode` has been explicitly set.
+  var hasEpisode: Bool {self._episode != nil}
+  /// Clears the value of `episode`. Subsequent reads from it will return its default value.
+  mutating func clearEpisode() {self._episode = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _season: Int32? = nil
+  fileprivate var _episode: Int32? = nil
+}
+
+/// Session-only credentials: NEVER persist, log, or echo in status/history.
+nonisolated struct Playbridge_ProgressWebhook: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var url: String = String()
+
+  var bearerToken: String = String()
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+}
+
 nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -601,6 +654,15 @@ nonisolated struct Playbridge_PlayPayload: @unchecked Sendable {
   /// Clears the value of `itemID`. Subsequent reads from it will return its default value.
   mutating func clearItemID() {_uniqueStorage()._itemID = nil}
 
+  var progressIdentity: Playbridge_ProgressIdentity {
+    get {_storage._progressIdentity ?? Playbridge_ProgressIdentity()}
+    set {_uniqueStorage()._progressIdentity = newValue}
+  }
+  /// Returns true if `progressIdentity` has been explicitly set.
+  var hasProgressIdentity: Bool {_storage._progressIdentity != nil}
+  /// Clears the value of `progressIdentity`. Subsequent reads from it will return its default value.
+  mutating func clearProgressIdentity() {_uniqueStorage()._progressIdentity = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -637,12 +699,22 @@ nonisolated struct Playbridge_PlaylistPayload: Sendable {
   /// Clears the value of `skipPreplay`. Subsequent reads from it will return its default value.
   mutating func clearSkipPreplay() {self._skipPreplay = nil}
 
+  var progressWebhook: Playbridge_ProgressWebhook {
+    get {_progressWebhook ?? Playbridge_ProgressWebhook()}
+    set {_progressWebhook = newValue}
+  }
+  /// Returns true if `progressWebhook` has been explicitly set.
+  var hasProgressWebhook: Bool {self._progressWebhook != nil}
+  /// Clears the value of `progressWebhook`. Subsequent reads from it will return its default value.
+  mutating func clearProgressWebhook() {self._progressWebhook = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
   fileprivate var _visualMetadata: Playbridge_VisualMetadata? = nil
   fileprivate var _skipPreplay: Bool? = nil
+  fileprivate var _progressWebhook: Playbridge_ProgressWebhook? = nil
 }
 
 nonisolated struct Playbridge_QueueAddPayload: Sendable {
@@ -1757,9 +1829,98 @@ nonisolated extension Playbridge_SubtitleResource: SwiftProtobuf.Message, SwiftP
   }
 }
 
+nonisolated extension Playbridge_ProgressIdentity: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ProgressIdentity"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}type\0\u{3}content_id\0\u{3}video_id\0\u{1}season\0\u{1}episode\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.type) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.contentID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.videoID) }()
+      case 4: try { try decoder.decodeSingularInt32Field(value: &self._season) }()
+      case 5: try { try decoder.decodeSingularInt32Field(value: &self._episode) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.type.isEmpty {
+      try visitor.visitSingularStringField(value: self.type, fieldNumber: 1)
+    }
+    if !self.contentID.isEmpty {
+      try visitor.visitSingularStringField(value: self.contentID, fieldNumber: 2)
+    }
+    if !self.videoID.isEmpty {
+      try visitor.visitSingularStringField(value: self.videoID, fieldNumber: 3)
+    }
+    try { if let v = self._season {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._episode {
+      try visitor.visitSingularInt32Field(value: v, fieldNumber: 5)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ProgressIdentity, rhs: Playbridge_ProgressIdentity) -> Bool {
+    if lhs.type != rhs.type {return false}
+    if lhs.contentID != rhs.contentID {return false}
+    if lhs.videoID != rhs.videoID {return false}
+    if lhs._season != rhs._season {return false}
+    if lhs._episode != rhs._episode {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Playbridge_ProgressWebhook: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".ProgressWebhook"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{3}bearer_token\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.url) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.bearerToken) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.url.isEmpty {
+      try visitor.visitSingularStringField(value: self.url, fieldNumber: 1)
+    }
+    if !self.bearerToken.isEmpty {
+      try visitor.visitSingularStringField(value: self.bearerToken, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: Playbridge_ProgressWebhook, rhs: Playbridge_ProgressWebhook) -> Bool {
+    if lhs.url != rhs.url {return false}
+    if lhs.bearerToken != rhs.bearerToken {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlayPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0\u{3}skip_history\0\u{3}item_id\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}url\0\u{1}title\0\u{1}headers\0\u{3}content_type\0\u{1}subtitles\0\u{3}detected_by\0\u{3}player_mode\0\u{3}preferred_audio_language\0\u{3}preferred_subtitle_language\0\u{3}default_video_quality\0\u{3}max_bitrate_cap_mbps\0\u{3}visual_metadata\0\u{3}binge_group\0\u{3}start_position_ms\0\u{3}allowed_private_origins\0\u{3}subtitle_resources\0\u{3}media_kind\0\u{3}display_duration_ms\0\u{3}skip_history\0\u{3}item_id\0\u{3}progress_identity\0")
 
   fileprivate class _StorageClass {
     var _url: String = String()
@@ -1782,6 +1943,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
     var _displayDurationMs: Int64? = nil
     var _skipHistory: Bool? = nil
     var _itemID: String? = nil
+    var _progressIdentity: Playbridge_ProgressIdentity? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -1812,6 +1974,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       _displayDurationMs = source._displayDurationMs
       _skipHistory = source._skipHistory
       _itemID = source._itemID
+      _progressIdentity = source._progressIdentity
     }
   }
 
@@ -1850,6 +2013,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         case 18: try { try decoder.decodeSingularInt64Field(value: &_storage._displayDurationMs) }()
         case 19: try { try decoder.decodeSingularBoolField(value: &_storage._skipHistory) }()
         case 20: try { try decoder.decodeSingularStringField(value: &_storage._itemID) }()
+        case 21: try { try decoder.decodeSingularMessageField(value: &_storage._progressIdentity) }()
         default: break
         }
       }
@@ -1922,6 +2086,9 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
       try { if let v = _storage._itemID {
         try visitor.visitSingularStringField(value: v, fieldNumber: 20)
       } }()
+      try { if let v = _storage._progressIdentity {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 21)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -1951,6 +2118,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
         if _storage._displayDurationMs != rhs_storage._displayDurationMs {return false}
         if _storage._skipHistory != rhs_storage._skipHistory {return false}
         if _storage._itemID != rhs_storage._itemID {return false}
+        if _storage._progressIdentity != rhs_storage._progressIdentity {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -1962,7 +2130,7 @@ nonisolated extension Playbridge_PlayPayload: SwiftProtobuf.Message, SwiftProtob
 
 nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".PlaylistPayload"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}items\0\u{3}start_index\0\u{3}visual_metadata\0\u{3}skip_preplay\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}items\0\u{3}start_index\0\u{3}visual_metadata\0\u{3}skip_preplay\0\u{3}progress_webhook\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1974,6 +2142,7 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
       case 2: try { try decoder.decodeSingularInt32Field(value: &self.startIndex) }()
       case 3: try { try decoder.decodeSingularMessageField(value: &self._visualMetadata) }()
       case 4: try { try decoder.decodeSingularBoolField(value: &self._skipPreplay) }()
+      case 5: try { try decoder.decodeSingularMessageField(value: &self._progressWebhook) }()
       default: break
       }
     }
@@ -1996,6 +2165,9 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
     try { if let v = self._skipPreplay {
       try visitor.visitSingularBoolField(value: v, fieldNumber: 4)
     } }()
+    try { if let v = self._progressWebhook {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2004,6 +2176,7 @@ nonisolated extension Playbridge_PlaylistPayload: SwiftProtobuf.Message, SwiftPr
     if lhs.startIndex != rhs.startIndex {return false}
     if lhs._visualMetadata != rhs._visualMetadata {return false}
     if lhs._skipPreplay != rhs._skipPreplay {return false}
+    if lhs._progressWebhook != rhs._progressWebhook {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

@@ -1,7 +1,8 @@
 import 'dart:convert';
+import 'progress_webhook.dart';
 
 import 'package:flutter/foundation.dart';
-import 'package:playbridge_protocol/messages.pb.dart';
+import 'package:playbridge_protocol/messages.pb.dart' hide ProgressWebhook;
 
 export 'package:playbridge_protocol/messages.pb.dart'
     show PlayPayload, VisualMetadata, PlaylistPayload;
@@ -96,7 +97,9 @@ class PlaylistCmd extends Command {
   final List<PlayPayload> items;
   final int startIndex;
   final bool skipPreplay;
-  const PlaylistCmd(this.items, this.startIndex, {this.skipPreplay = false});
+  final ProgressWebhook? progressWebhook;
+  const PlaylistCmd(this.items, this.startIndex,
+      {this.skipPreplay = false, this.progressWebhook});
 }
 
 class PlaylistJumpCmd extends Command {
@@ -238,7 +241,7 @@ PlayPayload _parsePlayPayload(Map<String, dynamic> p) {
   try {
     proto.mergeFromProto3Json(p, ignoreUnknownFields: true);
   } catch (e) {
-    debugPrint('PlayPayload proto3 parse failed, falling back to url-only: $e');
+    debugPrint('PlayPayload proto3 parse failed, falling back to url-only');
     if (p['url'] case final String u) proto.url = u;
   }
   return proto;
@@ -321,6 +324,8 @@ Command parseCommand(String json) {
               items,
               (payload?['startIndex'] ?? 0) as int,
               skipPreplay: payload?['skipPreplay'] == true,
+              progressWebhook:
+                  ProgressWebhook.parse(payload?['progressWebhook']),
             );
           case 'playlist_jump':
             return PlaylistJumpCmd(
@@ -412,7 +417,7 @@ Command parseCommand(String json) {
         return UnknownCmd(type ?? 'no_type');
     }
   } catch (e) {
-    return UnknownCmd('parse_error: $e');
+    return UnknownCmd('parse_error: ${e.runtimeType}');
   }
 }
 

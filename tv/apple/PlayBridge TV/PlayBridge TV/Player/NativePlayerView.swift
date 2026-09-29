@@ -402,6 +402,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 player?.seek(to: .zero)
                 player?.play()
             } else {
+                broadcastStatus()
                 onDismiss()
             }
         }
@@ -415,6 +416,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
                 NotificationCenter.default.post(name: .playBridgeStillWatchingResume, object: nil)
             } else {
                 NotificationCenter.default.post(name: .playBridgeUserActivity, object: nil)
+                broadcastStatus()
                 onExit()
             }
         }
@@ -570,6 +572,7 @@ struct NativePlayerView: UIViewControllerRepresentable {
             case "play_pause", "toggle":
                 if player.timeControlStatus == .playing { player.pause() } else { player.play() }
             case "stop":
+                broadcastStatus()
                 onExit()
                 return
             case "loop_on": isLooping = true

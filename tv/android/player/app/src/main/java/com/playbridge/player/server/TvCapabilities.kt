@@ -15,7 +15,7 @@ data class TvCapabilities(
     val mediaKinds: List<String> = listOf("video", "audio", "image"),
     val screenMirrorWebRtc: Boolean = true,
     val features: List<String> = listOf(
-        "queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1",
+        "queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1", "progress_webhook_v1",
     ),
 )
 

@@ -13,6 +13,7 @@ pub mod hls;
 pub mod native_discovery;
 pub mod net;
 pub mod playbridge;
+pub mod progress;
 pub mod roku;
 pub mod secure_ws;
 pub mod session;

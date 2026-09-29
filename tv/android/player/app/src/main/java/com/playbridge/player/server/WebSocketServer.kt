@@ -464,7 +464,7 @@ class WebSocketServer(
                         }
                     }
                 } catch (e: Exception) {
-                    FileLogger.e(TAG, "wss message error", e)
+                    FileLogger.e(TAG, "Unable to process WSS command")
                 }
                 return
             }

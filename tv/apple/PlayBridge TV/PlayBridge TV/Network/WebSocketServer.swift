@@ -34,6 +34,7 @@ class WebSocketServer: ObservableObject {
     private var connectionAuthorization = ConnectionAuthorization<ObjectIdentifier>()
     private var authenticationTimeouts: [ObjectIdentifier: DispatchWorkItem] = [:]
     private var historyStore: HistoryStore?
+    let progressWebhook = PlaybackProgressWebhook()
     var playlistStore: PlaylistStore?
 
     private var inProgressHandshakes: [ObjectIdentifier: ConnectionHandshake] = [:]
@@ -792,7 +793,7 @@ class WebSocketServer: ObservableObject {
     /// shows "TV Default" + AVPlayer + VLC + MPV. A concrete choice is honored per cast in
     /// `PlayerView` via the play payload's `playerMode`. (No browsers — Apple TV has no web view.)
     static let capabilityPlayers = ["avplayer", "vlc", "mpv"]
-    static let capabilityFeatures = ["queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1"]
+    static let capabilityFeatures = ["queue_crud_v1", "stable_item_ids", "command_results", "subtitle_resource_add_v1", "progress_webhook_v1"]
 
     /// Posted (on main) when the phone sends a `control` command (userInfo["command"]) or a
     /// `remote` key (userInfo["key"]). The active player view observes these.
@@ -969,10 +970,21 @@ class WebSocketServer: ObservableObject {
             return
         }
 
-        guard let payloadObj = payload else {
+        guard var payloadObj = payload else {
             print("WebSocket Command Error: missing 'payload' for action \(action)")
             completeCommand(requestID, ok: false, error: "invalid_command", to: connection)
             return
+        }
+        // Optional reporting must never prevent the media command from decoding.
+        if action == "playlist", var object = payloadObj as? [String: Any], let webhook = object["progressWebhook"] {
+            if let fields = webhook as? [String: Any],
+               let url = fields["url"] as? String, let token = fields["bearerToken"] as? String {
+                object["progressWebhook"] = ["url": url, "bearerToken": token]
+            } else {
+                object.removeValue(forKey: "progressWebhook")
+                print("Progress webhook disabled: invalid configuration")
+            }
+            payloadObj = object
         }
         guard JSONSerialization.isValidJSONObject(payloadObj),
               let payloadData = try? JSONSerialization.data(withJSONObject: payloadObj),
@@ -1124,6 +1136,7 @@ class WebSocketServer: ObservableObject {
                     self.completeCommand(requestID, ok: false, error: "stale_playback", to: connection)
                     return
                 }
+                self.progressWebhook.finish(clear: true)
                 store.clear()
                 self.currentPlayRequest = nil
                 self.completeCommand(requestID, ok: true, to: connection)
@@ -1222,6 +1235,7 @@ class WebSocketServer: ObservableObject {
         if !payload.skipHistory { historyStore?.addToHistory(url: url, title: payload.titleOrNil, headers: payload.headersOrNil) }
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
+            self.progressWebhook.finish(clear: true)
             self.playlistStore?.clear()
             self.playlistStore?.addToQueue(item: payload)
             self.skipPreplayForCurrentRequest = false
@@ -1246,7 +1260,12 @@ class WebSocketServer: ObservableObject {
         guard !valid.isEmpty else { return }
         DispatchQueue.main.async {
             TrackPreferences.shared.reset() // new cast session — drop carried track picks
+            self.progressWebhook.finish(clear: true)
             self.playlistStore?.setPlaylist(items: valid, startIndex: startIndex)
+            self.progressWebhook.configure(
+                url: payload.hasProgressWebhook ? payload.progressWebhook.url : nil,
+                token: payload.hasProgressWebhook ? payload.progressWebhook.bearerToken : nil,
+                playbackID: self.playlistStore?.playbackID ?? UUID().uuidString)
             self.skipPreplayForCurrentRequest = payload.skipPreplay
             if let first = self.playlistStore?.currentItem, let firstURL = first.validURL {
                 if !first.skipHistory { self.historyStore?.addToHistory(url: firstURL, title: first.titleOrNil, headers: first.headersOrNil) }

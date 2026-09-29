@@ -56,11 +56,13 @@ object PlayerLauncher {
         historyId: String? = null,
         playbackContext: PlaybackContext? = null,
     ): Intent {
+        val requestId = playbackRequestIds.incrementAndGet()
+        val safePayload = ServerService.preparePlaybackWebhook(payload, requestId)
         // The coordinator/engine reads the live queue from PlaylistStore — set it here so
         // both callers get identical queue setup.
-        PlaylistStore.currentPlaylist = payload.items
+        PlaylistStore.currentPlaylist = safePayload.items
 
-        val firstItem = payload.items.getOrNull(payload.start_index) ?: payload.items.firstOrNull()
+        val firstItem = safePayload.items.getOrNull(safePayload.start_index) ?: safePayload.items.firstOrNull()
         val pageControlled = firstItem?.detected_by in setOf("page_cast", "linked_page")
 
         val mode = when {
@@ -70,7 +72,7 @@ object PlayerLauncher {
             else -> "exo"
         }
         return Intent(context, PlayerHostActivity::class.java).apply {
-            putExtra(EXTRA_PLAYBACK_REQUEST_ID, playbackRequestIds.incrementAndGet())
+            putExtra(EXTRA_PLAYBACK_REQUEST_ID, requestId)
             historyId?.let { putExtra(EXTRA_HISTORY_ID, it) }
             playbackContext?.let {
                 FileLogger.i(
@@ -81,7 +83,7 @@ object PlayerLauncher {
                 putExtra(EXTRA_PLAYBACK_CONTEXT, protocolJson.encodeToString(it))
             } ?: FileLogger.d(TAG, "Launch intent has no saved playback context")
             putExtra(PlayerHostActivity.EXTRA_RENDERER, mode)
-            putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(payload))
+            putExtra(ServerService.EXTRA_PLAYLIST, encodePlaylistPayloadJson(safePayload))
             firstItem?.let { item ->
                 putExtra(ServerService.EXTRA_URL, item.url)
                 putExtra(ServerService.EXTRA_TITLE, item.title)
@@ -108,12 +110,12 @@ object PlayerLauncher {
                 }
             }
             putExtra(ServerService.EXTRA_IS_PLAYLIST, true)
-            putExtra(ServerService.EXTRA_PLAYLIST_INDEX, payload.start_index)
-            putExtra(ServerService.EXTRA_SKIP_PREPLAY, payload.skip_preplay == true)
+            putExtra(ServerService.EXTRA_PLAYLIST_INDEX, safePayload.start_index)
+            putExtra(ServerService.EXTRA_SKIP_PREPLAY, safePayload.skip_preplay == true)
 
             // Playlist-level metadata wins; fall back to the start item's (single videos
             // carry it on the item, not the playlist wrapper).
-            (payload.visual_metadata ?: firstItem?.visual_metadata)?.let { visualMetadata ->
+            (safePayload.visual_metadata ?: firstItem?.visual_metadata)?.let { visualMetadata ->
                 putExtra(ServerService.EXTRA_VISUAL_METADATA, visualMetadata.encode())
             }
 

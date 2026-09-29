@@ -909,6 +909,7 @@ class MPVViewController: UIViewController {
                 showUI(autoHide: true)
                 return
             }
+            broadcastStatus()
             onExit?()
             return
         }
@@ -1168,6 +1169,7 @@ class MPVViewController: UIViewController {
         }
         switch cmd {
         case "stop":
+            broadcastStatus()
             onExit?()
         case "loop_on":
             playbackState.isLooping = true

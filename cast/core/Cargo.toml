@@ -10,6 +10,7 @@ description = "Portable PlayBridge receiver discovery and casting core"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 aes-gcm = "0.11"
 base64 = "0.22"
 futures-util = "0.3"

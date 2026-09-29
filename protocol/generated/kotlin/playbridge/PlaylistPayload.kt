@@ -59,6 +59,13 @@ public class PlaylistPayload(
     schemaIndex = 3,
   )
   public val skip_preplay: Boolean? = null,
+  @field:WireField(
+    tag = 5,
+    adapter = "playbridge.ProgressWebhook#ADAPTER",
+    jsonName = "progressWebhook",
+    schemaIndex = 4,
+  )
+  public val progress_webhook: ProgressWebhook? = null,
   unknownFields: ByteString = ByteString.EMPTY,
 ) : Message<PlaylistPayload, Nothing>(ADAPTER, unknownFields) {
   @field:WireField(
@@ -84,6 +91,7 @@ public class PlaylistPayload(
     if (start_index != other.start_index) return false
     if (visual_metadata != other.visual_metadata) return false
     if (skip_preplay != other.skip_preplay) return false
+    if (progress_webhook != other.progress_webhook) return false
     return true
   }
 
@@ -95,6 +103,7 @@ public class PlaylistPayload(
       result = result * 37 + start_index.hashCode()
       result = result * 37 + (visual_metadata?.hashCode() ?: 0)
       result = result * 37 + (skip_preplay?.hashCode() ?: 0)
+      result = result * 37 + (progress_webhook?.hashCode() ?: 0)
       super.hashCode = result
     }
     return result
@@ -106,6 +115,7 @@ public class PlaylistPayload(
     result += """start_index=$start_index"""
     if (visual_metadata != null) result += """visual_metadata=$visual_metadata"""
     if (skip_preplay != null) result += """skip_preplay=$skip_preplay"""
+    if (progress_webhook != null) result += """progress_webhook=$progress_webhook"""
     return result.joinToString(prefix = "PlaylistPayload{", separator = ", ", postfix = "}")
   }
 
@@ -114,9 +124,10 @@ public class PlaylistPayload(
     start_index: Int = this.start_index,
     visual_metadata: VisualMetadata? = this.visual_metadata,
     skip_preplay: Boolean? = this.skip_preplay,
+    progress_webhook: ProgressWebhook? = this.progress_webhook,
     unknownFields: ByteString = this.unknownFields,
   ): PlaylistPayload = PlaylistPayload(items, start_index, visual_metadata, skip_preplay,
-      unknownFields)
+      progress_webhook, unknownFields)
 
   public companion object {
     @JvmField
@@ -136,6 +147,7 @@ public class PlaylistPayload(
         }
         size += VisualMetadata.ADAPTER.encodedSizeWithTag(3, value.visual_metadata)
         size += ProtoAdapter.BOOL.encodedSizeWithTag(4, value.skip_preplay)
+        size += ProgressWebhook.ADAPTER.encodedSizeWithTag(5, value.progress_webhook)
         return size
       }
 
@@ -146,11 +158,13 @@ public class PlaylistPayload(
         }
         VisualMetadata.ADAPTER.encodeWithTag(writer, 3, value.visual_metadata)
         ProtoAdapter.BOOL.encodeWithTag(writer, 4, value.skip_preplay)
+        ProgressWebhook.ADAPTER.encodeWithTag(writer, 5, value.progress_webhook)
         writer.writeBytes(value.unknownFields)
       }
 
       override fun encode(writer: ReverseProtoWriter, `value`: PlaylistPayload) {
         writer.writeBytes(value.unknownFields)
+        ProgressWebhook.ADAPTER.encodeWithTag(writer, 5, value.progress_webhook)
         ProtoAdapter.BOOL.encodeWithTag(writer, 4, value.skip_preplay)
         VisualMetadata.ADAPTER.encodeWithTag(writer, 3, value.visual_metadata)
         if (value.start_index != 0) {
@@ -164,12 +178,14 @@ public class PlaylistPayload(
         var start_index: Int = 0
         var visual_metadata: VisualMetadata? = null
         var skip_preplay: Boolean? = null
+        var progress_webhook: ProgressWebhook? = null
         val unknownFields = reader.forEachTag { tag ->
           when (tag) {
             1 -> items.add(PlayPayload.ADAPTER.decode(reader))
             2 -> start_index = ProtoAdapter.INT32.decode(reader)
             3 -> visual_metadata = VisualMetadata.ADAPTER.decode(reader)
             4 -> skip_preplay = ProtoAdapter.BOOL.decode(reader)
+            5 -> progress_webhook = ProgressWebhook.ADAPTER.decode(reader)
             else -> reader.readUnknownField(tag)
           }
         }
@@ -178,6 +194,7 @@ public class PlaylistPayload(
           start_index = start_index,
           visual_metadata = visual_metadata,
           skip_preplay = skip_preplay,
+          progress_webhook = progress_webhook,
           unknownFields = unknownFields
         )
       }
@@ -185,6 +202,7 @@ public class PlaylistPayload(
       override fun redact(`value`: PlaylistPayload): PlaylistPayload = value.copy(
         items = value.items.redactElements(PlayPayload.ADAPTER),
         visual_metadata = value.visual_metadata?.let(VisualMetadata.ADAPTER::redact),
+        progress_webhook = value.progress_webhook?.let(ProgressWebhook.ADAPTER::redact),
         unknownFields = ByteString.EMPTY
       )
     }

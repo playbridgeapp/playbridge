@@ -51,6 +51,11 @@ private const val KEY_SAVED_UAS = "saved_user_agents"
 class ServerService : Service() {
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val webhookTransport = PlaybackWebhookTransport()
+    private val playbackWebhook = PlaybackWebhook(webhookTransport::send)
+    private val pendingWebhooks = object : LinkedHashMap<Long, playbridge.ProgressWebhook?>(8, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, playbridge.ProgressWebhook?>): Boolean = size > 8
+    }
     private var webSocketServer: WebSocketServer? = null
     private lateinit var pairingStore: PairingStore
     private lateinit var overlayWindow: OverlayWindowHelper
@@ -892,7 +897,7 @@ class ServerService : Service() {
             is IncomingMessage.UserAgentQuery ->
                 broadcastUserAgents(getSharedPreferences("browser_prefs", Context.MODE_PRIVATE))
             is IncomingMessage.Unknown -> {
-                FileLogger.w(TAG, "Unknown message: ${msg.type}. Raw: ${msg.raw}")
+                FileLogger.w(TAG, "Ignoring unknown or malformed command")
             }
         }
     }
@@ -973,6 +978,7 @@ class ServerService : Service() {
      * Called by player activities via the static helper.
      */
     internal fun broadcastPlaylistStatusInternal(statusJson: String) {
+        playbackWebhook.observe(statusJson)
         scope.launch {
             webSocketServer?.broadcastStatus(statusJson)
         }
@@ -1035,6 +1041,7 @@ class ServerService : Service() {
             )
             return
         }
+        if (activeContext == "player") playbackWebhook.stop()
         activeContext = "idle"
         activePlayerEngine = null
         broadcastContext()
@@ -1205,6 +1212,9 @@ class ServerService : Service() {
             }
             registrationListener = null
         }
+        playbackWebhook.stop()
+        synchronized(pendingWebhooks) { pendingWebhooks.clear() }
+        webhookTransport.close()
         webSocketServer?.stop()
         if (::screenMirrorController.isInitialized) screenMirrorController.destroy()
         if (_screenMirrorController === screenMirrorController) _screenMirrorController = null
@@ -1325,9 +1335,34 @@ class ServerService : Service() {
             context.stopService(Intent(context, ServerService::class.java))
         }
 
-        /**
-         * Broadcast playlist_status to the phone from a player activity.
-         */
+        /** Strip credentials before the playlist can enter an Intent or history. */
+        fun preparePlaybackWebhook(payload: playbridge.PlaylistPayload, requestId: Long): playbridge.PlaylistPayload {
+            if (payload.items.isNotEmpty()) {
+                _staticInstance?.let { service ->
+                    synchronized(service.pendingWebhooks) {
+                        service.pendingWebhooks[requestId] = payload.progress_webhook
+                    }
+                }
+            }
+            return payload.copy(progress_webhook = null)
+        }
+
+        /** Activate only once the host accepts a nonempty, current playback request. */
+        fun activatePlaybackWebhook(requestId: Long?) {
+            _staticInstance?.let { service ->
+                val webhook = synchronized(service.pendingWebhooks) {
+                    val value = service.pendingWebhooks.remove(requestId)
+                    service.pendingWebhooks.keys.removeAll { requestId == null || it < requestId }
+                    value
+                }
+                if (!service.playbackWebhook.configure(webhook)) {
+                    service.scope.launch {
+                        service.webSocketServer?.broadcastStatus("{\"type\":\"error\",\"message\":\"Invalid progress webhook configuration\"}")
+                    }
+                }
+            }
+        }
+
         fun broadcastPlaylistStatus(statusJson: String) {
             _staticInstance?.broadcastPlaylistStatusInternal(statusJson)
         }
@@ -1509,7 +1544,7 @@ class ServerService : Service() {
             if (requestId == null) {
                 playlistStatusJson?.let { status ->
                     _staticInstance?.let { service ->
-                        service.scope.launch { service.webSocketServer?.broadcastStatus(status) }
+                        service.broadcastPlaylistStatusInternal(status)
                     }
                 }
                 return
@@ -1529,7 +1564,7 @@ class ServerService : Service() {
                 }
                 service.scope.launch {
                     service.webSocketServer?.sendTo(command.connectionId, result)
-                    playlistStatusJson?.let { service.webSocketServer?.broadcastStatus(it) }
+                    playlistStatusJson?.let { service.broadcastPlaylistStatusInternal(it) }
                 }
             }
         }

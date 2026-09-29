@@ -119,6 +119,7 @@ class PlaybackRequestPreparer {
       QueueItem(
         url: proxyUrl,
         title: item.title,
+        progressIdentity: item.progressIdentity,
         headers: null,
         subtitles: subtitles ?? item.subtitles,
         subtitleResources: null,

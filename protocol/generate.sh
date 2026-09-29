@@ -14,6 +14,8 @@
 #   # Wire (Kotlin): generate.sh auto-fetches wire-compiler-5.1.0.jar to ~/.cache
 #   # Requires a JDK on PATH (`java`)
 source ~/.zshrc 2>/dev/null
+set -e
+export PATH="$PATH:$HOME/.pub-cache/bin"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROTO_DIR="$SCRIPT_DIR/proto"
@@ -57,6 +59,8 @@ java -jar "$WIRE_JAR" \
   --proto_path="$PROTO_DIR" \
   --kotlin_out="$OUT/kotlin" \
   messages.proto
+
+python3 "$SCRIPT_DIR/scripts/redact-webhook-bindings.py" "$OUT"
 
 if [[ $CHECK_MODE -eq 1 ]]; then
   echo "==> Comparing $OUT against $SCRIPT_DIR/generated"

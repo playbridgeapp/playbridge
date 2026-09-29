@@ -566,6 +566,162 @@ class SubtitleResource extends $pb.GeneratedMessage {
   void clearLanguage() => $_clearField(4);
 }
 
+/// Nonsecret item identity for generic progress callbacks.
+class ProgressIdentity extends $pb.GeneratedMessage {
+  factory ProgressIdentity({
+    $core.String? type,
+    $core.String? contentId,
+    $core.String? videoId,
+    $core.int? season,
+    $core.int? episode,
+  }) {
+    final result = create();
+    if (type != null) result.type = type;
+    if (contentId != null) result.contentId = contentId;
+    if (videoId != null) result.videoId = videoId;
+    if (season != null) result.season = season;
+    if (episode != null) result.episode = episode;
+    return result;
+  }
+
+  ProgressIdentity._();
+
+  factory ProgressIdentity.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ProgressIdentity.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ProgressIdentity', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'type')
+    ..aOS(2, _omitFieldNames ? '' : 'contentId')
+    ..aOS(3, _omitFieldNames ? '' : 'videoId')
+    ..a<$core.int>(4, _omitFieldNames ? '' : 'season', $pb.PbFieldType.O3)
+    ..a<$core.int>(5, _omitFieldNames ? '' : 'episode', $pb.PbFieldType.O3)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ProgressIdentity clone() => ProgressIdentity()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ProgressIdentity copyWith(void Function(ProgressIdentity) updates) => super.copyWith((message) => updates(message as ProgressIdentity)) as ProgressIdentity;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ProgressIdentity create() => ProgressIdentity._();
+  @$core.override
+  ProgressIdentity createEmptyInstance() => create();
+  static $pb.PbList<ProgressIdentity> createRepeated() => $pb.PbList<ProgressIdentity>();
+  @$core.pragma('dart2js:noInline')
+  static ProgressIdentity getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ProgressIdentity>(create);
+  static ProgressIdentity? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get type => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set type($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get contentId => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set contentId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasContentId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearContentId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get videoId => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set videoId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasVideoId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearVideoId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.int get season => $_getIZ(3);
+  @$pb.TagNumber(4)
+  set season($core.int value) => $_setSignedInt32(3, value);
+  @$pb.TagNumber(4)
+  $core.bool hasSeason() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearSeason() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.int get episode => $_getIZ(4);
+  @$pb.TagNumber(5)
+  set episode($core.int value) => $_setSignedInt32(4, value);
+  @$pb.TagNumber(5)
+  $core.bool hasEpisode() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearEpisode() => $_clearField(5);
+}
+
+/// Session-only credentials: NEVER persist, log, or echo in status/history.
+class ProgressWebhook extends $pb.GeneratedMessage {
+  @$core.override
+  $core.String toString() => 'ProgressWebhook([redacted])';
+  factory ProgressWebhook({
+    $core.String? url,
+    $core.String? bearerToken,
+  }) {
+    final result = create();
+    if (url != null) result.url = url;
+    if (bearerToken != null) result.bearerToken = bearerToken;
+    return result;
+  }
+
+  ProgressWebhook._();
+
+  factory ProgressWebhook.fromBuffer($core.List<$core.int> data, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(data, registry);
+  factory ProgressWebhook.fromJson($core.String json, [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ProgressWebhook', package: const $pb.PackageName(_omitMessageNames ? '' : 'playbridge'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'url')
+    ..aOS(2, _omitFieldNames ? '' : 'bearerToken')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ProgressWebhook clone() => ProgressWebhook()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ProgressWebhook copyWith(void Function(ProgressWebhook) updates) => super.copyWith((message) => updates(message as ProgressWebhook)) as ProgressWebhook;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ProgressWebhook create() => ProgressWebhook._();
+  @$core.override
+  ProgressWebhook createEmptyInstance() => create();
+  static $pb.PbList<ProgressWebhook> createRepeated() => $pb.PbList<ProgressWebhook>();
+  @$core.pragma('dart2js:noInline')
+  static ProgressWebhook getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ProgressWebhook>(create);
+  static ProgressWebhook? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get url => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set url($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasUrl() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearUrl() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get bearerToken => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set bearerToken($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasBearerToken() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearBearerToken() => $_clearField(2);
+}
+
 class PlayPayload extends $pb.GeneratedMessage {
   factory PlayPayload({
     $core.String? url,
@@ -588,6 +744,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     $fixnum.Int64? displayDurationMs,
     $core.bool? skipHistory,
     $core.String? itemId,
+    ProgressIdentity? progressIdentity,
   }) {
     final result = create();
     if (url != null) result.url = url;
@@ -610,6 +767,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     if (displayDurationMs != null) result.displayDurationMs = displayDurationMs;
     if (skipHistory != null) result.skipHistory = skipHistory;
     if (itemId != null) result.itemId = itemId;
+    if (progressIdentity != null) result.progressIdentity = progressIdentity;
     return result;
   }
 
@@ -639,6 +797,7 @@ class PlayPayload extends $pb.GeneratedMessage {
     ..aInt64(18, _omitFieldNames ? '' : 'displayDurationMs')
     ..aOB(19, _omitFieldNames ? '' : 'skipHistory')
     ..aOS(20, _omitFieldNames ? '' : 'itemId')
+    ..aOM<ProgressIdentity>(21, _omitFieldNames ? '' : 'progressIdentity', subBuilder: ProgressIdentity.create)
     ..hasRequiredFields = false
   ;
 
@@ -830,6 +989,17 @@ class PlayPayload extends $pb.GeneratedMessage {
   $core.bool hasItemId() => $_has(19);
   @$pb.TagNumber(20)
   void clearItemId() => $_clearField(20);
+
+  @$pb.TagNumber(21)
+  ProgressIdentity get progressIdentity => $_getN(20);
+  @$pb.TagNumber(21)
+  set progressIdentity(ProgressIdentity value) => $_setField(21, value);
+  @$pb.TagNumber(21)
+  $core.bool hasProgressIdentity() => $_has(20);
+  @$pb.TagNumber(21)
+  void clearProgressIdentity() => $_clearField(21);
+  @$pb.TagNumber(21)
+  ProgressIdentity ensureProgressIdentity() => $_ensure(20);
 }
 
 class PlaylistPayload extends $pb.GeneratedMessage {
@@ -838,12 +1008,14 @@ class PlaylistPayload extends $pb.GeneratedMessage {
     $core.int? startIndex,
     VisualMetadata? visualMetadata,
     $core.bool? skipPreplay,
+    ProgressWebhook? progressWebhook,
   }) {
     final result = create();
     if (items != null) result.items.addAll(items);
     if (startIndex != null) result.startIndex = startIndex;
     if (visualMetadata != null) result.visualMetadata = visualMetadata;
     if (skipPreplay != null) result.skipPreplay = skipPreplay;
+    if (progressWebhook != null) result.progressWebhook = progressWebhook;
     return result;
   }
 
@@ -857,6 +1029,7 @@ class PlaylistPayload extends $pb.GeneratedMessage {
     ..a<$core.int>(2, _omitFieldNames ? '' : 'startIndex', $pb.PbFieldType.O3)
     ..aOM<VisualMetadata>(3, _omitFieldNames ? '' : 'visualMetadata', subBuilder: VisualMetadata.create)
     ..aOB(4, _omitFieldNames ? '' : 'skipPreplay')
+    ..aOM<ProgressWebhook>(5, _omitFieldNames ? '' : 'progressWebhook', subBuilder: ProgressWebhook.create)
     ..hasRequiredFields = false
   ;
 
@@ -910,6 +1083,17 @@ class PlaylistPayload extends $pb.GeneratedMessage {
   $core.bool hasSkipPreplay() => $_has(3);
   @$pb.TagNumber(4)
   void clearSkipPreplay() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  ProgressWebhook get progressWebhook => $_getN(4);
+  @$pb.TagNumber(5)
+  set progressWebhook(ProgressWebhook value) => $_setField(5, value);
+  @$pb.TagNumber(5)
+  $core.bool hasProgressWebhook() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearProgressWebhook() => $_clearField(5);
+  @$pb.TagNumber(5)
+  ProgressWebhook ensureProgressWebhook() => $_ensure(4);
 }
 
 class QueueAddPayload extends $pb.GeneratedMessage {

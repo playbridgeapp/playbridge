@@ -1,3 +1,4 @@
+use playbridge_cast_core::progress::{ProgressIdentity, ProgressReporter};
 use std::{collections::HashSet, fs, io::Write, path::PathBuf, process::Stdio, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -386,6 +387,7 @@ async fn query_mpv_status(
         (6, "mute"),
         (7, "loop-file"),
         (8, "speed"),
+        (9, "eof-reached"),
     ] {
         let mut frame = serde_json::to_vec(&json!({
             "command": ["get_property", property],
@@ -407,8 +409,9 @@ async fn query_mpv_status(
     let mut muted = None;
     let mut looping = None;
     let mut speed = None;
+    let mut eof = None;
     let mut lines = BufReader::new(reader).lines();
-    for _ in 0..8 {
+    for _ in 0..9 {
         let line = tokio::time::timeout(Duration::from_millis(500), lines.next_line())
             .await
             .map_err(|_| "mpv status query timed out".to_owned())?
@@ -429,11 +432,14 @@ async fn query_mpv_status(
                     .map(|value| value != "no")
             }
             Some(8) => speed = response.get("data").and_then(Value::as_f64),
+            Some(9) => eof = response.get("data").and_then(Value::as_bool),
             _ => {}
         }
     }
 
-    let state = if idle.unwrap_or(false) {
+    let state = if eof.unwrap_or(false) {
+        "ended"
+    } else if idle.unwrap_or(false) {
         "idle"
     } else if paused.unwrap_or(false) {
         "paused"
@@ -524,6 +530,7 @@ async fn run_receiver_mode(
     config.fallback_attempts = 10;
     config.authorized_tokens = state.tokens.iter().cloned().collect();
     config.players = vec!["internal_mpv".into()];
+    config.features.push("progress_webhook_v1".into());
     config.advertise = true;
     let host = ReceiverHost::start(config).await?;
     let mut events = host.subscribe();
@@ -627,6 +634,7 @@ async fn run_receiver_mode(
             _ = tokio::signal::ctrl_c() => break,
         }
     }
+    playback.progress.lock().unwrap().finish("stopped");
     playback.mpv.stop_process().await;
     host.shutdown().await;
     Ok(())
@@ -636,6 +644,7 @@ struct ReceiverPlayback {
     mpv: Mpv,
     queue: Vec<Value>,
     current_index: usize,
+    progress: std::sync::Mutex<ProgressReporter>,
 }
 
 impl ReceiverPlayback {
@@ -644,6 +653,7 @@ impl ReceiverPlayback {
             mpv: Mpv::new(quiet),
             queue: Vec::new(),
             current_index: 0,
+            progress: std::sync::Mutex::new(ProgressReporter::new()),
         }
     }
 }
@@ -690,6 +700,8 @@ async fn handle_dashboard_receiver_command(
             if playback.queue.is_empty() {
                 return Err("The receiver queue is empty".into());
             }
+            broadcast_status(host, playback).await;
+            playback.progress.lock().unwrap().observe("stopped", 0, 0);
             playback.current_index = match command {
                 ReceiverDashboardCommand::Previous => playback.current_index.saturating_sub(1),
                 ReceiverDashboardCommand::Next => {
@@ -743,6 +755,8 @@ async fn handle_dashboard_receiver_command(
                 .await?;
         }
         ReceiverDashboardCommand::StopPlayback => {
+            broadcast_status(host, playback).await;
+            playback.progress.lock().unwrap().finish("stopped");
             playback.mpv.control("stop").await?;
             playback.queue.clear();
             playback.current_index = 0;
@@ -778,14 +792,12 @@ async fn handle_command(
                 .get("startIndex")
                 .and_then(Value::as_u64)
                 .unwrap_or(0) as usize;
-            playback.queue = items.clone();
-            playback.current_index = index.min(playback.queue.len().saturating_sub(1));
-            let item = playback
-                .queue
-                .get(index)
-                .or_else(|| playback.queue.first())
-                .ok_or("playlist is empty")?;
-            let title = item
+            if items.is_empty() {
+                return Err("playlist is empty".into());
+            }
+            broadcast_status(host, playback).await;
+            let first = &items[index.min(items.len() - 1)];
+            let title = first
                 .get("title")
                 .and_then(Value::as_str)
                 .unwrap_or("untitled media");
@@ -795,7 +807,17 @@ async fn handle_command(
                     items.len()
                 );
             }
-            playback.mpv.load(item).await?;
+            playback.mpv.load(first).await?;
+            playback.progress.lock().unwrap().start(
+                payload
+                    .get("progressWebhook")
+                    .cloned()
+                    .and_then(|v| serde_json::from_value(v).ok()),
+                progress_item_id(first),
+                progress_identity(first),
+            );
+            playback.queue = items.clone();
+            playback.current_index = index.min(playback.queue.len().saturating_sub(1));
             if !quiet {
                 println!("Sent playback request to mpv.");
             }
@@ -824,12 +846,18 @@ async fn handle_command(
                 .queue
                 .get(index)
                 .ok_or("playlist index is out of range")?;
+            broadcast_status(host, playback).await;
+            playback.progress.lock().unwrap().observe("stopped", 0, 0);
             playback.current_index = index;
             playback.mpv.load(item).await?;
             broadcast_playlist(host, playback);
         }
         ReceiverCommand::Control(payload) => {
             if let Some(command) = payload.get("command").and_then(Value::as_str) {
+                if command == "stop" {
+                    broadcast_status(host, playback).await;
+                    playback.progress.lock().unwrap().finish("stopped");
+                }
                 playback.mpv.control(command).await?;
                 broadcast_status(host, playback).await;
                 if command == "stop" {
@@ -845,8 +873,30 @@ async fn handle_command(
     Ok(())
 }
 
+fn progress_item_id(item: &Value) -> String {
+    item.get("itemId")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            item.pointer("/progressIdentity/videoId")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default()
+        .to_owned()
+}
+fn progress_identity(item: &Value) -> Option<ProgressIdentity> {
+    item.get("progressIdentity")
+        .cloned()
+        .and_then(|v| serde_json::from_value(v).ok())
+}
 async fn broadcast_status(host: &ReceiverHost, playback: &ReceiverPlayback) {
     let snapshot = playback.mpv.snapshot().await;
+    {
+        let mut progress = playback.progress.lock().unwrap();
+        if let Some(item) = playback.queue.get(playback.current_index) {
+            progress.select(progress_item_id(item), progress_identity(item));
+            progress.observe(&snapshot.state, snapshot.position_ms, snapshot.duration_ms);
+        }
+    }
     host.broadcast(json!({
         "type": "status",
         "state": snapshot.state,
@@ -864,7 +914,9 @@ fn broadcast_playlist(host: &ReceiverHost, playback: &ReceiverPlayback) {
         .map(|(index, item)| {
             json!({
                 "index": index,
-                "title": item.get("title").and_then(Value::as_str).unwrap_or("untitled media")
+                "title": item.get("title").and_then(Value::as_str).unwrap_or("untitled media"),
+                "itemId": item.get("itemId"),
+                "progressIdentity": item.get("progressIdentity")
             })
         })
         .collect::<Vec<_>>();
@@ -1053,6 +1105,7 @@ mod tests {
                 (6, serde_json::json!(true)),
                 (7, serde_json::json!("inf")),
                 (8, serde_json::json!(1.25)),
+                (9, serde_json::json!(false)),
             ] {
                 lines.next_line().await.unwrap().unwrap();
                 writer

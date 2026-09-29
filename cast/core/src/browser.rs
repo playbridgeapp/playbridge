@@ -21,6 +21,10 @@ pub struct BrowserMedia {
     pub subtitle_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_position_ms: Option<u64>,
+    #[serde(default, skip_serializing)]
+    pub progress_webhook: Option<crate::progress::ProgressWebhook>,
+    #[serde(default, skip_serializing)]
+    pub progress_identity: Option<crate::progress::ProgressIdentity>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -82,7 +86,7 @@ pub enum HostToBrowserFrame {
     Load {
         #[serde(rename = "requestId")]
         request_id: String,
-        media: BrowserMedia,
+        media: Box<BrowserMedia>,
     },
     Command {
         #[serde(rename = "requestId")]
@@ -127,6 +131,12 @@ pub enum BrowserToHostFrame {
         request_id: String,
     },
     Status {
+        #[serde(
+            default,
+            skip_serializing_if = "Option::is_none",
+            rename = "mediaRequestId"
+        )]
+        media_request_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         #[serde(rename = "requestId")]
         request_id: Option<String>,
@@ -164,19 +174,26 @@ mod tests {
     fn browser_frames_use_stable_tag_and_camel_case_fields() {
         let frame = HostToBrowserFrame::Load {
             request_id: "7".into(),
-            media: BrowserMedia {
+            media: Box::new(BrowserMedia {
                 url: "http://sender/media/token/video.mp4".into(),
                 title: Some("Example".into()),
                 content_type: Some("video/mp4".into()),
                 poster_url: None,
                 subtitle_url: None,
                 start_position_ms: Some(1_500),
-            },
+                progress_webhook: Some(crate::progress::ProgressWebhook {
+                    url: "https://sync.example.com/progress".into(),
+                    bearer_token: "private-token".into(),
+                }),
+                progress_identity: None,
+            }),
         };
         let json = serde_json::to_value(frame).unwrap();
         assert_eq!(json["type"], "load");
         assert_eq!(json["requestId"], "7");
         assert_eq!(json["media"]["startPositionMs"], 1_500);
+        assert!(json["media"].get("progressWebhook").is_none());
+        assert!(!json.to_string().contains("private-token"));
 
         let command = serde_json::to_value(HostToBrowserFrame::Command {
             request_id: "8".into(),
@@ -196,6 +213,7 @@ mod tests {
         assert_eq!(
             frame,
             BrowserToHostFrame::Status {
+                media_request_id: None,
                 request_id: Some("9".into()),
                 state: BrowserPlaybackState::Playing,
                 position_ms: 1_000,
