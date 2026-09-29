@@ -122,6 +122,8 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.ui.ConnectionScreen
 import com.playbridge.sender.ui.DashboardScreen
 import com.playbridge.sender.ui.theme.PlayBridgeTheme
+import com.playbridge.sender.ui.theme.AppTheme
+import com.playbridge.sender.ui.theme.ThemeController
 import mozilla.components.lib.state.ext.flow
 import com.playbridge.sender.data.history.DatabaseProvider
 import com.playbridge.sender.data.history.HistoryEntity
@@ -1572,22 +1574,30 @@ class BrowserActivity : ComponentActivity() {
             var isFullscreen by remember { mutableStateOf(false) }
             var isFullscreenVideoPortrait by remember { mutableStateOf(false) }
 
-            // Fullscreen: hide/show system bars and handle auto-rotation
+            // Chrome-hidden browsing draws behind the transparent system bars while
+            // media fullscreen remains immersive and can rotate independently.
             val view = LocalView.current
-            LaunchedEffect(isFullscreen, isFullscreenVideoPortrait) {
+            val appTheme = ThemeController.current()
+            LaunchedEffect(isFullscreen, isFullscreenVideoPortrait, isBrowserChromeHidden, currentScreen, appTheme) {
                 val window = this@BrowserActivity.window ?: return@LaunchedEffect
                 val controller = WindowInsetsControllerCompat(window, view)
                 if (isFullscreen) {
                     controller.hide(WindowInsetsCompat.Type.systemBars())
                     controller.systemBarsBehavior =
                         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                    val lightIcons = !(currentScreen == Screen.Browser && isBrowserChromeHidden) && appTheme == AppTheme.LIGHT
+                    controller.isAppearanceLightStatusBars = lightIcons
+                    controller.isAppearanceLightNavigationBars = lightIcons
+                }
+                if (isFullscreen) {
                     requestedOrientation = if (isFullscreenVideoPortrait) {
                         ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     } else {
                         ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                     }
                 } else {
-                    controller.show(WindowInsetsCompat.Type.systemBars())
                     requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
                 }
             }

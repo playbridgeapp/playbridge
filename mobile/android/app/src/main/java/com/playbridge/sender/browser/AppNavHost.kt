@@ -464,17 +464,7 @@ fun AppNavHost(
                     var chromeHandleYFraction by rememberSaveable { mutableFloatStateOf(0f) }
                     var chromeHandleDragOffset by remember { mutableStateOf<Offset?>(null) }
 
-                    BoxWithConstraints(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(
-                                if (isBrowserChromeHidden && !isFullscreen) {
-                                    Modifier.windowInsetsPadding(WindowInsets.safeDrawing)
-                                } else {
-                                    Modifier
-                                }
-                            )
-                    ) {
+                    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
                         if (targetScreen == Screen.Browser && session != null) {
                             browserViewContent(session) { url ->
                                 onContextMenuUrlChange(url)
@@ -492,75 +482,81 @@ fun AppNavHost(
                         }
 
                         if (isBrowserChromeHidden && !isFullscreen) {
-                            val density = LocalDensity.current
-                            val handleSizePx = with(density) { 48.dp.toPx() }
-                            val maxHandleX = (with(density) { maxWidth.toPx() } - handleSizePx)
-                                .coerceAtLeast(0f)
-                            val maxHandleY = (with(density) { maxHeight.toPx() } - handleSizePx)
-                                .coerceAtLeast(0f)
-                            val restingHandleOffset = Offset(
-                                x = if (chromeHandleOnRight) maxHandleX else 0f,
-                                y = chromeHandleYFraction.coerceIn(0f, 1f) * maxHandleY,
-                            )
-                            val displayedHandleOffset = chromeHandleDragOffset ?: restingHandleOffset
-
-                            Surface(
+                            BoxWithConstraints(
                                 modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .offset {
-                                        IntOffset(
-                                            x = displayedHandleOffset.x.roundToInt(),
-                                            y = displayedHandleOffset.y.roundToInt(),
-                                        )
-                                    }
-                                    .pointerInput(maxHandleX, maxHandleY, restingHandleOffset) {
-                                        detectDragGestures(
-                                            onDragStart = {
-                                                chromeHandleDragOffset = restingHandleOffset
-                                            },
-                                            onDragEnd = {
-                                                chromeHandleDragOffset?.let { position ->
-                                                    chromeHandleOnRight = position.x >= maxHandleX / 2f
-                                                    chromeHandleYFraction = if (maxHandleY > 0f) {
-                                                        position.y / maxHandleY
-                                                    } else {
-                                                        0f
-                                                    }
-                                                }
-                                                chromeHandleDragOffset = null
-                                            },
-                                            onDragCancel = {
-                                                chromeHandleDragOffset = null
-                                            },
-                                        ) { change, dragAmount ->
-                                            change.consume()
-                                            val current = chromeHandleDragOffset ?: restingHandleOffset
-                                            chromeHandleDragOffset = Offset(
-                                                x = (current.x + dragAmount.x).coerceIn(0f, maxHandleX),
-                                                y = (current.y + dragAmount.y).coerceIn(0f, maxHandleY),
+                                    .fillMaxSize()
+                                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                            ) {
+                                val density = LocalDensity.current
+                                val handleSizePx = with(density) { 48.dp.toPx() }
+                                val maxHandleX = (with(density) { maxWidth.toPx() } - handleSizePx)
+                                    .coerceAtLeast(0f)
+                                val maxHandleY = (with(density) { maxHeight.toPx() } - handleSizePx)
+                                    .coerceAtLeast(0f)
+                                val restingHandleOffset = Offset(
+                                    x = if (chromeHandleOnRight) maxHandleX else 0f,
+                                    y = chromeHandleYFraction.coerceIn(0f, 1f) * maxHandleY,
+                                )
+                                val displayedHandleOffset = chromeHandleDragOffset ?: restingHandleOffset
+
+                                Surface(
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .offset {
+                                            IntOffset(
+                                                x = displayedHandleOffset.x.roundToInt(),
+                                                y = displayedHandleOffset.y.roundToInt(),
                                             )
                                         }
+                                        .pointerInput(maxHandleX, maxHandleY, restingHandleOffset) {
+                                            detectDragGestures(
+                                                onDragStart = {
+                                                    chromeHandleDragOffset = restingHandleOffset
+                                                },
+                                                onDragEnd = {
+                                                    chromeHandleDragOffset?.let { position ->
+                                                        chromeHandleOnRight = position.x >= maxHandleX / 2f
+                                                        chromeHandleYFraction = if (maxHandleY > 0f) {
+                                                            position.y / maxHandleY
+                                                        } else {
+                                                            0f
+                                                        }
+                                                    }
+                                                    chromeHandleDragOffset = null
+                                                },
+                                                onDragCancel = {
+                                                    chromeHandleDragOffset = null
+                                                },
+                                            ) { change, dragAmount ->
+                                                change.consume()
+                                                val current = chromeHandleDragOffset ?: restingHandleOffset
+                                                chromeHandleDragOffset = Offset(
+                                                    x = (current.x + dragAmount.x).coerceIn(0f, maxHandleX),
+                                                    y = (current.y + dragAmount.y).coerceIn(0f, maxHandleY),
+                                                )
+                                            }
+                                        },
+                                    shape = when {
+                                        chromeHandleDragOffset != null -> RoundedCornerShape(16.dp)
+                                        chromeHandleOnRight -> RoundedCornerShape(
+                                            topStart = 16.dp,
+                                            bottomStart = 16.dp,
+                                        )
+                                        else -> RoundedCornerShape(
+                                            topEnd = 16.dp,
+                                            bottomEnd = 16.dp,
+                                        )
                                     },
-                                shape = when {
-                                    chromeHandleDragOffset != null -> RoundedCornerShape(16.dp)
-                                    chromeHandleOnRight -> RoundedCornerShape(
-                                        topStart = 16.dp,
-                                        bottomStart = 16.dp,
-                                    )
-                                    else -> RoundedCornerShape(
-                                        topEnd = 16.dp,
-                                        bottomEnd = 16.dp,
-                                    )
-                                },
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
-                                tonalElevation = 6.dp,
-                                shadowElevation = 4.dp,
-                            ) {
-                                IconButton(onClick = { onIsBrowserChromeHiddenChange(false) }) {
-                                    Icon(
-                                        imageVector = Icons.Default.FullscreenExit,
-                                        contentDescription = "Show browser controls",
-                                    )
+                                    color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.9f),
+                                    tonalElevation = 6.dp,
+                                    shadowElevation = 4.dp,
+                                ) {
+                                    IconButton(onClick = { onIsBrowserChromeHiddenChange(false) }) {
+                                        Icon(
+                                            imageVector = Icons.Default.FullscreenExit,
+                                            contentDescription = "Show browser controls",
+                                        )
+                                    }
                                 }
                             }
                         }
