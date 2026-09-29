@@ -55,6 +55,8 @@ fun MenuSheet(
     onHistoryClick: () -> Unit,
     onDownloadsClick: () -> Unit,
     onAddBookmarkClick: () -> Unit,
+    canInstallBridgedApp: Boolean = false,
+    onAddBridgedAppClick: () -> Unit = {},
     onFindInPageClick: () -> Unit,
     onExtensionsClick: () -> Unit,
     onToggleDesktopMode: () -> Unit,
@@ -74,6 +76,11 @@ fun MenuSheet(
             label = "Add Bookmark",
             onClick = onAddBookmarkClick
         ),
+        *(if (canInstallBridgedApp) arrayOf(MenuAction(
+            icon = Icons.Default.Apps,
+            label = "Add Bridged App",
+            onClick = onAddBridgedAppClick
+        )) else emptyArray()),
         MenuAction(
             icon = Icons.Default.History,
             label = "History",

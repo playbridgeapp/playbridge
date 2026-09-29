@@ -130,8 +130,8 @@ class TabManager {
     private val closedTabsStack = ArrayDeque<ClosedTab>()
 
     /**
-     * Stack of recently *selected* tab IDs. Used to pick the next tab when the
-     * current one is closed. Most-recent at the end.
+     * Stack of recently *selected* tab IDs. Used as a fallback when the
+     * selected tab has no visible neighbor. Most-recent at the end.
      */
     private val selectionStack = ArrayDeque<String>()
 
@@ -338,17 +338,21 @@ class TabManager {
     }
 
     /**
-     * Remove a tab by id. Before removing, choose the next tab to select by
-     * popping the selection stack — falling back to BrowserStore's default
-     * behaviour if no prior selection is still alive. The engine session is
-     * closed by EngineMiddleware (TabsRemovedMiddleware) on removal.
+     * Remove a tab by id. If it is selected, prefer the next visible tab in
+     * list order, then the previous one. The engine session is closed by
+     * EngineMiddleware (TabsRemovedMiddleware) on removal.
      */
-    fun closeTab(tabId: String, store: BrowserStore) {
+    fun closeTab(
+        tabId: String,
+        store: BrowserStore,
+        rememberClosed: Boolean = true,
+        hiddenTabIds: Set<String> = emptySet(),
+    ) {
         val wasSelected = store.state.selectedTabId == tabId
 
         // Save to closed tabs stack before removal (state comes from the store).
         val sourceTab = store.state.tabs.find { it.id == tabId }
-        if (sourceTab != null) {
+        if (sourceTab != null && rememberClosed) {
             closedTabsStack.addLast(
                 ClosedTab(
                     url = sourceTab.content.url,
@@ -363,19 +367,25 @@ class TabManager {
         }
 
         if (wasSelected) {
-            // Drain stale entries off the top of the stack until we find a live tab
-            // that isn't the one being closed.
-            val liveTabIds = store.state.tabs.map { it.id }.toSet()
-            var next: String? = null
-            while (selectionStack.isNotEmpty()) {
-                val candidate = selectionStack.removeLast()
-                if (candidate != tabId && candidate in liveTabIds) {
-                    next = candidate
-                    break
+            val visibleTabIds = store.state.tabs.map { it.id }.filterNot { it in hiddenTabIds }
+            val closingIndex = visibleTabIds.indexOf(tabId)
+            var next = if (closingIndex >= 0) {
+                visibleTabIds.getOrNull(closingIndex + 1) ?: visibleTabIds.getOrNull(closingIndex - 1)
+            } else null
+            if (next == null) {
+                // A hidden tab or the last visible tab may still have a usable
+                // previously selected tab. Never pick another hidden app tab.
+                val liveTabIds = store.state.tabs.map { it.id }.toSet()
+                while (selectionStack.isNotEmpty()) {
+                    val candidate = selectionStack.removeLast()
+                    if (candidate != tabId && candidate in liveTabIds && candidate !in hiddenTabIds) {
+                        next = candidate
+                        break
+                    }
                 }
             }
             if (next != null) {
-                store.dispatch(TabListAction.SelectTabAction(next))
+                selectTab(next, store)
             }
         }
         // Clean up per-tab maps eagerly so they don't outlive the tab.

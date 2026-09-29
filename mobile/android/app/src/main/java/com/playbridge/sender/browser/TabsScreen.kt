@@ -106,6 +106,7 @@ fun BrowserStore.observeAsState(): State<BrowserState> {
  */
 @Composable
 fun TabsScreen(
+    hiddenTabIds: Set<String> = emptySet(),
     onTabSelected: (String) -> Unit,
     onTabClosed: (String) -> Unit,
     onNewTab: () -> Unit,
@@ -120,7 +121,7 @@ fun TabsScreen(
     onCloseAllConfirmChangeExternal: ((Boolean) -> Unit)? = null
 ) {
     // Observe only the tab list structure and selections.
-    val tabsScreenState by remember {
+    val allTabsScreenState by remember {
         Components.store.flow()
             .map { state ->
                 TabsScreenState(
@@ -136,6 +137,12 @@ fun TabsScreen(
             selectedTabId = Components.store.state.selectedTabId
         )
     )
+    val tabsScreenState = remember(allTabsScreenState, hiddenTabIds) {
+        TabsScreenState(
+            tabs = allTabsScreenState.tabs.filterNot { it.id in hiddenTabIds },
+            selectedTabId = allTabsScreenState.selectedTabId?.takeUnless { it in hiddenTabIds },
+        )
+    }
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     

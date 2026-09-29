@@ -75,7 +75,8 @@ fun DashboardOnboardingOverlay(
                             icon = { StepIcon(vector = Icons.Default.Dashboard) },
                             title = "This is your Dashboard",
                             body = "Home base for everything: browse the web, open your Library, " +
-                                "cast phone files, and more — each card takes you to a section."
+                                "cast phone files, and more — each card takes you to a section. " +
+                                "Swipe left across the cards for Bridged Apps and Cast History."
                         )
                         1 -> OnboardingStep(
                             icon = { StepIcon(vector = Icons.Default.Tv) },

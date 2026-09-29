@@ -11,11 +11,13 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.lazy.items
@@ -86,7 +88,7 @@ import com.playbridge.sender.data.library.AddonDao
 import com.playbridge.sender.data.settings.SettingsRepository
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalAnimationApi::class)
+@OptIn(ExperimentalAnimationApi::class, ExperimentalFoundationApi::class)
 @Composable
 fun AppNavHost(
     // Navigation & Layout States
@@ -114,6 +116,10 @@ fun AppNavHost(
     onIsFullscreenChange: (Boolean) -> Unit,
     isBrowserChromeHidden: Boolean,
     onIsBrowserChromeHiddenChange: (Boolean) -> Unit,
+    isBridgedAppMode: Boolean = false,
+    bridgedApps: List<BridgedApp> = emptyList(),
+    onOpenBridgedApp: (BridgedApp) -> Unit = {},
+    onRemoveBridgedApp: (BridgedApp) -> Unit = {},
     backPressedTime: Long,
     onBackPressedTimeChange: (Long) -> Unit,
     onFinishActivity: () -> Unit,
@@ -313,6 +319,8 @@ fun AppNavHost(
     val libraryDiscoverGridState = rememberSaveable(saver = LazyGridState.Saver) { LazyGridState() }
     val librarySearchResultsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val libraryCatalogRowScrollStates = remember { mutableStateMapOf<String, LazyListState>() }
+    // AnimatedContent recreates DashboardScreen after navigating away; keep its tile page here.
+    val dashboardPagerState = rememberPagerState(pageCount = { 2 })
 
     // State to determine if search focus should be requested
     var shouldFocusSearch by remember { mutableStateOf(false) }
@@ -432,10 +440,13 @@ fun AppNavHost(
                             session?.exitFullScreenMode()
                         }
                     }
-                    BackHandler(enabled = !isFullscreen && isBrowserChromeHidden) {
+                    BackHandler(enabled = !isFullscreen && isBridgedAppMode) {
+                        if (browserCanGoBack) session?.goBack() else onScreenChange(Screen.Dashboard)
+                    }
+                    BackHandler(enabled = !isFullscreen && isBrowserChromeHidden && !isBridgedAppMode) {
                         onIsBrowserChromeHiddenChange(false)
                     }
-                    BackHandler(enabled = !isFullscreen && !isBrowserChromeHidden && !isEditing) {
+                    BackHandler(enabled = !isFullscreen && !isBrowserChromeHidden && !isBridgedAppMode && !isEditing) {
                         if (browserCanGoBack) {
                             session?.goBack()
                         } else {
@@ -481,7 +492,7 @@ fun AppNavHost(
                             )
                         }
 
-                        if (isBrowserChromeHidden && !isFullscreen) {
+                        if (isBrowserChromeHidden && !isFullscreen && !isBridgedAppMode) {
                             BoxWithConstraints(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -854,13 +865,18 @@ fun AppNavHost(
                 }
                  Screen.Tabs -> {
                     BackHandler { onScreenChange(lastMainScreen) }
+                    val bridgedAppTabIds = bridgedApps.mapNotNull { it.tabId }.toSet()
                     TabsScreen(
+                        hiddenTabIds = bridgedAppTabIds,
                         onTabSelected = { tabId ->
                             tabManager.selectTab(tabId, store)
                             onScreenChange(Screen.Browser)
                         },
                         onTabClosed = { tabId ->
-                            tabManager.closeTab(tabId, store)
+                            tabManager.closeTab(tabId, store, hiddenTabIds = bridgedAppTabIds)
+                            if (store.state.tabs.none { it.id !in bridgedAppTabIds }) {
+                                tabManager.createTab("about:blank", store)
+                            }
                         },
                         onNewTab = {
                             tabManager.createTab("about:blank", store)
@@ -1698,6 +1714,7 @@ fun AppNavHost(
                     }
                     val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
                     DashboardScreen(
+                        pagerState = dashboardPagerState,
                         currentScreen = lastMainScreen,
                         isConnected = isConnected,
                         isSecure = (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
@@ -1712,6 +1729,9 @@ fun AppNavHost(
                             onLastMainScreenChange(Screen.Dashboard)
                             onScreenChange(Screen.Settings)
                         },
+                        bridgedApps = bridgedApps,
+                        onOpenBridgedApp = onOpenBridgedApp,
+                        onRemoveBridgedApp = onRemoveBridgedApp,
                     )
                 }
                 Screen.ScreenMirror -> {

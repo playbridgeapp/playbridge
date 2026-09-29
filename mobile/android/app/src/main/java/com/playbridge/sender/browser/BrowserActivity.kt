@@ -733,6 +733,11 @@ class BrowserActivity : ComponentActivity() {
             // Chrome-hidden mode belongs to the selected tab and intentionally remains
             // session-only: it survives tab switches/navigation, but not an app restart.
             var chromeHiddenTabIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
+            val bridgedAppStore = remember { BridgedAppStore(this@BrowserActivity) }
+            val installedBridgedApps by bridgedAppStore.apps.collectAsStateWithLifecycle()
+            var availableBridgedApp by remember { mutableStateOf<BridgedApp?>(null) }
+            var activeBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
+            var previousBrowserTabId by rememberSaveable { mutableStateOf<String?>(null) }
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
                 Log.d("PB_STARTUP", "Compose: syncSessions triggered — tabCount=${browserState.tabs.size}, selectedTabId=${browserState.selectedTabId}")
@@ -749,7 +754,28 @@ class BrowserActivity : ComponentActivity() {
 
             val selectedTabId = browserState.selectedTabId
             val selectedTab = browserState.tabs.find { it.id == selectedTabId }
-            val isBrowserChromeHidden = selectedTabId?.let(chromeHiddenTabIds::contains) == true
+            val bridgedAppTabIds = installedBridgedApps.mapNotNull { it.tabId }.toSet()
+            fun selectNormalBrowserTab() {
+                val normalIds = store.state.tabs.map { it.id }.filterNot { it in bridgedAppTabIds }
+                val normalId = previousBrowserTabId?.takeIf { it in normalIds } ?: normalIds.firstOrNull()
+                if (normalId != null) {
+                    tabManager.selectTab(normalId, store)
+                    previousBrowserTabId = normalId
+                } else {
+                    previousBrowserTabId = tabManager.createTab("about:blank", store)
+                }
+            }
+            LaunchedEffect(tabsRestoredOrReady.value, currentScreen, selectedTabId,
+                activeBridgedAppTabId, bridgedAppTabIds) {
+                // A cold start must not expose a saved app tab as an ordinary browser tab.
+                if (tabsRestoredOrReady.value && currentScreen == Screen.Browser &&
+                    selectedTabId != null && selectedTabId in bridgedAppTabIds &&
+                    selectedTabId != activeBridgedAppTabId) {
+                    selectNormalBrowserTab()
+                }
+            }
+            val isBrowserChromeHidden = selectedTabId?.let(chromeHiddenTabIds::contains) == true ||
+                (currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId)
             val session = if (selectedTab != null) sessions[selectedTab.id] else null
 
             Log.d("PB_STARTUP", "Compose: recompose — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, sessionNull=${session == null}, tabsRestored=${tabsRestoredOrReady.value}, sessionsMapSize=${sessions.size}")
@@ -793,13 +819,13 @@ class BrowserActivity : ComponentActivity() {
                                                     text = { Text("Go to playing tab") },
                                                     onClick = {
                                                         menuExpanded = false
-                                                        playingTabIds.keys.firstOrNull()?.let {
+                                                        playingTabIds.keys.firstOrNull { it !in bridgedAppTabIds }?.let {
                                                             tabManager.selectTab(it, store)
                                                             currentScreen = Screen.Browser
                                                         }
                                                     },
                                                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.VolumeUp, null) },
-                                                    enabled = playingTabIds.isNotEmpty()
+                                                    enabled = playingTabIds.keys.any { it !in bridgedAppTabIds }
                                                 )
                                                 DropdownMenuItem(
                                                     text = { Text("Reopen Closed Tab") },
@@ -852,12 +878,16 @@ class BrowserActivity : ComponentActivity() {
                         ) { innerPadding ->
                             Surface(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
                                 TabsScreen(
+                                    hiddenTabIds = bridgedAppTabIds,
                                     onTabSelected = { tabId ->
                                         tabManager.selectTab(tabId, store)
                                         currentScreen = Screen.Browser
                                     },
                                     onTabClosed = { tabId ->
-                                        tabManager.closeTab(tabId, store)
+                                        tabManager.closeTab(tabId, store, hiddenTabIds = bridgedAppTabIds)
+                                        if (store.state.tabs.none { it.id !in bridgedAppTabIds }) {
+                                            previousBrowserTabId = tabManager.createTab("about:blank", store)
+                                        }
                                     },
                                     onNewTab = {
                                         tabManager.createTab("about:blank", store)
@@ -902,6 +932,50 @@ class BrowserActivity : ComponentActivity() {
             // UI state variables — keyed to selectedTabId so they reset when switching tabs
             var currentUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "about:blank") }
             var isLoading by remember(selectedTabId) { mutableStateOf(false) }
+            val currentOrigin = BridgedAppStore.originFor(currentUrl)
+            val isBridgedAppMode = currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId &&
+                installedBridgedApps.any { it.tabId == selectedTabId && it.origin == currentOrigin }
+            SideEffect {
+                Components.bridgedAppOriginsByTabId = installedBridgedApps.mapNotNull { app ->
+                    app.tabId?.let { it to app.origin }
+                }.toMap()
+                Components.activeBridgedAppTabId = activeBridgedAppTabId
+                Components.onBridgedAppExternalNavigation = { appTabId, url ->
+                    if (activeBridgedAppTabId == appTabId && store.state.selectedTabId == appTabId &&
+                        installedBridgedApps.any { it.tabId == appTabId }) {
+                        activeBridgedAppTabId = null
+                        Components.activeBridgedAppTabId = null
+                        previousBrowserTabId = tabManager.createTab(url, store)
+                        currentScreen = Screen.Browser
+                    }
+                }
+            }
+            DisposableEffect(Unit) {
+                onDispose {
+                    Components.bridgedAppOriginsByTabId = emptyMap()
+                    Components.activeBridgedAppTabId = null
+                    Components.onBridgedAppExternalNavigation = null
+                }
+            }
+            LaunchedEffect(currentOrigin, selectedTabId, currentScreen) {
+                availableBridgedApp = if (currentScreen == Screen.Browser && currentOrigin != null &&
+                    selectedTabId != activeBridgedAppTabId) {
+                    BridgedAppStore.discover(currentUrl)
+                } else null
+            }
+            LaunchedEffect(currentUrl, activeBridgedAppTabId) {
+                if (selectedTabId == activeBridgedAppTabId && currentUrl != "about:blank" &&
+                    installedBridgedApps.none { it.tabId == selectedTabId && it.origin == currentOrigin }) {
+                    // If an external navigation escaped the request interceptor, expose that
+                    // page as a normal tab instead of leaving an inaccessible hidden tab.
+                    installedBridgedApps.firstOrNull { it.tabId == selectedTabId }?.let { app ->
+                        bridgedAppStore.setTab(app.origin, null)
+                        previousBrowserTabId = selectedTabId
+                    }
+                    activeBridgedAppTabId = null
+                    Components.activeBridgedAppTabId = null
+                }
+            }
             
             // Back/Forward states are now read from tabManager.navigationStates
             val navState = tabManager.navigationStates[selectedTabId] ?: TabNavigationState()
@@ -2243,13 +2317,13 @@ class BrowserActivity : ComponentActivity() {
                                                     text = { Text("Go to playing tab") },
                                                     onClick = {
                                                         menuExpanded = false
-                                                        playingTabIds.keys.firstOrNull()?.let {
+                                                        playingTabIds.keys.firstOrNull { it !in bridgedAppTabIds }?.let {
                                                             tabManager.selectTab(it, store)
                                                             currentScreen = Screen.Browser
                                                         }
                                                     },
                                                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.VolumeUp, null) },
-                                                    enabled = playingTabIds.isNotEmpty()
+                                                    enabled = playingTabIds.keys.any { it !in bridgedAppTabIds }
                                                 )
                                                 DropdownMenuItem(
                                                     text = { Text("Reopen Closed Tab") },
@@ -2386,7 +2460,7 @@ class BrowserActivity : ComponentActivity() {
                                         IconButton(
                                             onClick = { currentScreen = Screen.Tabs }
                                         ) {
-                                            val tabCount = browserState.tabs.size
+                                            val tabCount = browserState.tabs.count { it.id !in bridgedAppTabIds }
                                             Box(
                                                 modifier = Modifier
                                                     .size(24.dp)
@@ -2434,6 +2508,18 @@ class BrowserActivity : ComponentActivity() {
                             if (target == Screen.Dashboard && currentScreen != Screen.Dashboard) {
                                 dashboardOrigin = currentScreen
                             }
+                            if (target == Screen.Dashboard && currentScreen == Screen.Browser &&
+                                selectedTabId != null && selectedTabId == activeBridgedAppTabId) {
+                                activeBridgedAppTabId = null
+                                Components.activeBridgedAppTabId = null
+                                // AnimatedContent keeps the outgoing Browser visible briefly.
+                                // Leave its app tab selected until Browser is opened again so
+                                // the ordinary browser page cannot flash during this exit.
+                            }
+                            if (target == Screen.Browser && currentScreen != Screen.Browser &&
+                                store.state.selectedTabId in bridgedAppTabIds) {
+                                selectNormalBrowserTab()
+                            }
                             currentScreen = target
                         },
                         connectionInitialTab = connectionInitialTab,
@@ -2460,6 +2546,42 @@ class BrowserActivity : ComponentActivity() {
                                 } else {
                                     chromeHiddenTabIds - tabId
                                 }
+                            }
+                        },
+                        isBridgedAppMode = isBridgedAppMode,
+                        bridgedApps = installedBridgedApps,
+                        onOpenBridgedApp = { app ->
+                            if (selectedTabId != null && selectedTabId != activeBridgedAppTabId &&
+                                selectedTabId !in bridgedAppTabIds) {
+                                previousBrowserTabId = selectedTabId
+                            }
+                            val existingTab = app.tabId?.takeIf { id ->
+                                store.state.tabs.any { it.id == id && BridgedAppStore.originFor(it.content.url) == app.origin }
+                            }
+                            if (existingTab == null) {
+                                app.tabId?.takeIf { id -> store.state.tabs.any { it.id == id } }
+                                    ?.let { tabManager.closeTab(it, store, rememberClosed = false) }
+                            }
+                            val appTabId = if (existingTab != null) {
+                                tabManager.selectTab(existingTab, store)
+                                existingTab
+                            } else {
+                                tabManager.createTab(app.startUrl, store).also { bridgedAppStore.setTab(app.origin, it) }
+                            }
+                            activeBridgedAppTabId = appTabId
+                            Components.activeBridgedAppTabId = appTabId
+                            isEditing = false
+                            showFindBar = false
+                            currentScreen = Screen.Browser
+                        },
+                        onRemoveBridgedApp = { app ->
+                            bridgedAppStore.remove(app.origin)
+                            app.tabId?.takeIf { id -> store.state.tabs.any { it.id == id } }
+                                ?.let { tabManager.closeTab(it, store, rememberClosed = false) }
+                            if (app.tabId == activeBridgedAppTabId) {
+                                activeBridgedAppTabId = null
+                                Components.activeBridgedAppTabId = null
+                                selectNormalBrowserTab()
                             }
                         },
                         backPressedTime = backPressedTime,
@@ -2545,6 +2667,18 @@ class BrowserActivity : ComponentActivity() {
                         scope.launch { sheetState.hide() }.invokeOnCompletion {
                             showMenuSheet = false
                             handleBookmarkClick()
+                        }
+                    },
+                    canInstallBridgedApp = availableBridgedApp?.origin == currentOrigin &&
+                        installedBridgedApps.none { it.origin == currentOrigin },
+                    onAddBridgedAppClick = {
+                        val app = availableBridgedApp?.takeIf { it.origin == currentOrigin }
+                        scope.launch { sheetState.hide() }.invokeOnCompletion {
+                            showMenuSheet = false
+                            if (app != null) {
+                                bridgedAppStore.install(app)
+                                Toast.makeText(this@BrowserActivity, "${app.name} added to Bridged Apps", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     onFindInPageClick = {

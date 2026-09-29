@@ -133,6 +133,9 @@ object Components {
      */
     @Volatile var onMagnetDetected: ((String) -> Unit)? = null
     @Volatile var onStremioAddonDetected: ((String) -> Unit)? = null
+    @Volatile var bridgedAppOriginsByTabId: Map<String, String> = emptyMap()
+    @Volatile var activeBridgedAppTabId: String? = null
+    @Volatile var onBridgedAppExternalNavigation: ((String, String) -> Unit)? = null
 
     /**
      * Engine-level request interceptor (Fenix-style): serves friendly error
@@ -159,6 +162,17 @@ object Components {
                 Log.d(TAG, "Intercepted Stremio addon link: $uri")
                 Handler(Looper.getMainLooper()).post { onStremioAddonDetected?.invoke(uri) }
                 return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
+            }
+            if (!isSubframeRequest) {
+                val tab = store.state.tabs.firstOrNull { it.engineState.engineSession === engineSession }
+                val appOrigin = tab?.id?.let(bridgedAppOriginsByTabId::get)
+                if (tab != null && tab.id == activeBridgedAppTabId && appOrigin != null &&
+                    BridgedAppStore.isExternalWebNavigation(appOrigin, uri)) {
+                    Handler(Looper.getMainLooper()).post {
+                        onBridgedAppExternalNavigation?.invoke(tab.id, uri)
+                    }
+                    return mozilla.components.concept.engine.request.RequestInterceptor.InterceptionResponse.Deny
+                }
             }
             return null
         }

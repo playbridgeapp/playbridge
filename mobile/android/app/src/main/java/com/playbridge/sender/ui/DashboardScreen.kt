@@ -1,12 +1,15 @@
 package com.playbridge.sender.ui
 
 import com.playbridge.sender.browser.Screen
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -15,6 +18,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
@@ -38,11 +43,16 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import com.playbridge.sender.R
+import com.playbridge.sender.browser.BridgedApp
+import coil.compose.AsyncImage
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun DashboardScreen(
+    pagerState: PagerState,
     currentScreen: Screen,
     isConnected: Boolean,
     isSecure: Boolean,
@@ -54,10 +64,20 @@ fun DashboardScreen(
     onClose: () -> Unit = { onNavigate(currentScreen) },
     /** Global Settings entry (top-right gear). Defaults to [Screen.Settings]. */
     onSettings: () -> Unit = { onNavigate(Screen.Settings) },
+    bridgedApps: List<BridgedApp> = emptyList(),
+    onOpenBridgedApp: (BridgedApp) -> Unit = {},
+    onRemoveBridgedApp: (BridgedApp) -> Unit = {},
 ) {
     // ── Entrance animations ─────────────────────────────────────────────────
     var visible by remember { mutableStateOf(false) }
     var showExitConfirm by remember { mutableStateOf(false) }
+    var appToRemove by remember { mutableStateOf<BridgedApp?>(null) }
+    val homeScrollState = rememberScrollState()
+    val pagerScope = rememberCoroutineScope()
+    val selectPage: (Int) -> Unit = { page ->
+        pagerScope.launch { pagerState.animateScrollToPage(page) }
+    }
+    BackHandler(enabled = pagerState.currentPage == 1) { selectPage(0) }
     LaunchedEffect(Unit) { visible = true }
 
     // One-time onboarding tour (first launch lands here; see BrowserActivity).
@@ -134,12 +154,12 @@ fun DashboardScreen(
             )
         }
 
-        // ── Main Dashboard Scrollable Content ────────────────────────────────
+        // The header and status stay in the vertical dashboard; only tiles page sideways.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(homeScrollState)
                 .padding(horizontal = 24.dp)
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -290,10 +310,7 @@ fun DashboardScreen(
 
             Spacer(modifier = Modifier.height(36.dp))
 
-            // ── Navigation Cards Grid ───────────────────────────────────────
-            // Order: hero content (Browser, Library) on top; then Connection (gateway + live
-            // status), Phone Files and Debrid as the other content sources; Cast History — a
-            // passive log — last in the trailing slot.
+            // Each page contains only dashboard tiles; the logo and connection stay put.
             val items = listOf(
                 DashboardItem(
                     icon = Icons.Default.Language,
@@ -354,81 +371,138 @@ fun DashboardScreen(
                     screen = Screen.Collections,
                     gradientColors = listOf(Color(0xFFAD1457), Color(0xFFD81B60))
                 ),
-                DashboardItem(
-                    icon = Icons.Default.History,
-                    title = "Cast History",
-                    subtitle = "Recent casts",
-                    screen = Screen.CastHistory,
-                    gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00))
-                )
             ).filter {
                 // Debrid is FOSS-only; the Play flavor hides the tile entirely.
                 com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED || it.screen != Screen.DebridLibrary
             }
 
-            // Top row: 2 large cards (Browser + Library)
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items.take(2).forEachIndexed { index, item ->
-                    DashboardCard(
-                        item = item,
-                        isActive = isCurrentScreen(currentScreen, item.screen),
-                        animDelay = 100 + index * 80,
-                        visible = visible,
-                        modifier = Modifier.weight(1f),
-                        tall = true,
-                        onClick = { onNavigate(item.screen) }
-                    )
-                }
-            }
+            val mainRows = items.drop(2).chunked(3).size
+            val extraAppRows = (bridgedApps.size - 1).coerceAtLeast(0).let { (it + 1) / 2 }
+            val mainTilesHeight = (150 + if (mainRows > 0) 12 + mainRows * 132 else 0).dp
+            val appsTilesHeight = (120 + extraAppRows * 132).dp
+            // Keep the dots in one place while switching between tile pages.
+            val tilesHeight = maxOf(mainTilesHeight, appsTilesHeight)
+            HorizontalPager(
+                state = pagerState,
+                modifier = Modifier.fillMaxWidth().height(tilesHeight),
+                pageSpacing = 12.dp,
+                verticalAlignment = Alignment.Top,
+            ) { page ->
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    if (page == 0) {
+                        // Top row: 2 large cards (Browser + Library).
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            items.take(2).forEachIndexed { index, item ->
+                                DashboardCard(
+                                    item = item,
+                                    isActive = isCurrentScreen(currentScreen, item.screen),
+                                    animDelay = 100 + index * 80,
+                                    visible = visible,
+                                    modifier = Modifier.weight(1f),
+                                    tall = true,
+                                    onClick = { onNavigate(item.screen) }
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Remaining cards, 3 per row (wraps as more are added).
-            items.drop(2).chunked(3).forEachIndexed { rowIdx, rowItems ->
-                if (rowIdx > 0) Spacer(modifier = Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    rowItems.forEachIndexed { index, item ->
-                        DashboardCard(
-                            item = item,
-                            isActive = isCurrentScreen(currentScreen, item.screen),
-                            animDelay = 260 + index * 80,
-                            visible = visible,
-                            modifier = Modifier.weight(1f),
-                            tall = false,
-                            onClick = { onNavigate(item.screen) }
+                        // Remaining cards, 3 per row.
+                        items.drop(2).chunked(3).forEachIndexed { rowIdx, rowItems ->
+                            if (rowIdx > 0) Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                rowItems.forEachIndexed { index, item ->
+                                    DashboardCard(
+                                        item = item,
+                                        isActive = isCurrentScreen(currentScreen, item.screen),
+                                        animDelay = 260 + index * 80,
+                                        visible = visible,
+                                        modifier = Modifier.weight(1f),
+                                        tall = false,
+                                        onClick = { onNavigate(item.screen) },
+                                    )
+                                }
+                                repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
+                            }
+                        }
+                    } else {
+                        val historyCard = DashboardItem(
+                            icon = Icons.Default.History,
+                            title = "Cast History",
+                            subtitle = "Recent casts",
+                            screen = Screen.CastHistory,
+                            gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00)),
                         )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            DashboardCard(
+                                item = historyCard,
+                                isActive = isCurrentScreen(currentScreen, Screen.CastHistory),
+                                animDelay = 100,
+                                visible = visible,
+                                modifier = Modifier.weight(1f),
+                                tall = false,
+                                onClick = { onNavigate(Screen.CastHistory) },
+                            )
+                            val firstApp = bridgedApps.firstOrNull()
+                            if (firstApp != null) {
+                                BridgedAppDashboardCard(
+                                    app = firstApp,
+                                    visible = visible,
+                                    modifier = Modifier.weight(1f),
+                                    tall = false,
+                                    onClick = { onOpenBridgedApp(firstApp) },
+                                    onLongClick = { appToRemove = firstApp },
+                                )
+                            } else {
+                                DashboardCard(
+                                    item = DashboardItem(
+                                        icon = Icons.Default.Apps,
+                                        title = "Bridged Apps",
+                                        subtitle = "Open Browser to add",
+                                        screen = Screen.Browser,
+                                        gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
+                                    ),
+                                    isActive = false,
+                                    animDelay = 180,
+                                    visible = visible,
+                                    modifier = Modifier.weight(1f),
+                                    tall = false,
+                                    onClick = { onNavigate(Screen.Browser) },
+                                )
+                            }
+                        }
+                        bridgedApps.drop(1).chunked(2).forEach { row ->
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                row.forEach { app ->
+                                    BridgedAppDashboardCard(
+                                        app = app,
+                                        visible = visible,
+                                        modifier = Modifier.weight(1f),
+                                        tall = false,
+                                        onClick = { onOpenBridgedApp(app) },
+                                        onLongClick = { appToRemove = app },
+                                    )
+                                }
+                                if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
                     }
-                    repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
                 }
             }
-
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // ── Exit ─────────────────────────────────────────────────────────
-            // Fully quits the app (distinct from the top-left "Close Dashboard", which
-            // only dismisses this screen).
-            OutlinedButton(
-                onClick = { showExitConfirm = true },
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                ),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PowerSettingsNew,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp),
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Exit PlayBridge", fontWeight = FontWeight.Medium)
-            }
-
+            Spacer(modifier = Modifier.height(18.dp))
+            DashboardPageDots(selectedPage = pagerState.currentPage, onSelect = selectPage)
             Spacer(modifier = Modifier.height(24.dp))
         }
 
@@ -453,20 +527,37 @@ fun DashboardScreen(
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
                 )
             }
-            // Single global Settings entry — not in Browser menu or Library bottom nav.
-            IconButton(
-                onClick = onSettings,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+            Row(
+                modifier = Modifier.align(Alignment.TopEnd),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Icon(
-                    imageVector = Icons.Default.Settings,
-                    contentDescription = "Settings",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                )
+                IconButton(
+                    onClick = { showExitConfirm = true },
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PowerSettingsNew,
+                        contentDescription = "Exit PlayBridge",
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+                // Single global Settings entry — not in Browser menu or Library bottom nav.
+                IconButton(
+                    onClick = onSettings,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Settings",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+                }
             }
         }
 
@@ -481,6 +572,17 @@ fun DashboardScreen(
         }
 
         // Confirm before fully quitting — this is a hard exit, not a background close.
+        appToRemove?.let { app ->
+            AlertDialog(
+                onDismissRequest = { appToRemove = null },
+                title = { Text("Remove ${app.name}?") },
+                text = { Text("Its dashboard tile will be removed. Website data and casting permissions are managed separately.") },
+                confirmButton = {
+                    TextButton(onClick = { onRemoveBridgedApp(app); appToRemove = null }) { Text("Remove") }
+                },
+                dismissButton = { TextButton(onClick = { appToRemove = null }) { Text("Cancel") } },
+            )
+        }
         if (showExitConfirm) {
             AlertDialog(
                 onDismissRequest = { showExitConfirm = false },
@@ -505,6 +607,66 @@ fun DashboardScreen(
 }
 
 @Composable
+private fun DashboardPageDots(selectedPage: Int, onSelect: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        repeat(2) { index ->
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clickable(onClickLabel = if (index == 0) "Show dashboard tiles" else "Show apps and history tiles") {
+                        onSelect(index)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(if (selectedPage == index) 10.dp else 7.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (selectedPage == index) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BridgedAppDashboardCard(
+    app: BridgedApp,
+    visible: Boolean,
+    modifier: Modifier,
+    tall: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+) {
+    DashboardCard(
+        item = DashboardItem(
+            icon = Icons.Default.Apps,
+            title = app.name,
+            subtitle = "Bridged App",
+            screen = Screen.Browser,
+            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
+        ),
+        isActive = false,
+        animDelay = 180,
+        visible = visible,
+        modifier = modifier,
+        tall = tall,
+        onClick = onClick,
+        onLongClick = onLongClick,
+        onLongClickLabel = "Remove ${app.name}",
+        appIconUrl = app.iconUrl,
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun DashboardCard(
     item: DashboardItem,
     isActive: Boolean,
@@ -512,7 +674,10 @@ private fun DashboardCard(
     visible: Boolean,
     modifier: Modifier = Modifier,
     tall: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    onLongClickLabel: String? = null,
+    appIconUrl: String? = null,
 ) {
     // Perf: single entrance animation (alpha + offset) instead of 4 concurrent
     // per-card anims (cardAlpha/cardTranslateY/pressScale/activeScale).
@@ -565,10 +730,12 @@ private fun DashboardCard(
                 scaleX = finalScale
                 scaleY = finalScale
             }
-            .clickable(
+            .combinedClickable(
                 interactionSource = interactionSource,
                 indication = ripple(bounded = true),
-                onClick = onClick
+                onClick = onClick,
+                onLongClick = onLongClick,
+                onLongClickLabel = onLongClickLabel,
             ),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
@@ -656,12 +823,20 @@ private fun DashboardCard(
                         .background(Color.White.copy(alpha = 0.2f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = item.icon,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(22.dp)
-                    )
+                    if (appIconUrl != null) {
+                        AsyncImage(
+                            model = appIconUrl,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else {
+                        Icon(
+                            imageVector = item.icon,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
                 }
 
                 Column {
