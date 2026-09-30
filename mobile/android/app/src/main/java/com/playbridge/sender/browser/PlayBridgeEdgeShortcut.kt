@@ -5,7 +5,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -32,9 +31,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
@@ -43,6 +40,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.playbridge.sender.R
+import com.playbridge.sender.ui.frostedGlass
+import com.playbridge.sender.ui.rememberFrostedBackdrop
+import com.playbridge.sender.ui.theme.DockGlass
 import kotlinx.coroutines.delay
 
 /** Observe AndroidView / Compose taps in the initial pass; the website still gets every event. */
@@ -73,21 +73,16 @@ internal fun PlayBridgeEdgeShortcut(
     var expanded by remember { mutableStateOf(false) }
     var visible by remember(fullscreen) { mutableStateOf(!fullscreen) }
     // Nuvio's dock keeps the same charcoal glass and pale foreground in both themes.
-    val glassTint = Color(0xFF1C1C1E)
-    val glassForeground = Color.White.copy(alpha = 0.9f)
-    val glassIcon = Color.White.copy(alpha = 0.74f)
+    val glassForeground = DockGlass.foreground
+    val glassIcon = DockGlass.mutedForeground
     val handleShape = RoundedCornerShape(topStart = 12.dp, bottomStart = 12.dp)
     val menuShape = RoundedCornerShape(18.dp)
-    val handleGlass = remember { edgeGlassBrush(glassTint, 0.55f) }
-    val menuGlass = remember { edgeGlassBrush(glassTint, 0.82f) }
-    val glassRim = remember {
-        Brush.verticalGradient(
-            listOf(
-                Color.White.copy(alpha = 0.27f),
-                Color.White.copy(alpha = 0.02f),
-            ),
-        )
-    }
+    val backdrop = rememberFrostedBackdrop(
+        enabled = visible,
+        refreshIntervalMillis = 1_000L,
+        refreshKey = expanded,
+    )
+    val glassRim = DockGlass.rim
     val menuItemColors = MenuDefaults.itemColors(
         textColor = glassForeground,
         leadingIconColor = glassIcon,
@@ -127,7 +122,7 @@ internal fun PlayBridgeEdgeShortcut(
                     shadowElevation = 3.dp,
                 ) {
                     Box(
-                        modifier = Modifier.fillMaxSize().background(handleGlass),
+                        modifier = Modifier.fillMaxSize().frostedGlass(backdrop, 0.55f, handleShape),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
@@ -145,7 +140,7 @@ internal fun PlayBridgeEdgeShortcut(
             DropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false },
-                modifier = Modifier.width(156.dp).background(menuGlass, menuShape),
+                modifier = Modifier.width(156.dp).frostedGlass(backdrop, 0.65f, menuShape),
                 shape = menuShape,
                 containerColor = Color.Transparent,
                 tonalElevation = 0.dp,
@@ -175,15 +170,4 @@ internal fun PlayBridgeEdgeShortcut(
             }
         }
     }
-}
-
-/** Translucent tint and a quiet reflection; no page capture or blur on the render path. */
-private fun edgeGlassBrush(tint: Color, opacity: Float): Brush {
-    val base = tint.copy(alpha = opacity)
-    return Brush.verticalGradient(
-        listOf(
-            Color.White.copy(alpha = 0.035f).compositeOver(base),
-            base,
-        ),
-    )
 }

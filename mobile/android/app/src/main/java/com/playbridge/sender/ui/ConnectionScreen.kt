@@ -1275,15 +1275,6 @@ fun TvDeviceRow(
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Text(
-                        text = if (device.connectDevice.port > 0) {
-                            "${device.connectDevice.ip}:${device.connectDevice.port}"
-                        } else {
-                            device.connectDevice.ip
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -1295,19 +1286,26 @@ fun TvDeviceRow(
                             modifier = Modifier
                                 .size(8.dp)
                                 .clip(CircleShape)
-                                .background(dotColor),
+                                .background(dotColor)
+                                .semantics { contentDescription = if (device.isOnline) "Online" else "Offline" },
                         )
+                        val endpoint = if (device.connectDevice.port > 0) {
+                            "${device.connectDevice.ip}:${device.connectDevice.port}"
+                        } else {
+                            device.connectDevice.ip
+                        }
                         val statusText = when {
-                            device.isOnline && !device.isKnown -> "Online · New"
-                            device.isOnline -> "Online"
-                            device.lastConnected != null -> formatLastSeen(device.lastConnected)
-                            else -> "Saved"
+                            device.isOnline -> endpoint
+                            device.lastConnected != null -> "${formatLastSeen(device.lastConnected)} · $endpoint"
+                            else -> "Saved · $endpoint"
                         }
                         Text(
                             text = statusText,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (device.isOnline) OnlineGreen
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
                         )
                         if (showProtocolBadge) {
                             ProtocolBadge(device.connectDevice.resolvedProtocol.displayName)
@@ -1349,10 +1347,9 @@ private fun CompactTvDeviceRow(
         device.connectDevice.ip
     }
     val statusText = when {
-        device.isOnline && !device.isKnown -> "Online · New"
-        device.isOnline -> "Online"
-        device.lastConnected != null -> formatLastSeen(device.lastConnected)
-        else -> "Saved"
+        device.isOnline -> endpoint
+        device.lastConnected != null -> "${formatLastSeen(device.lastConnected)} · $endpoint"
+        else -> "Saved · $endpoint"
     }
 
     Card(
@@ -1417,13 +1414,13 @@ private fun CompactTvDeviceRow(
                             .background(
                                 if (device.isOnline) OnlineGreen
                                 else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            ),
+                            )
+                            .semantics { contentDescription = if (device.isOnline) "Online" else "Offline" },
                     )
                     Text(
-                        text = "$statusText · $endpoint",
+                        text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (device.isOnline) OnlineGreen
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),

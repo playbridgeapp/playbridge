@@ -1,5 +1,7 @@
 package com.playbridge.sender.cast
 
+import android.os.Build
+import android.view.WindowManager
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -41,11 +43,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogWindowProvider
 import com.playbridge.sender.cast.browser.BrowserReceiverRepository
 import com.playbridge.sender.cast.browser.BrowserReceiverSheet
 import com.playbridge.sender.connection.ConnectionMerge
@@ -62,9 +67,13 @@ import com.playbridge.sender.ui.ThisDeviceDestinationRow
 import com.playbridge.sender.ui.TvDeviceRow
 import com.playbridge.sender.ui.UnifiedDevice
 import com.playbridge.sender.ui.connectKnownOrPair
+import com.playbridge.sender.ui.frostedGlass
+import com.playbridge.sender.ui.rememberFrostedBackdrop
+import com.playbridge.sender.ui.theme.DockGlass
 import kotlinx.coroutines.launch
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.koinInject
+import java.util.function.Consumer
 
 private val ConnectedGreen = Color(0xFF4CAF50)
 private val ConnectingOrange = Color(0xFFFF9800)
@@ -72,45 +81,105 @@ private val ConnectingOrange = Color(0xFFFF9800)
 internal fun googleCastPickerConnectionComplete(phase: SessionPhase): Boolean =
     phase == SessionPhase.CONNECTED || phase == SessionPhase.PLAYING
 
+/** Blur the page behind the dialog, leaving its own text and controls sharp. */
+@Composable
+private fun rememberDevicePickerBlur(): Boolean {
+    val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+    val blurRadius = with(LocalDensity.current) { 24.dp.roundToPx() }
+    var blurEnabled by remember(window) { mutableStateOf(false) }
+
+    DisposableEffect(window, blurRadius) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && window != null) {
+            val manager = window.windowManager
+            val originalDim = window.attributes.dimAmount
+            val originalRadius = window.attributes.blurBehindRadius
+            val originallyBlurred = window.attributes.flags and
+                WindowManager.LayoutParams.FLAG_BLUR_BEHIND != 0
+            val listener = Consumer<Boolean> { enabled ->
+                // Android can disable blur at runtime, including in battery saver mode.
+                blurEnabled = enabled
+                if (enabled) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                } else {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                }
+                window.attributes = window.attributes.apply {
+                    blurBehindRadius = if (enabled) blurRadius else 0
+                    dimAmount = if (enabled) 0.22f else originalDim
+                }
+            }
+            manager.addCrossWindowBlurEnabledListener(window.context.mainExecutor, listener)
+            onDispose {
+                manager.removeCrossWindowBlurEnabledListener(listener)
+                if (!originallyBlurred) {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                } else {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+                }
+                window.attributes = window.attributes.apply {
+                    blurBehindRadius = originalRadius
+                    dimAmount = originalDim
+                }
+            }
+        } else {
+            onDispose { }
+        }
+    }
+    return blurEnabled
+}
+
 @Composable
 private fun DevicePickerDialogFrame(
     onDismissRequest: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Dialog(onDismissRequest = onDismissRequest) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 720.dp),
-            shape = MaterialTheme.shapes.extraLarge,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            tonalElevation = 6.dp,
-            shadowElevation = 12.dp,
-        ) {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+        val blurEnabled = rememberDevicePickerBlur()
+        val backdrop = rememberFrostedBackdrop(enabled = !blurEnabled)
+        MaterialTheme(colorScheme = DockGlass.pickerColors) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 720.dp),
+                shape = RoundedCornerShape(28.dp),
+                color = Color.Transparent,
+                contentColor = DockGlass.pickerColors.onSurface,
+                border = BorderStroke(0.75.dp, DockGlass.rim),
+                tonalElevation = 0.dp,
+                shadowElevation = 8.dp,
+            ) {
+                Column(
+                    modifier = Modifier.frostedGlass(
+                        backdrop = backdrop,
+                        opacity = 0.65f,
+                        shape = RoundedCornerShape(28.dp),
+                        blurredByWindow = blurEnabled,
+                    ),
                 ) {
-                    Text(
-                        text = "Cast to",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    IconButton(onClick = onDismissRequest) {
-                        Icon(
-                            imageVector = Icons.Default.Close,
-                            contentDescription = "Close",
-                            modifier = Modifier.size(22.dp),
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "Cast to",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
                         )
+                        IconButton(onClick = onDismissRequest) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                modifier = Modifier.size(22.dp),
+                            )
+                        }
                     }
-                }
 
-                HorizontalDivider()
-                content()
+                    HorizontalDivider()
+                    content()
+                }
             }
         }
     }
