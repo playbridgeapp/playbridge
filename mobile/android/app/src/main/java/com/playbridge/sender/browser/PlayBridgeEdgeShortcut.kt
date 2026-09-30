@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MenuDefaults
@@ -66,6 +67,7 @@ internal fun PlayBridgeEdgeShortcut(
     fullscreenInteraction: Int,
     onDashboard: () -> Unit,
     onDevices: () -> Unit,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -163,6 +165,12 @@ internal fun PlayBridgeEdgeShortcut(
                     text = { Text("Devices") },
                     leadingIcon = { Icon(Icons.Default.Cast, null, Modifier.size(18.dp)) },
                     onClick = { expanded = false; onDevices() },
+                )
+                DropdownMenuItem(
+                    colors = menuItemColors,
+                    text = { Text("Refresh") },
+                    leadingIcon = { Icon(Icons.Default.Refresh, null, Modifier.size(18.dp)) },
+                    onClick = { expanded = false; onRefresh() },
                 )
             }
         }

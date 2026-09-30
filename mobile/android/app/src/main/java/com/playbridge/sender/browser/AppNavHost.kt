@@ -1891,7 +1891,7 @@ fun AppNavHost(
 
         // Keep the shortcut outside AnimatedContent so it never slides/fades with a page.
         // Main screens already expose a dashboard glyph. Secondary screens get a direct
-        // shortcut, while chrome-hidden websites get the compact Dashboard / Devices menu.
+        // shortcut, while chrome-hidden websites get the compact page menu.
         val browserMenu = currentScreen == Screen.Browser &&
             (isBridgedAppMode || isBrowserChromeHidden || isFullscreen)
         val hasDashboardButton = currentScreen in listOf(
@@ -1909,6 +1909,10 @@ fun AppNavHost(
                         onScreenChange(Screen.Dashboard)
                     },
                     onDevices = { showDevicePicker = true },
+                    onRefresh = {
+                        leaveMediaFullscreen()
+                        session?.reload()
+                    },
                     modifier = Modifier
                         .align(Alignment.CenterEnd)
                         .windowInsetsPadding(WindowInsets.safeDrawing),
