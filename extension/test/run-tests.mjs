@@ -10,6 +10,7 @@ const outfiles = [
   join(directory, "data-consent.test.mjs"),
   join(directory, "geckoview-header-enrichment.test.mjs"),
   join(directory, "geckoview-detection-lifecycle.test.mjs"),
+  join(directory, "geckoview-detection-policy.test.mjs"),
   join(directory, "geckoview-detected-media-kind.test.mjs"),
   join(directory, "geckoview-page-cast.test.mjs"),
   join(directory, "hls-parser.test.mjs"),
@@ -25,6 +26,7 @@ try {
       "test/data-consent.test.ts",
       "test/geckoview-header-enrichment.test.ts",
       "test/geckoview-detection-lifecycle.test.ts",
+      "test/geckoview-detection-policy.test.ts",
       "test/geckoview-detected-media-kind.test.ts",
       "test/geckoview-page-cast.test.ts",
       "test/hls-parser.test.ts",
@@ -40,6 +42,17 @@ try {
     platform: "node",
     format: "esm",
     target: "node20",
+  });
+
+  // Exercise the actual phone scripts with browser/DOM fakes, including injection.
+  await build({
+    entryPoints: ["src/geckoview/content.ts", "src/geckoview/background.ts"],
+    outdir: join(directory, "geckoview-runtime"),
+    entryNames: "[name]",
+    bundle: true,
+    platform: "browser",
+    format: "iife",
+    target: "firefox102",
   });
 
   const exitCode = await new Promise((resolve, reject) => {

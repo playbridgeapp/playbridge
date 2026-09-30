@@ -7,6 +7,7 @@
  */
 
 import browser from "./browser";
+import { TabDetectionPolicy, type DetectionPolicy } from "./detection-policy";
 import {
   normalizeLinkedAppendPayload,
   normalizeLinkedJumpPayload,
@@ -124,12 +125,39 @@ interface VideoData {
   height?: number;
 }
 
+const detectionPolicy = new TabDetectionPolicy();
+interface DetectionRequest {
+  tabId: number;
+  type: string;
+  url: string;
+}
+const activeResponseFilters = new Map<ResponseBodyStreamFilter, DetectionRequest>();
+
+function applyDetectionPolicy(policy: DetectionPolicy, tabId?: number): void {
+  if (!detectionPolicy.apply(policy, tabId)) return;
+  for (const id of tabVideos.keys()) {
+    if (!detectionPolicy.allowsRequest(id, "main_frame", tabLastUrl.get(id))) clearTabDetectionState(id);
+  }
+  for (const [id, data] of requestHeadersMap) {
+    if (!detectionPolicy.allowsRequest(data.tabId, data.type, data.url)) requestHeadersMap.delete(id);
+  }
+  for (const [url, data] of urlToTab) {
+    if (!detectionPolicy.allows(data.tabId)) urlToTab.delete(url);
+  }
+  for (const [filter, request] of activeResponseFilters) {
+    if (!detectionPolicy.allowsRequest(request.tabId, request.type, request.url)) {
+      activeResponseFilters.delete(filter);
+      try { filter.disconnect(); } catch { /* Already closed. */ }
+    }
+  }
+}
+
 const tabVideos = new Map<number, VideoData[]>();
 const tabSeenUrls = new Map<number, Set<string>>();
 const tabHeadersCaptured = new Map<number, Set<string>>();
 const requestHeadersMap = new Map<
   string,
-  { headers: Record<string, string>; tabId: number; timestamp: number }
+  DetectionRequest & { headers: Record<string, string>; timestamp: number }
 >();
 const urlToTab = new Map<string, { tabId: number; ts: number }>();
 const tabLastUrl = new Map<number, string>();
@@ -151,7 +179,8 @@ function plog(...args: unknown[]): void {
 
 async function trySendToNative(message: Record<string, unknown>): Promise<boolean> {
   try {
-    await browser.runtime.sendNativeMessage(NATIVE_APP_ID, message);
+    const response = await browser.runtime.sendNativeMessage(NATIVE_APP_ID, message);
+    if (response?.type === "detection_policy") applyDetectionPolicy(response as DetectionPolicy);
     return true;
   } catch (e) {
     plog("sendNativeMessage failed:", (e as Error)?.message);
@@ -463,6 +492,12 @@ function clearTabDetectionState(tabId: number): void {
 function cleanupTab(tabId: number): void {
   mainFrameDetectionGate.abort(tabId);
   clearTabDetectionState(tabId);
+  detectionPolicy.remove(tabId);
+  for (const [filter, request] of activeResponseFilters) {
+    if (request.tabId !== tabId) continue;
+    activeResponseFilters.delete(filter);
+    try { filter.disconnect(); } catch { /* Already closed. */ }
+  }
   tabLastUrl.delete(tabId);
   tabNavigationGenerations.delete(tabId);
 }
@@ -612,6 +647,7 @@ function nativeVideoMessage(video: VideoData): Record<string, unknown> {
 }
 
 function emitNativeVideo(video: VideoData): void {
+  if (!detectionPolicy.allowsRequest(video.tabId, "main_frame", tabLastUrl.get(video.tabId))) return;
   sendToNative(nativeVideoMessage(video));
 }
 
@@ -640,6 +676,7 @@ async function replayCachedState(): Promise<void> {
 
     const replayed = new Set<string>();
     for (const [tabId, videos] of tabVideos) {
+      if (!detectionPolicy.allows(tabId)) continue;
       const generation = currentNavigationGeneration(
         tabNavigationGenerations,
         tabId,
@@ -833,6 +870,7 @@ function reportVideo(
   tabId: number,
   headers: Record<string, string> | null,
 ): void {
+  if (!detectionPolicy.allowsRequest(tabId, "main_frame", tabLastUrl.get(tabId))) return;
   const navigationGeneration =
     video.navigationGeneration ??
     currentNavigationGeneration(tabNavigationGenerations, tabId);
@@ -995,6 +1033,7 @@ function reportVideoForRequest(
   requestUrl: string,
   afterReport?: () => void,
 ): void {
+  if (!detectionPolicy.allowsRequest(tabId, requestType, requestUrl)) return;
   const committedUrl = tabLastUrl.get(tabId);
   const isUncommittedMainFrame = shouldStageMainFrameDetection(
     requestType,
@@ -1004,6 +1043,7 @@ function reportVideoForRequest(
   );
   if (isUncommittedMainFrame) {
     mainFrameDetectionGate.stage(tabId, requestUrl, (generation) => {
+      if (!detectionPolicy.allowsRequest(tabId, requestType, requestUrl)) return;
       reportVideo({ ...video, navigationGeneration: generation }, tabId, headers);
       afterReport?.();
     });
@@ -1144,9 +1184,11 @@ function handleSameDocumentNavigation(
 ): void {
   const previousUrl = tabLastUrl.get(tabId);
   tabLastUrl.set(tabId, url);
-  browser.tabs
-    .sendMessage(tabId, { type: "detector_same_document_navigation" })
-    .catch(() => {});
+  if (detectionPolicy.allows(tabId)) {
+    browser.tabs
+      .sendMessage(tabId, { type: "detector_same_document_navigation" })
+      .catch(() => {});
+  }
   if (!notifyNative) return;
   // Same-document (SPA) navigations deliberately do not advance the page
   // generation — detections for streams that may still be playing survive.
@@ -1209,7 +1251,8 @@ if (browser.webNavigation) {
 // ── webRequest ───────────────────────────────────────────────────────────────
 
 browser.webRequest.onBeforeRequest.addListener(
-  (details: { url: string; tabId: number }) => {
+  (details: { url: string; tabId: number; type: string }) => {
+    if (!detectionPolicy.allowsRequest(details.tabId, details.type, details.url)) return;
     rememberUrlTab(details.url, details.tabId);
   },
   { urls: ["<all_urls>"] },
@@ -1218,10 +1261,13 @@ browser.webRequest.onBeforeRequest.addListener(
 browser.webRequest.onBeforeSendHeaders.addListener(
   (details: {
     method: string;
+    type: string;
+    url: string;
     requestId: string;
     tabId: number;
     requestHeaders?: { name: string; value?: string }[];
   }) => {
+    if (!detectionPolicy.allowsRequest(details.tabId, details.type, details.url)) return;
     if (details.method === "OPTIONS") return;
     const headers: Record<string, string> = {};
     const skip = [
@@ -1240,6 +1286,8 @@ browser.webRequest.onBeforeSendHeaders.addListener(
       requestHeadersMap.set(details.requestId, {
         headers,
         tabId: details.tabId,
+        type: details.type,
+        url: details.url,
         timestamp: Date.now(),
       });
     }
@@ -1259,6 +1307,13 @@ browser.webRequest.onHeadersReceived.addListener(
     frameId?: number;
     responseHeaders?: { name: string; value?: string }[];
   }) => {
+    // Requests without a trusted owning tab must not be attributed by shared URLs.
+    if (details.tabId < 0) return;
+    const tabId = resolveTabId(details.tabId, details.url);
+    if (!detectionPolicy.allowsRequest(tabId, details.type, details.url)) {
+      requestHeadersMap.delete(details.requestId);
+      return;
+    }
     const ctHeader = details.responseHeaders?.find(
       (h) => h.name.toLowerCase() === "content-type",
     );
@@ -1276,7 +1331,6 @@ browser.webRequest.onHeadersReceived.addListener(
       (h) => h.name.toLowerCase() === "content-disposition",
     )?.value ?? "";
     const stored = requestHeadersMap.get(details.requestId);
-    const tabId = resolveTabId(details.tabId, details.url);
     const navigationGeneration = currentNavigationGeneration(
       tabNavigationGenerations,
       tabId,
@@ -1385,7 +1439,11 @@ browser.webRequest.onHeadersReceived.addListener(
             filterResponseData: (id: string) => ResponseBodyStreamFilter;
           }
         ).filterResponseData(details.requestId);
+        activeResponseFilters.set(filter, { tabId, type: details.type, url: details.url });
         attachBoundedResponseBodyScanner(filter, (body) => {
+          // Cancellation stays final even if detection is enabled again before EOF.
+          if (!activeResponseFilters.delete(filter)) return;
+          if (!detectionPolicy.allowsRequest(tabId, details.type, details.url)) return;
           const bodyNavigationGeneration = responseBodyNavigationGeneration(
             navigationGeneration,
             currentNavigationGeneration(tabNavigationGenerations, tabId),
@@ -1490,6 +1548,11 @@ browser.webRequest.onHeadersReceived.addListener(
             );
           }
         });
+        const onError = filter.onerror;
+        filter.onerror = () => {
+          activeResponseFilters.delete(filter);
+          onError?.();
+        };
       } catch (e) {
         plog("bounded response-body scan failed:", (e as Error)?.message);
       }
@@ -1526,9 +1589,16 @@ browser.runtime.onMessage.addListener(
       payload?: unknown;
       operation?: string;
       sessionId?: string;
+      policy?: DetectionPolicy;
     },
     sender: { tab?: { id?: number; url?: string }; frameId?: number },
   ) => {
+    if (message?.action === "detector_policy") {
+      if (sender.frameId === 0 && sender.tab?.id != null && message.policy) {
+        applyDetectionPolicy(message.policy, sender.tab.id);
+      }
+      return Promise.resolve(true);
+    }
     if (message?.action === "page_linked_cast") {
       return handleLinkedPageRequest(message, sender);
     }
@@ -1562,7 +1632,7 @@ browser.runtime.onMessage.addListener(
       return false;
     }
     const tabId = sender.tab?.id;
-    if (tabId == null || tabId < 0 || !message.url) return false;
+    if (tabId == null || !detectionPolicy.allows(tabId) || !message.url) return false;
     const mediaKind: DetectedMediaKind =
       message.action === "dom_audio_found"
         ? "audio"

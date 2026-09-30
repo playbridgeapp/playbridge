@@ -62,7 +62,6 @@ internal fun Modifier.observeFullscreenInteractions(enabled: Boolean, onInteract
 /** A small visual handle with a full 48dp touch target; it never takes space from the page. */
 @Composable
 internal fun PlayBridgeEdgeShortcut(
-    showMenu: Boolean,
     fullscreen: Boolean,
     fullscreenInteraction: Int,
     onDashboard: () -> Unit,
@@ -108,10 +107,8 @@ internal fun PlayBridgeEdgeShortcut(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .semantics { contentDescription = if (showMenu) "PlayBridge menu" else "Dashboard" }
-                    .clickable(role = Role.Button) {
-                        if (showMenu) expanded = !expanded else onDashboard()
-                    },
+                    .semantics { contentDescription = "PlayBridge menu" }
+                    .clickable(role = Role.Button) { expanded = !expanded },
                 contentAlignment = Alignment.CenterEnd,
             ) {
                 Surface(
@@ -126,12 +123,9 @@ internal fun PlayBridgeEdgeShortcut(
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
-                            painter = painterResource(
-                                if (showMenu) R.drawable.ic_playbridge_logo else R.drawable.ic_dashboard_blocks,
-                            ),
+                            painter = painterResource(R.drawable.ic_playbridge_logo),
                             contentDescription = null,
-                            tint = if (showMenu) Color.Unspecified
-                                else glassIcon,
+                            tint = Color.Unspecified,
                             modifier = Modifier.size(18.dp),
                         )
                     }

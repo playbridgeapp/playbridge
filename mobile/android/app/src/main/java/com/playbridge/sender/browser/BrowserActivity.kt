@@ -936,9 +936,7 @@ class BrowserActivity : ComponentActivity() {
             val isBridgedAppMode = currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId &&
                 installedBridgedApps.any { it.tabId == selectedTabId && it.origin == currentOrigin }
             SideEffect {
-                Components.bridgedAppOriginsByTabId = installedBridgedApps.mapNotNull { app ->
-                    app.tabId?.let { it to app.origin }
-                }.toMap()
+                Components.setBridgedApps(installedBridgedApps)
                 Components.activeBridgedAppTabId = activeBridgedAppTabId
                 Components.onBridgedAppExternalNavigation = { appTabId, url ->
                     if (activeBridgedAppTabId == appTabId && store.state.selectedTabId == appTabId &&
@@ -952,7 +950,6 @@ class BrowserActivity : ComponentActivity() {
             }
             DisposableEffect(Unit) {
                 onDispose {
-                    Components.bridgedAppOriginsByTabId = emptyMap()
                     Components.activeBridgedAppTabId = null
                     Components.onBridgedAppExternalNavigation = null
                 }
@@ -2566,7 +2563,8 @@ class BrowserActivity : ComponentActivity() {
                                 tabManager.selectTab(existingTab, store)
                                 existingTab
                             } else {
-                                tabManager.createTab(app.startUrl, store).also { bridgedAppStore.setTab(app.origin, it) }
+                                tabManager.createTab(app.startUrl, store, bridgedAppOrigin = app.origin)
+                                    .also { bridgedAppStore.setTab(app.origin, it) }
                             }
                             activeBridgedAppTabId = appTabId
                             Components.activeBridgedAppTabId = appTabId

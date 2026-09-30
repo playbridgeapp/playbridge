@@ -1889,19 +1889,13 @@ fun AppNavHost(
         }
     }
 
-        // Keep the shortcut outside AnimatedContent so it never slides/fades with a page.
-        // Main screens already expose a dashboard glyph. Secondary screens get a direct
-        // shortcut, while chrome-hidden websites get the compact page menu.
+        // Keep the browser menu outside AnimatedContent so it never slides/fades with a page.
+        // Bridged apps and chrome-hidden websites need access to PlayBridge's controls.
         val browserMenu = currentScreen == Screen.Browser &&
             (isBridgedAppMode || isBrowserChromeHidden || isFullscreen)
-        val hasDashboardButton = currentScreen in listOf(
-            Screen.Dashboard, Screen.Browser, Screen.Connection, Screen.Library,
-            Screen.DebridLibrary, Screen.CastHistory, Screen.Iptv,
-        )
-        if (browserMenu || !hasDashboardButton) {
+        if (browserMenu) {
             key(currentScreen, isFullscreen) {
                 PlayBridgeEdgeShortcut(
-                    showMenu = browserMenu,
                     fullscreen = fullscreenBrowser,
                     fullscreenInteraction = fullscreenInteraction,
                     onDashboard = {

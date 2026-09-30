@@ -26,6 +26,7 @@ import playbridge.PlayPayload
 import playbridge.VisualMetadata
 import mozilla.components.browser.engine.gecko.GeckoEngine
 import mozilla.components.browser.state.store.BrowserStore
+import mozilla.components.concept.engine.EngineSession
 import mozilla.components.concept.engine.webextension.WebExtension
 import mozilla.components.concept.fetch.Client
 import mozilla.components.feature.addons.AddonManager
@@ -134,6 +135,61 @@ object Components {
     @Volatile var onMagnetDetected: ((String) -> Unit)? = null
     @Volatile var onStremioAddonDetected: ((String) -> Unit)? = null
     @Volatile var bridgedAppOriginsByTabId: Map<String, String> = emptyMap()
+        set(value) {
+            if (field == value) return
+            field = value
+            publishDetectionPolicy()
+        }
+    private var installedBridgedAppOrigins: Set<String> = emptySet()
+    private val detectionPolicyPorts = mutableMapOf<GeckoWebExtension.Port, String>()
+    private var detectionPolicyRevision = 0L
+
+    fun setBridgedApps(apps: List<BridgedApp>) {
+        val origins = apps.map { it.origin }.toSet()
+        val tabs = apps.mapNotNull { app -> app.tabId?.let { it to app.origin } }.toMap()
+        val changed = installedBridgedAppOrigins != origins
+        installedBridgedAppOrigins = origins
+        bridgedAppOriginsByTabId = tabs
+        if (changed) publishDetectionPolicy()
+    }
+
+    private fun detectionPolicy(tabId: String? = null): JSONObject = JSONObject().apply {
+        put("type", "detection_policy")
+        put("revision", detectionPolicyRevision)
+        put("enabled", detectVideosEnabled && tabId != null && tabId !in bridgedAppOriginsByTabId)
+        put("browserEnabled", detectVideosEnabled)
+        put("bridgedAppOrigins", org.json.JSONArray(installedBridgedAppOrigins.toList()))
+    }
+
+    private fun publishDetectionPolicy() {
+        detectionPolicyRevision += 1L
+        Handler(Looper.getMainLooper()).post {
+            detectionPolicyPorts.toMap().forEach { (port, tabId) ->
+                runCatching { port.postMessage(detectionPolicy(tabId)) }
+            }
+        }
+    }
+
+    /** Bind policy to the native session, including child frames, rather than matching URLs. */
+    fun bindDetectionPolicy(tabId: String, engineSession: EngineSession) {
+        val extension = videoDetectorExtension ?: return
+        val session = tabManager.getGeckoSession(engineSession) ?: return
+        session.webExtensionController.setMessageDelegate(
+            extension,
+            object : GeckoWebExtension.MessageDelegate {
+                override fun onConnect(port: GeckoWebExtension.Port) {
+                    detectionPolicyPorts[port] = tabId
+                    port.setDelegate(object : GeckoWebExtension.PortDelegate {
+                        override fun onDisconnect(port: GeckoWebExtension.Port) {
+                            detectionPolicyPorts.remove(port)
+                        }
+                    })
+                    port.postMessage(detectionPolicy(tabId))
+                }
+            },
+            "detectorPolicy",
+        )
+    }
     @Volatile var activeBridgedAppTabId: String? = null
     @Volatile var onBridgedAppExternalNavigation: ((String, String) -> Unit)? = null
 
@@ -190,12 +246,16 @@ object Components {
     }
 
     /**
-     * Mirrors the "detect videos" setting. Detection messages from the extension
-     * arrive over native messaging regardless of the setting, so they are gated
-     * here. Kept in sync from BrowserActivity.
+     * Mirrors the browser detection setting and stops extension work in existing pages.
+     * Bridged app sessions always keep detection off, independently of this setting.
      */
     @Volatile
     var detectVideosEnabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            publishDetectionPolicy()
+        }
 
     val applicationScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
@@ -359,6 +419,7 @@ object Components {
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
+        setBridgedApps(BridgedAppStore(appContext).apps.value)
 
         // Start mirroring store state (engine sessions, nav state) into
         // TabManager and ensuring the selected tab has a live session.
@@ -498,14 +559,26 @@ object Components {
                 processMessage(message)
                 
                 // Return a response to avoid "unexpected error"
-                return GeckoResult.fromValue(mapOf("received" to true) as Any)
+                return GeckoResult.fromValue(detectionPolicy().put("received", true) as Any)
             }
         }
         
         // Use ensureBuiltIn for bundled extensions in assets
         Handler(Looper.getMainLooper()).post {
-            runtime.webExtensionController.ensureBuiltIn(extensionUrl, extensionId).then { extension ->
+            val detectorPrefs = appContext.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE)
+            val needsPolicyMigration = !detectorPrefs.getBoolean("detector_session_policy_v1", false)
+            // ensureBuiltIn keeps a same-version cached manifest. Reinstall once
+            // to grant nativeMessagingFromContent on existing app installations.
+            val installResult = if (needsPolicyMigration) {
+                runtime.webExtensionController.installBuiltIn(extensionUrl)
+            } else {
+                runtime.webExtensionController.ensureBuiltIn(extensionUrl, extensionId)
+            }
+            installResult.then { extension ->
                 if (extension != null) {
+                    if (needsPolicyMigration) {
+                        detectorPrefs.edit().putBoolean("detector_session_policy_v1", true).apply()
+                    }
                     Log.i(TAG, "Video detector extension loaded successfully: ${extension.id}")
 
                     // Store extension reference
@@ -514,6 +587,7 @@ object Components {
                     // Set up message delegate on the extension instance to receive messages on the UI thread
                     Handler(Looper.getMainLooper()).post {
                         extension.setMessageDelegate(globalMessageDelegate, "browser")
+                        tabManager.sessions.forEach { (tabId, session) -> bindDetectionPolicy(tabId, session) }
                         Log.i(TAG, "Message delegate registered on Extension instance: ${extension.id}")
                     }
                 } else {
@@ -692,6 +766,7 @@ object Components {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
                         return
                     }
+                    if (!detectVideosEnabled || kotlinTabId in bridgedAppOriginsByTabId) return
                     Handler(Looper.getMainLooper()).post {
                         // Find the session for the tab and load error page
                         val sessionToLoad = tabManager.sessions[kotlinTabId]
@@ -887,6 +962,7 @@ object Components {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
                         return
                     }
+                    if (type == "video_detected" && kotlinTabId in bridgedAppOriginsByTabId) return
                     val version = detectorPageVersion(jsonObject)
                     if (
                         type == "video_detected" &&

@@ -12,6 +12,8 @@ It is a **capability and expectation guide**, not a list of supported brand doma
 | Kotlin store + ranking | `VideoDetector.kt` |
 | Native message bridge | `Components.kt` + `DetectorTabBindingTracker` |
 
+Automatic detection applies to normal browser tabs. [Bridged app sessions](bridged-apps.md) keep all automatic media detection off and use the explicit page casting API instead. Disabling the browser detection switch stops scanning in existing pages as well as ignoring incoming results.
+
 Rebuild detector assets with `pnpm build` from `extension/` after changing TypeScript sources.
 
 ---

@@ -204,6 +204,7 @@ class TabManager {
                                 com.playbridge.sender.cast.MediaPlaybackService.deactivate(tab.id)
                             }
                             sessions[tab.id] = engineSession
+                            Components.bindDetectionPolicy(tab.id, engineSession)
                             engineSession.register(
                                 MediaSessionObserver(
                                     context = Components.applicationContext,
@@ -311,9 +312,14 @@ class TabManager {
         store: BrowserStore,
         parentId: String? = null,
         select: Boolean = true,
-        engineSessionState: EngineSessionState? = null
+        engineSessionState: EngineSessionState? = null,
+        bridgedAppOrigin: String? = null,
     ): String {
         val tabId = UUID.randomUUID().toString()
+        // Mark app ownership before dispatch can create/load its engine session.
+        if (bridgedAppOrigin != null) {
+            Components.bridgedAppOriginsByTabId = Components.bridgedAppOriginsByTabId + (tabId to bridgedAppOrigin)
+        }
         store.dispatch(
             TabListAction.AddTabAction(
                 tab = TabSessionState(

@@ -7,6 +7,10 @@ import browser from "./browser";
 import { isSupportedDomImage } from "./detected-media-kind";
 
 // cloneInto is Firefox/GeckoView-only (not on TypeScript's DOM lib).
+let detectionEnabled = false;
+let policyUpdate = 0;
+let videoObserver: MutationObserver | undefined;
+
 const cloneIntoFn = (globalThis as { cloneInto?: (obj: unknown, scope: Window) => unknown })
   .cloneInto;
 
@@ -35,7 +39,7 @@ function reportMediaSrc(
   width?: number,
   height?: number,
 ): void {
-  if (!src || src.startsWith("blob:") || src.startsWith("data:")) return;
+  if (!detectionEnabled || !src || src.startsWith("blob:") || src.startsWith("data:")) return;
   if (!src.startsWith("http")) return;
   browser.runtime
     .sendMessage({
@@ -61,6 +65,7 @@ function reportImageElement(image: HTMLImageElement): void {
 const waitingForImageLoad = new WeakSet<HTMLImageElement>();
 
 function scanElement(el: Element): void {
+  if (!detectionEnabled) return;
   if (el instanceof HTMLVideoElement) {
     reportMediaSrc("dom_video_found", el.currentSrc || el.src);
     if (el.poster) {
@@ -105,39 +110,81 @@ function scanElement(el: Element): void {
 }
 
 function scanAll(): void {
+  if (!detectionEnabled) return;
   document.querySelectorAll("video, audio, source, img").forEach(scanElement);
 }
 
-if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", scanAll);
-} else {
+function setDetectionEnabled(enabled: boolean): void {
+  if (enabled === detectionEnabled) return;
+  detectionEnabled = enabled;
+  if (!enabled) {
+    videoObserver?.disconnect();
+    videoObserver = undefined;
+    document.removeEventListener("DOMContentLoaded", startDocumentDetection);
+    window.dispatchEvent(new Event("PlayBridgeStopDetection"));
+    return;
+  }
+  videoObserver = new MutationObserver((mutations) => {
+    if (!detectionEnabled) return;
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== 1) continue;
+        const el = node as Element;
+        scanElement(el);
+        el.querySelectorAll?.("video, audio, source, img").forEach(scanElement);
+      }
+      if (mutation.type === "attributes" && mutation.target.nodeType === 1) {
+        scanElement(mutation.target as Element);
+      }
+    }
+  });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", startDocumentDetection, { once: true });
+    observeDocument();
+  } else {
+    startDocumentDetection();
+  }
+  injectPlayerProbe();
+}
+
+function observeDocument(): void {
+  if (!detectionEnabled || !document.documentElement) return;
+  videoObserver?.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["src", "srcset", "poster"],
+  });
+}
+
+function startDocumentDetection(): void {
+  observeDocument();
   scanAll();
 }
 
-const videoObserver = new MutationObserver((mutations) => {
-  for (const mutation of mutations) {
-    for (const node of mutation.addedNodes) {
-      if (node.nodeType !== 1) continue;
-      const el = node as Element;
-      scanElement(el);
-      el.querySelectorAll?.("video, audio, source, img").forEach(scanElement);
-    }
-    if (mutation.type === "attributes" && mutation.target.nodeType === 1) {
-      scanElement(mutation.target as Element);
-    }
-  }
-});
-
-videoObserver.observe(document.documentElement, {
-  childList: true,
-  subtree: true,
-  attributes: true,
-  attributeFilter: ["src", "srcset", "poster"],
-});
+// Native session ownership is authoritative even when an app and a browser tab
+// have identical URLs. No scanning starts before the native policy arrives.
+try {
+  const policyPort = browser.runtime.connectNative("detectorPolicy");
+  policyPort.onMessage.addListener((policy: { type?: string; enabled?: boolean }) => {
+    if (policy?.type !== "detection_policy") return;
+    const update = ++policyUpdate;
+    if (!policy.enabled) setDetectionEnabled(false);
+    browser.runtime.sendMessage({ action: "detector_policy", policy }).then(() => {
+      if (update === policyUpdate) setDetectionEnabled(policy.enabled === true);
+    }).catch(() => setDetectionEnabled(false));
+  });
+  policyPort.onDisconnect.addListener(() => {
+    policyUpdate += 1;
+    setDetectionEnabled(false);
+  });
+} catch {
+  // Keep the casting API available while detection fails closed.
+}
 
 window.addEventListener("PlayBridgeMediaFound", ((event: CustomEvent) => {
   const url = event.detail && (event.detail as { url?: string }).url;
-  if (!url || typeof url !== "string" || !url.startsWith("http")) return;
+  if (!detectionEnabled || !url || typeof url !== "string" || !url.startsWith("http")) return;
   browser.runtime
     .sendMessage({
       action: "player_video_found",
@@ -191,7 +238,7 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
   }));
 });
 
-// Page-world bridge + light player config probe (same idea as legacy phone detector).
+// The casting API is independent of automatic detection.
 (function injectBridge() {
   if (window.top !== window) return;
   const bridgeScript = document.createElement("script");
@@ -288,10 +335,25 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
           return session;
         });
       };
+    })();
+  `;
+  (document.documentElement || document.head || document.body).appendChild(
+    bridgeScript,
+  );
+  bridgeScript.remove();
+})();
+
+// Only normal browsing pages with detection enabled receive player probes.
+function injectPlayerProbe(): void {
+  if (window.top !== window) return;
+  const script = document.createElement("script");
+  script.textContent = `(function() {
+      var hiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
+      var visibilityDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
       try {
-        Object.defineProperty(document, 'hidden', { get: function() { return false; } });
-        Object.defineProperty(document, 'visibilityState', { get: function() { return 'visible'; } });
-      } catch (e) {}
+        Object.defineProperty(document, 'hidden', { configurable: true, get: function() { return false; } });
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: function() { return 'visible'; } });
+      } catch (_) {}
       function report(url) {
         if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
         window.dispatchEvent(new CustomEvent('PlayBridgeMediaFound', { detail: { url: url } }));
@@ -299,7 +361,6 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
       function probe() {
         try {
           if (window.jwplayer) {
-            var players = typeof window.jwplayer === 'function' ? [] : [];
             // best-effort: many pages expose jwplayer().getPlaylist
             try {
               var jw = window.jwplayer();
@@ -314,12 +375,18 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
           }
         } catch (e) {}
       }
-      setTimeout(probe, 1500);
-      setTimeout(probe, 4000);
-    })();
-  `;
-  (document.documentElement || document.head || document.body).appendChild(
-    bridgeScript,
-  );
-  bridgeScript.remove();
-})();
+      var timers = [setTimeout(probe, 1500), setTimeout(probe, 4000)];
+      window.addEventListener('PlayBridgeStopDetection', function stop() {
+        timers.forEach(clearTimeout);
+        try {
+          if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor);
+          else delete document.hidden;
+          if (visibilityDescriptor) Object.defineProperty(document, 'visibilityState', visibilityDescriptor);
+          else delete document.visibilityState;
+        } catch (_) {}
+        window.removeEventListener('PlayBridgeStopDetection', stop);
+      }, { once: true });
+  })();`;
+  (document.documentElement || document.head || document.body).appendChild(script);
+  script.remove();
+}

@@ -24,6 +24,7 @@
     "storage",
     "tabs",
     "nativeMessaging",
+    "nativeMessagingFromContent",
     "geckoViewAddons"
   ],
   "browser_specific_settings": {
