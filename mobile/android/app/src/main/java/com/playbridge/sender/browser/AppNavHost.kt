@@ -354,6 +354,10 @@ fun AppNavHost(
         if (currentScreen != Screen.Connection) expandOtherDevices = false
     }
     fun openAllDevicesExpanded() {
+        if (isFullscreen) {
+            onIsFullscreenChange(false)
+            session?.exitFullScreenMode()
+        }
         expandOtherDevices = true
         onScreenChange(Screen.Connection)
     }
@@ -389,6 +393,18 @@ fun AppNavHost(
         )
     }
 
+    val fullscreenBrowser = currentScreen == Screen.Browser && isFullscreen
+    var fullscreenInteraction by remember(currentScreen, isFullscreen) { mutableIntStateOf(0) }
+    fun leaveMediaFullscreen() {
+        if (isFullscreen) {
+            onIsFullscreenChange(false)
+            session?.exitFullScreenMode()
+        }
+    }
+    Box(
+        modifier = Modifier.fillMaxSize()
+            .observeFullscreenInteractions(fullscreenBrowser) { fullscreenInteraction++ },
+    ) {
     AnimatedContent(
         targetState = currentScreen,
         transitionSpec = {
@@ -1868,6 +1884,34 @@ fun AppNavHost(
                                 .calculateBottomPadding() +
                                 if (targetScreen == Screen.Library) 80.dp else 0.dp
                         )
+                )
+            }
+        }
+    }
+
+        // Keep the shortcut outside AnimatedContent so it never slides/fades with a page.
+        // Main screens already expose a dashboard glyph. Secondary screens get a direct
+        // shortcut, while chrome-hidden websites get the compact Dashboard / Devices menu.
+        val browserMenu = currentScreen == Screen.Browser &&
+            (isBridgedAppMode || isBrowserChromeHidden || isFullscreen)
+        val hasDashboardButton = currentScreen in listOf(
+            Screen.Dashboard, Screen.Browser, Screen.Connection, Screen.Library,
+            Screen.DebridLibrary, Screen.CastHistory, Screen.Iptv,
+        )
+        if (browserMenu || !hasDashboardButton) {
+            key(currentScreen, isFullscreen) {
+                PlayBridgeEdgeShortcut(
+                    showMenu = browserMenu,
+                    fullscreen = fullscreenBrowser,
+                    fullscreenInteraction = fullscreenInteraction,
+                    onDashboard = {
+                        leaveMediaFullscreen()
+                        onScreenChange(Screen.Dashboard)
+                    },
+                    onDevices = { showDevicePicker = true },
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
                 )
             }
         }
