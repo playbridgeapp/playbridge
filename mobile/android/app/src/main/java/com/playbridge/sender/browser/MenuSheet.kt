@@ -60,7 +60,7 @@ fun MenuSheet(
     onFindInPageClick: () -> Unit,
     onExtensionsClick: () -> Unit,
     onToggleDesktopMode: () -> Unit,
-    onToggleVideoDetect: () -> Unit,
+    onMediaDetectionClick: () -> Unit,
     onUserAgentClick: () -> Unit = {},
     onFullScreenClick: () -> Unit = {},
     onClearDataClick: () -> Unit = {}
@@ -104,9 +104,9 @@ fun MenuSheet(
         ),
         MenuAction(
             icon = Icons.Default.PlayCircle,
-            label = "Video Detect",
+            label = "Media detect",
             selected = detectVideosEnabled,
-            onClick = onToggleVideoDetect
+            onClick = onMediaDetectionClick
         ),
         MenuAction(
             icon = Icons.Default.Language,

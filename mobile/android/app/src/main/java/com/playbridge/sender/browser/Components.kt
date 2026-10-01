@@ -1,6 +1,8 @@
 package com.playbridge.sender.browser
 import com.playbridge.sender.cast.*
 
+import com.playbridge.sender.data.settings.MediaDetectionSettings
+import kotlinx.serialization.encodeToString
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -154,7 +156,7 @@ object Components {
 
     private fun detectionAllowed(tabId: String?): Boolean {
         if (!detectVideosEnabled || tabId == null) return false
-        return !isBridgedDetectionTab(tabId)
+        return mediaDetectionSettings.detectInBridgedSites || !isBridgedDetectionTab(tabId)
     }
 
     private fun isBridgedDetectionTab(tabId: String): Boolean {
@@ -185,17 +187,14 @@ object Components {
         put("revision", detectionPolicyRevision.get())
         put("enabled", detectionAllowed(tabId))
         put("browserEnabled", detectVideosEnabled)
+        put("options", JSONObject(MediaDetectionSettings.json.encodeToString(mediaDetectionSettings)))
         put("bridgedAppOrigins", org.json.JSONArray((installedBridgedAppOrigins + declaredBridgedApps.declaredOrigins()).toList()))
     }
 
     private fun publishDetectionPolicy() {
         detectionPolicyRevision.incrementAndGet()
         Handler(Looper.getMainLooper()).post {
-            detectionPolicyPorts.values.toSet().forEach { tabId ->
-                if (isBridgedDetectionTab(tabId) && VideoDetector.getVideoCountForTab(tabId) > 0) {
-                    VideoDetector.clearDetections(tabId)
-                }
-            }
+            VideoDetector.filterDetections(::detectionAllowed, mediaDetectionSettings::allows)
             detectionPolicyPorts.toMap().forEach { (port, tabId) ->
                 runCatching { port.postMessage(detectionPolicy(tabId)) }
             }
@@ -280,17 +279,18 @@ object Components {
         }
     }
 
-    /**
-     * Mirrors the browser detection setting and stops extension work in existing pages.
-     * Bridged app sessions always keep detection off, independently of this setting.
-     */
+    /** Publishes persisted detection controls to existing documents and network hooks. */
     @Volatile
-    var detectVideosEnabled: Boolean = true
+    var mediaDetectionSettings: MediaDetectionSettings = MediaDetectionSettings()
         set(value) {
             if (field == value) return
             field = value
             publishDetectionPolicy()
         }
+
+    var detectVideosEnabled: Boolean
+        get() = mediaDetectionSettings.enabled
+        set(value) { mediaDetectionSettings = mediaDetectionSettings.copy(enabled = value) }
 
     val applicationScope = kotlinx.coroutines.CoroutineScope(
         kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
@@ -966,7 +966,9 @@ object Components {
                         // SPA view change: rows are kept, but the tab's media lifecycle
                         // advances so ranking prefers the view the user navigated to.
                         if (version != null) {
-                            val accepted = VideoDetector.onSameDocumentNavigation(
+                            val accepted = if (!mediaDetectionSettings.navigationRescans || !detectionAllowed(kotlinTabId)) {
+                                VideoDetector.acceptDetectorVideo(kotlinTabId, version)
+                            } else VideoDetector.onSameDocumentNavigation(
                                 kotlinTabId,
                                 version,
                                 jsonObject["timestamp"]?.jsonPrimitive?.longOrNull
@@ -1005,7 +1007,16 @@ object Components {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
                         return
                     }
-                    if (type == "video_detected" && !detectionAllowed(kotlinTabId)) return
+                    if (type == "video_detected") {
+                        if (!detectionAllowed(kotlinTabId)) return
+                        val kind = classifyDetectedMediaKind(
+                            jsonObject["mediaKind"]?.jsonPrimitive?.contentOrNull,
+                            jsonObject["url"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                            jsonObject["contentType"]?.jsonPrimitive?.contentOrNull,
+                            jsonObject["hlsRole"]?.jsonPrimitive?.contentOrNull,
+                        )
+                        if (!mediaDetectionSettings.allows(kind)) return
+                    }
                     val version = detectorPageVersion(jsonObject)
                     if (
                         type == "video_detected" &&

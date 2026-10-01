@@ -134,18 +134,33 @@ interface DetectionRequest {
 const activeResponseFilters = new Map<ResponseBodyStreamFilter, DetectionRequest>();
 
 function applyDetectionPolicy(policy: DetectionPolicy, tabId?: number): void {
+  const previousOptions = detectionPolicy.options;
   if (!detectionPolicy.apply(policy, tabId)) return;
+  const categoriesChanged = previousOptions.videos !== detectionPolicy.options.videos ||
+    previousOptions.images !== detectionPolicy.options.images ||
+    previousOptions.audio !== detectionPolicy.options.audio ||
+    previousOptions.subtitles !== detectionPolicy.options.subtitles;
   for (const id of tabVideos.keys()) {
     if (!detectionPolicy.allowsRequest(id, "main_frame", tabLastUrl.get(id))) clearTabDetectionState(id);
+    else if (categoriesChanged) {
+      const retained = getTabVideos(id).filter(video => detectionPolicy.allowsMediaKind(video.mediaKind) ||
+        (video.hlsRole === "audio_media" && detectionPolicy.options.videos));
+      tabVideos.set(id, retained);
+      tabSeenUrls.set(id, new Set(retained.map(video => detectionKey(video.url))));
+      const captured = tabHeadersCaptured.get(id);
+      if (captured) for (const key of captured) {
+        if (!tabSeenUrls.get(id)?.has(key)) captured.delete(key);
+      }
+    }
   }
   for (const [id, data] of requestHeadersMap) {
-    if (!detectionPolicy.allowsRequest(data.tabId, data.type, data.url)) requestHeadersMap.delete(id);
+    if (!detectionPolicy.usesNetwork() || !detectionPolicy.allowsRequest(data.tabId, data.type, data.url)) requestHeadersMap.delete(id);
   }
   for (const [url, data] of urlToTab) {
-    if (!detectionPolicy.allows(data.tabId)) urlToTab.delete(url);
+    if (!detectionPolicy.usesNetwork() || !detectionPolicy.allows(data.tabId)) urlToTab.delete(url);
   }
   for (const [filter, request] of activeResponseFilters) {
-    if (!detectionPolicy.allowsRequest(request.tabId, request.type, request.url)) {
+    if (!detectionPolicy.scansResponses() || !detectionPolicy.allowsRequest(request.tabId, request.type, request.url)) {
       activeResponseFilters.delete(filter);
       try { filter.disconnect(); } catch { /* Already closed. */ }
     }
@@ -647,6 +662,7 @@ function nativeVideoMessage(video: VideoData): Record<string, unknown> {
 }
 
 function emitNativeVideo(video: VideoData): void {
+  if (!detectionPolicy.allowsMediaKind(video.mediaKind)) return;
   if (!detectionPolicy.allowsRequest(video.tabId, "main_frame", tabLastUrl.get(video.tabId))) return;
   sendToNative(nativeVideoMessage(video));
 }
@@ -685,6 +701,7 @@ async function replayCachedState(): Promise<void> {
         if ((video.navigationGeneration ?? generation) !== generation) {
           continue;
         }
+        if (!detectionPolicy.allowsMediaKind(video.mediaKind)) continue;
         const out = nativeVideoForEmission(video);
         const key = `${tabId}:${detectionKey(out.url)}`;
         if (replayed.has(key)) continue;
@@ -899,6 +916,9 @@ function reportVideo(
     video.mediaKind ??
     detectedMediaKind(annotated.url, annotated.contentType, annotated.hlsRole) ??
     "video";
+  // Video playlists may require audio companions even when standalone audio rows are hidden.
+  if (!detectionPolicy.allowsMediaKind(annotated.mediaKind) &&
+      !(annotated.hlsRole === "audio_media" && detectionPolicy.options.videos)) return;
   const hasHeaders = !!(headers && Object.keys(headers).length > 0);
   const seenUrls = getTabSeenUrls(tabId);
   const headersCaptured = getTabHeadersCaptured(tabId);
@@ -1184,7 +1204,7 @@ function handleSameDocumentNavigation(
 ): void {
   const previousUrl = tabLastUrl.get(tabId);
   tabLastUrl.set(tabId, url);
-  if (detectionPolicy.allows(tabId)) {
+  if (detectionPolicy.allows(tabId) && detectionPolicy.options.navigationRescans) {
     browser.tabs
       .sendMessage(tabId, { type: "detector_same_document_navigation" })
       .catch(() => {});
@@ -1252,7 +1272,7 @@ if (browser.webNavigation) {
 
 browser.webRequest.onBeforeRequest.addListener(
   (details: { url: string; tabId: number; type: string }) => {
-    if (!detectionPolicy.allowsRequest(details.tabId, details.type, details.url)) return;
+    if (!detectionPolicy.usesNetwork() || !detectionPolicy.allowsRequest(details.tabId, details.type, details.url)) return;
     rememberUrlTab(details.url, details.tabId);
   },
   { urls: ["<all_urls>"] },
@@ -1267,7 +1287,7 @@ browser.webRequest.onBeforeSendHeaders.addListener(
     tabId: number;
     requestHeaders?: { name: string; value?: string }[];
   }) => {
-    if (!detectionPolicy.allowsRequest(details.tabId, details.type, details.url)) return;
+    if (!detectionPolicy.usesNetwork() || !detectionPolicy.allowsRequest(details.tabId, details.type, details.url)) return;
     if (details.method === "OPTIONS") return;
     const headers: Record<string, string> = {};
     const skip = [
@@ -1311,6 +1331,10 @@ browser.webRequest.onHeadersReceived.addListener(
     if (details.tabId < 0) return;
     const tabId = resolveTabId(details.tabId, details.url);
     if (!detectionPolicy.allowsRequest(tabId, details.type, details.url)) {
+      requestHeadersMap.delete(details.requestId);
+      return;
+    }
+    if (!detectionPolicy.usesNetwork()) {
       requestHeadersMap.delete(details.requestId);
       return;
     }
@@ -1386,7 +1410,7 @@ browser.webRequest.onHeadersReceived.addListener(
         ? details.frameId
         : undefined;
 
-    if (isDetectedMedia) {
+    if (isDetectedMedia && detectionPolicy.options.networkDetection) {
       let detectedBy = "unknown";
       if (isImage) detectedBy = "image_content_type";
       else if (isAudio) detectedBy = "audio_content_type";
@@ -1428,6 +1452,7 @@ browser.webRequest.onHeadersReceived.addListener(
     }
 
     if (
+      detectionPolicy.scansResponses() &&
       details.statusCode === 200 &&
       (isM3u8Url ||
         isMpdUrl ||
@@ -1443,7 +1468,7 @@ browser.webRequest.onHeadersReceived.addListener(
         attachBoundedResponseBodyScanner(filter, (body) => {
           // Cancellation stays final even if detection is enabled again before EOF.
           if (!activeResponseFilters.delete(filter)) return;
-          if (!detectionPolicy.allowsRequest(tabId, details.type, details.url)) return;
+          if (!detectionPolicy.scansResponses() || !detectionPolicy.allowsRequest(tabId, details.type, details.url)) return;
           const bodyNavigationGeneration = responseBodyNavigationGeneration(
             navigationGeneration,
             currentNavigationGeneration(tabNavigationGenerations, tabId),
@@ -1627,21 +1652,24 @@ browser.runtime.onMessage.addListener(
       message?.action !== "dom_video_found" &&
       message?.action !== "player_video_found" &&
       message?.action !== "dom_audio_found" &&
-      message?.action !== "dom_image_found"
+      message?.action !== "dom_image_found" &&
+      message?.action !== "dom_subtitle_found"
     ) {
       return false;
     }
     const tabId = sender.tab?.id;
     if (tabId == null || !detectionPolicy.allows(tabId) || !message.url) return false;
+    if (message.action === "player_video_found" ? !detectionPolicy.options.playerProbes : !detectionPolicy.options.domScanning) return false;
     const mediaKind: DetectedMediaKind =
       message.action === "dom_audio_found"
         ? "audio"
         : message.action === "dom_image_found"
           ? "image"
-          : "video";
+          : message.action === "dom_subtitle_found" ? "subtitle" : "video";
+    if (!detectionPolicy.allowsMediaKind(mediaKind)) return false;
     const contentType =
       message.contentType ||
-      (mediaKind === "audio"
+      (mediaKind === "subtitle" ? (message.url.toLowerCase().split(/[?#]/)[0].endsWith(".srt") ? "application/x-subrip" : "text/vtt") : mediaKind === "audio"
         ? inferredMediaContentType(message.url, "audio")
         : mediaKind === "image"
           ? inferredMediaContentType(message.url, "image")

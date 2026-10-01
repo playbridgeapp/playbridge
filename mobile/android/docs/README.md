@@ -9,4 +9,4 @@ Project-local documentation for `mobile/android/` (PlayBridge phone sender).
 
 Cross-cutting product behaviour for detection (SPA rules, site patterns) still lives in the repo-root guide:
 
-- [`docs/android-video-detection.md`](../../../docs/android-video-detection.md)
+- [`docs/video-detection.md`](../../../docs/video-detection.md)

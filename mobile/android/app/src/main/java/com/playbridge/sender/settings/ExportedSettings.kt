@@ -1,6 +1,7 @@
 package com.playbridge.sender.settings
 
 import kotlinx.serialization.Serializable
+import com.playbridge.sender.data.settings.MediaDetectionSettings
 
 @Serializable
 data class ExportedBookmark(
@@ -95,6 +96,7 @@ data class ExportedAppSettings(
     val maxBitrateCapMbps: Double? = null,
     val tvPrefetchWindow: Int? = null,
     val detectVideos: Boolean? = null,
+    val mediaDetection: MediaDetectionSettings? = null,
     val trackWatchProgress: Boolean? = null,
     val autoAddToWatching: Boolean? = null,
     val blockPopups: Boolean? = null,

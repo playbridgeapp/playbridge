@@ -980,6 +980,16 @@ object VideoDetector {
 
                 seenUrls.add(url)
                 videos.add(video)
+                if (video.kind == DetectedMediaKind.IMAGE) {
+                    // Match the extension's image cache bound. Browsing large catalogs
+                    // otherwise leaves every poster ever emitted in the native list.
+                    val excess = videos.count { it.kind == DetectedMediaKind.IMAGE } - 30
+                    if (excess > 0) {
+                        val expired = videos.filter { it.kind == DetectedMediaKind.IMAGE }.take(excess)
+                        videos.removeAll(expired.toSet())
+                        seenUrls.removeAll(expired.map { it.url }.toSet())
+                    }
+                }
                 notifyVideoUpdated()
             }
             else -> {
@@ -1977,6 +1987,25 @@ object VideoDetector {
     /** Clear rows when detection is disabled, retaining ordering for late document messages. */
     internal fun clearDetections(tabId: String) {
         clearTabMedia(tabId)
+        notifyVideoUpdated()
+    }
+
+    /** Include suspended tabs whose content-script policy port is no longer connected. */
+    internal fun filterDetections(allowsTab: (String) -> Boolean, allowsKind: (DetectedMediaKind) -> Boolean) {
+        tabVideos.keys.toList().forEach { tabId ->
+            if (allowsTab(tabId)) retainDetections(tabId, allowsKind)
+            else clearDetections(tabId)
+        }
+    }
+
+    /** Remove disabled categories while preserving page ordering and remaining detections. */
+    internal fun retainDetections(tabId: String, allows: (DetectedMediaKind) -> Boolean) {
+        val videos = tabVideos[tabId] ?: return
+        val removed = videos.filterNot { allows(it.kind) }
+        if (removed.isEmpty()) return
+        videos.removeAll(removed.toSet())
+        // Removed URLs must be discoverable again after their category is re-enabled.
+        tabSeenUrls[tabId]?.removeAll(removed.map { it.url }.toSet())
         notifyVideoUpdated()
     }
 

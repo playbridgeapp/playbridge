@@ -237,6 +237,122 @@ test("app content injects casting without DOM scans, observers, player timers or
   await flush();
   assert.equal(scans, 1);
   assert.equal(observers, 1);
+  await h.policyMessages.listeners[0]({ ...policy(true, 6), options: {
+    domScanning: false, playerProbes: false, visibilityOverrides: false,
+  } });
+  await flush();
+  assert.equal(scans, 1);
+  assert.equal(observers, 1);
+  assert.equal(h.timers.size, 0);
+  assert.equal(document.hidden, true);
+  assert.equal(document.visibilityState, "hidden");
+  await h.policyMessages.listeners[0]({ ...policy(true, 7), options: {
+    playerProbes: false, visibilityOverrides: false, navigationRescans: false,
+  } });
+  await flush();
+  assert.equal(scans, 2);
+  assert.equal(observers, 2);
+  for (const listener of h.onMessage.listeners) listener({ type: "detector_same_document_navigation" });
+  assert.equal(scans, 2);
+  await h.policyMessages.listeners[0]({ ...policy(true, 8), options: {
+    domScanning: false, visibilityOverrides: false,
+  } });
+  await flush();
+  assert.equal(disconnected, 2);
+  assert.equal(h.timers.size, 2);
+  assert.equal(document.hidden, true);
+  await h.policyMessages.listeners[0]({ ...policy(true, 9), options: {
+    domScanning: false, playerProbes: false,
+  } });
+  await flush();
+  assert.equal(h.timers.size, 0);
+  assert.equal(document.hidden, false);
+  await h.policyMessages.listeners[0](policy(false, 10));
+  await flush();
+  assert.equal(document.hidden, true);
+  assert.equal(typeof window.playbridge.cast, "function");
+  let imageReads = 0;
+  context.HTMLVideoElement = class {};
+  context.HTMLAudioElement = class {};
+  context.HTMLSourceElement = class {};
+  class ImageElement {
+    get currentSrc() { imageReads++; return "https://cdn.example/poster.jpg"; }
+    naturalWidth = 400;
+    naturalHeight = 600;
+    complete = true;
+  }
+  context.HTMLImageElement = ImageElement;
+  const image = new ImageElement();
+  document.querySelectorAll = (selector: string) => selector.includes("img") ? [image] : [];
+  await h.policyMessages.listeners[0]({ ...policy(true, 11), options: {
+    images: false, playerProbes: false, visibilityOverrides: false,
+  } });
+  await flush();
+  assert.equal(imageReads, 0);
+  assert.equal(h.messages.some(message => message.action === "dom_image_found"), false);
+  await h.policyMessages.listeners[0]({ ...policy(true, 12), options: {
+    playerProbes: false, visibilityOverrides: false,
+  } });
+  await flush();
+  assert.equal(imageReads, 1);
+  assert.equal(h.messages.some(message => message.action === "dom_image_found"), true);
+
+  // Real catalog posters start unloaded. CSS-size reads must never force their
+  // offscreen layout or report them before their intrinsic dimensions exist.
+  let onImageLoad: Function | undefined;
+  class LazyImageElement {
+    currentSrc = "";
+    src = "https://cdn.example/lazy-poster.jpg";
+    naturalWidth = 0;
+    naturalHeight = 0;
+    complete = false;
+    get width() { throw new Error("image.width forces layout"); }
+    get height() { throw new Error("image.height forces layout"); }
+    get clientWidth() { throw new Error("image.clientWidth forces layout"); }
+    get clientHeight() { throw new Error("image.clientHeight forces layout"); }
+    addEventListener(name: string, listener: Function) {
+      assert.equal(name, "load");
+      onImageLoad = listener;
+    }
+  }
+  context.HTMLImageElement = LazyImageElement;
+  const lazyImage = new LazyImageElement();
+  document.querySelectorAll = (selector: string) => selector.includes("img") ? [lazyImage] : [];
+  await h.policyMessages.listeners[0](policy(false, 13));
+  await h.policyMessages.listeners[0]({ ...policy(true, 14), options: {
+    playerProbes: false, visibilityOverrides: false,
+  } });
+  await flush();
+  assert.equal(h.messages.some(message => message.url === lazyImage.src), false);
+  assert.equal(typeof onImageLoad, "function");
+  lazyImage.naturalWidth = 400;
+  lazyImage.naturalHeight = 600;
+  lazyImage.complete = true;
+  onImageLoad!();
+  await flush();
+  const loaded = h.messages.find(message => message.url === lazyImage.src);
+  assert.equal(loaded?.action, "dom_image_found");
+  assert.equal(loaded?.width, 400);
+  assert.equal(loaded?.height, 600);
+
+  // A SPA can reuse the same image element for a different, unloaded poster.
+  lazyImage.src = "https://cdn.example/replacement-poster.jpg";
+  lazyImage.naturalWidth = 0;
+  lazyImage.naturalHeight = 0;
+  lazyImage.complete = false;
+  onImageLoad = undefined;
+  for (const listener of h.onMessage.listeners) listener({ type: "detector_same_document_navigation" });
+  assert.equal(typeof onImageLoad, "function");
+  assert.equal(h.messages.some(message => message.url === lazyImage.src), false);
+  lazyImage.naturalWidth = 800;
+  lazyImage.naturalHeight = 1200;
+  lazyImage.complete = true;
+  onImageLoad!();
+  await flush();
+  const replacement = h.messages.find(message => message.url === lazyImage.src);
+  assert.equal(replacement?.action, "dom_image_found");
+  assert.equal(replacement?.width, 800);
+  assert.equal(replacement?.height, 1200);
 });
 
 test("a declared origin overrides the previous main document policy", () => {
@@ -249,4 +365,93 @@ test("a declared origin overrides the previous main document policy", () => {
   assert.equal(tabs.allowsRequest(7, "xmlhttprequest", "https://cdn.example/stream.m3u8"), false);
   tabs.apply(policy(true, 3), 7);
   assert.equal(tabs.allowsRequest(7, "xmlhttprequest", "https://cdn.example/stream.m3u8"), true);
+});
+
+
+test("the bridged override is explicit and cannot bypass the master switch", () => {
+  const tabs = new TabDetectionPolicy();
+  tabs.apply({ ...policy(true), options: { detectInBridgedSites: true } }, 7);
+  assert.equal(tabs.allowsRequest(7, "main_frame", "https://app.example/watch"), true);
+  tabs.apply({ ...policy(false, 2, false), options: { detectInBridgedSites: true } }, 7);
+  assert.equal(tabs.allowsRequest(7, "main_frame", "https://app.example/watch"), false);
+});
+
+test("media categories filter DOM and network reports and can be reenabled", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const message = h.onMessage.listeners[0];
+  const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
+  await message({ action: "detector_policy", policy: { ...policy(true), options: {
+    images: false, audio: false, subtitles: false,
+  } } }, sender);
+  h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
+  const headers = h.browser.webRequest.onHeadersReceived.listeners[0];
+  for (const [kind, url, contentType, action] of [
+    ["video", "https://cdn.example/movie.mp4", "video/mp4", "dom_video_found"],
+    ["image", "https://cdn.example/poster.jpg", "image/jpeg", "dom_image_found"],
+    ["audio", "https://cdn.example/music.mp3", "audio/mpeg", "dom_audio_found"],
+    ["subtitle", "https://cdn.example/captions.vtt", "text/vtt", "dom_subtitle_found"],
+  ]) {
+    headers({ tabId: 8, requestId: kind, type: "media", url, statusCode: 200,
+      responseHeaders: [{ name: "content-type", value: contentType }, { name: "content-length", value: "200000" }] });
+    message({ action, url }, sender);
+  }
+  await flush();
+  assert.deepEqual(h.nativeMessages.filter(item => item.type === "video_detected").map(item => item.mediaKind), ["video", "video"]);
+  await message({ action: "detector_policy", policy: { ...policy(true, 2), options: { videos: false } } }, sender);
+  message({ action: "dom_image_found", url: "https://cdn.example/poster.jpg" }, sender);
+  message({ action: "dom_audio_found", url: "https://cdn.example/music.mp3" }, sender);
+  message({ action: "dom_subtitle_found", url: "https://cdn.example/captions.vtt" }, sender);
+  message({ action: "dom_video_found", url: "https://cdn.example/other.mp4" }, sender);
+  await flush();
+  assert.deepEqual(h.nativeMessages.filter(item => item.type === "video_detected").slice(-3).map(item => item.mediaKind), ["image", "audio", "subtitle"]);
+});
+
+test("response scanning still reports embedded sources with network detection off", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const message = h.onMessage.listeners[0];
+  const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
+  await message({ action: "detector_policy", policy: { ...policy(true), options: { networkDetection: false } } }, sender);
+  h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
+  h.browser.webRequest.onHeadersReceived.listeners[0]({ tabId: 8, requestId: "config", type: "xmlhttprequest",
+    url: "https://cdn.example/config.json", statusCode: 200,
+    responseHeaders: [{ name: "content-type", value: "application/json" }] });
+  h.filters[0].ondata({ data: new TextEncoder().encode('{"file":"https://cdn.example/movie.mp4"}').buffer });
+  h.filters[0].onstop();
+  await flush();
+  assert.ok(h.nativeMessages.some(item => item.type === "video_detected" && item.url === "https://cdn.example/movie.mp4"));
+});
+
+test("network detection and response scanning work independently and stop active scans", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const message = h.onMessage.listeners[0];
+  const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
+  await message({ action: "detector_policy", policy: { ...policy(true), options: {
+    networkDetection: false, domScanning: false, playerProbes: false,
+  } } }, sender);
+  h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
+  const headers = h.browser.webRequest.onHeadersReceived.listeners[0];
+  headers({ tabId: 8, requestId: "movie", type: "media", url: "https://cdn.example/movie.mp4", statusCode: 200,
+    responseHeaders: [{ name: "content-type", value: "video/mp4" }] });
+  message({ action: "dom_video_found", url: "https://cdn.example/movie.mp4" }, sender);
+  message({ action: "player_video_found", url: "https://cdn.example/movie.mp4" }, sender);
+  assert.equal(h.nativeMessages.some(item => item.type === "video_detected"), false);
+  headers({ tabId: 8, requestId: "config", type: "xmlhttprequest", url: "https://cdn.example/config.json", statusCode: 200,
+    responseHeaders: [{ name: "content-type", value: "application/json" }] });
+  assert.equal(h.filters.length, 1);
+  h.filters[0].ondata({ data: new TextEncoder().encode('{"file":"https://cdn.example/movie.mp4"}').buffer });
+  await message({ action: "detector_policy", policy: { ...policy(true, 2), options: { responseScanning: false } } }, sender);
+  assert.equal(h.filters[0].disconnected, true);
+  h.filters[0].onstop();
+  headers({ tabId: 8, requestId: "config2", type: "xmlhttprequest", url: "https://cdn.example/config.json", statusCode: 200,
+    responseHeaders: [{ name: "content-type", value: "application/json" }] });
+  assert.equal(h.filters.length, 1);
+  headers({ tabId: 8, requestId: "movie2", type: "media", url: "https://cdn.example/movie.mp4", statusCode: 200,
+    responseHeaders: [{ name: "content-type", value: "video/mp4" }] });
+  await flush();
+  const detected = h.nativeMessages.filter(item => item.type === "video_detected");
+  assert.ok(detected.length > 0);
+  assert.ok(detected.every(item => item.url === "https://cdn.example/movie.mp4" && item.detectedBy === "content_type"));
 });

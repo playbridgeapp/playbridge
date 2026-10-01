@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import com.playbridge.sender.data.settings.MediaDetectionSettings
 import com.playbridge.sender.cast.CastSheet
 import com.playbridge.sender.cast.DetectedVideo
 import com.playbridge.sender.data.debrid.DebridRepository
@@ -42,6 +43,8 @@ fun SheetOverlayContainer(
     onExtensionsClick: () -> Unit,
     onToggleDesktopMode: () -> Unit,
     onToggleVideoDetect: () -> Unit,
+    mediaDetectionSettings: MediaDetectionSettings = MediaDetectionSettings(),
+    onMediaDetectionChange: (MediaDetectionSettings) -> Unit = {},
     onUserAgentClick: () -> Unit = {},
     onFullScreenClick: () -> Unit = {},
     userAgentActive: Boolean = false,
@@ -99,6 +102,7 @@ fun SheetOverlayContainer(
     onPlayMagnetLinks: (List<DebridUnrestrictedLink>) -> Unit
 ) {
     val debridRepository: DebridRepository = koinInject()
+    var showMediaDetectionSheet by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 1. Hamburger Menu Sheet
@@ -118,11 +122,22 @@ fun SheetOverlayContainer(
                 onFindInPageClick = onFindInPageClick,
                 onExtensionsClick = onExtensionsClick,
                 onToggleDesktopMode = onToggleDesktopMode,
-                onToggleVideoDetect = onToggleVideoDetect,
+                onMediaDetectionClick = {
+                    onMenuDismiss()
+                    showMediaDetectionSheet = true
+                },
                 userAgentActive = userAgentActive,
                 onUserAgentClick = onUserAgentClick,
                 onFullScreenClick = onFullScreenClick,
                 onClearDataClick = onClearDataClick
+            )
+        }
+
+        if (showMediaDetectionSheet) {
+            MediaDetectionSheet(
+                settings = mediaDetectionSettings,
+                onSettingsChange = onMediaDetectionChange,
+                onDismissRequest = { showMediaDetectionSheet = false },
             )
         }
 

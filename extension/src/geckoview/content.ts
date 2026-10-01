@@ -4,10 +4,12 @@
  */
 
 import browser from "./browser";
+import { detectionOptions, type DetectionOptions } from "./detection-policy";
 import { isSupportedDomImage } from "./detected-media-kind";
 
 // cloneInto is Firefox/GeckoView-only (not on TypeScript's DOM lib).
 let detectionEnabled = false;
+let options = detectionOptions();
 let policyUpdate = 0;
 let videoObserver: MutationObserver | undefined;
 
@@ -22,7 +24,7 @@ browser.runtime.onMessage.addListener((message: { type?: string }) => {
         : message;
     window.dispatchEvent(new CustomEvent("PlayBridgeFeedback", { detail }));
   } else if (message?.type === "detector_same_document_navigation") {
-    scanAll();
+    if (options.navigationRescans) scanAll();
   }
   return false;
 });
@@ -30,7 +32,8 @@ browser.runtime.onMessage.addListener((message: { type?: string }) => {
 type DomMediaAction =
   | "dom_video_found"
   | "dom_audio_found"
-  | "dom_image_found";
+  | "dom_image_found"
+  | "dom_subtitle_found";
 
 function reportMediaSrc(
   action: DomMediaAction,
@@ -39,7 +42,10 @@ function reportMediaSrc(
   width?: number,
   height?: number,
 ): void {
-  if (!detectionEnabled || !src || src.startsWith("blob:") || src.startsWith("data:")) return;
+  const allowed = action === "dom_image_found" ? options.images
+    : action === "dom_audio_found" ? options.audio
+    : action === "dom_subtitle_found" ? options.subtitles : options.videos;
+  if (!allowed || !detectionEnabled || !src || src.startsWith("blob:") || src.startsWith("data:")) return;
   if (!src.startsWith("http")) return;
   browser.runtime
     .sendMessage({
@@ -54,10 +60,14 @@ function reportMediaSrc(
 }
 
 function reportImageElement(image: HTMLImageElement): void {
+  if (!detectionEnabled || !options.domScanning || !options.images) return;
   const src = image.currentSrc || image.src;
   if (!src || !isSupportedDomImage(src)) return;
-  const width = image.naturalWidth || image.width || image.clientWidth;
-  const height = image.naturalHeight || image.height || image.clientHeight;
+  // Unloaded/lazy images have no intrinsic size yet. Reading rendered dimensions
+  // here forces layout inside offscreen/content-visibility subtrees and reports
+  // placeholder boxes as media. The load listener below will report real images.
+  const width = image.naturalWidth;
+  const height = image.naturalHeight;
   if (width < 64 || height < 64 || width * height < 16_384) return;
   reportMediaSrc("dom_image_found", src, undefined, width, height);
 }
@@ -65,24 +75,25 @@ function reportImageElement(image: HTMLImageElement): void {
 const waitingForImageLoad = new WeakSet<HTMLImageElement>();
 
 function scanElement(el: Element): void {
-  if (!detectionEnabled) return;
+  if (!detectionEnabled || !options.domScanning) return;
   if (el instanceof HTMLVideoElement) {
-    reportMediaSrc("dom_video_found", el.currentSrc || el.src);
-    if (el.poster) {
+    if (options.videos) reportMediaSrc("dom_video_found", el.currentSrc || el.src);
+    if (options.images && el.poster) {
       reportMediaSrc(
         "dom_image_found",
         el.poster,
         undefined,
-        el.videoWidth || el.clientWidth,
-        el.videoHeight || el.clientHeight,
+        el.videoWidth || undefined,
+        el.videoHeight || undefined,
       );
     }
-    for (const source of Array.from(el.querySelectorAll("source"))) {
+    if (options.videos) for (const source of Array.from(el.querySelectorAll("source"))) {
       reportMediaSrc("dom_video_found", source.src, source.type);
     }
     return;
   }
   if (el instanceof HTMLAudioElement) {
+    if (!options.audio) return;
     reportMediaSrc("dom_audio_found", el.currentSrc || el.src);
     for (const source of Array.from(el.querySelectorAll("source"))) {
       reportMediaSrc("dom_audio_found", source.src, source.type);
@@ -91,6 +102,7 @@ function scanElement(el: Element): void {
   }
   if (el instanceof HTMLSourceElement) {
     const parent = el.closest("audio, video");
+    if (parent instanceof HTMLAudioElement ? !options.audio : !options.videos) return;
     reportMediaSrc(
       parent instanceof HTMLAudioElement
         ? "dom_audio_found"
@@ -100,18 +112,32 @@ function scanElement(el: Element): void {
     );
     return;
   }
-  if (el instanceof HTMLImageElement) {
+  if (typeof HTMLTrackElement !== "undefined" && el instanceof HTMLTrackElement) {
+    if (el.kind === "subtitles" || el.kind === "captions") reportMediaSrc("dom_subtitle_found", el.src);
+    return;
+  }
+  if (el instanceof HTMLImageElement && options.images) {
     reportImageElement(el);
     if (!el.complete && !waitingForImageLoad.has(el)) {
       waitingForImageLoad.add(el);
-      el.addEventListener("load", () => reportImageElement(el), { once: true });
+      el.addEventListener("load", () => {
+        waitingForImageLoad.delete(el);
+        reportImageElement(el);
+      }, { once: true });
     }
   }
 }
 
+function mediaSelector(): string {
+  return [options.videos || options.images ? "video" : "", options.audio ? "audio" : "",
+    options.videos || options.audio ? "source" : "", options.images ? "img" : "",
+    options.subtitles ? "track" : ""].filter(Boolean).join(", ");
+}
+
 function scanAll(): void {
-  if (!detectionEnabled) return;
-  document.querySelectorAll("video, audio, source, img").forEach(scanElement);
+  if (!detectionEnabled || !options.domScanning) return;
+  const selector = mediaSelector();
+  if (selector) document.querySelectorAll(selector).forEach(scanElement);
 }
 
 function setDetectionEnabled(enabled: boolean): void {
@@ -124,25 +150,27 @@ function setDetectionEnabled(enabled: boolean): void {
     window.dispatchEvent(new Event("PlayBridgeStopDetection"));
     return;
   }
-  videoObserver = new MutationObserver((mutations) => {
-    if (!detectionEnabled) return;
-    for (const mutation of mutations) {
-      for (const node of mutation.addedNodes) {
-        if (node.nodeType !== 1) continue;
-        const el = node as Element;
-        scanElement(el);
-        el.querySelectorAll?.("video, audio, source, img").forEach(scanElement);
+  if (options.domScanning && mediaSelector()) {
+    videoObserver = new MutationObserver((mutations) => {
+      if (!detectionEnabled) return;
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          const el = node as Element;
+          scanElement(el);
+          el.querySelectorAll?.(mediaSelector()).forEach(scanElement);
+        }
+        if (mutation.type === "attributes" && mutation.target.nodeType === 1) {
+          scanElement(mutation.target as Element);
+        }
       }
-      if (mutation.type === "attributes" && mutation.target.nodeType === 1) {
-        scanElement(mutation.target as Element);
-      }
+    });
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", startDocumentDetection, { once: true });
+      observeDocument();
+    } else {
+      startDocumentDetection();
     }
-  });
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", startDocumentDetection, { once: true });
-    observeDocument();
-  } else {
-    startDocumentDetection();
   }
   injectPlayerProbe();
 }
@@ -166,13 +194,15 @@ function startDocumentDetection(): void {
 // have identical URLs. No scanning starts before the native policy arrives.
 try {
   const policyPort = browser.runtime.connectNative("detectorPolicy");
-  policyPort.onMessage.addListener((policy: { type?: string; enabled?: boolean }) => {
+  policyPort.onMessage.addListener((policy: { type?: string; enabled?: boolean; options?: Partial<DetectionOptions> }) => {
     if (policy?.type !== "detection_policy") return;
     const update = ++policyUpdate;
-    if (!policy.enabled) setDetectionEnabled(false);
+    const nextOptions = detectionOptions(policy.options);
+    if (!policy.enabled || JSON.stringify(options) !== JSON.stringify(nextOptions)) setDetectionEnabled(false);
+    options = nextOptions;
     browser.runtime.sendMessage({ action: "detector_policy", policy }).then(() => {
       if (update === policyUpdate) setDetectionEnabled(policy.enabled === true);
-    }).catch(() => setDetectionEnabled(false));
+    }).catch(() => { if (update === policyUpdate) setDetectionEnabled(false); });
   });
   policyPort.onDisconnect.addListener(() => {
     policyUpdate += 1;
@@ -184,7 +214,7 @@ try {
 
 window.addEventListener("PlayBridgeMediaFound", ((event: CustomEvent) => {
   const url = event.detail && (event.detail as { url?: string }).url;
-  if (!detectionEnabled || !url || typeof url !== "string" || !url.startsWith("http")) return;
+  if (!detectionEnabled || !options.playerProbes || !options.videos || !url || typeof url !== "string" || !url.startsWith("http")) return;
   browser.runtime
     .sendMessage({
       action: "player_video_found",
@@ -345,12 +375,12 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
 
 // Only normal browsing pages with detection enabled receive player probes.
 function injectPlayerProbe(): void {
-  if (window.top !== window) return;
+  if (window.top !== window || (!options.visibilityOverrides && !(options.playerProbes && options.videos))) return;
   const script = document.createElement("script");
   script.textContent = `(function() {
       var hiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden');
       var visibilityDescriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState');
-      try {
+      if (${options.visibilityOverrides}) try {
         Object.defineProperty(document, 'hidden', { configurable: true, get: function() { return false; } });
         Object.defineProperty(document, 'visibilityState', { configurable: true, get: function() { return 'visible'; } });
       } catch (_) {}
@@ -375,10 +405,10 @@ function injectPlayerProbe(): void {
           }
         } catch (e) {}
       }
-      var timers = [setTimeout(probe, 1500), setTimeout(probe, 4000)];
+      var timers = ${options.playerProbes && options.videos} ? [setTimeout(probe, 1500), setTimeout(probe, 4000)] : [];
       window.addEventListener('PlayBridgeStopDetection', function stop() {
         timers.forEach(clearTimeout);
-        try {
+        if (${options.visibilityOverrides}) try {
           if (hiddenDescriptor) Object.defineProperty(document, 'hidden', hiddenDescriptor);
           else delete document.hidden;
           if (visibilityDescriptor) Object.defineProperty(document, 'visibilityState', visibilityDescriptor);

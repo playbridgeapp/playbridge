@@ -114,6 +114,7 @@ object BackupUtils {
             maxBitrateCapMbps = settingsRepository.maxBitrateCapMbps.first(),
             tvPrefetchWindow = settingsRepository.tvPrefetchWindow.first(),
             detectVideos = settingsRepository.detectVideos.first(),
+            mediaDetection = settingsRepository.mediaDetectionSettings.first(),
             trackWatchProgress = settingsRepository.trackWatchProgress.first(),
             autoAddToWatching = settingsRepository.autoAddToWatching.first(),
             blockPopups = settingsRepository.blockPopups.first(),
@@ -221,6 +222,7 @@ object BackupUtils {
                 s.defaultVideoQuality?.let { settingsRepository.setDefaultVideoQuality(it) }
                 s.maxBitrateCapMbps?.let { settingsRepository.setMaxBitrateCapMbps(it) }
                 s.tvPrefetchWindow?.let { settingsRepository.setTvPrefetchWindow(it) }
+                s.mediaDetection?.let { settingsRepository.setMediaDetectionSettings(it) }
                 s.detectVideos?.let { settingsRepository.setDetectVideos(it) }
                 s.trackWatchProgress?.let { settingsRepository.setTrackWatchProgress(it) }
                 s.autoAddToWatching?.let { settingsRepository.setAutoAddToWatching(it) }

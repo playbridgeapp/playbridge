@@ -12,7 +12,18 @@ It is a **capability and expectation guide**, not a list of supported brand doma
 | Kotlin store + ranking | `VideoDetector.kt` |
 | Native message bridge | `Components.kt` + `DetectorTabBindingTracker` |
 
-Automatic detection applies to normal browser tabs. [Bridged app sessions](bridged-apps.md) keep all automatic media detection off and use the explicit page casting API instead. Disabling the browser detection switch stops scanning in existing pages as well as ignoring incoming results.
+Automatic detection applies to normal browser tabs. [Bridged app sessions](bridged-apps.md) keep automatic media detection off by default and use the explicit page casting API. The Android browser menu's **Media detect** item opens a settings sheet:
+
+- **Automatic detection** is the master switch, preserving the previous Video Detect preference.
+- **Video detection**, **Images**, **Audio**, and **Subtitles** independently control which media is scanned/reported. Disabling a category removes its existing rows. Video playback can still retain companion audio metadata when standalone audio detection is off.
+- **Advanced** exposes Page scanning (DOM observer), Network detection (URL/header detection and playback headers), Response scanning (bounded text bodies and playlist parsing), Scan on page changes (SPA rescans and media lifecycle ranking), Player probes, and Keep page visible (the document visibility shim).
+- **Detect on bridged sites** overrides the bridged-site opt-out for troubleshooting. It starts off and still requires the master switch.
+
+Preferences persist across restarts and settings backup/import. Changes apply to open documents, stop disabled observers/probes/body scans, and filter late results. Re-enabling page scanning rescans the current DOM; reload if previously completed network responses need rediscovery. Turning off both network and response scanning also stops playback-header capture, so protected sources found only in the DOM may lack required replay headers. Explicit website casting remains independent of every detection switch.
+
+The SPA rules below describe the default configuration. With Scan on page changes off, navigation ownership and document generations still update, but the DOM rescan and Kotlin lifecycle/ranking update are skipped.
+
+Image DOM detection uses intrinsic (`naturalWidth`/`naturalHeight`) dimensions and waits for the image's load event. It does not measure unloaded poster boxes, preserving lazy loading and `content-visibility` layout skipping. The extension and Android store each retain at most 30 image rows per tab; video rows remain independent of that image limit.
 
 Rebuild detector assets with `pnpm build` from `extension/` after changing TypeScript sources.
 

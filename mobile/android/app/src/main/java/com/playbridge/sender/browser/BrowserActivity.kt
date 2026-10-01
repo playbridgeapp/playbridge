@@ -1638,11 +1638,14 @@ class BrowserActivity : ComponentActivity() {
                 )
             }
 
-            val detectVideosEnabled by settingsRepository.detectVideos.collectAsStateWithLifecycle(initialValue = true)
+            val mediaDetectionSettings by settingsRepository.mediaDetectionSettings.collectAsStateWithLifecycle(
+                initialValue = com.playbridge.sender.data.settings.MediaDetectionSettings()
+            )
+            val detectVideosEnabled = mediaDetectionSettings.enabled
             // Detection messages now arrive via native messaging (Components.processMessage),
             // so the setting is enforced there rather than at the old hash-signal parse site.
-            LaunchedEffect(detectVideosEnabled) {
-                Components.detectVideosEnabled = detectVideosEnabled
+            LaunchedEffect(mediaDetectionSettings) {
+                Components.mediaDetectionSettings = mediaDetectionSettings
             }
             var isDesktopMode by remember { mutableStateOf(false) }
             var isSecureConnection by remember { mutableStateOf(false) }
@@ -2717,6 +2720,8 @@ class BrowserActivity : ComponentActivity() {
                     },
                     onToggleDesktopMode = { isDesktopMode = !isDesktopMode },
                     onToggleVideoDetect = { composeScope.launch { settingsRepository.setDetectVideos(!detectVideosEnabled) } },
+                    mediaDetectionSettings = mediaDetectionSettings,
+                    onMediaDetectionChange = { composeScope.launch { settingsRepository.setMediaDetectionSettings(it) } },
                     userAgentActive = userAgentPreset != UserAgentPresets.DEFAULT_ID,
                     onUserAgentClick = {
                         scope.launch { sheetState.hide() }.invokeOnCompletion {

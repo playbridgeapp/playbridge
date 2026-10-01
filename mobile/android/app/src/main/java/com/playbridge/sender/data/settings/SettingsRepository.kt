@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.*
 import com.playbridge.sender.browser.CustomUserAgent
+import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
@@ -27,6 +28,7 @@ class SettingsRepository(
         val TV_PLAYER_MODE = stringPreferencesKey("tv_player_mode")
         val TV_PREFETCH_WINDOW = intPreferencesKey("tv_prefetch_window")
         val DETECT_VIDEOS = booleanPreferencesKey("detect_videos")
+        val MEDIA_DETECTION = stringPreferencesKey("media_detection")
         val TRACK_WATCH_PROGRESS = booleanPreferencesKey("track_watch_progress")
         val AUTO_ADD_TO_WATCHING = booleanPreferencesKey("auto_add_to_watching")
         val BLOCK_POPUPS = booleanPreferencesKey("block_popups")
@@ -63,6 +65,9 @@ class SettingsRepository(
     /** How many episodes to keep resolved & queued ahead on the TV for series without a play-endpoint addon. */
     val tvPrefetchWindow: Flow<Int> = dataStore.data.catch { handleException(it) }.map { (it[Keys.TV_PREFETCH_WINDOW] ?: 1).coerceIn(1, 10) }
     val detectVideos: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.DETECT_VIDEOS] ?: true }
+    val mediaDetectionSettings: Flow<MediaDetectionSettings> = dataStore.data.catch { handleException(it) }.map { prefs ->
+        MediaDetectionSettings.decode(prefs[Keys.MEDIA_DETECTION]).copy(enabled = prefs[Keys.DETECT_VIDEOS] ?: true)
+    }
     /** Automatically update watchlist progress / watched state from TV playback. */
     val trackWatchProgress: Flow<Boolean> = dataStore.data.catch { handleException(it) }.map { it[Keys.TRACK_WATCH_PROGRESS] ?: true }
     /** When auto-tracking, add untracked shows/movies to the watchlist as Watching. */
@@ -100,6 +105,10 @@ class SettingsRepository(
     suspend fun setTvPlayerMode(value: String) = write { it[Keys.TV_PLAYER_MODE] = value }
     suspend fun setTvPrefetchWindow(value: Int) = write { it[Keys.TV_PREFETCH_WINDOW] = value.coerceIn(1, 10) }
     suspend fun setDetectVideos(value: Boolean) = write { it[Keys.DETECT_VIDEOS] = value }
+    suspend fun setMediaDetectionSettings(value: MediaDetectionSettings) = write {
+        it[Keys.DETECT_VIDEOS] = value.enabled
+        it[Keys.MEDIA_DETECTION] = MediaDetectionSettings.json.encodeToString(value)
+    }
     suspend fun setTrackWatchProgress(value: Boolean) = write { it[Keys.TRACK_WATCH_PROGRESS] = value }
     suspend fun setAutoAddToWatching(value: Boolean) = write { it[Keys.AUTO_ADD_TO_WATCHING] = value }
     suspend fun setBlockPopups(value: Boolean) = write { it[Keys.BLOCK_POPUPS] = value }
