@@ -107,7 +107,9 @@ fun BrowserToolbar(
             }
         } else {
             textFieldValue = TextFieldValue(if (currentUrl == "about:blank") "" else stripProtocol(currentUrl))
-            focusManager.clearFocus(force = true)
+            // SPA URL updates can arrive while a page input owns focus (e.g. search).
+            // Only release focus when this toolbar's URL field owns it.
+            if (isFocused) focusManager.clearFocus(force = true)
         }
     }
 

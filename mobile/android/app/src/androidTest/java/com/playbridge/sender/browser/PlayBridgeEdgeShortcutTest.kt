@@ -37,7 +37,14 @@ class PlayBridgeEdgeShortcutTest {
         var refreshes = 0
         compose.setContent {
             MaterialTheme {
-                PlayBridgeEdgeShortcut(true, false, 0, { dashboards++ }, { devices++ }, { refreshes++ })
+                PlayBridgeEdgeShortcut(
+                    fullscreen = false,
+                    fullscreenInteraction = 0,
+                    onDashboard = { dashboards++ },
+                    onRemote = {},
+                    onDevices = { devices++ },
+                    onRefresh = { refreshes++ },
+                )
             }
         }
         compose.onNodeWithText("Dashboard").assertDoesNotExist()
@@ -57,15 +64,23 @@ class PlayBridgeEdgeShortcutTest {
         compose.runOnIdle { assertEquals(1, dashboards); assertEquals(1, devices); assertEquals(1, refreshes) }
     }
 
-    @Test fun nativeScreenDashboardNeedsOneTap() {
-        var dashboards = 0
+    @Test fun menuOpensRemoteInTwoTaps() {
+        var remotes = 0
         compose.setContent {
             MaterialTheme {
-                PlayBridgeEdgeShortcut(false, false, 0, { dashboards++ }, { error("No device menu") }, { error("No refresh menu") })
+                PlayBridgeEdgeShortcut(
+                    fullscreen = false,
+                    fullscreenInteraction = 0,
+                    onDashboard = { error("No dashboard navigation expected") },
+                    onRemote = { remotes++ },
+                    onDevices = { error("No devices navigation expected") },
+                    onRefresh = { error("No refresh expected") },
+                )
             }
         }
-        compose.onNodeWithContentDescription("Dashboard").performClick()
-        compose.runOnIdle { assertEquals(1, dashboards) }
+        compose.onNodeWithContentDescription("PlayBridge menu").performClick()
+        compose.onNodeWithText("Remote").performClick()
+        compose.runOnIdle { assertEquals(1, remotes) }
         compose.onNodeWithText("Devices").assertDoesNotExist()
     }
 
@@ -87,7 +102,15 @@ class PlayBridgeEdgeShortcutTest {
                         },
                         modifier = Modifier.fillMaxSize().testTag("page"),
                     )
-                    PlayBridgeEdgeShortcut(true, true, interactions, {}, {}, {}, Modifier.align(Alignment.CenterEnd))
+                    PlayBridgeEdgeShortcut(
+                        fullscreen = true,
+                        fullscreenInteraction = interactions,
+                        onDashboard = {},
+                        onRemote = {},
+                        onDevices = {},
+                        onRefresh = {},
+                        modifier = Modifier.align(Alignment.CenterEnd),
+                    )
                 }
             }
         }
@@ -112,7 +135,14 @@ class PlayBridgeEdgeShortcutTest {
         val fullscreen = mutableStateOf(false)
         compose.setContent {
             MaterialTheme {
-                PlayBridgeEdgeShortcut(true, fullscreen.value, 0, {}, {}, {})
+                PlayBridgeEdgeShortcut(
+                    fullscreen = fullscreen.value,
+                    fullscreenInteraction = 0,
+                    onDashboard = {},
+                    onRemote = {},
+                    onDevices = {},
+                    onRefresh = {},
+                )
             }
         }
         compose.onNodeWithContentDescription("PlayBridge menu").assertIsDisplayed()
