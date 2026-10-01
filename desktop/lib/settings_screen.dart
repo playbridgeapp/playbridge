@@ -402,7 +402,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.bug_report_outlined,
               title: 'Enable logging',
               subtitle:
-                  'Save app logs to this device for troubleshooting. Off by default — '
+                  'Save app logs and memory samples every 30 seconds to this device '
+                  'for troubleshooting. Off by default — '
                   'logs can contain stream URLs and request headers (including '
                   'Debrid tokens), so only enable when needed.',
               trailing: Switch(

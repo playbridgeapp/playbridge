@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
@@ -475,6 +476,72 @@ class MpvEngine extends PlayerEngine {
   final ValueNotifier<PlaybackStats?> stats =
       ValueNotifier<PlaybackStats?>(null);
   Timer? _statsTimer;
+
+  /// Independent, on-demand counters for opt-in memory diagnostics. This does
+  /// not enable the stats overlay timer or publish UI notifications.
+  Future<Map<String, Object?>> readMemoryDiagnostics() async {
+    final native = player.platform;
+    if (native is! NativePlayer) return const {};
+    Future<String?> read(String property) async {
+      try {
+        return await native
+            .getProperty(property)
+            .timeout(const Duration(seconds: 1));
+      } on Object {
+        return null;
+      }
+    }
+
+    const numericProperties = {
+      'width': 'videoWidth',
+      'height': 'videoHeight',
+      'demuxer-cache-duration': 'bufferSeconds',
+      'demuxer-max-bytes': 'forwardBufferLimitBytes',
+      'demuxer-max-back-bytes': 'backBufferLimitBytes',
+      'frame-drop-count': 'droppedFrames',
+      'decoder-frame-drop-count': 'decoderDroppedFrames',
+    };
+    const textProperties = {
+      'hwdec-current': 'hardwareDecoder',
+      'video-format': 'videoFormat',
+    };
+    final properties = [
+      ...numericProperties.keys,
+      ...textProperties.keys,
+      'cache-on-disk',
+      'demuxer-cache-state',
+    ];
+    final values = await Future.wait(properties.map(read));
+    final raw = Map<String, String?>.fromIterables(properties, values);
+    final result = <String, Object?>{};
+    for (final entry in numericProperties.entries) {
+      final value = num.tryParse(raw[entry.key] ?? '');
+      if (value != null && value.isFinite) result[entry.value] = value;
+    }
+    for (final entry in textProperties.entries) {
+      final value = raw[entry.key];
+      if (value != null && RegExp(r'^[a-zA-Z0-9_.-]{1,40}$').hasMatch(value)) {
+        result[entry.value] = value;
+      }
+    }
+    if (raw['cache-on-disk'] == 'yes' || raw['cache-on-disk'] == 'no') {
+      result['diskCache'] = raw['cache-on-disk'] == 'yes';
+    }
+    try {
+      final state = jsonDecode(raw['demuxer-cache-state'] ?? '{}');
+      if (state is Map) {
+        for (final entry in const {
+          'fw-bytes': 'bufferForwardBytes',
+          'total-bytes': 'bufferTotalBytes',
+        }.entries) {
+          if (state[entry.key] is int) result[entry.value] = state[entry.key];
+        }
+      }
+    } on Object {
+      // Properties may be absent while opening/stopping a stream.
+    }
+    return result;
+  }
 
   void setStatsCollecting(bool active) {
     if (active) {

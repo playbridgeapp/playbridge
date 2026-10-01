@@ -93,6 +93,8 @@ class LogStore {
   bool _enabled = false;
 
   bool get enabled => _enabled;
+  final ValueNotifier<bool> _enabledNotifier = ValueNotifier(false);
+  ValueListenable<bool> get enabledListenable => _enabledNotifier;
 
   /// Recent entries for the live viewer (oldest first; newest appended at end).
   final ValueNotifier<List<LogEntry>> entries =
@@ -103,6 +105,7 @@ class LogStore {
     _initialized = true;
     _prefs = await SharedPreferences.getInstance();
     _enabled = _prefs?.getBool(_prefKey) ?? false;
+    _enabledNotifier.value = _enabled;
     try {
       final support = await getApplicationSupportDirectory();
       final dir = Directory('${support.path}/$_logDirName');
@@ -116,6 +119,7 @@ class LogStore {
 
   Future<void> setEnabled(bool value) async {
     _enabled = value;
+    _enabledNotifier.value = value;
     await _prefs?.setBool(_prefKey, value);
     // Wipe persisted (possibly sensitive) logs when turning off.
     if (!value) await clear();

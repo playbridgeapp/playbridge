@@ -49,6 +49,10 @@ class MainFlutterWindow: NSWindow {
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
+    MemoryDiagnosticsHandler.register(
+      with: flutterViewController.engine.binaryMessenger
+    )
+
     // Bluetooth headset / media-key remote control (Now Playing + togglePlayPause).
     MediaRemoteHandler.shared.register(
       with: flutterViewController.engine.binaryMessenger

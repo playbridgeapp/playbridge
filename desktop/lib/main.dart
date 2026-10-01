@@ -10,6 +10,7 @@ import 'package:window_manager/window_manager.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 
 import 'logging/log_store.dart';
+import 'logging/memory_diagnostics.dart';
 import 'context_menu_installer.dart';
 import 'discovery.dart';
 import 'engines/mpv_engine.dart';
@@ -44,6 +45,7 @@ import 'still_watching_prompt.dart';
 import 'tray_controller.dart';
 import 'tv_connection_store.dart';
 import 'tv_sender_controller.dart';
+import 'update/app_version.dart';
 import 'update/update_checker.dart';
 import 'update/update_gate.dart';
 
@@ -170,6 +172,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   final FocusNode _keyboardFocusNode =
       FocusNode(debugLabel: 'desktop-shortcuts');
   late final PlayerController _player;
+  late final MemoryDiagnostics _memoryDiagnostics;
   late final ReceiverServer _server;
   late final DiscoveryPublisher _discovery;
   late final TrayController _tray;
@@ -262,6 +265,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       preselectHlsQuality: widget.store.preselectHlsQuality,
       store: widget.store,
     );
+    _memoryDiagnostics = MemoryDiagnostics(
+      enabled: LogStore.instance.enabledListenable,
+      readSnapshot: _readMemorySnapshot,
+      write: (level, message) =>
+          LogStore.instance.log(level, 'memory', message),
+    )..start();
     _stillWatching = StillWatchingController(
       player: _player,
       enabled: widget.store.stillWatchingEnabled,
@@ -510,6 +519,13 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   }
 
   void _handlePlayerChange() {
+    _memoryDiagnostics.playbackChanged((
+      _player.engine,
+      _player.playbackId,
+      _player.currentIndex,
+      _player.state,
+      _player.isOpening,
+    ));
     final hasMedia = _player.queue.isNotEmpty;
 
     // Rising edge: new playback session started → switch to video view.
@@ -807,6 +823,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   @override
   void dispose() {
+    _memoryDiagnostics.dispose();
     _hideTimer?.cancel();
     _osdTimer?.cancel();
     _tapTimer?.cancel();
@@ -830,6 +847,39 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showStats.dispose();
     _updateChecker.dispose();
     super.dispose();
+  }
+
+  Future<Map<String, Object?>> _readMemorySnapshot() async {
+    final engine = _player.engine;
+    final index = _player.currentIndex;
+    final item = index >= 0 && index < _player.queue.length
+        ? _player.queue[index]
+        : null;
+    final context = <String, Object?>{
+      'appVersion': kAppVersion,
+      'engine': _player.engineType.name,
+      'state': _player.state,
+      'opening': _player.isOpening,
+      'queueLength': _player.queue.length,
+      'queueRevision': _player.queueRevision,
+      'itemIndex': index,
+      'mediaKind': item?.mediaKind.name,
+      'positionMs': _player.positionMs,
+      'durationMs': _player.durationMs,
+      'hardwareVideoOutput': _player.hardwareVideoOutput,
+      'proxied': item != null && StreamProxyServer.instance.ownsUrl(item.url),
+      'proxyRunning': StreamProxyServer.instance.isRunning,
+    };
+    final snapshots = await Future.wait([
+      readProcessMemory(),
+      if (engine is MpvEngine && item?.mediaKind == MediaKind.video)
+        engine.readMemoryDiagnostics(),
+    ]);
+    return {
+      ...context,
+      for (final snapshot in snapshots) ...snapshot,
+      'engineChangedDuringSample': !identical(engine, _player.engine),
+    };
   }
 
   @override
