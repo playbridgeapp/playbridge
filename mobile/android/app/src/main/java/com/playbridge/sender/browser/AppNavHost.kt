@@ -97,9 +97,8 @@ fun AppNavHost(
     lastMainScreen: Screen,
     onLastMainScreenChange: (Screen) -> Unit,
     connectionInitialTab: Int = 0,
-    // Where the Remote screen's Back should return (the screen it was opened from);
-    // defaults to lastMainScreen at the call site when no origin was recorded.
-    remoteReturnScreen: Screen = lastMainScreen,
+    // Restores the source screen and, when applicable, its bridged app session.
+    onRemoteBack: () -> Unit,
     // Where the Dashboard's close (X) should return — the screen it was opened from.
     dashboardReturnScreen: Screen = lastMainScreen,
     innerPadding: PaddingValues,
@@ -1003,9 +1002,7 @@ fun AppNavHost(
                     )
                 }
                 Screen.Remote -> {
-                    BackHandler {
-                        onScreenChange(remoteReturnScreen)
-                    }
+                    BackHandler(onBack = onRemoteBack)
                     // Perf: high-frequency TV tickers collected locally so per-second
                     // position updates recompose only this branch, not the whole host.
                     val tvActiveContext by connectionCoordinator.tvActiveContext.collectAsStateWithLifecycle()
@@ -1028,7 +1025,9 @@ fun AppNavHost(
                     if (external != null) {
                         RemoteControlScreen(
                             activeContext = "player",
-                            onBack = { onScreenChange(remoteReturnScreen) },
+                            onBack = onRemoteBack,
+                            linkedPageCastControllerName = linkedPageCastState.controllerName.takeIf { linkedPageCastState.active },
+                            onUnlinkWebsite = { linkedPageCastCoordinator.unlink("unlinked") },
                             onRemoteKey = { key ->
                                 when {
                                     key == "volume_up" -> connectionViewModel.externalAdjustVolume(true)
@@ -1155,9 +1154,9 @@ fun AppNavHost(
                                 else -> false
                             }
                         },
-                        onBack = {
-                            onScreenChange(remoteReturnScreen)
-                        },
+                        onBack = onRemoteBack,
+                        linkedPageCastControllerName = linkedPageCastState.controllerName.takeIf { linkedPageCastState.active },
+                        onUnlinkWebsite = { linkedPageCastCoordinator.unlink("unlinked") },
                         onRemoteKey = { key ->
                             connectionViewModel.webSocketClient.send(com.playbridge.shared.protocol.createRemoteCommandJson(key))
                         },
@@ -1850,8 +1849,7 @@ fun AppNavHost(
             // Hide on Library Addons tab so the bar doesn't overlay addon management.
             val libSelectedTab by libraryViewModel.selectedTab.collectAsStateWithLifecycle()
             val libraryAddonsTab = targetScreen == Screen.Library && libSelectedTab == 3
-            val showNowPlayingBar = ((targetScreen == Screen.Browser && linkedPageCastState.active) ||
-                targetScreen == Screen.Library ||
+            val showNowPlayingBar = (targetScreen == Screen.Library ||
                 targetScreen == Screen.PhoneFiles ||
                 targetScreen == Screen.DebridLibrary ||
                 targetScreen is Screen.LibraryDetail ||
@@ -1867,14 +1865,11 @@ fun AppNavHost(
                     tvDevice = tvDevice,
                     activeExternalDevice = activeExternalDevice,
                     castRoute = castRoute,
-                    linkedPageCastControllerName = linkedPageCastState.controllerName,
-                    linkedPageCastActive = linkedPageCastState.active,
                     accentColor = if (targetScreen is Screen.LibraryDetail) libraryDetailAccent else null,
                     showDevicePicker = { showDevicePicker = true },
                     onOpenRemote = {
                         onScreenChange(Screen.Remote)
                     },
-                    onUnlink = { linkedPageCastCoordinator.unlink("unlinked") },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         // Clear the system navigation bar, plus the Library's bottom
@@ -1901,6 +1896,15 @@ fun AppNavHost(
                     onDashboard = {
                         leaveMediaFullscreen()
                         onScreenChange(Screen.Dashboard)
+                    },
+                    onRemote = {
+                        leaveMediaFullscreen()
+                        if (castRoute is CastSessionManager.Route.NativeTv) {
+                            connectionViewModel.webSocketClient.send(
+                                com.playbridge.shared.protocol.createContextQueryJson()
+                            )
+                        }
+                        onScreenChange(Screen.Remote)
                     },
                     onDevices = { showDevicePicker = true },
                     onRefresh = {
@@ -1944,12 +1948,9 @@ private fun NowPlayingBarHost(
     tvDevice: TvDevice?,
     activeExternalDevice: TvDevice?,
     castRoute: CastSessionManager.Route,
-    linkedPageCastControllerName: String?,
-    linkedPageCastActive: Boolean,
     accentColor: androidx.compose.ui.graphics.Color?,
     showDevicePicker: () -> Unit,
     onOpenRemote: () -> Unit,
-    onUnlink: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val externalStatus by connectionViewModel.externalStatus.collectAsStateWithLifecycle()
@@ -1996,9 +1997,7 @@ private fun NowPlayingBarHost(
     when {
         playing -> {
             primaryText = (if (externalActive) externalMediaTitle else tvPlayback?.title) ?: "Now playing"
-            secondaryText = linkedPageCastControllerName?.let {
-                "Controlled by $it · on ${resolvedDeviceName ?: "TV"}"
-            } ?: "on ${resolvedDeviceName ?: "TV"}" +
+            secondaryText = "on ${resolvedDeviceName ?: "TV"}" +
                 protocolName?.let { " · $it" }.orEmpty()
         }
         externalActive || (nativeSelected && wsConnected) -> {
@@ -2034,11 +2033,6 @@ private fun NowPlayingBarHost(
         showTvIcon = playing,
         onTvIconClick = {
             showDevicePicker()
-        },
-        onUnlinkClick = if (linkedPageCastActive) {
-            { onUnlink() }
-        } else {
-            null
         },
         // Poster-matched accent on the library detail screen (the old FAB's
         // dynamic styling); FAB-like primaryContainer elsewhere.

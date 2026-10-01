@@ -98,10 +98,11 @@ class BridgedAppStore(context: Context) {
         }
 
         internal fun parseManifest(origin: String, json: JSONObject): BridgedApp? {
-            if (json.optString("protocol") != "playbridge-app-v1") return null
-            val name = json.optString("name").trim().take(60)
+            if (json.opt("protocol") != "playbridge-app-v1") return null
+            val name = (json.opt("name") as? String)?.trim()?.take(60) ?: return null
             if (name.isEmpty()) return null
-            val startUrl = runCatching { URL(URL("$origin/"), json.optString("start_url", "/")).toString() }
+            val startPath = if (json.isNull("start_url")) "/" else json.opt("start_url") as? String ?: return null
+            val startUrl = runCatching { URL(URL("$origin/"), startPath).toString() }
                 .getOrNull() ?: return null
             if (originFor(startUrl) != origin) return null
             val iconUrl = json.optString("icon_url").takeIf { it.isNotBlank() }

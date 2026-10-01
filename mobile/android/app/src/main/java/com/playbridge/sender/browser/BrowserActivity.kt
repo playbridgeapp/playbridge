@@ -599,13 +599,12 @@ class BrowserActivity : ComponentActivity() {
             }
             // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
             // Connection) rather than always falling back to the last main tab.
-            var remoteOrigin by remember { mutableStateOf<Screen?>(null) }
+            var remoteOrigin by rememberSaveable(stateSaver = Screen.Saver) {
+                mutableStateOf(currentScreen.takeUnless { it == Screen.Remote } ?: Screen.Browser)
+            }
+            var remoteOriginBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
             var connectionInitialTab by remember { mutableStateOf(0) }
-            // Keep the Remote's return target pointed at wherever we actually were last, even
-            // when playback auto-switches into the Remote directly (which bypasses
-            // onScreenChange and would otherwise leave remoteOrigin stale — e.g. stuck on IPTV).
             LaunchedEffect(currentScreen) {
-                if (currentScreen != Screen.Remote) remoteOrigin = currentScreen
                 if (currentScreen != Screen.Connection) connectionInitialTab = 0
             }
             // The screen the Dashboard was opened from, so its close (X) returns there.
@@ -935,6 +934,14 @@ class BrowserActivity : ComponentActivity() {
             val currentOrigin = BridgedAppStore.originFor(currentUrl)
             val isBridgedAppMode = currentScreen == Screen.Browser && selectedTabId == activeBridgedAppTabId &&
                 installedBridgedApps.any { it.tabId == selectedTabId && it.origin == currentOrigin }
+            // Also cover playback auto-switches that bypass onScreenChange. Retain both
+            // values while Remote is visible, including across Activity recreation.
+            LaunchedEffect(currentScreen, selectedTabId, isBridgedAppMode) {
+                if (currentScreen != Screen.Remote) {
+                    remoteOrigin = currentScreen
+                    remoteOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
+                }
+            }
             SideEffect {
                 Components.setBridgedApps(installedBridgedApps)
                 Components.activeBridgedAppTabId = activeBridgedAppTabId
@@ -2501,6 +2508,7 @@ class BrowserActivity : ComponentActivity() {
                             // can return there instead of always the last main tab.
                             if (target == Screen.Remote && currentScreen != Screen.Remote) {
                                 remoteOrigin = currentScreen
+                                remoteOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
                             }
                             if (target == Screen.Dashboard && currentScreen != Screen.Dashboard) {
                                 dashboardOrigin = currentScreen
@@ -2522,7 +2530,23 @@ class BrowserActivity : ComponentActivity() {
                         connectionInitialTab = connectionInitialTab,
                         lastMainScreen = lastMainScreen,
                         onLastMainScreenChange = { lastMainScreen = it },
-                        remoteReturnScreen = remoteOrigin ?: lastMainScreen,
+                        onRemoteBack = {
+                            val returnTarget = resolveRemoteReturnTarget(
+                                origin = remoteOrigin,
+                                bridgedAppTabId = remoteOriginBridgedAppTabId,
+                                apps = bridgedAppStore.apps.value,
+                                tabUrls = store.state.tabs.associate { it.id to it.content.url },
+                            )
+                            activeBridgedAppTabId = returnTarget.bridgedAppTabId
+                            Components.activeBridgedAppTabId = returnTarget.bridgedAppTabId
+                            if (returnTarget.bridgedAppTabId != null) {
+                                tabManager.selectTab(returnTarget.bridgedAppTabId, store)
+                            } else if (returnTarget.screen == Screen.Browser &&
+                                store.state.selectedTabId in bridgedAppTabIds) {
+                                selectNormalBrowserTab()
+                            }
+                            currentScreen = returnTarget.screen
+                        },
                         dashboardReturnScreen = dashboardOrigin ?: lastMainScreen,
                         innerPadding = innerPadding,
                         session = session,

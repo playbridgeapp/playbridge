@@ -1974,6 +1974,12 @@ object VideoDetector {
         detectorPageTracker.forget(tabId)
     }
 
+    /** Clear rows when detection is disabled, retaining ordering for late document messages. */
+    internal fun clearDetections(tabId: String) {
+        clearTabMedia(tabId)
+        notifyVideoUpdated()
+    }
+
     private fun clearTabMedia(tabId: String) {
         if (tabVideos.containsKey(tabId) || tabSeenUrls.containsKey(tabId)) {
             debugLog("Clearing videos for tab $tabId (had ${tabVideos[tabId]?.size ?: 0})")

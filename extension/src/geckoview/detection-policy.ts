@@ -30,6 +30,13 @@ export class TabDetectionPolicy {
 
   allowsRequest(tabId: number, requestType?: string, url?: string): boolean {
     if (tabId < 0 || !this.browserEnabled) return false;
+    // A newly recognized origin takes precedence over a tab's previous document
+    // policy, including main-frame requests that race the next content handshake.
+    if (requestType === "main_frame" && url) {
+      try {
+        if (this.appOrigins.has(new URL(url).origin)) return false;
+      } catch { return false; }
+    }
     if (this.tabs.has(tabId)) return this.allows(tabId);
     // First main-frame responses precede content injection. Installed app origins
     // remain excluded until native session identity is known; subframes/resources

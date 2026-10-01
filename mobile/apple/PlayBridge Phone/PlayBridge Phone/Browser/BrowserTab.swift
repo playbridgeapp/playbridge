@@ -72,6 +72,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         return view
     }
     let detector = VideoDetector()
+    private(set) var detectionEnabled = true
+    private var detectionNavigationID = UUID()
     let networkLog = BrowserNetworkLog()
     @Published private(set) var networkCaptureEnabled = false
 
@@ -276,7 +278,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private func installUserScripts() {
         let cc = configuration.userContentController
         cc.removeAllUserScripts()
-        cc.addUserScript(WKUserScript(source: DetectionScript.source,
+        cc.addUserScript(WKUserScript(source: "window.__playbridgeDetectionEnabled = \(detectionEnabled);\n" + DetectionScript.source,
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
         cc.addUserScript(WKUserScript(source: PageCastScript.source,
@@ -427,6 +429,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         else { cancelPrompt(); webView.reload() }
     }
     func stop() {
+        detectionNavigationID = UUID()
         playbackExpiryTask?.cancel()
         playbackExpiryTask = nil
         loadedWebView?.stopLoading()
@@ -502,6 +505,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        detectionNavigationID = UUID()
         onPageCastInvalidated?()
         navigationFailure = nil
         popupBlocked = false
@@ -615,7 +619,26 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             })
             return
         }
-        if action.targetFrame?.isMainFrame == true { requestedAddress = url.absoluteString }
+        if action.targetFrame?.isMainFrame == true {
+            requestedAddress = url.absoluteString
+            detectionNavigationID = UUID()
+            let navigationID = detectionNavigationID
+            Task { @MainActor [weak self, weak webView] in
+                let enabled = !(await BridgedAppDeclarationCache.shared.isDeclared(url))
+                guard let self, let webView, self.loadedWebView === webView,
+                      self.detectionNavigationID == navigationID else {
+                    decisionHandler(.cancel, preferences)
+                    return
+                }
+                if self.detectionEnabled != enabled {
+                    self.detectionEnabled = enabled
+                    self.installUserScripts()
+                }
+                // Apply before navigation, including Back/Forward cache restores.
+                decisionHandler(.allow, preferences)
+            }
+            return
+        }
         decisionHandler(.allow, preferences)
     }
     func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
@@ -631,7 +654,27 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             networkLog.record(url: url.absoluteString, page: urlString, kind: "navigation response", state: "Response", status: (response.response as? HTTPURLResponse)?.statusCode)
         }
         let attachment = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
-        guard attachment || !response.canShowMIMEType else { decisionHandler(.allow); return }
+        if !attachment && response.canShowMIMEType {
+            guard response.isForMainFrame, let url = response.response.url else {
+                decisionHandler(.allow)
+                return
+            }
+            let navigationID = detectionNavigationID
+            Task { @MainActor [weak self, weak webView] in
+                let enabled = !(await BridgedAppDeclarationCache.shared.isDeclared(url))
+                guard let self, let webView, self.loadedWebView === webView,
+                      self.detectionNavigationID == navigationID else {
+                    decisionHandler(.cancel)
+                    return
+                }
+                if self.detectionEnabled != enabled {
+                    self.detectionEnabled = enabled
+                    self.installUserScripts()
+                }
+                decisionHandler(.allow)
+            }
+            return
+        }
         present(BrowserPrompt(title: "Download file?", message: "This file can be saved to Downloads and exported to Files.", acceptLabel: "Download") { accepted, _ in
             decisionHandler(accepted ? .download : .cancel)
         })

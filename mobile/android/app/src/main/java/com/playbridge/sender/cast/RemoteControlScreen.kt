@@ -181,7 +181,9 @@ fun RemoteControlScreen(
     onAddSubtitleResource: (playbridge.SubtitleResource) -> Boolean = { false },
     detectedSubtitles: List<DetectedVideo> = emptyList(),
     tvName: String? = null,
-    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected
+    connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
+    linkedPageCastControllerName: String? = null,
+    onUnlinkWebsite: () -> Unit = {},
 ) {
     var showSettingsSheet by remember { mutableStateOf(false) }
     var showAddSubtitle by remember { mutableStateOf(false) }
@@ -249,6 +251,37 @@ fun RemoteControlScreen(
                 protocolLabel = externalProtocolLabel,
             )
             Spacer(modifier = Modifier.height(12.dp))
+
+            linkedPageCastControllerName?.let { controllerName ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 12.dp, end = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Link,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = "Controlled by $controllerName",
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        TextButton(onClick = onUnlinkWebsite) { Text("Unlink") }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             // Segmented Mode Selector for immediate UX clarity
             RemoteModeSegmentedRow(

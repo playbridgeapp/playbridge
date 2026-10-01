@@ -395,14 +395,21 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
         }
         guard let body = message.body as? [String: Any], let type = body["type"] as? String else { return }
         switch type {
+        case "detectionPolicyRequest":
+            guard let tab, message.webView === tab.loadedWebView else { return }
+            // Each frame uses its owning tab's policy, including cross-origin frames and BFCache restores.
+            tab.webView.evaluateJavaScript(
+                "window.__playbridgeSetDetectionEnabled?.(\(tab.detectionEnabled)); void 0;",
+                in: message.frameInfo, in: .page, completionHandler: nil)
         case "pageCastRequest":
             guard let tab, message.webView === tab.loadedWebView, message.frameInfo.isMainFrame,
                   let frameOrigin = BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)),
                   frameOrigin == tab.pageCastOrigin else { return }
             tab.onWebsiteCast?(body)
         case "mediaLifecycle":
-            if message.frameInfo.isMainFrame { tab?.detector.beginMediaLifecycle() }
+            if tab?.detectionEnabled == true, message.frameInfo.isMainFrame { tab?.detector.beginMediaLifecycle() }
         case "video":
+            guard tab?.detectionEnabled == true else { return }
             tab?.detector.ingest(body)
         case "cast":
             guard message.webView === tab?.loadedWebView, message.frameInfo.isMainFrame,

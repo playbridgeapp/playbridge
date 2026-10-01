@@ -140,9 +140,36 @@ object Components {
             field = value
             publishDetectionPolicy()
         }
-    private var installedBridgedAppOrigins: Set<String> = emptySet()
+    @Volatile private var installedBridgedAppOrigins: Set<String> = emptySet()
     private val detectionPolicyPorts = mutableMapOf<GeckoWebExtension.Port, String>()
-    private var detectionPolicyRevision = 0L
+    private val detectionPolicyRevision = java.util.concurrent.atomic.AtomicLong()
+    private val detectionTabOrigins = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val declaredBridgedApps by lazy {
+        BridgedAppDeclarationCache(
+            scope = applicationScope,
+            probe = { BridgedAppStore.discover(it) != null },
+            onChanged = { publishDetectionPolicy() },
+        )
+    }
+
+    private fun detectionAllowed(tabId: String?): Boolean {
+        if (!detectVideosEnabled || tabId == null) return false
+        return !isBridgedDetectionTab(tabId)
+    }
+
+    private fun isBridgedDetectionTab(tabId: String): Boolean {
+        if (tabId in bridgedAppOriginsByTabId) return true
+        val origin = detectionTabOrigins[tabId] ?: store.state.tabs.firstOrNull { it.id == tabId }
+            ?.content?.url?.let(BridgedAppStore::originFor)
+        return origin in installedBridgedAppOrigins || declaredBridgedApps.isDeclared(origin)
+    }
+
+    private fun updateDetectionOrigin(tabId: String, url: String) {
+        val origin = BridgedAppStore.originFor(url)
+        val previous = if (origin == null) detectionTabOrigins.remove(tabId) else detectionTabOrigins.put(tabId, origin)
+        if (origin != null) declaredBridgedApps.refresh(origin)
+        if (previous != origin) publishDetectionPolicy()
+    }
 
     fun setBridgedApps(apps: List<BridgedApp>) {
         val origins = apps.map { it.origin }.toSet()
@@ -155,15 +182,20 @@ object Components {
 
     private fun detectionPolicy(tabId: String? = null): JSONObject = JSONObject().apply {
         put("type", "detection_policy")
-        put("revision", detectionPolicyRevision)
-        put("enabled", detectVideosEnabled && tabId != null && tabId !in bridgedAppOriginsByTabId)
+        put("revision", detectionPolicyRevision.get())
+        put("enabled", detectionAllowed(tabId))
         put("browserEnabled", detectVideosEnabled)
-        put("bridgedAppOrigins", org.json.JSONArray(installedBridgedAppOrigins.toList()))
+        put("bridgedAppOrigins", org.json.JSONArray((installedBridgedAppOrigins + declaredBridgedApps.declaredOrigins()).toList()))
     }
 
     private fun publishDetectionPolicy() {
-        detectionPolicyRevision += 1L
+        detectionPolicyRevision.incrementAndGet()
         Handler(Looper.getMainLooper()).post {
+            detectionPolicyPorts.values.toSet().forEach { tabId ->
+                if (isBridgedDetectionTab(tabId) && VideoDetector.getVideoCountForTab(tabId) > 0) {
+                    VideoDetector.clearDetections(tabId)
+                }
+            }
             detectionPolicyPorts.toMap().forEach { (port, tabId) ->
                 runCatching { port.postMessage(detectionPolicy(tabId)) }
             }
@@ -221,6 +253,9 @@ object Components {
             }
             if (!isSubframeRequest) {
                 val tab = store.state.tabs.firstOrNull { it.engineState.engineSession === engineSession }
+                // Warm the origin cache without changing the current document policy.
+                // A cancelled navigation must leave the displayed app opted out.
+                BridgedAppStore.originFor(uri)?.let(declaredBridgedApps::refresh)
                 val appOrigin = tab?.id?.let(bridgedAppOriginsByTabId::get)
                 if (tab != null && tab.id == activeBridgedAppTabId && appOrigin != null &&
                     BridgedAppStore.isExternalWebNavigation(appOrigin, uri)) {
@@ -766,7 +801,7 @@ object Components {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
                         return
                     }
-                    if (!detectVideosEnabled || kotlinTabId in bridgedAppOriginsByTabId) return
+                    if (!detectionAllowed(kotlinTabId)) return
                     Handler(Looper.getMainLooper()).post {
                         // Find the session for the tab and load error page
                         val sessionToLoad = tabManager.sessions[kotlinTabId]
@@ -927,7 +962,7 @@ object Components {
                     }
                     val version = detectorPageVersion(jsonObject)
                     val transitionType = jsonObject["transitionType"]?.jsonPrimitive?.contentOrNull
-                    if (transitionType == "same_document") {
+                    val acceptedNavigation = if (transitionType == "same_document") {
                         // SPA view change: rows are kept, but the tab's media lifecycle
                         // advances so ranking prefers the view the user navigated to.
                         if (version != null) {
@@ -941,18 +976,26 @@ object Components {
                                 "Detector same-document navigation tab=$kotlinTabId " +
                                     "generation=${version.navigationGeneration} accepted=$accepted",
                             )
-                        }
+                            accepted
+                        } else false
                     } else if (version == null) {
                         VideoDetector.clearTab(kotlinTabId)
                         debugDetectorLog(
                             "Legacy navigation — cleared detected videos for tab $kotlinTabId",
                         )
+                        true
                     } else {
                         val order = VideoDetector.onDetectorNavigation(kotlinTabId, version)
                         debugDetectorLog(
                             "Detector navigation tab=$kotlinTabId " +
                                 "generation=${version.navigationGeneration} order=$order",
                         )
+                        order != DetectorMessageOrder.STALE
+                    }
+                    if (acceptedNavigation) {
+                        jsonObject["url"]?.jsonPrimitive?.contentOrNull?.let {
+                            updateDetectionOrigin(kotlinTabId, it)
+                        }
                     }
                 } else if (type == "video_detected" && !detectVideosEnabled) {
                     debugDetectorLog("Video detection disabled — ignoring detection message")
@@ -962,7 +1005,7 @@ object Components {
                         retryUnresolvedDetectorMessage(jsonString, resolutionAttempt, type)
                         return
                     }
-                    if (type == "video_detected" && kotlinTabId in bridgedAppOriginsByTabId) return
+                    if (type == "video_detected" && !detectionAllowed(kotlinTabId)) return
                     val version = detectorPageVersion(jsonObject)
                     if (
                         type == "video_detected" &&

@@ -70,7 +70,7 @@ function script(name: string): string {
   return readFileSync(new URL(`./geckoview-runtime/${name}.js`, import.meta.url), "utf8");
 }
 
-test("unknown tabs and app subframes never inspect responses; a browser tab at the same origin still can", () => {
+test("unknown tabs and declared main frames never inspect responses; ordinary origins still can", () => {
   const state = new TabDetectionPolicy();
   assert.equal(state.allowsRequest(1, "main_frame", "https://normal.example"), false);
   state.apply(policy(false));
@@ -81,7 +81,7 @@ test("unknown tabs and app subframes never inspect responses; a browser tab at t
   state.apply(policy(true), 2);
   assert.equal(state.allowsRequest(1, "xmlhttprequest", "https://normal.example/config.json"), false);
   assert.equal(state.allowsRequest(1, "sub_frame", "https://normal.example"), false);
-  assert.equal(state.allowsRequest(2, "main_frame", "https://app.example"), true);
+  assert.equal(state.allowsRequest(2, "main_frame", "https://app.example"), false);
   assert.equal(state.allowsRequest(-1, "main_frame", "https://normal.example"), false);
   state.apply(policy(false, 2, false));
   assert.equal(state.allows(2), false);
@@ -118,12 +118,13 @@ test("app response hooks and DOM messages stay idle while explicit casting still
     payload: { items: [{ id: "episode", url: "https://cdn.example/movie.mp4" }] } }, sender);
   assert.equal(linked.ok, true);
   assert.equal(h.nativeMessages.some(message => message.type === "linked_open"), true);
-  // A second, normal tab still gets body inspection, even at the app's URL.
-  await runtimeMessage({ action: "detector_policy", policy: policy(true) }, { ...sender, tab: { ...sender.tab, id: 8 } });
+  // A second, ordinary tab still gets body inspection.
+  const normalSender = { ...sender, tab: { id: 8, url: "https://normal.example" } };
+  await runtimeMessage({ action: "detector_policy", policy: policy(true) }, normalSender);
   headers({ tabId: 8, requestId: "normal", url: "https://cdn.example/config.json",
     type: "xmlhttprequest", statusCode: 200, responseHeaders: [{ name: "content-type", value: "application/json" }] });
   assert.equal(h.filters.length, 1);
-  await runtimeMessage({ action: "detector_policy", policy: policy(false, 2, false) }, { ...sender, tab: { ...sender.tab, id: 8 } });
+  await runtimeMessage({ action: "detector_policy", policy: policy(false, 2, false) }, normalSender);
   assert.equal(h.filters[0].disconnected, true);
   h.filters[0].onstop();
   assert.equal(h.nativeMessages.some(message => message.type === "video_detected"), false);
@@ -236,4 +237,16 @@ test("app content injects casting without DOM scans, observers, player timers or
   await flush();
   assert.equal(scans, 1);
   assert.equal(observers, 1);
+});
+
+test("a declared origin overrides the previous main document policy", () => {
+  const tabs = new TabDetectionPolicy();
+  tabs.apply(policy(true), 7);
+  assert.equal(tabs.allowsRequest(7, "main_frame", "https://app.example/watch"), false);
+  assert.equal(tabs.allowsRequest(7, "main_frame", "https://ordinary.example/watch"), true);
+  tabs.apply(policy(false, 2), 7);
+  assert.equal(tabs.allowsRequest(7, "sub_frame", "https://ordinary.example/embed"), false);
+  assert.equal(tabs.allowsRequest(7, "xmlhttprequest", "https://cdn.example/stream.m3u8"), false);
+  tabs.apply(policy(true, 3), 7);
+  assert.equal(tabs.allowsRequest(7, "xmlhttprequest", "https://cdn.example/stream.m3u8"), true);
 });

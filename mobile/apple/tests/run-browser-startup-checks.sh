@@ -4,7 +4,7 @@ repo_root="$(cd "$(dirname "$0")/../../.." && pwd)"
 test_dir="$(mktemp -d /tmp/playbridge-browser-checks.XXXXXX)"
 fixture_pid=''
 trap 'if [[ -n "$fixture_pid" ]]; then kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true; fi; rm -rf "$test_dir"' EXIT
-python3 "$repo_root/mobile/apple/tests/browser-fixture.py" "$test_dir/base" &
+python3 "$repo_root/mobile/apple/tests/browser-fixture.py" "$test_dir/base" "${1:-}" &
 fixture_pid=$!
 for attempt in {1..100}; do [[ -s "$test_dir/base" ]] && break; sleep 0.05; done
 export SIMCTL_CHILD_BROWSER_FIXTURE="$(cat "$test_dir/base")"
@@ -16,6 +16,7 @@ if [[ "${1:-}" == "--playback-state" ]]; then export SIMCTL_CHILD_TAB_PLAYBACK_S
 if [[ "${1:-}" == "--tab-management" ]]; then export SIMCTL_CHILD_TAB_MANAGEMENT=1; fi
 if [[ "${1:-}" == "--picker-menu-ui" ]]; then export SIMCTL_CHILD_PICKER_MENU_UI=1; fi
 if [[ "${1:-}" == "--picker-live-ui" ]]; then export SIMCTL_CHILD_PICKER_MENU_UI=1; fi
+if [[ "${1:-}" == "--detection-policy" ]]; then export SIMCTL_CHILD_DETECTION_POLICY=1; fi
 simulator="${IOS_TEST_SIMULATOR:-booted}"
 app="$test_dir/BrowserChecks.app"
 mkdir -p "$app"
@@ -39,11 +40,17 @@ source = (Path(sys.argv[1]) / 'mobile/apple/PlayBridge Phone/PlayBridge Phone/Br
 script = source.split('static let elementPickerJS = #"""', 1)[1].split('"""#', 1)[0]
 Path(sys.argv[2]).write_text(script)
 PYTHON
+python3 - "$repo_root" "$app/media-detector.js" <<'PYTHON'
+import sys
+from pathlib import Path
+source = (Path(sys.argv[1]) / 'mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/DetectionScript.swift').read_text()
+Path(sys.argv[2]).write_text(source.split('#"""', 1)[1].split('"""#', 1)[0])
+PYTHON
 cp "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Fonts/Poppins-Regular.ttf" "$app/Poppins-Regular.ttf"
 sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
 source_dir="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser"
 xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.0-simulator" -module-cache-path "$test_dir/cache" \
- "$source_dir/BrowserPlaybackState.swift" "$source_dir/BrowserFavicon.swift" "$source_dir/BrowserStore.swift" "$source_dir/BrowserTab.swift" "$source_dir/BrowserInteraction.swift" "$source_dir/BrowserDownloads.swift" "$source_dir/WebViewContainer.swift" \
+ "$source_dir/BridgedAppDeclaration.swift" "$source_dir/BrowserPlaybackState.swift" "$source_dir/BrowserFavicon.swift" "$source_dir/BrowserStore.swift" "$source_dir/BrowserTab.swift" "$source_dir/BrowserInteraction.swift" "$source_dir/BrowserDownloads.swift" "$source_dir/WebViewContainer.swift" \
  "$source_dir/PageCastSource.swift" "$source_dir/PageCastScript.swift" "$source_dir/PageCastRequest.swift" "$source_dir/PageCastPermissions.swift" "$source_dir/PageCastCoordinator.swift" "$source_dir/../Models/Models.swift" \
  "$source_dir/../UI/TabsScreen.swift" "$source_dir/../UI/Theme.swift" "$source_dir/../UI/MenuSheet.swift" "$source_dir/../UI/BrowserNetworkLogView.swift" "$source_dir/BrowserDomainRules.swift" "$source_dir/BrowserNetworkLog.swift" "$source_dir/NavigationAdRules.swift" "$source_dir/../Data/BrowserDataStore.swift" \
  "$repo_root/mobile/apple/tests/BrowserPageCastIntegration.swift" "$repo_root/mobile/apple/tests/BrowserStartupTests.swift" -o "$app/BrowserChecks"

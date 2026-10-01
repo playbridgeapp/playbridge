@@ -66,7 +66,11 @@ final class VideoDetector: ObservableObject {
     func ingest(_ body: [String: Any]) {}
     func beginMediaLifecycle() {}
 }
-enum DetectionScript { static let source = "" }
+enum DetectionScript {
+    static let source = ProcessInfo.processInfo.environment["DETECTION_POLICY"] == "1"
+        ? try! String(contentsOf: Bundle.main.url(forResource: "media-detector", withExtension: "js")!, encoding: .utf8)
+        : ""
+}
 enum ContentBlocker {
     static var isEnabled = true
     static var navigationRules = NavigationAdRules()
@@ -290,6 +294,45 @@ enum ContentBlocker {
         print("CHECK: desktop toggle changes request and JavaScript identity plus rendered viewport in both directions")
     }
 
+    @MainActor func verifyDetectionPolicy(base: String) async throws {
+        let browser = BrowserStore(tabsFileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
+        store = browser
+        browser.browserVisible = true
+        let tab = browser.newTab(loading: base + "/detection")
+        let view = tab.webView
+        view.frame = window!.bounds
+        window!.rootViewController!.view.addSubview(view)
+        defer { view.removeFromSuperview() }
+        try await wait("declared app") { view.title == "Detection" && !view.isLoading }
+        let app = try await view.evaluateJavaScript("window.detectorAtStart") as? Bool
+        try check(app == false && !tab.detectionEnabled, "Declared app started the detector before page scripts")
+        let cast = try await view.evaluateJavaScript("typeof window.playbridge.cast === 'function' && typeof window.playbridge.linkCast === 'function'") as? Bool
+        try check(cast == true, "Declaration disabled explicit casting")
+        // The embedded frame has no declaration of its own; the owning tab still opts it out.
+        for _ in 0..<100 {
+            if (try await view.evaluateJavaScript("window.frameDetectorState === false") as? Bool) == true { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let frame = try await view.evaluateJavaScript("window.frameDetectorState") as? Bool
+        try check(frame == false, "Embedded frame did not inherit the declared app policy")
+        let ordinary = base.replacingOccurrences(of: "127.0.0.1", with: "localhost")
+        tab.load(ordinary + "/detection")
+        try await wait("ordinary website") { view.url?.host == "localhost" && !view.isLoading }
+        let normal = try await view.evaluateJavaScript("window.detectorAtStart") as? Bool
+        try check(normal == true && tab.detectionEnabled, "Detection failed to resume on an ordinary website")
+        view.goBack()
+        try await wait("back to declared app") { view.url?.host == "127.0.0.1" && !view.isLoading }
+        let restored = try await view.evaluateJavaScript("window.__playbridgeDetectionEnabled") as? Bool
+        try check(restored == false && !tab.detectionEnabled, "Back navigation restored the wrong detector policy")
+        tab.load(ordinary + "/redirect-detection")
+        try await wait("redirect to declared origin") {
+            view.url?.query == "redirected=1" && view.url?.host == "127.0.0.1" && !view.isLoading
+        }
+        let redirected = try await view.evaluateJavaScript("window.detectorAtStart") as? Bool
+        try check(redirected == false && !tab.detectionEnabled, "Redirect enabled detection in a declared app")
+        print("CHECK: declared origin, embedded frames, casting, ordinary navigation, Back and redirects")
+    }
+
     @MainActor func run() async throws {
         let linkInteraction = BrowserPopupInteraction()
         linkInteraction.recordContextLink("https://example.test/logo-target", now: 100)
@@ -315,6 +358,10 @@ enum ContentBlocker {
         try await verifyFavicons()
         try await verifyJumpDuringScrolling()
         let base = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        if ProcessInfo.processInfo.environment["DETECTION_POLICY"] == "1" {
+            try await verifyDetectionPolicy(base: base)
+            return
+        }
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("startup-tabs.json")
         let urls = (0..<20).map { "\(base)/tab/\($0)" }
         try JSONSerialization.data(withJSONObject: ["urls": urls, "activeIndex": 7]).write(to: file)

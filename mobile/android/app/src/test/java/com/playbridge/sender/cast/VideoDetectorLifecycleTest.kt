@@ -119,4 +119,17 @@ class VideoDetectorLifecycleTest {
         )
         assertEquals(0, VideoDetector.lifecycleIndexForTab(tabId))
     }
+    @Test
+    fun disablingDetectionRetainsDocumentOrderingForDelayedNavigation() {
+        val tabId = "disabled-detection-${System.nanoTime()}"
+        val current = DetectorPageVersion(detectorEpoch = 7L, navigationGeneration = 3L)
+        assertEquals(DetectorMessageOrder.ADVANCE, VideoDetector.onDetectorNavigation(tabId, current))
+        VideoDetector.clearDetections(tabId)
+        assertEquals(
+            DetectorMessageOrder.STALE,
+            VideoDetector.onDetectorNavigation(tabId, current.copy(navigationGeneration = 1L)),
+        )
+        assertEquals(DetectorMessageOrder.CURRENT, VideoDetector.onDetectorNavigation(tabId, current))
+    }
+
 }

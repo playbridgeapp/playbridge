@@ -15,9 +15,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode() if self.command == 'POST' else ''
-        if path in ('/redirect-ad', '/redirect-good'):
+        if path in ('/redirect-ad', '/redirect-good', '/redirect-detection'):
             self.send_response(302)
-            self.send_header('Location', '/ad' if path == '/redirect-ad' else '/child')
+            location = ('http://127.0.0.1:' + str(self.server.server_port) + '/detection?redirected=1') if path == '/redirect-detection' else ('/ad' if path == '/redirect-ad' else '/child')
+            self.send_header('Location', location)
             self.send_header('Content-Length', '0')
             self.end_headers()
             return
@@ -26,7 +27,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             requests.append({'path': path, 'method': self.command, 'body': body,
                              'cookie': self.headers.get('Cookie', ''), 'userAgent': self.headers.get('User-Agent', '')})
-            if path == '/playback.wav':
+            if path == '/.well-known/playbridge-app.json' and self.headers.get('Host', '').startswith('127.0.0.1:') and '--detection-policy' in sys.argv:
+                data = json.dumps({'protocol': 'playbridge-app-v1', 'name': 'Fixture', 'start_url': '/'}).encode()
+            elif path == '/detection':
+                data = ("<html><title>Detection</title><script>window.detectorAtStart=window.__playbridgeDetectionEnabled;addEventListener('message',e=>{window.frameDetectorState=e.data.detector;});</script><iframe src='http://localhost:" + str(self.server.server_port) + "/detection-frame'></iframe></html>").encode()
+            elif path == '/detection-frame':
+                data = b"<html><script>parent.postMessage({detector:window.__playbridgeDetectionEnabled},'*');</script></html>"
+            elif path == '/playback.wav':
                 output = io.BytesIO()
                 with wave.open(output, 'wb') as audio:
                     audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(8000)
