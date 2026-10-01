@@ -5,7 +5,7 @@ import plistlib
 import sys
 
 root = pathlib.Path(sys.argv[1])
-source = str(pathlib.Path(__file__).with_name('BrowserPopupUITests.swift').resolve())
+source = str(pathlib.Path(sys.argv[2]).resolve()) if len(sys.argv) > 2 else str(pathlib.Path(__file__).with_name('BrowserPopupUITests.swift').resolve())
 objects = {}
 def add(key, isa, **fields):
     objects[key] = dict(isa=isa, **fields)

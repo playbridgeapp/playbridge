@@ -1,11 +1,23 @@
 import Foundation
 import WebKit
+import Combine
 
 /// Owns the set of browser tabs and the active selection. Tabs share a `WKProcessPool` +
 /// default data store so cookies/logins persist across tabs (like a normal browser).
 final class BrowserStore: ObservableObject {
     @Published private(set) var tabs: [BrowserTab] = []
     @Published private(set) var activeID: UUID?
+    let bridgedApps: BridgedAppStore
+    private var appSubscription: AnyCancellable?
+    private var lastBrowserTabID: UUID?
+    var onBridgedAppExternalNavigation: (() -> Void)?
+
+    var browserTabs: [BrowserTab] { tabs.filter { !$0.isBridgedApp } }
+    var activeBridgedApp: BridgedApp? {
+        guard let tab = activeTab, let origin = tab.bridgedAppOrigin,
+              let url = URL(string: tab.urlString), BridgedAppDeclaration.origin(of: url) == origin else { return nil }
+        return bridgedApps.apps.first { $0.origin == origin }
+    }
 
     /// Forwarded when any tab's page calls `window.playbridge.cast(...)`.
     var onPageCast: (([String: Any], String) -> Void)?
@@ -38,8 +50,10 @@ final class BrowserStore: ObservableObject {
         return dir.appendingPathComponent("browser_tabs.json")
     }
 
-    init(tabsFileURL: URL? = nil) {
+    init(tabsFileURL: URL? = nil, bridgedApps: BridgedAppStore = BridgedAppStore()) {
         self.tabsFileURL = tabsFileURL ?? Self.defaultTabsFileURL()
+        self.bridgedApps = bridgedApps
+        appSubscription = bridgedApps.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }
         restoreTabs()
         Task { @MainActor in
             // Compile cached rules so blocking is active immediately (curated fallback).
@@ -79,7 +93,7 @@ final class BrowserStore: ObservableObject {
     }
 
     @discardableResult
-    private func makeTab(url: String?, activate: Bool = true, after openerID: UUID? = nil, windowConfiguration: WKWebViewConfiguration? = nil) -> BrowserTab {
+    private func makeTab(url: String?, activate: Bool = true, after openerID: UUID? = nil, windowConfiguration: WKWebViewConfiguration? = nil, bridgedAppOrigin: URL? = nil) -> BrowserTab {
         let handler = TabScriptHandler()
         let configuration = windowConfiguration ?? makeConfiguration()
         // AirPlay is owned by the app's persistent casting player. Page players
@@ -88,7 +102,7 @@ final class BrowserStore: ObservableObject {
         // WebKit may share the opener's content controller. Each tab needs its own
         // message handler without changing the supplied process pool/data store.
         if windowConfiguration != nil { configuration.userContentController = WKUserContentController() }
-        let tab = BrowserTab(configuration: configuration, handler: handler)
+        let tab = BrowserTab(configuration: configuration, handler: handler, bridgedAppOrigin: bridgedAppOrigin)
         handler.tab = tab
         tab.isActive = { [weak self, weak tab] in
             guard let self, let tab else { return false }
@@ -113,6 +127,14 @@ final class BrowserStore: ObservableObject {
             guard let self, let tab else { return }
             self.pendingInitialLoads.removeValue(forKey: tab.id)
             self.applyRules(to: tab)
+        }
+        tab.onBridgedAppExternalNavigation = { [weak self, weak tab] request in
+            guard let self, let tab, self.tabs.contains(where: { $0.id == tab.id }),
+                  request.url != nil else { return }
+            // Preserve the app's current document/history and the original request (including POST).
+            let child = self.makeTab(url: nil, activate: self.browserVisible && self.activeID == tab.id, after: tab.id)
+            child.load(request)
+            if self.activeID == child.id { self.onBridgedAppExternalNavigation?() }
         }
         tab.onCreateWindow = { [weak self, weak tab] configuration, request in
             guard let self, let tab else { return nil }
@@ -171,7 +193,10 @@ final class BrowserStore: ObservableObject {
         } else {
             tabs.append(tab)
         }
-        if activate { activeTab?.cancelPrompt(); activeID = tab.id }
+        if activate {
+            activeTab?.cancelPrompt(); activeID = tab.id
+            if !tab.isBridgedApp { lastBrowserTabID = tab.id }
+        }
         if let url, !url.isEmpty {
             tab.urlString = url
             tab.title = URL(string: url)?.host ?? url
@@ -201,6 +226,7 @@ final class BrowserStore: ObservableObject {
         var desktop: Bool
         var userAgentPreset: String? = nil
         var customUserAgent: String? = nil
+        var bridgedAppOrigin: URL? = nil
     }
     private struct SavedTabs: Codable { var tabs: [SavedTab]; var activeIndex: Int }
     private struct LegacyTabs: Codable { var urls: [String]; var activeIndex: Int }
@@ -210,8 +236,15 @@ final class BrowserStore: ObservableObject {
         let saved = loadSavedTabs()
         if saved.tabs.isEmpty { makeTab(url: nil) }
         else {
-            for item in saved.tabs {
-                let tab = makeTab(url: item.isHome ? nil : item.url, activate: false)
+            var restoredActive: BrowserTab?
+            for (index, item) in saved.tabs.enumerated() {
+                if let origin = item.bridgedAppOrigin {
+                    guard bridgedApps.apps.contains(where: { $0.origin == origin }),
+                          let url = URL(string: item.url), BridgedAppDeclaration.origin(of: url) == origin,
+                          !tabs.contains(where: { $0.bridgedAppOrigin == origin }) else { continue }
+                }
+                let tab = makeTab(url: item.isHome ? nil : item.url, activate: false, bridgedAppOrigin: item.bridgedAppOrigin)
+                if index == saved.activeIndex { restoredActive = tab }
                 tab.title = item.title.isEmpty ? (URL(string: item.url)?.host ?? "New Tab") : item.title
                 tab.isDesktopMode = item.desktop
                 tab.restoreUserAgent(
@@ -219,8 +252,10 @@ final class BrowserStore: ObservableObject {
                     custom: item.customUserAgent
                 )
             }
-            activeID = tabs[tabs.indices.contains(saved.activeIndex) ? saved.activeIndex : 0].id
+            if browserTabs.isEmpty { makeTab(url: nil, activate: false) }
+            activeID = (restoredActive?.isBridgedApp == false ? restoredActive : browserTabs.first)?.id
         }
+        lastBrowserTabID = activeID
         isRestoring = false
         saveTabs()
     }
@@ -229,7 +264,8 @@ final class BrowserStore: ObservableObject {
         guard !isRestoring else { return }
         let items = tabs.map {
             SavedTab(url: $0.urlString, title: $0.title, isHome: $0.isHome, desktop: $0.isDesktopMode,
-                     userAgentPreset: $0.userAgentPreset.rawValue, customUserAgent: $0.customUserAgent)
+                     userAgentPreset: $0.userAgentPreset.rawValue, customUserAgent: $0.customUserAgent,
+                     bridgedAppOrigin: $0.bridgedAppOrigin)
         }
         let payload = SavedTabs(tabs: items, activeIndex: tabs.firstIndex { $0.id == activeID } ?? 0)
         if let data = try? JSONEncoder().encode(payload) { try? data.write(to: tabsFileURL, options: .atomic) }
@@ -316,6 +352,7 @@ final class BrowserStore: ObservableObject {
         guard tabs.contains(where: { $0.id == id }) else { return }
         if activeID != id { activeTab?.cancelPrompt() }
         activeID = id
+        if activeTab?.isBridgedApp == false { lastBrowserTabID = id }
         // A deliberate user selection outranks the rules-ready deferral — load now.
         if let url = pendingInitialLoads.removeValue(forKey: id),
            let tab = tabs.first(where: { $0.id == id }) {
@@ -324,9 +361,41 @@ final class BrowserStore: ObservableObject {
         saveTabs()
     }
 
+    func showBrowser() {
+        if let id = lastBrowserTabID, browserTabs.contains(where: { $0.id == id }) { select(id) }
+        else if let tab = browserTabs.first { select(tab.id) }
+        else { newTab() }
+    }
+
+    @discardableResult
+    func openBridgedApp(_ app: BridgedApp) -> BrowserTab? {
+        guard bridgedApps.apps.contains(where: { $0.origin == app.origin }) else { return nil }
+        if let tab = tabs.first(where: { $0.bridgedAppOrigin == app.origin &&
+            URL(string: $0.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == app.origin }) {
+            select(tab.id)
+            return tab
+        }
+        let stale = Set(tabs.filter { $0.bridgedAppOrigin == app.origin }.map(\.id))
+        closeTabs(stale)
+        return makeTab(url: app.startURL.absoluteString, bridgedAppOrigin: app.origin)
+    }
+
+    func removeBridgedApp(_ app: BridgedApp) {
+        bridgedApps.remove(app.origin)
+        closeTabs(Set(tabs.filter { $0.bridgedAppOrigin == app.origin }.map(\.id)))
+    }
+
+    func restoreBridgedApp(_ id: UUID) -> Bool {
+        guard let tab = tabs.first(where: { $0.id == id }), let origin = tab.bridgedAppOrigin,
+              bridgedApps.apps.contains(where: { $0.origin == origin }),
+              URL(string: tab.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == origin else { return false }
+        select(id)
+        return true
+    }
+
     @discardableResult
     func duplicateTab(_ id: UUID) -> BrowserTab? {
-        guard let source = tabs.first(where: { $0.id == id }) else { return nil }
+        guard let source = browserTabs.first(where: { $0.id == id }) else { return nil }
         let duplicate = makeTab(url: source.isHome ? nil : source.urlString, activate: false, after: id)
         duplicate.title = source.title
         duplicate.isDesktopMode = source.isDesktopMode
@@ -336,7 +405,7 @@ final class BrowserStore: ObservableObject {
     }
 
     func bookmarkTabs(_ ids: Set<UUID>) {
-        for tab in tabs where ids.contains(tab.id) && !tab.isHome && !tab.urlString.isEmpty {
+        for tab in browserTabs where ids.contains(tab.id) && !tab.isHome && !tab.urlString.isEmpty {
             data.addBookmark(url: tab.urlString, title: tab.title)
         }
     }
@@ -348,7 +417,8 @@ final class BrowserStore: ObservableObject {
         guard !closing.isEmpty else { return }
         let oldActiveIndex = tabs.firstIndex { $0.id == activeID } ?? 0
         let survivors = tabs.filter { !ids.contains($0.id) }
-        let next = tabs.dropFirst(oldActiveIndex).first { !ids.contains($0.id) } ?? survivors.last
+        let next = tabs.dropFirst(oldActiveIndex).first { !ids.contains($0.id) && !$0.isBridgedApp }
+            ?? survivors.last { !$0.isBridgedApp }
         for tab in closing {
             onPageCastInvalidated?(tab)
             pendingInitialLoads.removeValue(forKey: tab.id)
@@ -358,7 +428,7 @@ final class BrowserStore: ObservableObject {
             tab.stop()
         }
         tabs = survivors
-        if tabs.isEmpty { makeTab(url: nil) }
+        if browserTabs.isEmpty { makeTab(url: nil) }
         else if let activeID, ids.contains(activeID), let next { select(next.id) }
         saveTabs()
     }
@@ -381,6 +451,11 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         if !Thread.isMainThread {
             DispatchQueue.main.async { [weak self] in self?.userContentController(controller, didReceive: message) }
+            return
+        }
+        if message.name == "moviFullscreen" {
+            guard message.webView === tab?.loadedWebView, message.frameInfo.isMainFrame else { return }
+            tab?.recordMoviFullscreen(message.body)
             return
         }
         if message.name == "playbackState" {

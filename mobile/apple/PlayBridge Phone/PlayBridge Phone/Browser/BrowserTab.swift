@@ -55,6 +55,21 @@ enum BrowserUserAgentPreset: String, CaseIterable, Identifiable {
 /// messages to its `VideoDetector`. Rough analogue of an entry in the Android `TabManager`.
 final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDelegate, WKUIDelegate, PageCastSource {
     let id = UUID()
+    let bridgedAppOrigin: URL?
+    var onBridgedAppExternalNavigation: ((URLRequest) -> Void)?
+
+    var isBridgedApp: Bool { bridgedAppOrigin != nil }
+
+    private func redirectBridgedAppNavigation(_ request: URLRequest) -> Bool {
+        guard let origin = bridgedAppOrigin, let url = request.url,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+              BridgedAppDeclaration.origin(of: url) != origin else { return false }
+        if let current = loadedWebView?.backForwardList.currentItem?.url ?? committedPageURL {
+            urlString = current.absoluteString
+        }
+        onBridgedAppExternalNavigation?(request)
+        return true
+    }
 
     private(set) var loadedWebView: WKWebView?
     let configuration: WKWebViewConfiguration
@@ -67,6 +82,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         view.uiDelegate = self
         view.allowsBackForwardNavigationGestures = true
         view.isFindInteractionEnabled = true
+        if isBridgedApp {
+            // The app surface extends behind the island/home indicator. Leave keyboard
+            // avoidance to SwiftUI, without WebKit adding another safe-area inset.
+            view.scrollView.contentInsetAdjustmentBehavior = .never
+        }
         view.customUserAgent = effectiveUserAgent
         observe()
         return view
@@ -90,8 +110,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     @Published var urlString: String = ""
     @Published var title: String = "New Tab"
     @Published private(set) var isMediaPlaying = false
+    @Published private(set) var isMoviFullscreen = false
     private var playbackState = BrowserPlaybackState()
     private var playbackExpiryTask: Task<Void, Never>?
+
+    func recordMoviFullscreen(_ body: Any) {
+        guard isBridgedApp, let body = body as? [String: Any],
+              let fullscreen = body["fullscreen"] as? Bool else { return }
+        if isMoviFullscreen != fullscreen { isMoviFullscreen = fullscreen }
+    }
 
     func recordPlaybackState(_ body: Any) {
         guard let body = body as? [String: Any], let frame = body["frame"] as? String,
@@ -286,6 +313,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                                       forMainFrameOnly: true))
         cc.addUserScript(WKUserScript(source: BrowserPlaybackScript.source,
             injectionTime: .atDocumentStart, forMainFrameOnly: false, in: BrowserPlaybackScript.world))
+        if isBridgedApp {
+            cc.addUserScript(WKUserScript(source: BrowserMoviFullscreenScript.source,
+                injectionTime: .atDocumentStart, forMainFrameOnly: true, in: BrowserMoviFullscreenScript.world))
+        }
         if networkCaptureEnabled {
             cc.addUserScript(WKUserScript(source: BrowserNetworkScript.source,
                 injectionTime: .atDocumentStart, forMainFrameOnly: false))
@@ -299,13 +330,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         }
     }
 
-    init(configuration: WKWebViewConfiguration, handler: WKScriptMessageHandler) {
+    init(configuration: WKWebViewConfiguration, handler: WKScriptMessageHandler, bridgedAppOrigin: URL? = nil) {
+        self.bridgedAppOrigin = bridgedAppOrigin
+        detectionEnabled = bridgedAppOrigin == nil
         // Each tab installs the detection script + message handler into its own content controller,
         // so detections are attributed to this tab.
         let cc = configuration.userContentController
         cc.add(handler, name: "playbridge")
         cc.add(handler, name: "networkLog")
         cc.add(handler, contentWorld: BrowserPlaybackScript.world, name: "playbackState")
+        if bridgedAppOrigin != nil {
+            cc.add(handler, contentWorld: BrowserMoviFullscreenScript.world, name: "moviFullscreen")
+        }
 
         self.configuration = configuration
         super.init()
@@ -354,15 +390,22 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func load(_ input: String) {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        let target = BrowserTab.resolveInput(trimmed)
+        guard let url = URL(string: target) else { return }
+        load(URLRequest(url: url))
+    }
+
+    func load(_ request: URLRequest) {
+        guard let url = request.url else { return }
         cancelPrompt()
         stopElementPicker()
         navigationFailure = nil
         isHome = false
-        let target = BrowserTab.resolveInput(trimmed)
+        let target = url.absoluteString
         urlString = target
         requestedAddress = target
         onBeforeLoad?()
-        if let url = URL(string: target) { webView.load(URLRequest(url: url)) }
+        webView.load(request)
     }
 
     /// Present the system Find-in-page bar for the current page.
@@ -520,6 +563,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         playbackExpiryTask?.cancel()
         playbackExpiryTask = nil
         isMediaPlaying = false
+        isMoviFullscreen = false
         if let url = webView.url, url.scheme != "about" {
             hasCommittedPage = true
             committedPageURL = url
@@ -568,6 +612,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     }
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         onPageCastInvalidated?()
+        isMoviFullscreen = false
         isPickingElement = false
         pickerSelector = nil
         pickerHasSource = false
@@ -619,17 +664,24 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             })
             return
         }
+        if action.targetFrame?.isMainFrame == true, redirectBridgedAppNavigation(action.request) {
+            decisionHandler(.cancel, preferences)
+            return
+        }
         if action.targetFrame?.isMainFrame == true {
             requestedAddress = url.absoluteString
             detectionNavigationID = UUID()
             let navigationID = detectionNavigationID
             Task { @MainActor [weak self, weak webView] in
-                let enabled = !(await BridgedAppDeclarationCache.shared.isDeclared(url))
+                let declared: Bool
+                if self?.isBridgedApp == true { declared = true }
+                else { declared = await BridgedAppDeclarationCache.shared.isDeclared(url) }
                 guard let self, let webView, self.loadedWebView === webView,
                       self.detectionNavigationID == navigationID else {
                     decisionHandler(.cancel, preferences)
                     return
                 }
+                let enabled = !self.isBridgedApp && !declared
                 if self.detectionEnabled != enabled {
                     self.detectionEnabled = enabled
                     self.installUserScripts()
@@ -653,6 +705,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         if let url = response.response.url {
             networkLog.record(url: url.absoluteString, page: urlString, kind: "navigation response", state: "Response", status: (response.response as? HTTPURLResponse)?.statusCode)
         }
+        if response.isForMainFrame, let url = response.response.url,
+           redirectBridgedAppNavigation(URLRequest(url: url)) {
+            decisionHandler(.cancel)
+            return
+        }
         let attachment = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition")?.lowercased().hasPrefix("attachment") == true
         if !attachment && response.canShowMIMEType {
             guard response.isForMainFrame, let url = response.response.url else {
@@ -661,12 +718,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             }
             let navigationID = detectionNavigationID
             Task { @MainActor [weak self, weak webView] in
-                let enabled = !(await BridgedAppDeclarationCache.shared.isDeclared(url))
+                let declared: Bool
+                if self?.isBridgedApp == true { declared = true }
+                else { declared = await BridgedAppDeclarationCache.shared.isDeclared(url) }
                 guard let self, let webView, self.loadedWebView === webView,
                       self.detectionNavigationID == navigationID else {
                     decisionHandler(.cancel)
                     return
                 }
+                let enabled = !self.isBridgedApp && !declared
                 if self.detectionEnabled != enabled {
                     self.detectionEnabled = enabled
                     self.installUserScripts()

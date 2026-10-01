@@ -70,3 +70,65 @@ enum BrowserPlaybackScript {
     })();
     """#
 }
+
+/// Canvas-backed Movi players use a CSS fullscreen fallback on iPhone. Observe
+/// their DOM state in an isolated world without enabling the media detector or
+/// depending on page-world custom-element methods.
+enum BrowserMoviFullscreenScript {
+    static let world = WKContentWorld.world(name: "PlayBridgeMoviFullscreen")
+    static let source = #"""
+    (() => {
+      const players = new Map();
+      let lastFullscreen;
+      function report(fullscreen, force = false) {
+        if (!force && fullscreen === lastFullscreen) return;
+        lastFullscreen = fullscreen;
+        try { window.webkit.messageHandlers.moviFullscreen.postMessage({fullscreen}); } catch (_) {}
+      }
+      function sample(force = false) {
+        const native = document.fullscreenElement || document.webkitFullscreenElement;
+        let fullscreen = false;
+        for (const [player, observer] of players) {
+          if (!player.isConnected || player.ownerDocument !== document) {
+            observer.disconnect();
+            player.removeEventListener('fullscreenchange', onFullscreenChange);
+            players.delete(player);
+            continue;
+          }
+          if (player.classList.contains('movi-pseudo-fullscreen') ||
+              (native && (native === player || player.contains(native)))) fullscreen = true;
+        }
+        report(fullscreen, force);
+      }
+      function onFullscreenChange() { sample(); }
+      function track(player) {
+        if (players.has(player)) return;
+        const observer = new MutationObserver(onFullscreenChange);
+        observer.observe(player, {attributes: true, attributeFilter: ['class']});
+        player.addEventListener('fullscreenchange', onFullscreenChange);
+        players.set(player, observer);
+      }
+      function discover(node) {
+        if (node.nodeType !== Node.ELEMENT_NODE) return;
+        if (node.matches('movi-player')) track(node);
+        for (const player of node.querySelectorAll('movi-player')) track(player);
+      }
+      // Only inspect newly inserted subtrees. Catalog image/attribute changes
+      // do not trigger discovery or a whole-document rescan.
+      new MutationObserver(records => {
+        let removed = false;
+        for (const record of records) {
+          for (const node of record.addedNodes) discover(node);
+          if (record.removedNodes.length) removed = true;
+        }
+        if (players.size || removed) sample();
+      }).observe(document, {childList: true, subtree: true});
+      for (const player of document.querySelectorAll('movi-player')) track(player);
+      document.addEventListener('fullscreenchange', onFullscreenChange);
+      document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+      window.addEventListener('pagehide', () => report(false, true));
+      window.addEventListener('pageshow', () => sample(true));
+      sample();
+    })();
+    """#
+}

@@ -21,6 +21,9 @@ final class NavigationViewModel: ObservableObject {
     @Published var lastMainScreen: AppScreen = .browser
     @Published var remoteOrigin: AppScreen? = nil
     @Published var dashboardOrigin: AppScreen? = nil
+    weak var browserStore: BrowserStore?
+    private var remoteAppTabID: UUID?
+    private var dashboardAppTabID: UUID?
 
     var dashboardSource: AppScreen? {
         dashboardOrigin == .remote ? remoteOrigin : dashboardOrigin
@@ -30,9 +33,13 @@ final class NavigationViewModel: ObservableObject {
         // Remember where the Remote or Dashboard was opened from
         if target == .remote && currentScreen != .remote {
             remoteOrigin = currentScreen
+            remoteAppTabID = currentScreen == .browser && browserStore?.activeBridgedApp != nil
+                ? browserStore?.activeID : nil
         }
         if target == .dashboard && currentScreen != .dashboard {
             dashboardOrigin = currentScreen
+            dashboardAppTabID = currentScreen == .browser && browserStore?.activeBridgedApp != nil
+                ? browserStore?.activeID : nil
         }
         if target == .browser || target == .connection {
             lastMainScreen = target
@@ -41,6 +48,28 @@ final class NavigationViewModel: ObservableObject {
         withAnimation(.easeInOut(duration: 0.25)) {
             currentScreen = target
         }
+    }
+
+    func openBrowser() {
+        browserStore?.showBrowser()
+        navigate(to: .browser)
+    }
+
+    func returnFromRemote() {
+        returnTo(remoteOrigin ?? .dashboard, appTabID: remoteAppTabID)
+    }
+
+    func returnFromDashboard() {
+        returnTo(dashboardOrigin ?? .browser, appTabID: dashboardAppTabID)
+    }
+
+    private func returnTo(_ screen: AppScreen, appTabID: UUID?) {
+        if screen == .browser {
+            if let id = appTabID {
+                guard browserStore?.restoreBridgedApp(id) == true else { navigate(to: .dashboard); return }
+            } else { browserStore?.showBrowser() }
+        }
+        navigate(to: screen)
     }
 }
 

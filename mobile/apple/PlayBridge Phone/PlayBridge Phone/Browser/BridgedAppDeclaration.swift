@@ -1,5 +1,20 @@
 import Foundation
 
+struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
+    let origin: URL
+    let name: String
+    let startURL: URL
+    let iconURL: URL?
+    var id: URL { origin }
+
+    var isValid: Bool {
+        BridgedAppDeclaration.origin(of: origin) == origin &&
+        BridgedAppDeclaration.origin(of: startURL) == origin &&
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && name.count <= 60 &&
+        (iconURL.map { BridgedAppDeclaration.origin(of: $0) == origin } ?? true)
+    }
+}
+
 /// The declaration is an origin-wide detection opt-out, independent of app installation.
 enum BridgedAppDeclaration {
     static func origin(of url: URL) -> URL? {
@@ -29,18 +44,30 @@ enum BridgedAppDeclaration {
     }
 
     static func isValid(_ data: Data, for origin: URL) -> Bool {
+        parse(data, for: origin) != nil
+    }
+
+    static func parse(_ data: Data, for origin: URL) -> BridgedApp? {
         guard data.count <= 16384,
+              self.origin(of: origin) == origin,
               let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               json["protocol"] as? String == "playbridge-app-v1",
               let name = json["name"] as? String,
               !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               (json["start_url"] == nil || json["start_url"] is NSNull || json["start_url"] is String),
               let start = URL(string: json["start_url"] as? String ?? "/", relativeTo: origin)?.absoluteURL,
-              self.origin(of: start) == origin else { return false }
-        return true
+              self.origin(of: start) == origin else { return nil }
+        let icon = (json["icon_url"] as? String).flatMap { path -> URL? in
+            guard !path.isEmpty, let url = URL(string: path, relativeTo: origin)?.absoluteURL,
+                  self.origin(of: url) == origin else { return nil }
+            return url
+        }
+        return BridgedApp(origin: origin,
+                         name: String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60)),
+                         startURL: start, iconURL: icon)
     }
 
-    static func fetch(_ origin: URL) async -> Bool {
+    static func fetch(_ origin: URL) async -> BridgedApp? {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 2
         configuration.timeoutIntervalForResource = 2
@@ -52,14 +79,14 @@ enum BridgedAppDeclaration {
         do {
             let (bytes, response) = try await session.bytes(for: request)
             guard let response = response as? HTTPURLResponse, response.statusCode == 200,
-                  response.expectedContentLength <= 16384 else { return false }
+                  response.expectedContentLength <= 16384 else { return nil }
             var data = Data()
             for try await byte in bytes {
-                if data.count == 16384 { return false }
+                if data.count == 16384 { return nil }
                 data.append(byte)
             }
-            return isValid(data, for: origin)
-        } catch { return false }
+            return parse(data, for: origin)
+        } catch { return nil }
     }
 }
 
@@ -73,14 +100,14 @@ private final class NoManifestRedirects: NSObject, URLSessionTaskDelegate {
 
 actor BridgedAppDeclarationCache {
     static let shared = BridgedAppDeclarationCache()
-    private struct Entry { let declared: Bool; let expires: TimeInterval }
+    private struct Entry { let app: BridgedApp?; let expires: TimeInterval }
     private var entries: [URL: Entry] = [:]
-    private var pending: [URL: Task<Bool, Never>] = [:]
-    private let probe: @Sendable (URL) async -> Bool
+    private var pending: [URL: Task<BridgedApp?, Never>] = [:]
+    private let probe: @Sendable (URL) async -> BridgedApp?
     private let now: @Sendable () -> TimeInterval
     private let lifetime: TimeInterval
 
-    init(probe: @escaping @Sendable (URL) async -> Bool = { await BridgedAppDeclaration.fetch($0) },
+    init(probe: @escaping @Sendable (URL) async -> BridgedApp? = { await BridgedAppDeclaration.fetch($0) },
          now: @escaping @Sendable () -> TimeInterval = { Date.timeIntervalSinceReferenceDate },
          lifetime: TimeInterval = 300) {
         self.probe = probe
@@ -89,18 +116,22 @@ actor BridgedAppDeclarationCache {
     }
 
     func isDeclared(_ url: URL) async -> Bool {
-        guard let origin = BridgedAppDeclaration.origin(of: url) else { return false }
-        if let entry = entries[origin], entry.expires > now() { return entry.declared }
-        let task: Task<Bool, Never>
+        await discover(url) != nil
+    }
+
+    func discover(_ url: URL) async -> BridgedApp? {
+        guard let origin = BridgedAppDeclaration.origin(of: url) else { return nil }
+        if let entry = entries[origin], entry.expires > now() { return entry.app }
+        let task: Task<BridgedApp?, Never>
         if let existing = pending[origin] { task = existing }
         else {
             let probe = self.probe
             task = Task { await probe(origin) }
             pending[origin] = task
         }
-        let declared = await task.value
-        entries[origin] = Entry(declared: declared, expires: now() + lifetime)
+        let app = await task.value
+        entries[origin] = Entry(app: app, expires: now() + lifetime)
         pending[origin] = nil
-        return declared
+        return app
     }
 }

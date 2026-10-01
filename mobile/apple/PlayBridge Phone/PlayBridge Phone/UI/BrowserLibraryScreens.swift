@@ -4,6 +4,7 @@ import WebKit
 // MARK: - Shared
 
 private func openInBrowser(_ url: String, store: BrowserStore, nav: NavigationViewModel) {
+    if store.activeTab?.isBridgedApp == true { store.showBrowser() }
     if let tab = store.activeTab {
         tab.load(url)
     } else {

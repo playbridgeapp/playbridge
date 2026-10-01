@@ -16,6 +16,7 @@ struct MenuSheet: View {
     @State private var showRemoveBookmarkConfirmation = false
     @State private var allowPopups = false
     @State private var feedback: String?
+    @State private var availableBridgedApp: BridgedApp?
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
 
@@ -51,6 +52,14 @@ struct MenuSheet: View {
                 }
 
                 LazyVGrid(columns: columns, spacing: 10) {
+                    if let app = availableBridgedApp,
+                       !store.bridgedApps.apps.contains(where: { $0.origin == app.origin }),
+                       pageURL.flatMap(BridgedAppDeclaration.origin(of:)) == app.origin {
+                        menuGridItem(icon: "plus.app", label: "Add Bridged App") {
+                            store.bridgedApps.install(app)
+                            feedback = "\(app.name) added to Dashboard"
+                        }
+                    }
                     menuGridItem(icon: "bookmark", label: "Bookmarks") { go(.bookmarks) }
                     menuGridItem(icon: "clock.arrow.circlepath", label: "History") { go(.history) }
                     menuGridItem(
@@ -133,6 +142,13 @@ struct MenuSheet: View {
             .padding(.top, 18)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity)
+        }
+        .task(id: tab.urlString) {
+            availableBridgedApp = nil
+            guard !tab.isBridgedApp, let url = pageURL else { return }
+            let app = await BridgedAppDeclarationCache.shared.discover(url)
+            guard !Task.isCancelled, pageURL.flatMap(BridgedAppDeclaration.origin(of:)) == app?.origin else { return }
+            availableBridgedApp = app
         }
         .background(Theme.surfaceContainerLow.ignoresSafeArea())
         .presentationDetents([.fraction(0.7), .large])

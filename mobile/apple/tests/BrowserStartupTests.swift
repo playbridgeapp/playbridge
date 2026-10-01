@@ -3,10 +3,6 @@ import SwiftUI
 import WebKit
 import Combine
 
-enum AppScreen { case bookmarks, history, browserSettings }
-final class NavigationViewModel: ObservableObject {
-    func navigate(to screen: AppScreen) {}
-}
 struct AdblockSettingsSheet: View {
     let store: BrowserStore
     var body: some View { EmptyView() }
@@ -67,7 +63,7 @@ final class VideoDetector: ObservableObject {
     func beginMediaLifecycle() {}
 }
 enum DetectionScript {
-    static let source = ProcessInfo.processInfo.environment["DETECTION_POLICY"] == "1"
+    static let source = ProcessInfo.processInfo.environment["DETECTION_POLICY"] == "1" || ProcessInfo.processInfo.environment["DETECTION_POLICY_SCRIPT"] == "1"
         ? try! String(contentsOf: Bundle.main.url(forResource: "media-detector", withExtension: "js")!, encoding: .utf8)
         : ""
 }
@@ -358,6 +354,10 @@ enum ContentBlocker {
         try await verifyFavicons()
         try await verifyJumpDuringScrolling()
         let base = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        if ProcessInfo.processInfo.environment["BRIDGED_APPS"] == "1" {
+            try await verifyBridgedApps(base: base)
+            return
+        }
         if ProcessInfo.processInfo.environment["DETECTION_POLICY"] == "1" {
             try await verifyDetectionPolicy(base: base)
             return
@@ -919,6 +919,170 @@ extension BrowserStartupChecks {
 }
 
 extension BrowserStartupChecks {
+    @MainActor func verifyMoviFullscreen(_ tab: BrowserTab, base: String) async throws {
+        let view = tab.webView
+        _ = try await view.evaluateJavaScript(#"""
+        (() => {
+            window.fixturePlayer = document.createElement('movi-player');
+            fixturePlayer.attachShadow({mode: 'open'}).appendChild(document.createElement('canvas'));
+            document.body.appendChild(fixturePlayer);
+            fixturePlayer.dispatchEvent(new Event('playing'));
+        })();
+        """#)
+        try check(!tab.isMoviFullscreen, "Inline canvas playback hid the edge menu")
+        // iPhone Movi 0.4.0 changes this class without emitting fullscreenchange.
+        _ = try await view.evaluateJavaScript("fixturePlayer.classList.add('movi-pseudo-fullscreen');void(0)")
+        try await wait("Movi CSS fullscreen") { tab.isMoviFullscreen }
+        _ = try await view.evaluateJavaScript("fixturePlayer.dispatchEvent(new Event('pause'));fixturePlayer.dispatchEvent(new Event('waiting'));void(0)")
+        try check(tab.isMoviFullscreen, "Pause or buffering cleared fullscreen")
+        _ = try await view.evaluateJavaScript("fixturePlayer.classList.remove('movi-pseudo-fullscreen');void(0)")
+        try await wait("Movi fullscreen exit") { !tab.isMoviFullscreen }
+        // Simulate the browser's native fullscreen DOM signal in the observer's
+        // world; iPhone may not support requestFullscreen on a canvas host.
+        func nativeFullscreen(_ selector: String) async throws {
+            _ = try await view.callAsyncJavaScript("""
+                Object.defineProperty(document, 'fullscreenElement', {
+                    configurable: true, value: document.querySelector(selector)
+                });
+                document.dispatchEvent(new Event('fullscreenchange'));
+                return true;
+                """, arguments: ["selector": selector], in: nil,
+                contentWorld: BrowserMoviFullscreenScript.world)
+        }
+        try await nativeFullscreen("movi-player:last-of-type")
+        try await wait("Movi native fullscreen signal") { tab.isMoviFullscreen }
+        try await nativeFullscreen("body")
+        try await wait("unrelated native fullscreen") { !tab.isMoviFullscreen }
+        _ = try await view.callAsyncJavaScript("""
+            delete document.fullscreenElement;
+            document.dispatchEvent(new Event('fullscreenchange'));
+            return true;
+            """, arguments: [:], in: nil, contentWorld: BrowserMoviFullscreenScript.world)
+        _ = try await view.evaluateJavaScript("fixturePlayer.dispatchEvent(new CustomEvent('movi-fullscreen-request',{bubbles:true,detail:{active:false}}));void(0)")
+        try check(!tab.isMoviFullscreen, "A fullscreen request hid the handle before entry")
+        _ = try await view.evaluateJavaScript("fixturePlayer.classList.add('movi-pseudo-fullscreen');void(0)")
+        try await wait("Movi fullscreen reentry") { tab.isMoviFullscreen }
+        _ = try await view.evaluateJavaScript("fixturePlayer.remove();void(0)")
+        try await wait("Movi player removal") { !tab.isMoviFullscreen }
+        // A dynamically inserted player can already be fullscreen when discovered.
+        _ = try await view.evaluateJavaScript("document.body.appendChild(fixturePlayer);void(0)")
+        try await wait("Movi fullscreen player inserted") { tab.isMoviFullscreen }
+        _ = try await view.evaluateJavaScript("dispatchEvent(new Event('pagehide'));void(0)")
+        try await wait("Movi pagehide") { !tab.isMoviFullscreen }
+        _ = try await view.evaluateJavaScript("dispatchEvent(new Event('pageshow'));void(0)")
+        try await wait("Movi pageshow") { tab.isMoviFullscreen }
+        tab.webViewWebContentProcessDidTerminate(view)
+        try check(!tab.isMoviFullscreen, "Terminated page retained fullscreen")
+        _ = try await view.evaluateJavaScript("dispatchEvent(new Event('pageshow'));void(0)")
+        try await wait("Movi before navigation") { tab.isMoviFullscreen }
+        tab.load(base + "/identity")
+        try await wait("Movi navigation reset") { view.title == "Identity" && !view.isLoading && !tab.isMoviFullscreen }
+        tab.load(base)
+        try await wait("app fixture restored") { view.title == "Child" && !view.isLoading }
+        try check(!tab.detectionEnabled, "Fullscreen tracking enabled automatic detection")
+        try check((try await view.evaluateJavaScript("typeof window.webkit.messageHandlers.moviFullscreen")) as? String == "undefined",
+                  "Fullscreen message handler leaked into the page world")
+        print("CHECK: canvas Movi inline/fullscreen, pause, exit, removal, reinsertion, page lifecycle and navigation passed")
+    }
+
+    @MainActor func verifyBridgedApps(base: String) async throws {
+        let suite = "bridged-session-tests-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let installed = BridgedAppStore(defaults: defaults)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let browser = BrowserStore(tabsFileURL: file, bridgedApps: installed)
+        store = browser
+        browser.browserVisible = true
+        let nav = NavigationViewModel()
+        nav.browserStore = browser
+        let normal = browser.activeTab!
+        let app = await BridgedAppDeclarationCache.shared.discover(URL(string: base)!)
+        try check(app != nil, "Valid declaration was not discoverable for installation")
+        installed.install(app!)
+        let tab = browser.openBridgedApp(app!)!
+        let view = tab.webView
+        view.frame = window!.bounds
+        window!.rootViewController!.view.addSubview(view)
+        defer { view.removeFromSuperview() }
+        try await wait("bridged app ready") { !view.isLoading && view.title != nil }
+        try check(view.scrollView.contentInsetAdjustmentBehavior == .never,
+                  "App web view still adds automatic safe-area padding")
+        try check(browser.browserTabs.map(\.id) == [normal.id] && tab.isBridgedApp,
+                  "App session leaked into ordinary tabs")
+        try check(!tab.detectionEnabled, "Installed app started automatic detection")
+        try check((try await view.evaluateJavaScript("typeof window.playbridge.linkCast === 'function'")) as? Bool == true,
+                  "App mode removed the explicit casting bridge")
+        try await verifyMoviFullscreen(tab, base: base)
+        _ = try await view.evaluateJavaScript("window.sessionMarker=42;history.pushState({},'', '/saved-route');void(0)")
+        try await wait("app soft navigation") { tab.urlString.hasSuffix("/saved-route") }
+        browser.showBrowser()
+        try check(browser.activeID == normal.id, "Browser tile did not restore the ordinary browser")
+        try check(browser.openBridgedApp(app!) === tab, "Reopening recreated the app session")
+        try check((try await view.evaluateJavaScript("window.sessionMarker")) as? Int == 42,
+                  "App lost its rendered state")
+        nav.navigate(to: .remote)
+        browser.select(normal.id)
+        nav.returnFromRemote()
+        try check(nav.currentScreen == .browser && browser.activeID == tab.id,
+                  "Remote did not restore its originating app")
+        nav.navigate(to: .dashboard)
+        nav.openBrowser()
+        nav.returnFromDashboard()
+        try check(browser.activeID == tab.id, "Dashboard close lost the originating app")
+        browser.closeTabs(Set(browser.browserTabs.map(\.id)))
+        try check(browser.tabs.contains(where: { $0.id == tab.id }) && browser.browserTabs.count == 1,
+                  "Close all ordinary tabs removed the app or left no browser tab")
+        browser.select(tab.id)
+        // A POST link must retain its body and leave the app's document untouched.
+        let external = base.replacingOccurrences(of: "127.0.0.1", with: "localhost")
+        _ = try await view.evaluateJavaScript("var f=document.createElement('form');f.method='POST';f.action='\(external)/post';var i=document.createElement('input');i.name='value';i.value='preserved';f.appendChild(i);document.body.appendChild(f);f.submit();void(0)")
+        try await wait("external normal tab") { browser.activeTab?.isBridgedApp == false && browser.activeTab?.loadedWebView?.title == "Child" }
+        try check(view.url?.path == "/saved-route", "External navigation replaced the app")
+        let (data, _) = try await URLSession.shared.data(from: URL(string: base + "/requests")!)
+        let requests = try JSONSerialization.jsonObject(with: data) as! [[String: Any]]
+        try check(requests.contains { $0["path"] as? String == "/post" && $0["body"] as? String == "value=preserved" },
+                  "External navigation lost the POST body")
+        browser.openBridgedApp(app!)
+        tab.load(base + "/bridged-external-redirect")
+        try await wait("external redirect") { browser.activeTab?.isBridgedApp == false && browser.activeTab?.loadedWebView?.url?.host == "localhost" && browser.activeTab?.loadedWebView?.title == "Child" }
+        try check(view.url?.path == "/saved-route", "Server redirect replaced the app document")
+        browser.openBridgedApp(app!)
+        browser.showBrowser()
+        let restored = BrowserStore(tabsFileURL: file, bridgedApps: installed)
+        try check(restored.browserTabs.count == browser.browserTabs.count &&
+                  restored.tabs.filter(\.isBridgedApp).count == 1, "Relaunch lost app session isolation")
+        try check(restored.tabs.first(where: \.isBridgedApp)?.loadedWebView == nil,
+                  "Restoration eagerly loaded the inactive app")
+        let reopened = restored.openBridgedApp(app!)!
+        try check(reopened.urlString == base + "/saved-route", "Relaunch lost the saved app URL")
+        restored.closeTab(reopened.id)
+        browser.openBridgedApp(app!)
+        nav.navigate(to: .remote)
+        browser.removeBridgedApp(app!)
+        nav.returnFromRemote()
+        try check(nav.currentScreen == .dashboard && !browser.tabs.contains(where: \.isBridgedApp),
+                  "Remote reopened a removed app")
+        // Installed app sessions stay opted out even when no declaration is reachable.
+        let localOrigin = BridgedAppDeclaration.origin(of: URL(string: external)!)!
+        let undeclared = BridgedApp(origin: localOrigin, name: "Local app", startURL: URL(string: external + "/detection")!, iconURL: nil)
+        installed.install(undeclared)
+        let local = browser.openBridgedApp(undeclared)!
+        let localView = local.webView
+        window!.rootViewController!.view.addSubview(localView)
+        defer { localView.removeFromSuperview() }
+        try await wait("installed undeclared app") { localView.title == "Detection" && !localView.isLoading }
+        let localDetection = try await localView.evaluateJavaScript("window.detectorAtStart") as? Bool
+        try check(!local.detectionEnabled && localDetection == false,
+                  "Unavailable declaration enabled detection inside an installed app")
+        nav.navigate(to: .browser)
+        nav.navigate(to: .remote)
+        local.urlString = base + "/left-origin"
+        nav.returnFromRemote()
+        try check(nav.currentScreen == .dashboard, "Remote returned to an app that left its origin")
+        print("CHECK: bridged apps install, isolated tabs, retained state, POST links, redirects, lazy restore, Remote return and detection passed")
+    }
+
     @MainActor func verifyTabManagement(_ browser: BrowserStore) throws {
         let originalActive = browser.activeID
         let source = browser.tabs.first { $0.loadedWebView == nil }!

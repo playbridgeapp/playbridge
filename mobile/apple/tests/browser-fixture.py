@@ -15,6 +15,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         body = self.rfile.read(int(self.headers.get('Content-Length', 0))).decode() if self.command == 'POST' else ''
+        if path == '/bridged-external-redirect':
+            self.send_response(302)
+            self.send_header('Location', 'http://localhost:' + str(self.server.server_port) + '/child')
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         if path in ('/redirect-ad', '/redirect-good', '/redirect-detection'):
             self.send_response(302)
             location = ('http://127.0.0.1:' + str(self.server.server_port) + '/detection?redirected=1') if path == '/redirect-detection' else ('/ad' if path == '/redirect-ad' else '/child')
@@ -27,7 +33,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             requests.append({'path': path, 'method': self.command, 'body': body,
                              'cookie': self.headers.get('Cookie', ''), 'userAgent': self.headers.get('User-Agent', '')})
-            if path == '/.well-known/playbridge-app.json' and self.headers.get('Host', '').startswith('127.0.0.1:') and '--detection-policy' in sys.argv:
+            if path == '/.well-known/playbridge-app.json' and self.headers.get('Host', '').startswith('127.0.0.1:') and any(mode in sys.argv for mode in ('--detection-policy', '--bridged-apps')):
                 data = json.dumps({'protocol': 'playbridge-app-v1', 'name': 'Fixture', 'start_url': '/'}).encode()
             elif path == '/detection':
                 data = ("<html><title>Detection</title><script>window.detectorAtStart=window.__playbridgeDetectionEnabled;addEventListener('message',e=>{window.frameDetectorState=e.data.detector;});</script><iframe src='http://localhost:" + str(self.server.server_port) + "/detection-frame'></iframe></html>").encode()
@@ -46,6 +52,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = ('<html><title>PlaybackFrame</title><iframe src="http://localhost:' + str(self.server.server_port) + '/playback"></iframe></html>').encode()
             elif path == '/identity':
                 data = b'<html><head><title>Identity</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>Identity</body></html>'
+            elif path == '/' and '--bridged-apps' in sys.argv:
+                # Model Movi's canvas + CSS fallback contract without a video element.
+                data = b'''<html><head><title>Child</title><meta name="viewport" content="width=device-width,initial-scale=1">
+                <style>body{padding:60px 30px}button,a{display:block;margin:12px;padding:12px}movi-player{display:block;height:100px}</style></head><body>
+                <movi-player id="player"></movi-player>
+                <button onclick="player.dispatchEvent(new Event('playing'))">Play inline canvas</button>
+                <button onclick="player.classList.add('movi-pseudo-fullscreen')">Enter canvas fullscreen</button>
+                <button onclick="player.dispatchEvent(new Event('pause'))">Pause canvas</button>
+                <button onclick="player.classList.remove('movi-pseudo-fullscreen')">Exit canvas fullscreen</button>
+                <button onclick="player.remove()">Close canvas player</button>
+                <a href="/identity">Leave canvas page</a>
+                <script>player.attachShadow({mode:'open'}).appendChild(document.createElement('canvas'));</script>
+                </body></html>'''
             elif path == '/parent':
                 data = b'''<html><head><title>Parent</title></head><body>
                 <a id="link" href="/child" target="_blank">Open</a>

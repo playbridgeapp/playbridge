@@ -3,6 +3,9 @@ import SwiftUI
 struct DashboardScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var store: BrowserStore
+    @State private var tilePage = 0
+    @State private var appToRemove: BridgedApp?
     @State private var showComingSoonAlert = false
     @State private var comingSoonFeatureName = ""
 
@@ -58,7 +61,7 @@ struct DashboardScreen: View {
                     Spacer().frame(height: 36)
 
                     // ── Grid Cards ────────────────────────────────────────────────────
-                    cardsGrid
+                    tilePages
 
                     Spacer().frame(height: 32)
 
@@ -75,9 +78,70 @@ struct DashboardScreen: View {
         } message: {
             Text("This feature is not yet ported from Android to iOS. The core bridge and web browser are fully functional.")
         }
+        .alert("Remove Bridged App?", isPresented: Binding(
+            get: { appToRemove != nil }, set: { if !$0 { appToRemove = nil } }
+        )) {
+            Button("Remove", role: .destructive) {
+                if let app = appToRemove { store.removeBridgedApp(app) }
+                appToRemove = nil
+            }
+            Button("Cancel", role: .cancel) { appToRemove = nil }
+        } message: {
+            Text("Its dashboard tile and app session will be removed. Website data and casting permissions are managed separately.")
+        }
     }
 
     // MARK: - Components
+
+    private var tilePages: some View {
+        VStack(spacing: 16) {
+            TabView(selection: $tilePage) {
+                cardsGrid.tag(0)
+                appsGrid.tag(1)
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: max(414, CGFloat((store.bridgedApps.apps.count + 2) / 2) * 132 - 12))
+            HStack(spacing: 12) {
+                ForEach(0..<2) { page in
+                    Button { withAnimation { tilePage = page } } label: {
+                        Circle().fill(tilePage == page ? Theme.primary : Theme.onSurfaceVariant.opacity(0.4))
+                            .frame(width: 8, height: 8).padding(8)
+                    }
+                    .accessibilityLabel(page == 0 ? "Dashboard tiles" : "Apps and history tiles")
+                    .accessibilityAddTraits(tilePage == page ? .isSelected : [])
+                }
+            }
+        }
+    }
+
+    private var appsGrid: some View {
+        VStack(spacing: 12) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                cardView(title: "Cast History", subtitle: "Recent casts", systemImage: "clock.arrow.circlepath",
+                         gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)], tall: false,
+                         isActive: isSource(.castHistory), action: { nav.navigate(to: .castHistory) })
+                ForEach(store.bridgedApps.apps) { app in
+                    cardView(title: app.name, subtitle: "Bridged App", systemImage: "app.connected.to.app.below.fill",
+                             gradient: [Color(hex: 0x1565C0), Color(hex: 0x5E35B1)], tall: false,
+                             isActive: store.activeBridgedApp?.origin == app.origin, iconURL: app.iconURL,
+                             action: {
+                                 if store.openBridgedApp(app) != nil { nav.navigate(to: .browser) }
+                             })
+                    .contextMenu {
+                        Button("Remove Bridged App", role: .destructive) { appToRemove = app }
+                    }
+                    .accessibilityLabel("\(app.name), Bridged App")
+                    .accessibilityIdentifier("bridged-app-\(app.origin.absoluteString)")
+                }
+            }
+            if store.bridgedApps.apps.isEmpty {
+                Text("Open a supported website in Browser, then choose Add Bridged App from its menu.")
+                    .font(Theme.font(.footnote)).foregroundStyle(Theme.onSurfaceVariant)
+                    .multilineTextAlignment(.center).padding(.top, 16)
+            }
+            Spacer(minLength: 0)
+        }
+    }
 
     private var cardsGrid: some View {
         VStack(spacing: 12) {
@@ -90,7 +154,7 @@ struct DashboardScreen: View {
                     gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)],
                     tall: true,
                     isActive: isSource(.browser),
-                    action: { nav.navigate(to: .browser) }
+                    action: { nav.openBrowser() }
                 )
 
                 cardView(
@@ -140,13 +204,13 @@ struct DashboardScreen: View {
                 )
 
                 cardView(
-                    title: "Cast History",
-                    subtitle: "Recent casts",
-                    systemImage: "clock.arrow.circlepath",
+                    title: "Remote",
+                    subtitle: "Control your TV",
+                    systemImage: "av.remote",
                     gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)],
                     tall: false,
-                    isActive: isSource(.castHistory),
-                    action: { nav.navigate(to: .castHistory) }
+                    isActive: isSource(.remote),
+                    action: { nav.navigate(to: .remote) }
                 )
             }
         }
@@ -161,6 +225,7 @@ struct DashboardScreen: View {
         tall: Bool,
         isActive: Bool,
         comingSoon: Bool = false,
+        iconURL: URL? = nil,
         action: (() -> Void)? = nil
     ) -> some View {
         Button {
@@ -212,9 +277,16 @@ struct DashboardScreen: View {
                         RoundedRectangle(cornerRadius: 12)
                             .fill(Color.white.opacity(0.2))
                             .frame(width: 40, height: 40)
-                        Image(systemName: systemImage)
-                            .font(Theme.font(size: 20))
-                            .foregroundColor(.white)
+                        if let iconURL {
+                            AsyncImage(url: iconURL) { image in
+                                image.resizable().scaledToFit().frame(width: 32, height: 32)
+                            } placeholder: {
+                                Image(systemName: systemImage).foregroundColor(.white)
+                            }
+                        } else {
+                            Image(systemName: systemImage)
+                                .font(Theme.font(size: 20)).foregroundColor(.white)
+                        }
                     }
 
                     Spacer()
@@ -252,7 +324,7 @@ struct DashboardScreen: View {
         VStack {
             HStack {
                 Button {
-                    nav.navigate(to: nav.dashboardOrigin ?? .browser)
+                    nav.returnFromDashboard()
                 } label: {
                     ZStack {
                         Circle()
@@ -263,6 +335,7 @@ struct DashboardScreen: View {
                             .foregroundColor(Theme.onSurface.opacity(0.8))
                     }
                 }
+                .accessibilityLabel("Close dashboard")
                 .padding(.leading, 16)
                 .padding(.top, 8)
                 Spacer()

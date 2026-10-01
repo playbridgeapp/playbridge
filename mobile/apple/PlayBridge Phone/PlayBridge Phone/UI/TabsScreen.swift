@@ -20,7 +20,7 @@ struct TabsScreen: View {
     @State private var scrollNoticeTask: Task<Void, Never>?
 
     private var filtered: [BrowserTab] {
-        store.tabs.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.urlString.localizedCaseInsensitiveContains(search) }
+        store.browserTabs.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.urlString.localizedCaseInsensitiveContains(search) }
     }
     private var allVisibleSelected: Bool { !filtered.isEmpty && Set(filtered.map(\.id)).isSubset(of: selected) }
 
@@ -127,7 +127,7 @@ struct TabsScreen: View {
                 }
             }
             .background(Theme.surface.ignoresSafeArea())
-            .navigationTitle(selecting ? "\(selected.count) selected" : "\(store.tabs.count) Tab\(store.tabs.count == 1 ? "" : "s")")
+            .navigationTitle(selecting ? "\(selected.count) selected" : "\(store.browserTabs.count) Tab\(store.browserTabs.count == 1 ? "" : "s")")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -142,7 +142,7 @@ struct TabsScreen: View {
                         Menu {
                             Button("Select tabs", systemImage: "checkmark.circle") { searchFocused = false; selecting = true }
                             Button("Close all tabs", systemImage: "trash", role: .destructive) {
-                                closing = Set(store.tabs.map(\.id)); confirmClose = true
+                                closing = Set(store.browserTabs.map(\.id)); confirmClose = true
                             }
                         } label: { Image(systemName: "ellipsis.circle") }
                         .accessibilityLabel("Tab actions")
@@ -169,10 +169,10 @@ struct TabsScreen: View {
             .confirmationDialog("Close \(closing.count) tab\(closing.count == 1 ? "" : "s")?", isPresented: $confirmClose, titleVisibility: .visible) {
                 Button("Close tabs", role: .destructive) {
                     store.closeTabs(closing); selected.removeAll(); selecting = false
-                    if store.tabs.count == 1 && store.activeTab?.isHome == true { search = "" }
+                    if store.browserTabs.count == 1 && store.activeTab?.isHome == true { search = "" }
                 }
             }
-            .onChange(of: store.tabs.map(\.id)) { ids in selected.formIntersection(Set(ids)) }
+            .onChange(of: store.browserTabs.map(\.id)) { ids in selected.formIntersection(Set(ids)) }
         }
     }
 }

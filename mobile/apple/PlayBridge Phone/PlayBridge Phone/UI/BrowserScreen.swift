@@ -57,10 +57,12 @@ private struct ActiveTabView: View {
     @State private var showDeviceSheet = false
     @FocusState private var addressFocused: Bool
 
+    private var chromeHidden: Bool { tab.isBridgedApp || tab.isBrowserChromeHidden }
+
     var body: some View {
         VStack(spacing: 0) {
-            if !tab.isBrowserChromeHidden { topBar }
-            if !tab.isBrowserChromeHidden && tab.isLoading && tab.progress < 1 {
+            if !chromeHidden { topBar }
+            if !chromeHidden && tab.isLoading && tab.progress < 1 {
                 ProgressView(value: tab.progress).tint(Theme.primary)
                     .scaleEffect(x: 1, y: 0.6, anchor: .center)
             }
@@ -89,7 +91,7 @@ private struct ActiveTabView: View {
                         tab.load(url)
                     }
                 }
-                if tab.isBrowserChromeHidden {
+                if tab.isBrowserChromeHidden && !tab.isBridgedApp {
                     VStack {
                         HStack {
                             Spacer()
@@ -144,9 +146,15 @@ private struct ActiveTabView: View {
                         .accessibilityLabel("Dismiss popup notice")
                 }.padding(10).background(Theme.surfaceContainer)
             }
-            if !tab.isBrowserChromeHidden { toolbar }
+            if !chromeHidden { toolbar }
         }
-        .statusBarHidden(tab.isBrowserChromeHidden)
+        .statusBarHidden(chromeHidden)
+        .overlay(alignment: .trailing) {
+            if tab.isBridgedApp && !tab.isMoviFullscreen {
+                BridgedAppEdgeMenu(tab: tab)
+            }
+        }
+        .ignoresSafeArea(.container, edges: tab.isBridgedApp ? .all : [])
         .sheet(isPresented: $showDetected) {
             CastSheet(detector: tab.detector, tab: tab, store: store)
                 .presentationDetents([.large])
@@ -328,15 +336,15 @@ private struct ActiveTabView: View {
             }
             Spacer(minLength: 0)
             Button { showTabs = true } label: {
-                Text(store.tabs.count > 999 ? "999+" : "\(store.tabs.count)")
-                    .font(.custom("Poppins-Regular", fixedSize: store.tabs.count >= 100 ? 8 : store.tabs.count >= 10 ? 10 : 12).bold())
+                Text(store.browserTabs.count > 999 ? "999+" : "\(store.browserTabs.count)")
+                    .font(.custom("Poppins-Regular", fixedSize: store.browserTabs.count >= 100 ? 8 : store.browserTabs.count >= 10 ? 10 : 12).bold())
                     .foregroundStyle(Theme.onSurface)
                     .frame(width: 24, height: 24)
                     .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.onSurface, lineWidth: 2))
                     .frame(width: 48, height: 48).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Tabs, \(store.tabs.count) open")
+            .accessibilityLabel("Tabs, \(store.browserTabs.count) open")
             Spacer(minLength: 0)
             toolButton("line.3.horizontal", label: "Browser menu", enabled: true) { showMenu = true }
         }

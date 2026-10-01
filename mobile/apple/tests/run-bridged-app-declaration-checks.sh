@@ -5,5 +5,6 @@ test_dir="$(mktemp -d /tmp/playbridge-declaration-tests.XXXXXX)"
 trap 'rm -rf "$test_dir"' EXIT
 swiftc -module-cache-path "$test_dir/cache" \
   "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/BridgedAppDeclaration.swift" \
+  "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Browser/BridgedAppStore.swift" \
   "$repo_root/mobile/apple/tests/BridgedAppDeclarationTests.swift" -o "$test_dir/check"
 "$test_dir/check"

@@ -3,13 +3,18 @@ import SwiftUI
 struct RemoteControlScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var nav: NavigationViewModel
+    @EnvironmentObject private var pageCasting: PageCastCoordinator
     @State private var showCastLink = false
     @State private var castURL = ""
 
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 4) {
-                ScreenBackButton(destination: nav.remoteOrigin ?? .dashboard, accessibilityLabel: "Back")
+                Button { nav.returnFromRemote() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 36, height: 44)
+                }.accessibilityLabel("Back").accessibilityIdentifier("remote-return")
                 Text("Remote").font(Theme.font(.title3).bold())
                 Spacer()
 #if DEBUG
@@ -25,6 +30,15 @@ struct RemoteControlScreen: View {
                 }.accessibilityLabel("Cast a link").disabled(!vm.isConnected)
             }
             statusChip
+            if let site = pageCasting.controllerName {
+                HStack {
+                    Text("Controlled by \(site)").font(Theme.font(.footnote)).lineLimit(1)
+                    Spacer()
+                    Button("Unlink") { pageCasting.unlink() }
+                }
+                .padding(12)
+                .background(Theme.surfaceContainer, in: RoundedRectangle(cornerRadius: 12))
+            }
             if vm.isAirPlay && !vm.airPlay.routeAvailable {
                 AirPlayDestinationRow()
             }

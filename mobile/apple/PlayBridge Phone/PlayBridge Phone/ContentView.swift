@@ -11,7 +11,7 @@ struct ContentView: View {
 
     private var showsMiniBar: Bool {
         switch nav.currentScreen {
-        case .browser: return pageCasting.isLinked
+        case .browser: return false
         case .dashboard, .connection, .remote, .history, .bookmarks, .browserSettings:
             return false
         default:
@@ -46,6 +46,8 @@ struct ContentView: View {
             Button("OK", role: .cancel) { vm.operationError = nil }
         } message: { Text(vm.operationError ?? "") }
         .onAppear {
+            nav.browserStore = store
+            store.onBridgedAppExternalNavigation = { [weak nav] in nav?.navigate(to: .browser) }
             pageCasting.attach(vm)
             pageCasting.onError = { [weak vm] in vm?.operationError = $0 }
             store.onWebsiteCast = { [weak pageCasting] tab, message in
