@@ -1,16 +1,37 @@
 package com.playbridge.sender.browser
 
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 /**
  * What the user picked in the Clear Data sheet. Mirrors Firefox's
- * "Delete browsing data" categories.
+ * "Clear Browsing Data" categories.
  */
 data class ClearDataSelection(
     val openTabs: Boolean,
@@ -26,7 +47,7 @@ data class ClearDataSelection(
 }
 
 /**
- * Firefox-style "Delete browsing data" bottom sheet: one checkbox per data
+ * Firefox-style "Clear Browsing Data" bottom sheet: one checkbox per data
  * category plus a destructive confirm button. Owns its own sheet state; the
  * caller controls visibility via [onDismissRequest].
  */
@@ -39,6 +60,7 @@ fun ClearDataSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
+    var confirming by remember { mutableStateOf(false) }
     var openTabs by remember { mutableStateOf(false) }
     var browsingHistory by remember { mutableStateOf(true) }
     var cookies by remember { mutableStateOf(true) }
@@ -65,17 +87,18 @@ fun ClearDataSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(start = 16.dp, end = 16.dp, bottom = 24.dp)
         ) {
             Text(
-                text = "Delete browsing data",
+                text = "Clear Browsing Data",
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(bottom = 12.dp)
             )
 
             ClearDataRow(
-                label = "Open tabs",
-                subtitle = if (openTabsCount == 1) "1 tab" else "$openTabsCount tabs",
+                label = "Open browser tabs",
+                subtitle = "$openTabsCount tabs; installed bridged apps stay available",
                 checked = openTabs,
                 onCheckedChange = { openTabs = it },
             )
@@ -87,7 +110,7 @@ fun ClearDataSheet(
             )
             ClearDataRow(
                 label = "Cookies and site data",
-                subtitle = "You'll be logged out of most sites",
+                subtitle = "Includes bridged apps; you may be logged out",
                 checked = cookies,
                 onCheckedChange = { cookies = it },
             )
@@ -99,7 +122,7 @@ fun ClearDataSheet(
             )
             ClearDataRow(
                 label = "Site permissions",
-                subtitle = "Camera, location, notifications, etc.",
+                subtitle = "Website casting, popup rules, and browser site permissions",
                 checked = permissions,
                 onCheckedChange = { permissions = it },
             )
@@ -113,7 +136,7 @@ fun ClearDataSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             Button(
-                onClick = { onConfirm(selection) },
+                onClick = { confirming = true },
                 enabled = !selection.isEmpty,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
@@ -121,9 +144,27 @@ fun ClearDataSheet(
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text("Delete browsing data")
+                Text("Clear Browsing Data")
             }
         }
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text("Clear selected browsing data?") },
+            text = {
+                Text(buildList {
+                    if (openTabs) add("Open browser tabs")
+                    if (browsingHistory) add("Browsing history")
+                    if (cookies) add("Cookies and site data (including bridged apps)")
+                    if (caches) add("Cached images and files")
+                    if (permissions) add("Site permissions")
+                    if (downloads) add("Downloads")
+                }.joinToString("\n"))
+            },
+            confirmButton = { TextButton(onClick = { confirming = false; onConfirm(selection) }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        )
     }
 }
 

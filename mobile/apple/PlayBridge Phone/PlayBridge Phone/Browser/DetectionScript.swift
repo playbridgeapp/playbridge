@@ -10,23 +10,37 @@ enum DetectionScript {
     /// The single user script source. Runs in the page world, all frames.
     static let source = #"""
     (function () {
-      if (window.__playbridgeSetDetectionEnabled) return;
+      if (window.__playbridgeSetDetectionOptions) return;
       var stopDetection = null;
-      function setEnabled(enabled) {
-        if (!!stopDetection === !!enabled) return;
+      var configured = null;
+      function setOptions(value) {
+        var next = {};
+        ['enabled', 'videos', 'images', 'audio', 'subtitles', 'domScanning', 'networkDetection',
+         'responseScanning', 'navigationRescans', 'visibilityOverrides'].forEach(function (key) {
+          next[key] = !value || value[key] !== false;
+        });
+        window.__playbridgeDetectionEnabled = next.enabled;
+        if (configured && JSON.stringify(configured) === JSON.stringify(next)) return;
         if (stopDetection) { var stop = stopDetection; stopDetection = null; stop(); }
-        if (enabled) stopDetection = startDetection();
+        configured = next;
+        if (next.enabled) stopDetection = startDetection(next);
       }
-      window.__playbridgeSetDetectionEnabled = setEnabled;
-      window.addEventListener('pageshow', function () {
+      window.__playbridgeSetDetectionOptions = setOptions;
+      window.__playbridgeSetDetectionEnabled = function (enabled) {
+        setOptions(Object.assign({}, configured || {}, {enabled: !!enabled}));
+      };
+      function requestPolicy() {
         try { window.webkit.messageHandlers.playbridge.postMessage({type: 'detectionPolicyRequest'}); } catch (_) {}
-      });
-      setEnabled(window.__playbridgeDetectionEnabled !== false);
+      }
+      window.addEventListener('pageshow', requestPolicy);
+      setOptions(window.__playbridgeDetectionOptions || {enabled: window.__playbridgeDetectionEnabled !== false});
+      requestPolicy();
 
-      function startDetection() {
+      function startDetection(options) {
         var active = true;
         var cleanups = [];
         var readers = new Set();
+        var pendingImages = new Map();
         function cancelReader(reader) {
           if (!readers.delete(reader)) return;
           try { Promise.resolve(reader.cancel()).catch(function () {}); } catch (_) {}
@@ -60,7 +74,7 @@ enum DetectionScript {
           if (window !== window.top || location.href === lastPageURL) return;
           lastPageURL = location.href;
           post({type: 'mediaLifecycle'});
-          scanAll();
+          if (options.navigationRescans) scanAll();
         }
         ['pushState', 'replaceState'].forEach(function (name) {
           var original = history[name];
@@ -84,6 +98,10 @@ enum DetectionScript {
           }
           var path = url.split('?')[0];
           if (SEGMENT.test(path)) return; // HLS/DASH media segments aren't standalone streams
+          var kind = mediaKind || (/text\/vtt|subrip/i.test(contentType || '') || /\.(vtt|srt)$/i.test(path) ? 'subtitle' :
+            /^audio\//i.test(contentType || '') || /\.(mp3|m4a|aac|ogg|oga|opus|wav|flac|weba)$/i.test(path) ? 'audio' :
+            /^image\//i.test(contentType || '') ? 'image' : 'video');
+          if (!options[kind === 'video' ? 'videos' : kind === 'image' ? 'images' : kind === 'subtitle' ? 'subtitles' : 'audio']) return;
           var message = {
             type: 'video',
             url: url,
@@ -92,7 +110,7 @@ enum DetectionScript {
             originUrl: location.href,
             ua: navigator.userAgent
           };
-          if (mediaKind) message.mediaKind = mediaKind;
+          message.mediaKind = kind;
           post(message);
         }
 
@@ -124,20 +142,20 @@ enum DetectionScript {
         }
 
         function scanSubtitleBody(url, body, disposition, detectedBy) {
-          if (!active) return;
+          if (!active || !options.subtitles || !options.responseScanning) return;
           var contentType = subtitleTypeFromBody(body) || subtitleTypeFromDisposition(disposition);
           if (contentType) report(url, contentType, detectedBy || 'body_content_subtitle', 'subtitle');
         }
 
         function inspectFetchSubtitle(resp, fallbackURL) {
-          if (!active) return;
+          if (!active || !options.subtitles) return;
           try {
             var url = resp.url || fallbackURL;
             var contentType = (resp.headers && resp.headers.get('content-type')) || '';
             var disposition = (resp.headers && resp.headers.get('content-disposition')) || '';
             var dispositionType = subtitleTypeFromDisposition(disposition);
             if (dispositionType) report(url, dispositionType, 'subtitle_disposition', 'subtitle');
-            if (!shouldInspectSubtitleBody(contentType) || !resp.clone) return;
+            if (!options.responseScanning || !shouldInspectSubtitleBody(contentType) || !resp.clone) return;
 
             var length = parseInt((resp.headers && resp.headers.get('content-length')) || '', 10);
             if (isFinite(length) && length > SUBTITLE_SCAN_LIMIT) return;
@@ -179,6 +197,7 @@ enum DetectionScript {
         }
 
         // ── fetch hook ──────────────────────────────────────────────────────────
+        if (options.networkDetection && (options.videos || options.audio || options.subtitles)) {
         var origFetch = window.fetch;
         if (origFetch) {
           var wrappedFetch = function (input, init) {
@@ -231,7 +250,7 @@ enum DetectionScript {
               var ct = xhr.getResponseHeader('content-type') || '';
               var disposition = xhr.getResponseHeader('content-disposition') || '';
               var length = parseInt(xhr.getResponseHeader('content-length') || '', 10);
-              if (!shouldInspectSubtitleBody(ct) || (isFinite(length) && length > SUBTITLE_SCAN_LIMIT)) return;
+              if (!options.subtitles || !options.responseScanning || !shouldInspectSubtitleBody(ct) || (isFinite(length) && length > SUBTITLE_SCAN_LIMIT)) return;
               var url = xhr.responseURL || xhr.__pb_url;
               if (xhr.responseType === '' || xhr.responseType === 'text') {
                 if (typeof xhr.responseText === 'string' && xhr.responseText.length <= SUBTITLE_SCAN_LIMIT) {
@@ -261,33 +280,48 @@ enum DetectionScript {
           if (XMLHttpRequest.prototype.send === wrappedSend) XMLHttpRequest.prototype.send = origSend;
         });
 
+        }
+
         // ── DOM scan (port of content.js) ─────────────────────────────────────────
         function scanEl(el) {
           if (!active || !el || !el.tagName) return;
           if (el.tagName === 'VIDEO') {
-            if (el.currentSrc || el.src) report(el.currentSrc || el.src, '', 'dom_video_element', 'video');
-            if (el.poster) report(el.poster, '', 'dom_image_element', 'image');
+            if (options.videos && (el.currentSrc || el.src)) report(el.currentSrc || el.src, '', 'dom_video_element', 'video');
+            if (options.images && el.poster) report(el.poster, '', 'dom_image_element', 'image');
           } else if (el.tagName === 'SOURCE') {
             if (el.src) report(el.src, el.type || '', el.parentElement && el.parentElement.tagName === 'AUDIO' ? 'dom_audio_element' : 'dom_video_element',
                                el.parentElement && el.parentElement.tagName === 'AUDIO' ? 'audio' : 'video');
           } else if (el.tagName === 'AUDIO') {
             if (el.src) report(el.src, '', 'dom_audio_element', 'audio');
-          } else if (el.tagName === 'IMG') {
+          } else if (el.tagName === 'IMG' && options.images) {
             var imageURL = el.currentSrc || el.src;
             var width = el.naturalWidth || el.width || el.clientWidth || 0;
             var height = el.naturalHeight || el.height || el.clientHeight || 0;
             if (imageURL && !IMAGE_NOISE.test(imageURL) && width >= 64 && height >= 64 && width * height >= 16384) {
               report(imageURL, '', 'dom_image_element', 'image');
             }
-            if (!el.complete && !el.__pb_waiting_image) {
-              el.__pb_waiting_image = true;
-              el.addEventListener('load', function () { scanEl(el); }, {once: true});
+            if (!el.complete && !pendingImages.has(el)) {
+              var loaded = function () {
+                el.removeEventListener('load', loaded);
+                pendingImages.delete(el);
+                scanEl(el);
+              };
+              pendingImages.set(el, loaded);
+              el.addEventListener('load', loaded, {once: true});
             }
           } else if (el.tagName === 'TRACK') {
             if (el.src && el.src.indexOf('http') === 0) report(el.src, '', 'dom_track_element', 'subtitle');
           }
         }
-        function scanAll() { if (!active) return; document.querySelectorAll('video, audio, source, track, img').forEach(scanEl); }
+        var selectors = [];
+        if (options.videos || options.images) selectors.push('video');
+        if (options.videos || options.audio) selectors.push('source');
+        if (options.audio) selectors.push('audio');
+        if (options.subtitles) selectors.push('track');
+        if (options.images) selectors.push('img');
+        var selector = selectors.join(', ');
+        function scanAll() { if (!active || !options.domScanning || !selector) return; document.querySelectorAll(selector).forEach(scanEl); }
+        if (options.domScanning && selector) {
         if (document.readyState === 'loading') {
           listen(document, 'DOMContentLoaded', scanAll);
         } else { scanAll(); }
@@ -300,19 +334,21 @@ enum DetectionScript {
                 var n = m.addedNodes[j];
                 if (n.nodeType !== 1) continue;
                 scanEl(n);
-                if (n.querySelectorAll) n.querySelectorAll('video, audio, source, track, img').forEach(scanEl);
+                if (n.querySelectorAll) n.querySelectorAll(selector).forEach(scanEl);
               }
               if (m.type === 'attributes' && m.target && m.target.nodeType === 1) scanEl(m.target);
             }
           });
           observer.observe(document.documentElement, {
-            childList: true, subtree: true, attributes: true, attributeFilter: ['src']
+            childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'srcset', 'poster']
           });
           cleanups.push(function () { observer.disconnect(); });
         } catch (e) {}
 
+        }
+
         // ── Background-playback shim (skipped in safe mode) ───────────────────────
-        if (!__pb_safe) {
+        if (options.visibilityOverrides && !__pb_safe) {
           try {
             var previousVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
             var previousHidden = Object.getOwnPropertyDescriptor(document, 'hidden');
@@ -339,6 +375,8 @@ enum DetectionScript {
           active = false;
           readers.forEach(cancelReader);
           readers.clear();
+          pendingImages.forEach(function (loaded, el) { el.removeEventListener('load', loaded); });
+          pendingImages.clear();
           cleanups.forEach(function (cleanup) { try { cleanup(); } catch (_) {} });
         };
       }

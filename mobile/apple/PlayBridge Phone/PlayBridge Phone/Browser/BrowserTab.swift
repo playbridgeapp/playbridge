@@ -92,7 +92,54 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         return view
     }
     let detector = VideoDetector()
-    private(set) var detectionEnabled = true
+    private var mediaDetectionSettings = BrowserMediaDetectionSettings.load()
+    private var isDeclaredBridgedSite = false
+    private var detectionFrames: [WKFrameInfo] = []
+    var detectionEnabled: Bool {
+        mediaDetectionSettings.enabled &&
+            (mediaDetectionSettings.detectInBridgedSites || (!isBridgedApp && !isDeclaredBridgedSite))
+    }
+
+    func acceptsDetection(_ body: [String: Any]) -> Bool {
+        detectionEnabled && mediaDetectionSettings.allows(body["mediaKind"] as? String ?? "video")
+    }
+
+    func configureMediaDetection(_ settings: BrowserMediaDetectionSettings) {
+        guard settings != mediaDetectionSettings else { return }
+        objectWillChange.send()
+        mediaDetectionSettings = settings
+        // Cancel enrichment and remove stale detections before the newly configured scan.
+        detector.clear()
+        installUserScripts()
+        applyDetectionToLoadedFrames()
+    }
+
+    private var detectionPolicyScript: String {
+        "window.__playbridgeSetDetectionOptions?.(\(mediaDetectionSettings.scriptOptions(enabled: detectionEnabled))); void 0;"
+    }
+
+    func registerDetectionFrame(_ frame: WKFrameInfo) {
+        // Only document-start/pageshow requests register frames; media messages never grow this list.
+        if !detectionFrames.contains(where: { $0.isEqual(frame) }) && detectionFrames.count < 256 {
+            detectionFrames.append(frame)
+        }
+        loadedWebView?.evaluateJavaScript(detectionPolicyScript, in: frame, in: .page, completionHandler: nil)
+    }
+
+    private func applyDetectionToLoadedFrames() {
+        guard let view = loadedWebView else { return }
+        view.evaluateJavaScript(detectionPolicyScript, completionHandler: nil)
+        detectionFrames.filter { !$0.isMainFrame }.forEach {
+            view.evaluateJavaScript(detectionPolicyScript, in: $0, in: .page, completionHandler: nil)
+        }
+    }
+
+    private func updateDetectionPolicy(declared: Bool) {
+        guard isDeclaredBridgedSite != declared else { return }
+        isDeclaredBridgedSite = declared
+        installUserScripts()
+        applyDetectionToLoadedFrames()
+    }
     private var detectionNavigationID = UUID()
     let networkLog = BrowserNetworkLog()
     @Published private(set) var networkCaptureEnabled = false
@@ -305,7 +352,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     private func installUserScripts() {
         let cc = configuration.userContentController
         cc.removeAllUserScripts()
-        cc.addUserScript(WKUserScript(source: "window.__playbridgeDetectionEnabled = \(detectionEnabled);\n" + DetectionScript.source,
+        cc.addUserScript(WKUserScript(source: "window.__playbridgeDetectionEnabled = \(detectionEnabled); window.__playbridgeDetectionOptions = \(mediaDetectionSettings.scriptOptions(enabled: detectionEnabled));\n" + DetectionScript.source,
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
         cc.addUserScript(WKUserScript(source: PageCastScript.source,
@@ -332,7 +379,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     init(configuration: WKWebViewConfiguration, handler: WKScriptMessageHandler, bridgedAppOrigin: URL? = nil) {
         self.bridgedAppOrigin = bridgedAppOrigin
-        detectionEnabled = bridgedAppOrigin == nil
         // Each tab installs the detection script + message handler into its own content controller,
         // so detections are attributed to this tab.
         let cc = configuration.userContentController
@@ -548,6 +594,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     // MARK: - WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        detectionFrames.removeAll()
         detectionNavigationID = UUID()
         onPageCastInvalidated?()
         navigationFailure = nil
@@ -681,11 +728,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                     decisionHandler(.cancel, preferences)
                     return
                 }
-                let enabled = !self.isBridgedApp && !declared
-                if self.detectionEnabled != enabled {
-                    self.detectionEnabled = enabled
-                    self.installUserScripts()
-                }
+                self.updateDetectionPolicy(declared: declared)
                 // Apply before navigation, including Back/Forward cache restores.
                 decisionHandler(.allow, preferences)
             }
@@ -726,11 +769,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
                     decisionHandler(.cancel)
                     return
                 }
-                let enabled = !self.isBridgedApp && !declared
-                if self.detectionEnabled != enabled {
-                    self.detectionEnabled = enabled
-                    self.installUserScripts()
-                }
+                self.updateDetectionPolicy(declared: declared)
                 decisionHandler(.allow)
             }
             return

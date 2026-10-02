@@ -3,6 +3,8 @@ import SwiftUI
 import WebKit
 import Combine
 
+struct PageCastPermissionsView: View { var body: some View { EmptyView() } }
+
 struct AdblockSettingsSheet: View {
     let store: BrowserStore
     var body: some View { EmptyView() }
@@ -291,6 +293,22 @@ enum ContentBlocker {
     }
 
     @MainActor func verifyDetectionPolicy(base: String) async throws {
+        let preferenceName = "BrowserMediaDetectionTests." + UUID().uuidString
+        let preferences = UserDefaults(suiteName: preferenceName)!
+        defer { preferences.removePersistentDomain(forName: preferenceName) }
+        let defaultSettings = BrowserMediaDetectionSettings.load(defaults: preferences)
+        try check(defaultSettings.enabled && defaultSettings.images && !defaultSettings.detectInBridgedSites,
+                  "Detection defaults changed")
+        var savedPreference = defaultSettings
+        savedPreference.images = false
+        savedPreference.detectInBridgedSites = true
+        savedPreference.save(defaults: preferences)
+        try check(BrowserMediaDetectionSettings.load(defaults: preferences) == savedPreference,
+                  "Detection preferences did not survive reloading")
+        preferences.set(["images": false], forKey: "browser.mediaDetection")
+        let partial = BrowserMediaDetectionSettings.load(defaults: preferences)
+        try check(!partial.images && partial.videos && !partial.detectInBridgedSites,
+                  "Missing preference fields did not retain safe defaults")
         let browser = BrowserStore(tabsFileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         store = browser
         browser.browserVisible = true
@@ -316,10 +334,48 @@ enum ContentBlocker {
         try await wait("ordinary website") { view.url?.host == "localhost" && !view.isLoading }
         let normal = try await view.evaluateJavaScript("window.detectorAtStart") as? Bool
         try check(normal == true && tab.detectionEnabled, "Detection failed to resume on an ordinary website")
+        let savedSettings = browser.mediaDetectionSettings
+        defer { browser.mediaDetectionSettings = savedSettings }
+        browser.mediaDetectionSettings.enabled = false
+        for _ in 0..<100 {
+            if (try await view.evaluateJavaScript("window.__playbridgeDetectionEnabled") as? Bool) == false { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let disabledDocument = try await view.evaluateJavaScript("window.__playbridgeDetectionEnabled") as? Bool
+        try check(!tab.detectionEnabled && disabledDocument == false,
+                  "Master switch did not disable the loaded document")
+        // Query a cross-origin frame through postMessage; it cannot be inspected from the parent.
+        _ = try await view.evaluateJavaScript("window.frameDetectorState = null; document.querySelector('iframe').contentWindow.postMessage('detector-state', '*'); void 0")
+        for _ in 0..<100 {
+            if (try await view.evaluateJavaScript("window.frameDetectorState") as? Bool) == false { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let disabledFrame = try await view.evaluateJavaScript("window.frameDetectorState") as? Bool
+        try check(disabledFrame == false,
+                  "Master switch left a cross-origin frame enabled")
+        browser.mediaDetectionSettings.enabled = true
+        browser.mediaDetectionSettings.images = false
+        try check(!tab.acceptsDetection(["mediaKind": "image"]) && tab.acceptsDetection(["mediaKind": "video"]),
+                  "Disabled image detection still accepted stale native messages")
+        browser.mediaDetectionSettings.images = true
         view.goBack()
         try await wait("back to declared app") { view.url?.host == "127.0.0.1" && !view.isLoading }
         let restored = try await view.evaluateJavaScript("window.__playbridgeDetectionEnabled") as? Bool
         try check(restored == false && !tab.detectionEnabled, "Back navigation restored the wrong detector policy")
+        browser.mediaDetectionSettings.detectInBridgedSites = true
+        for _ in 0..<100 {
+            if (try await view.evaluateJavaScript("window.__playbridgeDetectionEnabled") as? Bool) == true { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        let overrideEnabled = try await view.evaluateJavaScript("window.__playbridgeDetectionEnabled") as? Bool
+        try check(tab.detectionEnabled && overrideEnabled == true, "Advanced bridged-site override did not enable the loaded page")
+        browser.mediaDetectionSettings.detectInBridgedSites = false
+        let cacheTypes = BrowserDataCategory.websiteTypes(for: [.cache])
+        try check(!cacheTypes.contains(WKWebsiteDataTypeCookies) && cacheTypes.contains(WKWebsiteDataTypeDiskCache),
+                  "Cache-only clearing included cookies")
+        try check(BrowserDataCategory.websiteTypes(for: [.websiteData]).isDisjoint(with: cacheTypes),
+                  "Website storage and cache categories overlap")
+
         tab.load(ordinary + "/redirect-detection")
         try await wait("redirect to declared origin") {
             view.url?.query == "redirected=1" && view.url?.host == "127.0.0.1" && !view.isLoading

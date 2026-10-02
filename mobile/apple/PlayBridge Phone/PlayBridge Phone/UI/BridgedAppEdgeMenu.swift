@@ -6,6 +6,8 @@ struct BridgedAppEdgeMenu: View {
     @ObservedObject var tab: BrowserTab
     @EnvironmentObject private var nav: NavigationViewModel
     @State private var showMenu = false
+    @EnvironmentObject private var store: BrowserStore
+    @State private var showSettings = false
     @State private var showConnection = false
     @State private var pendingAction: (() -> Void)?
     @State private var interfaceOrientation: UIInterfaceOrientation = .unknown
@@ -40,6 +42,7 @@ struct BridgedAppEdgeMenu: View {
                 action("Remote", icon: "av.remote") { nav.navigate(to: .remote) }
                 action("Connect TV", icon: "tv") { showConnection = true }
                 action("Reload", icon: "arrow.clockwise") { tab.reload() }
+                action("App Settings", icon: "gearshape") { showSettings = true }
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -47,6 +50,9 @@ struct BridgedAppEdgeMenu: View {
             .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showConnection) { DeviceConnectionSheet() }
+        .sheet(isPresented: $showSettings) {
+            BrowserAppSettingsSheet(tab: tab, store: store)
+        }
     }
 
     private func action(_ title: String, icon: String, perform: @escaping () -> Void) -> some View {

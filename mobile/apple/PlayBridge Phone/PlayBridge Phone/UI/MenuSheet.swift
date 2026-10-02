@@ -5,144 +5,94 @@ struct MenuSheet: View {
     @ObservedObject var store: BrowserStore
     @Binding var isPresented: Bool
     let dismissThen: (@escaping () -> Void) -> Void
-
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var data: BrowserDataStore
-
     @State private var showAdblockSettings = false
     @State private var showDownloads = false
-    @State private var showNetworkLogs = false
-    @State private var showUserAgent = false
+    @State private var showMediaDetection = false
+    @State private var showSiteSettings = false
+    @State private var showContentBlocking = false
     @State private var showRemoveBookmarkConfirmation = false
-    @State private var allowPopups = false
     @State private var feedback: String?
     @State private var availableBridgedApp: BridgedApp?
-
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var bookmarkRemovalURL: String?
 
     private var pageURL: URL? {
-        guard !tab.isHome, let url = URL(string: tab.urlString),
-              BrowserSitePolicy.origin(url) != nil else { return nil }
+        guard !tab.isHome, let url = URL(string: tab.urlString), BrowserSitePolicy.origin(url) != nil else { return nil }
         return url
     }
-
     private var isBookmarked: Bool { data.isBookmarked(tab.urlString) }
-
-    private func go(_ screen: AppScreen) {
-        dismissThen { nav.navigate(to: screen) }
-    }
+    private func go(_ screen: AppScreen) { dismissThen { nav.navigate(to: screen) } }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 0) {
                 HStack {
-                    Text("Browser menu")
-                        .font(Theme.font(size: 20, weight: .semibold))
-                        .foregroundColor(Theme.onSurface)
+                    Text(pageURL?.host ?? "Browser")
+                        .font(Theme.font(.subheadline)).foregroundColor(Theme.onSurfaceVariant)
+                        .lineLimit(1).truncationMode(.middle)
                     Spacer()
-                    Button("Done") { isPresented = false }
-                        .font(Theme.font(size: 14, weight: .semibold))
-                        .foregroundColor(Theme.primary)
-                }
-
-                if let feedback {
-                    Label(feedback, systemImage: "checkmark.circle.fill")
-                        .font(Theme.font(.footnote))
-                        .foregroundColor(Theme.primary)
-                }
-
-                LazyVGrid(columns: columns, spacing: 10) {
-                    if let app = availableBridgedApp,
-                       !store.bridgedApps.apps.contains(where: { $0.origin == app.origin }),
-                       pageURL.flatMap(BridgedAppDeclaration.origin(of:)) == app.origin {
-                        menuGridItem(icon: "plus.app", label: "Add Bridged App") {
-                            store.bridgedApps.install(app)
-                            feedback = "\(app.name) added to Dashboard"
-                        }
+                    Button { isPresented = false } label: {
+                        Image(systemName: "xmark").font(.system(size: 15, weight: .medium))
+                            .frame(width: 44, height: 44)
                     }
-                    menuGridItem(icon: "bookmark", label: "Bookmarks") { go(.bookmarks) }
-                    menuGridItem(icon: "clock.arrow.circlepath", label: "History") { go(.history) }
-                    menuGridItem(
-                        icon: isBookmarked ? "star.fill" : "star",
-                        label: isBookmarked ? "Bookmarked" : "Add Bookmark",
-                        selected: isBookmarked,
-                        enabled: pageURL != nil,
-                        state: isBookmarked ? "Saved" : "Not saved",
-                        hint: isBookmarked ? "Opens a confirmation before removal" : "Saves this page"
-                    ) {
-                        if isBookmarked { showRemoveBookmarkConfirmation = true }
-                        else if pageURL != nil {
-                            data.addBookmark(url: tab.urlString, title: tab.title)
-                            feedback = "Bookmark added"
-                        }
+                    .accessibilityLabel("Close menu")
+                }
+                HStack(spacing: 0) {
+                    shortcut(icon: isBookmarked ? "star.fill" : "star",
+                             label: isBookmarked ? "Bookmarked" : "Bookmark", selected: isBookmarked) {
+                        if isBookmarked { bookmarkRemovalURL = tab.urlString; showRemoveBookmarkConfirmation = true }
+                        else { data.addBookmark(url: tab.urlString, title: tab.title); feedback = "Bookmark added" }
                     }
-
-                    menuGridItem(icon: "magnifyingglass", label: "Find in Page", enabled: pageURL != nil) {
+                    shortcut(icon: "magnifyingglass", label: "Find in page") {
                         dismissThen { tab.findInPage() }
                     }
-                    menuGridItem(icon: "desktopcomputer", label: "Desktop Site", selected: tab.isDesktopMode,
-                                 state: tab.isDesktopMode ? "On" : "Off") {
-                        dismissThen { tab.toggleDesktopMode() }
-                    }
-                    menuGridItem(icon: "person.text.rectangle", label: "User Agent",
-                                 selected: tab.userAgentPreset != .automatic,
-                                 state: tab.userAgentPreset.label,
-                                 hint: "Choose the browser identity for this tab") {
-                        showUserAgent = true
-                    }
-
-                    menuGridItem(icon: "scope", label: "Block Element", enabled: pageURL != nil) {
-                        dismissThen { tab.startElementPicker() }
-                    }
-                    menuGridItem(icon: "shield", label: "Adblock Settings",
-                                 state: store.adBlockEnabled ? "Blocking on" : "Blocking off",
-                                 hint: "Opens ad blocking settings") {
-                        showAdblockSettings = true
-                    }
-                    menuGridItem(icon: "network", label: "Network Logs",
-                                 selected: tab.networkCaptureEnabled,
-                                 state: tab.networkCaptureEnabled ? "Recording" : "Capture off") {
-                        showNetworkLogs = true
-                    }
-
-                    menuGridItem(icon: "arrow.down.circle", label: "Downloads") {
-                        showDownloads = true
-                    }
-                    menuGridItem(icon: "gearshape", label: "Browser Settings") {
-                        go(.browserSettings)
-                    }
-                    menuGridItem(icon: "arrow.up.left.and.arrow.down.right", label: "Full Screen",
-                                 enabled: pageURL != nil,
-                                 hint: "Hides browser controls; an exit button remains visible") {
+                    shortcut(icon: "arrow.up.left.and.arrow.down.right", label: "Full screen") {
                         dismissThen { tab.isBrowserChromeHidden = true }
                     }
                 }
-
-                if let pageURL, let host = pageURL.host {
-                    Divider().overlay(Theme.outlineVariant)
-                    Toggle(isOn: $allowPopups) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Allow popups for this site")
-                                .font(Theme.font(size: 14, weight: .medium))
-                                .foregroundColor(Theme.onSurface)
-                            Text(host)
-                                .font(Theme.font(.caption))
-                                .foregroundColor(Theme.onSurfaceVariant)
-                                .lineLimit(1)
-                        }
-                    }
-                    .tint(Theme.primary)
-                    .onChange(of: allowPopups) { value in
-                        BrowserSitePolicy.setPopupsAllowed(value, url: pageURL)
+                if let feedback {
+                    Label(feedback, systemImage: "checkmark.circle.fill")
+                        .font(Theme.font(.footnote)).padding(.vertical, 8)
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
+                Divider().padding(.vertical, 8)
+                menuRow(icon: "play.circle", label: "Media detect",
+                        status: store.mediaDetectionSettings.enabled ? (tab.detectionEnabled ? "On" : "Auto off") : "Off") {
+                    showMediaDetection = true
+                }
+                Toggle(isOn: Binding(get: { tab.isDesktopMode }, set: { value in
+                    if value != tab.isDesktopMode { dismissThen { tab.toggleDesktopMode() } }
+                })) {
+                    Label {
+                        Text("Desktop Site").font(Theme.font(size: 15))
+                    } icon: {
+                        Image(systemName: "desktopcomputer").font(.system(size: 20))
+                            .foregroundColor(Theme.onSurfaceVariant).frame(width: 24)
                     }
                 }
+                .disabled(pageURL == nil).opacity(pageURL == nil ? 0.4 : 1)
+                .padding(.horizontal, 8).frame(minHeight: 48)
+                menuRow(icon: "slider.horizontal.3", label: "Site Settings", enabled: pageURL != nil) { showSiteSettings = true }
+                menuRow(icon: "shield", label: "Content Blocking", status: store.adBlockEnabled ? "On" : "Off") { showContentBlocking = true }
+                if let app = installableApp {
+                    menuRow(icon: "plus.app", label: "Add Bridged App") {
+                        store.bridgedApps.install(app)
+                        feedback = "\(app.name) added to Dashboard"
+                    }
+                }
+                Divider().padding(.vertical, 8)
+                menuRow(icon: "bookmark", label: "Bookmarks") { go(.bookmarks) }
+                menuRow(icon: "clock.arrow.circlepath", label: "History") { go(.history) }
+                menuRow(icon: "arrow.down.circle", label: "Downloads") { showDownloads = true }
+                menuRow(icon: "gearshape", label: "Settings") { go(.browserSettings) }
             }
-            .frame(maxWidth: 500)
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 28)
+            .foregroundColor(Theme.onSurface)
+            .frame(maxWidth: 500).padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 16)
             .frame(maxWidth: .infinity)
         }
+        .tint(Theme.primary)
         .task(id: tab.urlString) {
             availableBridgedApp = nil
             guard !tab.isBridgedApp, let url = pageURL else { return }
@@ -151,63 +101,79 @@ struct MenuSheet: View {
             availableBridgedApp = app
         }
         .background(Theme.surfaceContainerLow.ignoresSafeArea())
-        .presentationDetents([.fraction(0.7), .large])
-        .presentationDragIndicator(.visible)
-        .onAppear { allowPopups = BrowserSitePolicy.popupsAllowed(pageURL) }
-        .onChange(of: tab.urlString) { value in
-            allowPopups = BrowserSitePolicy.popupsAllowed(URL(string: value))
-        }
-        .sheet(isPresented: $showNetworkLogs) { BrowserNetworkLogView(tab: tab, store: store) }
+        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height(installableApp == nil ? 560 : 608), .large]).presentationDragIndicator(.visible)
         .sheet(isPresented: $showDownloads) { BrowserDownloadsView(downloads: store.downloads) }
-        .sheet(isPresented: $showAdblockSettings) { AdblockSettingsSheet(store: store) }
-        .sheet(isPresented: $showUserAgent) { BrowserUserAgentSheet(tab: tab) }
-        .confirmationDialog("Remove this bookmark?", isPresented: $showRemoveBookmarkConfirmation,
-                            titleVisibility: .visible) {
+        .sheet(isPresented: $showMediaDetection) { BrowserMediaDetectionSheet(store: store) }
+        .sheet(isPresented: $showSiteSettings) { BrowserSiteSettingsSheet(tab: tab) }
+        .sheet(isPresented: $showContentBlocking, onDismiss: {
+            if pendingPicker { pendingPicker = false; dismissThen { tab.startElementPicker() } }
+        }) {
+            NavigationStack {
+                List {
+                    Button("Adblock Settings") { showAdblockSettings = true }
+                    Button("Block Element") { pendingPicker = true; showContentBlocking = false }
+                        .disabled(pageURL == nil)
+                }
+                .navigationTitle("Content Blocking").navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showContentBlocking = false } } }
+                .sheet(isPresented: $showAdblockSettings) { AdblockSettingsSheet(store: store) }
+            }
+            .presentationDetents([.medium, .large])
+        }
+        .confirmationDialog("Remove this bookmark?", isPresented: $showRemoveBookmarkConfirmation, titleVisibility: .visible) {
             Button("Remove Bookmark", role: .destructive) {
-                data.removeBookmark(url: tab.urlString)
+                if let url = bookmarkRemovalURL { data.removeBookmark(url: url) }
+                bookmarkRemovalURL = nil
                 feedback = "Bookmark removed"
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { bookmarkRemovalURL = nil }
         }
     }
 
-    private func menuGridItem(
-        icon: String,
-        label: String,
-        selected: Bool = false,
-        enabled: Bool = true,
-        state: String = "",
-        hint: String = "",
-        action: @escaping () -> Void
-    ) -> some View {
+    @State private var pendingPicker = false
+
+    private var installableApp: BridgedApp? {
+        guard let app = availableBridgedApp,
+              !store.bridgedApps.apps.contains(where: { $0.origin == app.origin }),
+              pageURL.flatMap(BridgedAppDeclaration.origin(of:)) == app.origin else { return nil }
+        return app
+    }
+
+    private func menuRow(icon: String, label: String, status: String = "", enabled: Bool = true,
+                         action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: icon).font(.system(size: 20)).foregroundColor(Theme.onSurfaceVariant).frame(width: 24)
+                Text(label).font(Theme.font(size: 15))
+                Spacer(minLength: 8)
+                if !status.isEmpty { Text(status).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant) }
+                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundColor(Theme.onSurfaceVariant)
+            }
+            .padding(.horizontal, 8).padding(.vertical, 10).frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.4)
+        .accessibilityLabel(label).accessibilityValue(status)
+    }
+
+    private func shortcut(icon: String, label: String, selected: Bool = false,
+                          action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 21, weight: .medium))
+                Image(systemName: icon).font(.system(size: 22))
                     .foregroundColor(selected ? Theme.primary : Theme.onSurfaceVariant)
-                    .frame(width: 48, height: 48)
-                    .background(selected ? Theme.primaryDim.opacity(0.25) : Color.clear, in: Circle())
-                Text(label)
-                    .font(Theme.font(size: 12))
-                    .foregroundColor(selected ? Theme.primary : Theme.onSurface)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
+                Text(label).font(Theme.font(size: 12)).multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
-                    .frame(minHeight: 34, alignment: .top)
             }
-            .frame(maxWidth: .infinity, minHeight: 92)
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .padding(.vertical, 8).padding(.horizontal, 4)
+            .frame(maxWidth: .infinity, minHeight: 64).contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .disabled(!enabled)
-        .opacity(enabled ? 1 : 0.4)
+        .buttonStyle(.plain).disabled(pageURL == nil).opacity(pageURL == nil ? 0.4 : 1)
         .accessibilityLabel(label)
-        .accessibilityValue(state)
-        .accessibilityHint(enabled ? hint : "Open a website to use this action")
     }
 }
 
-private struct BrowserUserAgentSheet: View {
+struct BrowserUserAgentSheet: View {
     @ObservedObject var tab: BrowserTab
     @Environment(\.dismiss) private var dismiss
     @State private var customValue = ""

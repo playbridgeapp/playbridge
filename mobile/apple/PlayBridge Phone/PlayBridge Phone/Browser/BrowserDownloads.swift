@@ -141,6 +141,8 @@ final class BrowserDownloads: NSObject, ObservableObject, WKDownloadDelegate {
             view.startDownload(using: request, completionHandler: completion)
         }
     }
+    func clear() { items.forEach { remove($0) } }
+
     func remove(_ item: BrowserDownload) {
         cancel(item)
         items.removeAll { $0 === item }

@@ -1,6 +1,17 @@
 import XCTest
 
 final class BrowserPopupUITests: XCTestCase {
+    private func openContentBlocking(_ app: XCUIApplication) {
+        let action = app.buttons["Content Blocking"]
+        let menuScroll = app.scrollViews.containing(.button, identifier: "Bookmarks").firstMatch
+        for _ in 0..<4 {
+            if action.exists && action.isHittable { break }
+            menuScroll.swipeUp()
+        }
+        XCTAssertTrue(action.waitForExistence(timeout: 5), app.debugDescription)
+        action.tap()
+    }
+
     func testBlockElementOnLiveImage() {
         continueAfterFailure = false
         let app = XCUIApplication(bundleIdentifier: "com.playbridge.browser-startup-checks")
@@ -11,6 +22,7 @@ final class BrowserPopupUITests: XCTestCase {
         let menu = app.buttons["Browser menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 40), app.debugDescription)
         menu.tap()
+        openContentBlocking(app)
         app.buttons["Block Element"].tap()
         let state = app.staticTexts["pickerState"]
         expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
@@ -24,6 +36,7 @@ final class BrowserPopupUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
         waitForExpectations(timeout: 10)
         menu.tap()
+        openContentBlocking(app)
         app.buttons["Block Element"].tap()
         expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
         waitForExpectations(timeout: 10)
@@ -41,6 +54,7 @@ final class BrowserPopupUITests: XCTestCase {
         let menu = app.buttons["Browser menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 25), app.debugDescription)
         menu.tap()
+        openContentBlocking(app)
         let block = app.buttons["Block Element"]
         XCTAssertTrue(block.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertTrue(block.isEnabled, "Block Element should be enabled on a loaded web page")
@@ -53,6 +67,7 @@ final class BrowserPopupUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
         waitForExpectations(timeout: 10)
         menu.tap()
+        openContentBlocking(app)
         block.tap()
         expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
         waitForExpectations(timeout: 10)
@@ -65,6 +80,7 @@ final class BrowserPopupUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label == %@", "Picker inactive"), evaluatedWith: state)
         waitForExpectations(timeout: 10)
         menu.tap()
+        openContentBlocking(app)
         block.tap()
         expectation(for: NSPredicate(format: "label == %@", "Picker active"), evaluatedWith: state)
         waitForExpectations(timeout: 10)

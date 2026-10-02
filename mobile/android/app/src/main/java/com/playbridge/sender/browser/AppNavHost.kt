@@ -118,6 +118,7 @@ fun AppNavHost(
     isBrowserChromeHidden: Boolean,
     onIsBrowserChromeHiddenChange: (Boolean) -> Unit,
     isBridgedAppMode: Boolean = false,
+    onAppSettings: () -> Unit = {},
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
@@ -1909,6 +1910,11 @@ fun AppNavHost(
                         onScreenChange(Screen.Remote)
                     },
                     onDevices = { showDevicePicker = true },
+                    onBack = {
+                        leaveMediaFullscreen()
+                        if (browserCanGoBack) session?.goBack() else onScreenChange(Screen.Dashboard)
+                    },
+                    onAppSettings = onAppSettings,
                     onRefresh = {
                         leaveMediaFullscreen()
                         session?.reload()

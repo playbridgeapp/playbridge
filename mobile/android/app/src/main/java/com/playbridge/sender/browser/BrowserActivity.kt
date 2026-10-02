@@ -308,7 +308,9 @@ class BrowserActivity : ComponentActivity() {
         // so live pages don't immediately re-accumulate the data being deleted.
         if (selection.openTabs) {
             val store = Components.store
-            store.state.tabs.map { it.id }.forEach { Components.tabManager.closeTab(it, store) }
+            val appTabIds = installedAppStore.apps.value.mapNotNull { it.tabId }.toSet()
+            store.state.tabs.filter { it.id !in appTabIds }.map { it.id }
+                .forEach { Components.tabManager.closeTab(it, store) }
             // Land on a fresh tab (Fenix-style) instead of a dead browser view.
             Components.tabManager.createTab("about:blank", store)
         }
@@ -332,6 +334,13 @@ class BrowserActivity : ComponentActivity() {
         } else null
 
         lifecycleScope.launch {
+            if (selection.sitePermissions) {
+                linkedPageCastCoordinator.unlink("permission_reset")
+                PageCastConsentStore.clear(this@BrowserActivity)
+                val settings: SettingsRepository by inject()
+                settings.popupWhitelist.first().forEach { settings.removePopupWhitelist(it) }
+                settings.popupBlacklist.first().forEach { settings.removePopupBlacklist(it) }
+            }
             if (selection.browsingHistory) {
                 historyDao.clear()
                 searchHistoryDao.deleteAll()
@@ -1020,7 +1029,7 @@ class BrowserActivity : ComponentActivity() {
             var previousUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "") }
             var menuExpanded by remember { mutableStateOf(false) }
             var showMenuSheet by remember { mutableStateOf(false) }
-            val sheetState = rememberModalBottomSheetState()
+            val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
             var showUserAgentSheet by remember { mutableStateOf(false) }
             val userAgentSheetState = rememberModalBottomSheetState()
             var showClearDataSheet by remember { mutableStateOf(false) }
@@ -2233,16 +2242,39 @@ class BrowserActivity : ComponentActivity() {
                 }
             )
 
+            val bookmarkUrls by browserViewModel.bookmarkUrls.collectAsStateWithLifecycle()
+            var bookmarkRemovalUrl by remember { mutableStateOf<String?>(null) }
+            var showAppSettings by remember { mutableStateOf(false) }
             val handleBookmarkClick = {
                 val title = selectedTab?.content?.title
                 val url = currentUrl
                 if (url != "about:blank") {
-                    browserViewModel.addBookmark(url, title ?: "")
-                    Toast.makeText(this@BrowserActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
+                    if (bookmarkUrls?.contains(url) == true) {
+                        bookmarkRemovalUrl = url
+                    } else {
+                        browserViewModel.addBookmark(url, title ?: "")
+                        Toast.makeText(this@BrowserActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
 
             PlayBridgeTheme {
+                bookmarkRemovalUrl?.let { url ->
+                    AlertDialog(
+                        onDismissRequest = { bookmarkRemovalUrl = null },
+                        title = { Text("Remove this bookmark?") },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                bookmarkRemovalUrl = null
+                                browserViewModel.removeBookmark(url) { success ->
+                                    Toast.makeText(this@BrowserActivity,
+                                        if (success) "Bookmark removed" else "Couldn’t remove bookmark", Toast.LENGTH_SHORT).show()
+                                }
+                            }) { Text("Remove Bookmark") }
+                        },
+                        dismissButton = { TextButton(onClick = { bookmarkRemovalUrl = null }) { Text("Cancel") } },
+                    )
+                }
                     Scaffold(
                         contentWindowInsets = WindowInsets(0, 0, 0, 0),
                         topBar = {
@@ -2624,6 +2656,7 @@ class BrowserActivity : ComponentActivity() {
                             }
                         },
                         isBridgedAppMode = isBridgedAppMode,
+                        onAppSettings = { showAppSettings = true },
                         bridgedApps = installedBridgedApps,
                         onOpenBridgedApp = { app ->
                             if (selectedTabId != null && selectedTabId != activeBridgedAppTabId &&
@@ -2719,6 +2752,11 @@ class BrowserActivity : ComponentActivity() {
                 SheetOverlayContainer(
                     // Hamburger Menu Sheet States
                     showMenuSheet = showMenuSheet,
+                    showAppSettings = showAppSettings,
+                    onAppSettingsDismiss = { showAppSettings = false },
+                    pageHost = runCatching { java.net.URI(currentUrl).host }.getOrNull().orEmpty(),
+                    isBookmarked = bookmarkUrls?.contains(currentUrl) == true,
+                    bookmarkStateReady = bookmarkUrls != null,
                     onMenuDismiss = { showMenuSheet = false },
                     menuSheetState = sheetState,
                     currentScreen = currentScreen,
@@ -2801,7 +2839,7 @@ class BrowserActivity : ComponentActivity() {
                     },
                     showClearDataSheet = showClearDataSheet,
                     onClearDataDismiss = { showClearDataSheet = false },
-                    openTabsCount = store.state.tabs.size,
+                    openTabsCount = store.state.tabs.count { tab -> installedBridgedApps.none { it.tabId == tab.id } },
                     onClearDataConfirm = { selection ->
                         showClearDataSheet = false
                         performClearData(selection)

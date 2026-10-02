@@ -414,7 +414,7 @@ private fun CertRow(label: String, value: String) {
     }
 }
 
-private fun isHostMatch(host: String, list: Set<String>): Boolean {
+internal fun isHostMatch(host: String, list: Set<String>): Boolean {
     val trimmedHost = host.trim().lowercase()
     if (trimmedHost.isBlank()) return false
     return list.any { exception ->

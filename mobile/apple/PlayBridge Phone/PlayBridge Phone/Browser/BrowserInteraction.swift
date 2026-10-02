@@ -34,6 +34,10 @@ struct BrowserNavigationFailure {
 }
 
 enum BrowserSitePolicy {
+    static func clearPopupPermissions() {
+        UserDefaults.standard.removeObject(forKey: "pb_popup_origins")
+    }
+
     static func origin(_ url: URL?) -> String? {
         guard let url, let scheme = url.scheme?.lowercased(), ["http", "https"].contains(scheme),
               let host = url.host?.lowercased() else { return nil }

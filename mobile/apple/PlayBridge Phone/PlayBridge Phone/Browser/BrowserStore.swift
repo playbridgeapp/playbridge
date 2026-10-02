@@ -28,6 +28,14 @@ final class BrowserStore: ObservableObject {
         didSet { if !browserVisible { activeTab?.cancelPrompt() } }
     }
 
+    @Published var mediaDetectionSettings = BrowserMediaDetectionSettings.load() {
+        didSet {
+            guard mediaDetectionSettings != oldValue else { return }
+            mediaDetectionSettings.save()
+            tabs.forEach { $0.configureMediaDetection(mediaDetectionSettings) }
+        }
+    }
+
     @Published var adBlockEnabled: Bool = ContentBlocker.isEnabled
     private var ruleLists: [WKContentRuleList] = []
 
@@ -103,6 +111,7 @@ final class BrowserStore: ObservableObject {
         // message handler without changing the supplied process pool/data store.
         if windowConfiguration != nil { configuration.userContentController = WKUserContentController() }
         let tab = BrowserTab(configuration: configuration, handler: handler, bridgedAppOrigin: bridgedAppOrigin)
+        tab.configureMediaDetection(mediaDetectionSettings)
         handler.tab = tab
         tab.isActive = { [weak self, weak tab] in
             guard let self, let tab else { return false }
@@ -473,9 +482,7 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
         case "detectionPolicyRequest":
             guard let tab, message.webView === tab.loadedWebView else { return }
             // Each frame uses its owning tab's policy, including cross-origin frames and BFCache restores.
-            tab.webView.evaluateJavaScript(
-                "window.__playbridgeSetDetectionEnabled?.(\(tab.detectionEnabled)); void 0;",
-                in: message.frameInfo, in: .page, completionHandler: nil)
+            tab.registerDetectionFrame(message.frameInfo)
         case "pageCastRequest":
             guard let tab, message.webView === tab.loadedWebView, message.frameInfo.isMainFrame,
                   let frameOrigin = BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)),
@@ -484,7 +491,7 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
         case "mediaLifecycle":
             if tab?.detectionEnabled == true, message.frameInfo.isMainFrame { tab?.detector.beginMediaLifecycle() }
         case "video":
-            guard tab?.detectionEnabled == true else { return }
+            guard message.webView === tab?.loadedWebView, tab?.acceptsDetection(body) == true else { return }
             tab?.detector.ingest(body)
         case "cast":
             guard message.webView === tab?.loadedWebView, message.frameInfo.isMainFrame,

@@ -1,8 +1,17 @@
 package com.playbridge.sender.browser
 
 import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SheetState
 import androidx.compose.runtime.Composable
@@ -28,6 +37,11 @@ import org.koin.androidx.compose.koinViewModel
 fun SheetOverlayContainer(
     // Hamburger Menu Sheet States
     showMenuSheet: Boolean,
+    showAppSettings: Boolean = false,
+    onAppSettingsDismiss: () -> Unit = {},
+    pageHost: String = "",
+    isBookmarked: Boolean = false,
+    bookmarkStateReady: Boolean = true,
     onMenuDismiss: () -> Unit,
     menuSheetState: SheetState,
     currentScreen: Screen,
@@ -103,13 +117,19 @@ fun SheetOverlayContainer(
 ) {
     val debridRepository: DebridRepository = koinInject()
     var showMediaDetectionSheet by remember { mutableStateOf(false) }
+    var showBrowserSettings by remember { mutableStateOf(false) }
+    var showContentBlocking by remember { mutableStateOf(false) }
+    var showSiteSettings by remember { mutableStateOf(false) }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 1. Hamburger Menu Sheet
         if (showMenuSheet) {
             MenuSheet(
                 sheetState = menuSheetState,
-                currentScreen = currentScreen,
+                pageHost = pageHost,
+                hasPage = currentUrl.startsWith("https://") || currentUrl.startsWith("http://"),
+                isBookmarked = isBookmarked,
+                bookmarkStateReady = bookmarkStateReady,
                 isDesktopMode = isDesktopMode,
                 detectVideosEnabled = detectVideosEnabled,
                 onDismissRequest = onMenuDismiss,
@@ -120,19 +140,41 @@ fun SheetOverlayContainer(
                 canInstallBridgedApp = canInstallBridgedApp,
                 onAddBridgedAppClick = onAddBridgedAppClick,
                 onFindInPageClick = onFindInPageClick,
-                onExtensionsClick = onExtensionsClick,
                 onToggleDesktopMode = onToggleDesktopMode,
                 onMediaDetectionClick = {
                     onMenuDismiss()
                     showMediaDetectionSheet = true
                 },
-                userAgentActive = userAgentActive,
-                onUserAgentClick = onUserAgentClick,
-                onFullScreenClick = onFullScreenClick,
-                onClearDataClick = onClearDataClick
+                onSiteSettingsClick = { onMenuDismiss(); showSiteSettings = true },
+                onBrowserSettingsClick = { onMenuDismiss(); showBrowserSettings = true },
+                onContentBlockingClick = { onMenuDismiss(); showContentBlocking = true },
+                onFullScreenClick = onFullScreenClick
             )
         }
 
+        if (showBrowserSettings || showAppSettings || showSiteSettings) {
+            BrowserPreferencesSheet(
+                title = if (showSiteSettings) "Site Settings" else if (showAppSettings) "App Settings" else "Settings",
+                siteUrl = if (showSiteSettings || showAppSettings) currentUrl else null,
+                onDismiss = { showBrowserSettings = false; showSiteSettings = false; onAppSettingsDismiss() },
+                onMediaDetection = { showBrowserSettings = false; showSiteSettings = false; onAppSettingsDismiss(); showMediaDetectionSheet = true },
+                userAgentActive = userAgentActive,
+                onUserAgent = { showBrowserSettings = false; showSiteSettings = false; onAppSettingsDismiss(); onUserAgentClick() },
+                onExtensions = { showBrowserSettings = false; showSiteSettings = false; onAppSettingsDismiss(); onExtensionsClick() },
+                onClearData = { showBrowserSettings = false; showSiteSettings = false; onAppSettingsDismiss(); onClearDataClick() },
+            )
+        }
+        if (showContentBlocking) {
+            ModalBottomSheet(onDismissRequest = { showContentBlocking = false }) {
+                Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Content Blocking", style = MaterialTheme.typography.titleLarge)
+                    Text("Manage content blocking through your installed browser extensions.")
+                    Button(onClick = { showContentBlocking = false; onExtensionsClick() }) {
+                        Text("Manage Extensions")
+                    }
+                }
+            }
+        }
         if (showMediaDetectionSheet) {
             MediaDetectionSheet(
                 settings = mediaDetectionSettings,

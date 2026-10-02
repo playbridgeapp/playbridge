@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +58,19 @@ class BrowserViewModel(
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    val bookmarkUrls: StateFlow<Set<String>?> = bookmarkDao.getAll()
+        .map { entries -> entries.mapTo(mutableSetOf()) { it.url }.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    fun removeBookmark(url: String, onComplete: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            val success = withContext(Dispatchers.IO) {
+                runCatching { bookmarkDao.deleteByUrl(url) }.isSuccess
+            }
+            onComplete(success)
+        }
+    }
 
     fun setEditUrl(url: String) {
         _editUrl.value = url

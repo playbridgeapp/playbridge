@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SettingsRemote
 import androidx.compose.material3.DropdownMenu
@@ -69,6 +71,8 @@ internal fun PlayBridgeEdgeShortcut(
     onRemote: () -> Unit,
     onDevices: () -> Unit,
     onRefresh: () -> Unit,
+    onBack: () -> Unit = onDashboard,
+    onAppSettings: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -145,6 +149,12 @@ internal fun PlayBridgeEdgeShortcut(
             ) {
                 DropdownMenuItem(
                     colors = menuItemColors,
+                    text = { Text("Back") },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.ArrowBack, null, Modifier.size(18.dp)) },
+                    onClick = { expanded = false; onBack() },
+                )
+                DropdownMenuItem(
+                    colors = menuItemColors,
                     text = { Text("Dashboard") },
                     leadingIcon = {
                         Icon(painterResource(R.drawable.ic_dashboard_blocks), null, Modifier.size(18.dp))
@@ -159,15 +169,21 @@ internal fun PlayBridgeEdgeShortcut(
                 )
                 DropdownMenuItem(
                     colors = menuItemColors,
-                    text = { Text("Devices") },
+                    text = { Text("Connect TV") },
                     leadingIcon = { Icon(Icons.Default.Cast, null, Modifier.size(18.dp)) },
                     onClick = { expanded = false; onDevices() },
                 )
                 DropdownMenuItem(
                     colors = menuItemColors,
-                    text = { Text("Refresh") },
+                    text = { Text("Reload") },
                     leadingIcon = { Icon(Icons.Default.Refresh, null, Modifier.size(18.dp)) },
                     onClick = { expanded = false; onRefresh() },
+                )
+                DropdownMenuItem(
+                    colors = menuItemColors,
+                    text = { Text("App Settings") },
+                    leadingIcon = { Icon(Icons.Default.Settings, null, Modifier.size(18.dp)) },
+                    onClick = { expanded = false; onAppSettings() },
                 )
             }
         }

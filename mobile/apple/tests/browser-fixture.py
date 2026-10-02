@@ -38,7 +38,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif path == '/detection':
                 data = ("<html><title>Detection</title><script>window.detectorAtStart=window.__playbridgeDetectionEnabled;addEventListener('message',e=>{window.frameDetectorState=e.data.detector;});</script><iframe src='http://localhost:" + str(self.server.server_port) + "/detection-frame'></iframe></html>").encode()
             elif path == '/detection-frame':
-                data = b"<html><script>parent.postMessage({detector:window.__playbridgeDetectionEnabled},'*');</script></html>"
+                data = b"<html><script>parent.postMessage({detector:window.__playbridgeDetectionEnabled},'*');addEventListener('message',()=>parent.postMessage({detector:window.__playbridgeDetectionEnabled},'*'));</script></html>"
             elif path == '/playback.wav':
                 output = io.BytesIO()
                 with wave.open(output, 'wb') as audio:

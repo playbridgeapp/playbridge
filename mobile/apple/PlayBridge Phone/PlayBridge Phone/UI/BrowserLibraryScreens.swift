@@ -110,10 +110,13 @@ struct BookmarksScreen: View {
 // MARK: - Browser settings
 
 struct BrowserSettingsScreen: View {
-    @EnvironmentObject private var data: BrowserDataStore
+    @EnvironmentObject private var store: BrowserStore
+    @State private var showClearData = false
+    @State private var showMediaDetection = false
+    @State private var advanced = false
+    @State private var showUserAgent = false
+    @State private var showNetworkLogs = false
     @State private var engine = SearchEngine.current
-    @State private var confirmClearHistory = false
-    @State private var clearedMessage: String?
     @State private var showCastPermissions = false
 
     var body: some View {
@@ -142,35 +145,38 @@ struct BrowserSettingsScreen: View {
                     Section("Privacy") {
                         Button("Website casting permissions") { showCastPermissions = true }
                         Link("Privacy policy", destination: URL(string: "https://playbridge.app/privacy")!)
-                        Button("Clear history") { confirmClearHistory = true }
-                            .foregroundColor(Theme.danger)
-                        Button("Clear cookies & website data") { clearWebsiteData() }
+                        Button("Media detect") { showMediaDetection = true }
+                        Button("Clear Browsing Data") { showClearData = true }
                             .foregroundColor(Theme.danger)
                     }
-                    if let clearedMessage {
-                        Section { Text(clearedMessage).font(Theme.font(size: 13)).foregroundColor(Color(hex: 0x4CAF50)) }
+                    Section {
+                        DisclosureGroup("Advanced", isExpanded: $advanced) {
+                            Button { showUserAgent = true } label: {
+                                HStack {
+                                    Text("User Agent")
+                                    Spacer()
+                                    Text(store.activeTab?.userAgentPreset.label ?? "Automatic")
+                                        .foregroundColor(Theme.onSurfaceVariant)
+                                }
+                            }
+                            .disabled(store.activeTab == nil)
+                            Button("Network Logs") { showNetworkLogs = true }
+                                .disabled(store.activeTab == nil)
+                        }
                     }
                 }
                 .scrollContentBackground(.hidden)
             }
         }
         .sheet(isPresented: $showCastPermissions) { PageCastPermissionsView() }
-        .alert("Clear all history?", isPresented: $confirmClearHistory) {
-            Button("Clear", role: .destructive) { data.clearHistory(); flash("History cleared.") }
-            Button("Cancel", role: .cancel) {}
+        .sheet(isPresented: $showClearData) { BrowserClearDataSheet(store: store) }
+        .sheet(isPresented: $showMediaDetection) { BrowserMediaDetectionSheet(store: store) }
+        .sheet(isPresented: $showUserAgent) {
+            if let tab = store.activeTab { BrowserUserAgentSheet(tab: tab) }
         }
-    }
-
-    private func clearWebsiteData() {
-        let types = WKWebsiteDataStore.allWebsiteDataTypes()
-        WKWebsiteDataStore.default().removeData(ofTypes: types, modifiedSince: .distantPast) {
-            flash("Cookies & website data cleared.")
+        .sheet(isPresented: $showNetworkLogs) {
+            if let tab = store.activeTab { BrowserNetworkLogView(tab: tab, store: store) }
         }
-    }
-
-    private func flash(_ text: String) {
-        clearedMessage = text
-        Task { try? await Task.sleep(nanoseconds: 2_500_000_000); if clearedMessage == text { clearedMessage = nil } }
     }
 }
 
