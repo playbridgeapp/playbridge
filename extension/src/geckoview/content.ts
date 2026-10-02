@@ -6,6 +6,7 @@
 import browser from "./browser";
 import { detectionOptions, type DetectionOptions } from "./detection-policy";
 import { isSupportedDomImage } from "./detected-media-kind";
+import { installPluginBridge } from "./plugin-bridge";
 
 // cloneInto is Firefox/GeckoView-only (not on TypeScript's DOM lib).
 let detectionEnabled = false;
@@ -374,6 +375,8 @@ browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown
 })();
 
 // Only normal browsing pages with detection enabled receive player probes.
+installPluginBridge();
+
 function injectPlayerProbe(): void {
   if (window.top !== window || (!options.visibilityOverrides && !(options.playerProbes && options.videos))) return;
   const script = document.createElement("script");

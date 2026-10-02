@@ -22,3 +22,24 @@ On Android and iOS, a valid same-origin `/.well-known/playbridge-app.json` decla
 The frosted edge menu includes **Remote**. Opening it from a bridged app keeps that app's session and position; the Remote return arrow (and Android Back) reopens the same app. If the app was removed, its tab was closed, or the tab left its app origin, return goes to the dashboard instead. On iOS the edge menu also offers **Back**, **Dashboard**, **Connect TV**, and **Reload**. In iPhone landscape mode the handle stays on the side opposite the front camera, with its chevron pointing inward; portrait keeps it on the right. Closing Dashboard returns to the app which opened it. On iOS the handle hides while a main-page Movi player is fullscreen, including its canvas-based CSS fallback. Inline playback keeps it visible; pausing or buffering in fullscreen keeps it hidden. Exiting fullscreen, removing the player, or leaving the document restores it. This uses a separate lightweight fullscreen observer and does not enable media or image detection.
 
 Linked website casts do not display a mini playback bar over browser or bridged-app pages. Remote shows **Controlled by [website]** with an **Unlink** action while a website controls the session. Unlink releases website control while the current TV playback continues; Remote's playback and queue controls remain available.
+
+## Device plugins on Android FOSS
+
+Library and installed Bridged Apps share the device's Nuvio plugin manager and resolver. The resolver is opt-in and initially disabled. The Play flavor does not include the QuickJS plugin runtime; iOS has no native plugin resolver. Library remains accessible during the transition to Streams. Device plugin installation, provider settings and approvals stay on the device and are not imported from a website or its Nuvio cloud profile.
+
+The GeckoView page API extends the existing `window.playbridge` object:
+
+```ts
+playbridge.capabilities.nativePlugins // 1 = supported, 0 = unavailable
+await playbridge.plugins.status() // available, enabled, installed provider identifiers and approval state
+await playbridge.plugins.resolve({
+  repoUrl: 'https://plugins.example/manifest.json',
+  scraperIds: ['example'], tmdbId: '60625', mediaType: 'tv', season: 8, episode: 2
+}) // streams and safe warnings
+await playbridge.plugins.manage() // opens the shared device manager from a user gesture
+playbridge.plugins.cancel() // cancels this document's outstanding resolutions
+```
+
+Only the installed app's top-level document may use the native endpoint. The sender's actual GeckoSession, tab and origin are checked by Android; declaring an app manifest alone does not grant access. Release builds require HTTPS app origins; debug builds also accept local HTTP development origins. Requests contain installed repository and scraper identifiers, never downloaded code, arbitrary HTTP requests, provider settings or credentials. Resolve requests accept at most 32 distinct scraper IDs, and a document may have at most four pending bridge requests. Closing the document or changing its hash route cancels lookups. Native failure, disabled providers and pending approvals must not fall back to executing website plugin code.
+
+Plugin resolution does not remove browser restrictions on playback. A returned stream may still require provider headers, CORS support, a compatible codec, or native casting. The resolver's network client is separate from browser and app authentication, and provider domain access must be approved in device settings.

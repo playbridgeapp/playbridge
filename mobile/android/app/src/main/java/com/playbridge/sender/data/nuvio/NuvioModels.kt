@@ -116,3 +116,48 @@ data class NuvioSettingOption(
     val label: String = "",
     val value: String = ""
 )
+
+// ==================== Native plugin bridge contract ====================
+
+/**
+ * Status of the shared native plugin engine. Does not include credentials,
+ * settings, or script source. [requiresApproval] means the installed code has
+ * not been explicitly approved; a pending update does not clear an existing
+ * approval of the retained version.
+ */
+data class NativePluginStatus(
+    val available: Boolean,
+    val enabled: Boolean,
+    val providers: List<NativePluginProvider> = emptyList(),
+)
+
+data class NativePluginProvider(
+    val repoUrl: String,
+    val scraperId: String,
+    val name: String,
+    val enabled: Boolean,
+    val requiresApproval: Boolean,
+)
+
+data class NativePluginStream(
+    val addonName: String,
+    val addonUrl: String,
+    val url: String,
+    val name: String? = null,
+    val title: String? = null,
+    val headers: Map<String, String>? = null,
+)
+
+data class NativePluginResolution(
+    val streams: List<NativePluginStream> = emptyList(),
+    val warnings: List<String> = emptyList(),
+)
+
+/** UI-only state for the native management screen. Not part of the bridge contract. */
+data class NativePluginManagementState(
+    val scraper: NuvioScraperEntity,
+    val requiresApproval: Boolean,
+    val updateAvailable: Boolean,
+    val approvedHosts: List<String> = emptyList(),
+    val blockedHosts: List<String> = emptyList(),
+)

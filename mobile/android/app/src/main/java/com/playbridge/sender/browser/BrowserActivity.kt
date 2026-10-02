@@ -603,9 +603,11 @@ class BrowserActivity : ComponentActivity() {
                 mutableStateOf(currentScreen.takeUnless { it == Screen.Remote } ?: Screen.Browser)
             }
             var remoteOriginBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
+            var pluginManagerReturnTabId by rememberSaveable { mutableStateOf<String?>(null) }
             var connectionInitialTab by remember { mutableStateOf(0) }
             LaunchedEffect(currentScreen) {
                 if (currentScreen != Screen.Connection) connectionInitialTab = 0
+                if (currentScreen != Screen.AddonSettings) pluginManagerReturnTabId = null
             }
             // The screen the Dashboard was opened from, so its close (X) returns there.
             var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
@@ -945,6 +947,13 @@ class BrowserActivity : ComponentActivity() {
             SideEffect {
                 Components.setBridgedApps(installedBridgedApps)
                 Components.activeBridgedAppTabId = activeBridgedAppTabId
+                Components.onNativePluginManagerRequested = { appTabId ->
+                    if (currentScreen == Screen.Browser && isBridgedAppMode && selectedTabId == appTabId) {
+                        pluginManagerReturnTabId = appTabId
+                        currentScreen = Screen.AddonSettings
+                        true
+                    } else false
+                }
                 Components.onBridgedAppExternalNavigation = { appTabId, url ->
                     if (activeBridgedAppTabId == appTabId && store.state.selectedTabId == appTabId &&
                         installedBridgedApps.any { it.tabId == appTabId }) {
@@ -959,6 +968,7 @@ class BrowserActivity : ComponentActivity() {
                 onDispose {
                     Components.activeBridgedAppTabId = null
                     Components.onBridgedAppExternalNavigation = null
+                    Components.onNativePluginManagerRequested = null
                 }
             }
             LaunchedEffect(currentOrigin, selectedTabId, currentScreen) {
@@ -2531,6 +2541,26 @@ class BrowserActivity : ComponentActivity() {
                             currentScreen = target
                         },
                         connectionInitialTab = connectionInitialTab,
+                        addonSettingsFromBridgedApp = pluginManagerReturnTabId != null,
+                        onAddonSettingsBack = {
+                            val appTab = pluginManagerReturnTabId
+                            pluginManagerReturnTabId = null
+                            if (appTab == null) {
+                                currentScreen = Screen.Library
+                            } else {
+                                val target = resolveRemoteReturnTarget(
+                                    origin = Screen.Browser,
+                                    bridgedAppTabId = appTab,
+                                    apps = bridgedAppStore.apps.value,
+                                    tabUrls = store.state.tabs.associate { it.id to it.content.url },
+                                )
+                                activeBridgedAppTabId = target.bridgedAppTabId
+                                Components.activeBridgedAppTabId = target.bridgedAppTabId
+                                if (target.bridgedAppTabId != null) tabManager.selectTab(target.bridgedAppTabId, store)
+                                else if (store.state.selectedTabId in bridgedAppTabIds) selectNormalBrowserTab()
+                                currentScreen = target.screen
+                            }
+                        },
                         lastMainScreen = lastMainScreen,
                         onLastMainScreenChange = { lastMainScreen = it },
                         onRemoteBack = {

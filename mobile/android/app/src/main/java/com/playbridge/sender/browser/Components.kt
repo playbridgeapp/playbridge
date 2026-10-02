@@ -86,6 +86,7 @@ object Components {
     var onLinkedNativePortDisconnected: (() -> Unit)? = null
     var onLinkedDevicePickerDismissed: (() -> Unit)? = null
     var onLinkedDevicePicked: ((com.playbridge.sender.model.TvDevice) -> Unit)? = null
+    var onNativePluginManagerRequested: ((tabId: String) -> Boolean)? = null
     private val pageCastCallbackGate = OwnedCallbackGate()
     private val pageNavigationGenerations = java.util.concurrent.ConcurrentHashMap<Int, Long>()
     val linkedDevicePickerRequests = kotlinx.coroutines.flow.MutableStateFlow(0L)
@@ -182,6 +183,16 @@ object Components {
         if (changed) publishDetectionPolicy()
     }
 
+    internal fun nativePluginAppOrigin(tabId: String): String? =
+        bridgedAppOriginsByTabId[tabId]?.takeIf { it in installedBridgedAppOrigins }
+
+    internal fun nativePluginDocumentUrl(tabId: String, session: org.mozilla.geckoview.GeckoSession): String? {
+        val tab = store.state.tabs.firstOrNull { it.id == tabId } ?: return null
+        val engineSession = tab.engineState.engineSession ?: return null
+        if (tabManager.getGeckoSession(engineSession) !== session) return null
+        return tab.content.url
+    }
+
     private fun detectionPolicy(tabId: String? = null): JSONObject = JSONObject().apply {
         put("type", "detection_policy")
         put("revision", detectionPolicyRevision.get())
@@ -194,6 +205,7 @@ object Components {
     private fun publishDetectionPolicy() {
         detectionPolicyRevision.incrementAndGet()
         Handler(Looper.getMainLooper()).post {
+            NativePluginBridge.invalidateUnauthorized()
             VideoDetector.filterDetections(::detectionAllowed, mediaDetectionSettings::allows)
             detectionPolicyPorts.toMap().forEach { (port, tabId) ->
                 runCatching { port.postMessage(detectionPolicy(tabId)) }
@@ -205,6 +217,7 @@ object Components {
     fun bindDetectionPolicy(tabId: String, engineSession: EngineSession) {
         val extension = videoDetectorExtension ?: return
         val session = tabManager.getGeckoSession(engineSession) ?: return
+        NativePluginBridge.bind(session, extension, tabId)
         session.webExtensionController.setMessageDelegate(
             extension,
             object : GeckoWebExtension.MessageDelegate {

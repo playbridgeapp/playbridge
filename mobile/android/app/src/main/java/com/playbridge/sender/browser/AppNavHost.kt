@@ -99,6 +99,8 @@ fun AppNavHost(
     connectionInitialTab: Int = 0,
     // Restores the source screen and, when applicable, its bridged app session.
     onRemoteBack: () -> Unit,
+    onAddonSettingsBack: () -> Unit = { onScreenChange(Screen.Library) },
+    addonSettingsFromBridgedApp: Boolean = false,
     // Where the Dashboard's close (X) should return — the screen it was opened from.
     dashboardReturnScreen: Screen = lastMainScreen,
     innerPadding: PaddingValues,
@@ -1695,17 +1697,17 @@ fun AppNavHost(
                 }
                 Screen.AddonSettings -> {
                     BackHandler {
-                        onScreenChange(Screen.Library)
+                        onAddonSettingsBack()
                         libraryViewModel.setSelectedTab(0)
                     }
                     AddonSettingsScreen(
                         addonRepository = addonRepository,
                         installedAddons = installedAddons,
                         onBack = {
-                            onScreenChange(Screen.Library)
+                            onAddonSettingsBack()
                             libraryViewModel.setSelectedTab(0)
                         },
-                        showBack = false,
+                        showBack = addonSettingsFromBridgedApp,
                         onOpenUrl = { url ->
                             tabManager.createTab(url, store)
                             onScreenChange(Screen.Browser)

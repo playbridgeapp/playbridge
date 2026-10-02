@@ -338,10 +338,10 @@ dependencies {
     implementation(libs.koin.android)
     implementation(libs.koin.compose)
 
-    // QuickJS — sandboxed JS runtime for Nuvio scraper plugins
-    implementation(libs.quickjs.kt)
-
-    implementation(libs.jsoup)
+    // QuickJS + jsoup — sandboxed JS runtime for Nuvio scraper plugins (FOSS only)
+    "fossImplementation"(libs.quickjs.kt)
+    "fossImplementation"(libs.jsoup)
+    "testFossRuntimeOnly"("io.github.dokar3:quickjs-kt-jvm:1.0.15")
 
     implementation(project(":shared"))
 }

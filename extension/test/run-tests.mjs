@@ -13,6 +13,7 @@ const outfiles = [
   join(directory, "geckoview-detection-policy.test.mjs"),
   join(directory, "geckoview-detected-media-kind.test.mjs"),
   join(directory, "geckoview-page-cast.test.mjs"),
+  join(directory, "geckoview-plugin-bridge.test.mjs"),
   join(directory, "hls-parser.test.mjs"),
   join(directory, "media-candidate.test.mjs"),
   join(directory, "response-body-media.test.mjs"),
@@ -29,6 +30,7 @@ try {
       "test/geckoview-detection-policy.test.ts",
       "test/geckoview-detected-media-kind.test.ts",
       "test/geckoview-page-cast.test.ts",
+      "test/geckoview-plugin-bridge.test.ts",
       "test/hls-parser.test.ts",
       "test/media-candidate.test.ts",
       "test/response-body-media.test.ts",
@@ -53,6 +55,14 @@ try {
     platform: "browser",
     format: "iife",
     target: "firefox102",
+  });
+  await build({
+    stdin: {
+      contents: 'import { installPluginBridge } from "./src/geckoview/plugin-bridge"; installPluginBridge();',
+      resolveDir: process.cwd(),
+    },
+    outfile: join(directory, "geckoview-runtime", "plugin-bridge.js"),
+    bundle: true, platform: "browser", format: "iife", target: "firefox102",
   });
 
   const exitCode = await new Promise((resolve, reject) => {

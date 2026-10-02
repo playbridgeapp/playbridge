@@ -1000,8 +1000,9 @@ private fun NuvioScrapersCard(
     repo: InstalledAddonEntity,
     nuvioRepository: com.playbridge.sender.data.nuvio.NuvioRepository,
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val scrapers by nuvioRepository.observeScrapers(repo.manifestUrl)
+    val managementItems by nuvioRepository.observeManagement(repo.manifestUrl)
         .collectAsState(initial = emptyList())
     var expanded by remember { mutableStateOf(false) }
 
@@ -1024,11 +1025,18 @@ private fun NuvioScrapersCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    val enabledCount = scrapers.count { it.isEnabled }
+                    val enabledCount = managementItems.count { it.scraper.isEnabled }
+                    val unapprovedCount = managementItems.count { it.requiresApproval }
+                    val updateCount = managementItems.count { it.updateAvailable }
+                    val statusText = buildString {
+                        append("$enabledCount of ${managementItems.size} scrapers enabled")
+                        if (unapprovedCount > 0) append(" · $unapprovedCount unapproved")
+                        if (updateCount > 0) append(" · $updateCount updates")
+                    }
                     Text(
-                        text = "$enabledCount of ${scrapers.size} scrapers enabled",
+                        text = statusText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (unapprovedCount > 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Icon(
@@ -1038,44 +1046,238 @@ private fun NuvioScrapersCard(
             }
 
             if (expanded) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Disclosure notice
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                ) {
+                    Text(
+                        text = "Plugins run on this device for Library and installed BridgedApps only. Plugin installation, approvals, and settings stay on this device. Network requests run from this device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(10.dp)
+                    )
+                }
+
                 var settingsFor by remember {
                     mutableStateOf<com.playbridge.sender.data.nuvio.NuvioScraperEntity?>(null)
                 }
-                scrapers.forEach { scraper ->
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
+
+                managementItems.forEach { item ->
+                    val scraper = item.scraper
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 4.dp)
+                            .padding(vertical = 6.dp)
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(scraper.name, style = MaterialTheme.typography.bodyLarge)
-                            val meta = buildString {
-                                append(scraper.supportedTypes)
-                                if (scraper.contentLanguage.isNotBlank()) {
-                                    append(" · ").append(scraper.contentLanguage)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(scraper.name, style = MaterialTheme.typography.bodyLarge)
+                                    if (item.requiresApproval) {
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Surface(
+                                            shape = MaterialTheme.shapes.extraSmall,
+                                            color = MaterialTheme.colorScheme.errorContainer,
+                                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                        ) {
+                                            Text(
+                                                text = "Unapproved",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                                val meta = buildString {
+                                    append(scraper.supportedTypes)
+                                    if (scraper.contentLanguage.isNotBlank()) {
+                                        append(" · ").append(scraper.contentLanguage)
+                                    }
+                                }
+                                Text(
+                                    meta,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (scraper.hasSettings && !item.requiresApproval) {
+                                IconButton(onClick = { settingsFor = scraper }) {
+                                    Icon(Icons.Default.Settings, contentDescription = "Scraper settings")
                                 }
                             }
-                            Text(
-                                meta,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            Switch(
+                                checked = scraper.isEnabled,
+                                onCheckedChange = { checked ->
+                                    scope.launch { nuvioRepository.setScraperEnabled(scraper, checked) }
+                                }
                             )
                         }
-                        if (scraper.hasSettings) {
-                            IconButton(onClick = { settingsFor = scraper }) {
-                                Icon(Icons.Default.Settings, contentDescription = "Scraper settings")
+
+                        // Approval actions
+                        if (item.requiresApproval) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp, bottom = 4.dp)
+                            ) {
+                                Text(
+                                    "Code requires explicit approval",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                Button(
+                                    onClick = {
+                                        scope.launch {
+                                            val ok = nuvioRepository.approveInstalledCode(scraper)
+                                            if (!ok) {
+                                                Toast.makeText(context, "Failed to approve code", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text("Approve code", style = MaterialTheme.typography.labelMedium)
+                                }
                             }
                         }
-                        Switch(
-                            checked = scraper.isEnabled,
-                            onCheckedChange = { checked ->
-                                scope.launch { nuvioRepository.setScraperEnabled(scraper, checked) }
+
+                        // Update actions
+                        if (item.updateAvailable) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp, bottom = 4.dp)
+                            ) {
+                                Text(
+                                    "Update available",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            scope.launch { nuvioRepository.discardPendingUpdate(scraper) }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("Discard", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                    Button(
+                                        onClick = {
+                                            scope.launch {
+                                                val ok = nuvioRepository.approvePendingUpdate(scraper)
+                                                if (!ok) {
+                                                    Toast.makeText(context, "Failed to approve update", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text("Approve update", style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
                             }
+                        }
+
+                        // Blocked hosts
+                        if (item.blockedHosts.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                            ) {
+                                Text(
+                                    "Blocked domains requested by scraper:",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                item.blockedHosts.forEach { host ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            host,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        TextButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    val ok = nuvioRepository.approveHost(scraper, host)
+                                                    if (!ok) {
+                                                        Toast.makeText(context, "Failed to approve domain", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Approve domain", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Approved hosts (with revoke)
+                        if (item.approvedHosts.isNotEmpty()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 4.dp)
+                            ) {
+                                Text(
+                                    "Approved domains:",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                item.approvedHosts.forEach { host ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            host,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        TextButton(
+                                            onClick = {
+                                                scope.launch { nuvioRepository.revokeHost(scraper, host) }
+                                            },
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                        ) {
+                                            Text("Revoke", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 6.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
                         )
                     }
                 }
+
                 settingsFor?.let { target ->
                     NuvioScraperSettingsDialog(
                         scraper = target,
@@ -1083,7 +1285,7 @@ private fun NuvioScrapersCard(
                         onDismiss = { settingsFor = null }
                     )
                 }
-                if (scrapers.isEmpty()) {
+                if (managementItems.isEmpty()) {
                     Text(
                         "No scrapers — try refreshing this plugin.",
                         style = MaterialTheme.typography.bodySmall,
@@ -1126,7 +1328,7 @@ private fun NuvioMasterToggleCard(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    "Runs third-party plugin code on your device to find streams. Off by default — turn on at your own risk.",
+                    "Runs third-party plugin code on this device for Library and installed BridgedApps only. Plugin installation, approvals, and settings stay on this device. Network requests run from this device.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

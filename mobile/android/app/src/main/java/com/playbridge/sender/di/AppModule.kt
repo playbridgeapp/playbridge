@@ -21,6 +21,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.preferencesDataStoreFile
 import com.playbridge.sender.data.settings.SettingsRepository
@@ -72,16 +73,18 @@ val appModule = module {
             client = get()
         )
     }
-    // Nuvio scraper-plugin support: sandboxed JS runner + repository.
-    single { com.playbridge.sender.data.nuvio.NuvioScraperRunner(context = androidContext(), client = get()) }
+    // Nuvio scraper-plugin support: sandboxed JS engine + repository.
+    single<com.playbridge.sender.data.nuvio.NuvioScraperEngine> {
+        com.playbridge.sender.data.nuvio.createNuvioScraperEngine()
+    }
     single {
+        val settingsRepository: SettingsRepository = get()
         com.playbridge.sender.data.nuvio.NuvioRepository(
             addonDao = get(),
             scraperDao = get(),
-            runner = get(),
-            settingsRepository = get(),
+            engine = get(),
             filesDir = androidContext().filesDir,
-            client = get()
+            masterEnabled = { settingsRepository.enableLocalScrapers.first() },
         )
     }
     single {
