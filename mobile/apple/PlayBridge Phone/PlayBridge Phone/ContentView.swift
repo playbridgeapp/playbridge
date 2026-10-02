@@ -36,6 +36,15 @@ struct ContentView: View {
         }
         .environmentObject(pageCasting)
         .tint(Theme.primary)
+        .fullScreenCover(item: $vm.websitePlayerItem) { item in
+            FullScreenVideoPlayerView(session: item.session, diagnosticsReport: {
+#if DEBUG
+                item.report()
+#else
+                ""
+#endif
+            }, onDismiss: { vm.websitePlayerItem = nil })
+        }
         .sheet(isPresented: $showDestinationPicker) { DeviceConnectionSheet() }
         .sheet(item: Binding(get: { pageCasting.presentation }, set: { if $0 == nil { pageCasting.dismissPresentation() } })) { _ in
             PageCastRequestSheet(casting: pageCasting)
@@ -49,6 +58,7 @@ struct ContentView: View {
             nav.browserStore = store
             store.onBridgedAppExternalNavigation = { [weak nav] in nav?.navigate(to: .browser) }
             pageCasting.attach(vm)
+            pageCasting.onChooseDestination = { showDestinationPicker = true }
             pageCasting.onError = { [weak vm] in vm?.operationError = $0 }
             store.onWebsiteCast = { [weak pageCasting] tab, message in
                 MainActor.assumeIsolated { pageCasting?.receive(message, from: tab) }

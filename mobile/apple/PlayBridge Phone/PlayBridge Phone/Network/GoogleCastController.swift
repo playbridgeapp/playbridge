@@ -73,6 +73,8 @@ final class GoogleCastController: ObservableObject {
     var onReceiverEnded: (() -> Void)?
     private let worker: GoogleCastWorker
     private var generation = 0
+    private var mediaEpoch = UUID().uuidString
+    private var statusEpochs: [String: String] = [:]
     private var device: ExternalReceiverDevice?
     private var title: String?
     private var receiverAppAvailable: Bool?
@@ -133,8 +135,9 @@ final class GoogleCastController: ObservableObject {
         _ = try await request(command, expectedGeneration: current)
         try await MainActor.run {
             guard self.generation == current, self.state.isConnected else { throw CancellationError() }
+            self.mediaEpoch = UUID().uuidString
             self.title = title
-            self.playback = .init(state: "buffering", positionMs: 0, durationMs: 0, title: title)
+            self.playback = .init(state: "buffering", positionMs: 0, durationMs: 0, title: title, playbackId: self.mediaEpoch)
         }
     }
 
@@ -190,6 +193,7 @@ final class GoogleCastController: ObservableObject {
                     }
                     var payload = payload
                     payload["request_id"] = id
+                    if payload["command"] as? String == "status" { statusEpochs[id] = mediaEpoch }
                     pending[id] = continuation
                     let deadline = DispatchWorkItem { [weak self] in
                         self?.complete(id, result: .failure(StreamRoutingError.message("The receiver did not respond. Try again or reconnect.")))
@@ -206,6 +210,7 @@ final class GoogleCastController: ObservableObject {
     }
 
     private func complete(_ id: String, result: Result<[String: Any], Error>) {
+        statusEpochs.removeValue(forKey: id)
         deadlines.removeValue(forKey: id)?.cancel()
         pending.removeValue(forKey: id)?.resume(with: result)
     }
@@ -233,12 +238,13 @@ final class GoogleCastController: ObservableObject {
         case "status":
             if let id = event["request_id"] as? String, pending[id] != nil,
                let status = event["status"] as? [String: Any] {
+                guard statusEpochs.removeValue(forKey: id) == mediaEpoch else { complete(id, result: .success(event)); return }
                 func milliseconds(_ key: String) -> Int64 {
                     let seconds = (status[key] as? NSNumber)?.doubleValue ?? 0
                     return seconds.isFinite ? Int64(max(0, min(seconds * 1000, Double(Int64.max / 2)))) : 0
                 }
                 playback = .init(state: status["state"] as? String ?? "unknown", positionMs: milliseconds("position_seconds"),
-                    durationMs: milliseconds("duration_seconds"), title: title)
+                    durationMs: milliseconds("duration_seconds"), title: title, playbackId: mediaEpoch)
                 complete(id, result: .success(event))
             }
         case "error":

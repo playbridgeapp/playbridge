@@ -12,5 +12,6 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Network/StreamRouteService.swift" \
   "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Network/PhonePlaybackFallback.swift" \
   "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Network/PlaybackSession.swift" \
+  "$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone/Network/PhonePlaybackEngine.swift" \
   "$repo_root/mobile/apple/tests/PlaybackSessionTests.swift" -o "$test_dir/check"
 "$test_dir/check"

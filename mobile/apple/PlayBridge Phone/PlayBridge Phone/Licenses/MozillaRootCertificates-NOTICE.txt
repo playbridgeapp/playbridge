@@ -1,0 +1,12 @@
+Mozilla root CA certificate data, extracted by curl's mk-ca-bundle.
+License: Mozilla Public License 2.0 (see MPL-2.0.txt).
+The certificate data is redistributed without modification.
+
+Bundled snapshot: 2026-09-25, 121 roots.
+Source: https://curl.se/ca/cacert-2026-09-25.pem
+Upstream SHA-256 file: https://curl.se/ca/cacert-2026-09-25.pem.sha256
+Verified bundle SHA-256:
+a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505
+
+Mozilla source reference and certificate labels are preserved in the PEM file.
+Update instructions: https://curl.se/docs/caextract.html

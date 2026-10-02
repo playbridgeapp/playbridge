@@ -128,7 +128,7 @@ final class AirPlayController: ObservableObject {
     }
 
     @MainActor
-    func send(media: RoutedStream, title: String, kind: String, subtitles: [AirPlaySubtitleSource], queue: Bool, request: UUID) async throws {
+    func send(media: RoutedStream, title: String, kind: String, subtitles: [AirPlaySubtitleSource], queue: Bool, request: UUID, resumeAt: Double = 0) async throws {
         guard request == generation else { throw CancellationError() }
         guard selected, routeAvailable else { throw StreamRoutingError.message("Choose an AirPlay device before casting.") }
         guard kind != "image" else { throw StreamRoutingError.message("AirPlay casting currently supports video and audio.") }
@@ -152,7 +152,7 @@ final class AirPlayController: ObservableObject {
             update()
         } else {
             queueState.play(entry)
-            install(entry)
+            install(entry, resumeAt: resumeAt)
         }
     }
 

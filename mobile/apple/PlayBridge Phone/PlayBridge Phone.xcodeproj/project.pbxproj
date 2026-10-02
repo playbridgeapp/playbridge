@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		AA0000000000000000000015 /* MPVKit in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000017 /* MPVKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		AA0000000000000000000006 /* PlayBridge Phone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "PlayBridge Phone.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA0000000000000000000013 /* CastCoreOptional.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = CastCoreOptional.xcconfig; sourceTree = "<group>"; };
@@ -37,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				AA0000000000000000000015 /* MPVKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -80,6 +85,9 @@
 				AA0000000000000000000004 /* PlayBridge Phone */,
 			);
 			name = "PlayBridge Phone";
+			packageProductDependencies = (
+				AA0000000000000000000017 /* MPVKit */,
+			);
 			productName = "PlayBridge Phone";
 			productReference = AA0000000000000000000006 /* PlayBridge Phone.app */;
 			productType = "com.apple.product-type.application";
@@ -108,6 +116,9 @@
 			);
 			mainGroup = AA0000000000000000000002;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AA0000000000000000000016 /* XCRemoteSwiftPackageReference "MPVKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA0000000000000000000003 /* Products */;
 			projectDirPath = "";
@@ -338,6 +349,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AA0000000000000000000016 /* XCRemoteSwiftPackageReference "MPVKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/mpvkit/MPVKit.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA0000000000000000000017 /* MPVKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA0000000000000000000016 /* XCRemoteSwiftPackageReference "MPVKit" */;
+			productName = MPVKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = AA0000000000000000000001 /* Project object */;
 }

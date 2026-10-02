@@ -23,6 +23,26 @@ The frosted edge menu includes **Remote**. Opening it from a bridged app keeps t
 
 Linked website casts do not display a mini playback bar over browser or bridged-app pages. Remote shows **Controlled by [website]** with an **Unlink** action while a website controls the session. Unlink releases website control while the current TV playback continues; Remote's playback and queue controls remain available.
 
+## Unified playback destinations
+
+Android and iOS advertise `playbridge.capabilities.playback === 1`. The selected native destination is authoritative, including an explicit **This device** selection. Websites can display and change it without starting media:
+
+```ts
+const { destination } = await playbridge.getPlaybackDestination()
+// { id, name, kind: 'local' | 'native' | 'external', connected }
+await playbridge.choosePlaybackDestination() // opens the existing native destination picker
+await playbridge.choosePlaybackDestination({ destinationId: 'this-device' }) // explicit local recovery
+const session = await playbridge.play({
+  destinationId: destination.id,
+  items: [{ id: 'episode-1', url: 'https://media.example/one.mp4', startPositionMs: 120000 }],
+  startIndex: 0
+})
+```
+
+`play()` uses the linked-session event and `provideItems()` contract. Phone playback opens the existing native fullscreen player; a selected receiver uses its normal native transport. Resume positions, explicit media headers, metadata and supported subtitles travel with the items. Website and private-server permissions apply to playback just as they do to casting. The requested destination is checked again after asynchronous preparation; a changed or disconnected target rejects the request, allowing the website to offer reconnect or explicit local playback.
+
+Local playback and native PlayBridge receivers support the website's lazy episode queue. External receivers retain their existing single-item capabilities; they do not request next episodes. Unsupported external queues or subtitle delivery fail explicitly. Unlinking releases website control and progress reporting while playback continues. Existing `cast()` and `linkCast()` remain available for compatibility. A website without the bridge uses its own web player.
+
 ## Device plugins on Android FOSS
 
 Library and installed Bridged Apps share the device's Nuvio plugin manager and resolver. The resolver is opt-in and initially disabled. The Play flavor does not include the QuickJS plugin runtime; iOS has no native plugin resolver. Library remains accessible during the transition to Streams. Device plugin installation, provider settings and approvals stay on the device and are not imported from a website or its Nuvio cloud profile.

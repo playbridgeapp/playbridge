@@ -17,6 +17,36 @@ private final class FakePage: PageCastSource {
 }
 
 private final class FakeTransport: PageCastTransport {
+    var localState: [String: Any]?
+    var localOpens = 0
+    var localPreparation: (() async -> Void)?
+    var localAppends = 0
+    var localDetached = 0
+    var localCommits = 0
+    var localCancellation = 0
+    var localFinishedSupply = false
+    var externalOpens = 0
+    var playbackKind = "native"
+    var playbackDestination: [String: Any] {
+        ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": playbackKind,
+         "connected": playbackKind == "local" || isConnected]
+    }
+    @MainActor var websiteLocalState: [String: Any]? { localState }
+    @MainActor func selectWebsiteLocalDestination() { destinationID = nil; isConnected = false; playbackKind = "local" }
+    @MainActor func startWebsiteLocalPlayback(_ request: PageCastRequest, event: @escaping (String, [String: Any]) -> Void) async throws {
+        localOpens += 1
+        await localPreparation?()
+        localState = ["currentIndex": request.startIndex, "positionMs": 40_000, "durationMs": 60_000, "state": "playing", "closed": false]
+    }
+    @MainActor func commitWebsiteLocalPlayback() { localCommits += 1 }
+    @MainActor func cancelWebsiteLocalPreparation() { localCancellation += 1 }
+    @MainActor func appendWebsiteLocalItems(_ items: [[String: Any]], endOfList: Bool) { localAppends += items.count; localFinishedSupply = endOfList }
+    @MainActor func jumpWebsiteLocalItem(_ index: Int) async throws { localState?["currentIndex"] = index }
+    @MainActor func detachWebsiteLocalPlayback() { localDetached += 1 }
+    @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws {
+        externalOpens += 1
+        websitePlayback = TvPlaybackStatus(state: "playing", positionMs: 10_000, durationMs: 60_000, playbackId: "external-load")
+    }
     var destinationID: String? = "receiver-one"
     var isConnected = true
     var isAirPlay = false
@@ -378,6 +408,95 @@ private final class FakeTransport: PageCastTransport {
         print("PASS compatible receiver selection, cancellation and reconnect")
     }
 
+    @MainActor static func unifiedPlayback() async {
+        do {
+            let f = Fixture()
+            let status = f.send("destination")
+            let destination = await f.response(status)["destination"] as! [String: Any]
+            precondition(destination["id"] as? String == "receiver-one")
+            precondition(f.transport.sends.isEmpty && f.coordinator.presentation == nil)
+            var pickerOpens = 0
+            f.coordinator.onChooseDestination = { pickerOpens += 1 }
+            _ = await f.response(f.send("choose_destination"))
+            precondition(pickerOpens == 1)
+            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "arbitrary-device"]), error: "invalid_request")
+            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "this-device"]))
+            precondition(f.transport.playbackDestination["id"] as? String == "this-device")
+        }
+        do {
+            let f = Fixture(approved: true)
+            _ = await f.response(f.send("play", payload: ["items": [Fixture.item()]]), error: "invalid_request")
+            _ = await f.response(f.send("play", payload: ["destinationId": "wrong", "items": [Fixture.item()]]), error: "receiver_changed")
+            f.transport.isConnected = false
+            _ = await f.response(f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]]), error: "connect_failed")
+            precondition(f.transport.sends.isEmpty && f.transport.localOpens == 0)
+        }
+        do {
+            let gate = ResolveGate()
+            let f = Fixture(approved: true, resolve: { _, _, _ in await gate.wait() })
+            let play = f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]])
+            await f.wait({ gate.entered }, "play DNS resolution")
+            f.transport.selectWebsiteLocalDestination()
+            gate.release()
+            _ = await f.response(play, error: "receiver_changed")
+            precondition(f.transport.localOpens == 0 && f.transport.sends.isEmpty)
+        }
+        do {
+            let gate = ResolveGate()
+            let f = Fixture(approved: true)
+            f.transport.selectWebsiteLocalDestination()
+            f.transport.localPreparation = { _ = await gate.wait() }
+            let play = f.send("play", payload: ["destinationId": "this-device", "items": [Fixture.item()]])
+            await f.wait({ gate.entered }, "local media preparation")
+            f.transport.destinationID = "receiver-one"; f.transport.playbackKind = "native"; f.transport.isConnected = true
+            gate.release()
+            _ = await f.response(play, error: "receiver_changed")
+            precondition(f.transport.localCommits == 0 && f.transport.localCancellation == 1)
+        }
+        do {
+            let f = Fixture(approved: true)
+            f.transport.selectWebsiteLocalDestination()
+            let play = f.send("play", payload: ["destinationId": "this-device", "items": [Fixture.item()]])
+            let session = await f.response(play)["sessionId"] as! String
+            precondition(f.transport.localOpens == 1 && f.transport.localCommits == 1 && f.transport.sends.isEmpty)
+            _ = await f.response(f.send("ping", session: session, payload: ["ready": true]))
+            let state = f.page.events("statechange").last?["detail"] as! [String: Any]
+            precondition(state["positionMs"] as? Int == 40_000)
+            let demand = f.page.events("needitems").last?["detail"] as! [String: Any]
+            f.coordinator.refresh(now: Date().addingTimeInterval(6))
+            precondition(f.page.events("needitems").count == 2)
+            precondition((f.page.events("needitems").last?["detail"] as? [String: Any])?["requestId"] as? String == demand["requestId"] as? String)
+            _ = await f.response(f.send("supply", session: session, payload: ["requestId": demand["requestId"]!, "items": [Fixture.item("two")]]))
+            precondition(f.transport.localAppends == 1)
+            _ = await f.response(f.send("jump", session: session, payload: ["index": 1]))
+            precondition(f.transport.localState?["currentIndex"] as? Int == 1)
+            f.coordinator.refresh()
+            let tailDemand = f.page.events("needitems").last?["detail"] as! [String: Any]
+            _ = await f.response(f.send("supply", session: session, payload: ["requestId": tailDemand["requestId"]!, "items": [], "endOfList": true]))
+            precondition(f.transport.localFinishedSupply)
+            f.transport.localState?["closed"] = true
+            f.transport.localState?["state"] = "stopped"
+            f.coordinator.refresh()
+            precondition(!f.coordinator.isLinked && f.transport.localDetached == 1)
+            let finalState = f.page.events("statechange").last?["detail"] as! [String: Any]
+            precondition(finalState["closed"] as? Bool == true)
+        }
+        do {
+            let f = Fixture(approved: true)
+            f.transport.playbackKind = "external"; f.transport.isAirPlay = true
+            let play = f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]])
+            let session = await f.response(play)["sessionId"] as! String
+            precondition(f.transport.externalOpens == 1 && f.transport.sends.isEmpty)
+            _ = await f.response(f.send("ping", session: session, payload: ["ready": true]))
+            precondition(f.page.events("needitems").isEmpty)
+            f.transport.websitePlayback?.playbackId = "other-media"
+            f.coordinator.refresh()
+            precondition(!f.coordinator.isLinked)
+            precondition(f.page.events("ended").last?["detail"].map { ($0 as? [String: Any])?["reason"] as? String } == "receiver_media_changed")
+        }
+        print("PASS unified destination picker, explicit local selection, launch locking, local progress/queue and external media ownership")
+    }
+
     @MainActor static func main() async {
         // Demand is deterministic regardless of the developer's configured preference.
         let previous = UserDefaults.standard.object(forKey: "website_cast_prefetch")
@@ -386,6 +505,7 @@ private final class FakeTransport: PageCastTransport {
             if let previous { UserDefaults.standard.set(previous, forKey: "website_cast_prefetch") }
             else { UserDefaults.standard.removeObject(forKey: "website_cast_prefetch") }
         }
+        await unifiedPlayback()
         await permissionFlow()
         await privatePermissionsAndPayloads()
         await demandAndSupply()

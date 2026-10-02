@@ -220,6 +220,9 @@ class BrowserActivity : ComponentActivity() {
     private val connectionViewModel: ConnectionViewModel by viewModel()
     private val connectionCoordinator: ConnectionCoordinator by inject()
     private val linkedPageCastCoordinator: LinkedPageCastCoordinator by inject()
+    private val pagePlaybackCoordinator by lazy {
+        PagePlaybackCoordinator(this, connectionViewModel, linkedPageCastCoordinator, lifecycleScope)
+    }
     private val externalQueueCoordinator: com.playbridge.sender.connection.ExternalQueueCoordinator by inject()
     private val addonRepository: com.playbridge.sender.data.library.AddonRepository by inject()
     private val downloadRepository: com.playbridge.sender.downloads.engine.DownloadRepository by inject()
@@ -470,6 +473,19 @@ class BrowserActivity : ComponentActivity() {
     ) {
         lifecycleScope.launch {
             if (linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)) return@launch
+            if (request.destinationId != null) {
+                val destination = pagePlaybackCoordinator.destination()
+                if (destination.optString("id") != request.destinationId) {
+                    linkedPageCastCoordinator.reject(request.bridgeRequestId, "receiver_changed"); return@launch
+                }
+                if (!destination.optBoolean("connected")) {
+                    linkedPageCastCoordinator.reject(request.bridgeRequestId, "connect_failed"); return@launch
+                }
+                if (destination.optString("kind") != "native") {
+                    pagePlaybackCoordinator.open(request); return@launch
+                }
+                pagePlaybackCoordinator.end("superseded")
+            }
             if (selectedDevice == null) {
                 when (connectionViewModel.route.value) {
                     is com.playbridge.sender.cast.CastSessionManager.Route.ThisDevice,
@@ -518,6 +534,15 @@ class BrowserActivity : ComponentActivity() {
                 } != true
             ) {
                 linkedPageCastCoordinator.reject(request.bridgeRequestId, "connect_failed")
+                return@launch
+            }
+            if (request.destinationId != null && pagePlaybackCoordinator.destination().optString("id") != request.destinationId) {
+                linkedPageCastCoordinator.reject(request.bridgeRequestId, "receiver_changed")
+                return@launch
+            }
+            if (!Components.isCurrentPageNavigation(request.tabId, request.navigationGeneration) ||
+                linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)) {
+                linkedPageCastCoordinator.reject(request.bridgeRequestId, "session_ended")
                 return@launch
             }
             linkedPageCastCoordinator.open(request, targetDevice)
@@ -1290,6 +1315,7 @@ class BrowserActivity : ComponentActivity() {
                 }
                 Components.onLinkedNativePortDisconnected = {
                     linkedPageCastCoordinator.unlink("native_port_lost")
+                    pagePlaybackCoordinator.end("native_port_lost")
                 }
                 Components.onLinkedDevicePicked = { device ->
                     val request = pendingLinkedDeviceRequest
@@ -1310,8 +1336,10 @@ class BrowserActivity : ComponentActivity() {
                 }
                 Components.onLinkedCastRequest = linkedRequest@ { message ->
                     val type = message.optString("type")
+                    if (pagePlaybackCoordinator.handle(message)) return@linkedRequest
                     if (type == "linked_cancel_open") {
                         val targetBridgeRequestId = message.optString("targetBridgeRequestId")
+                        pagePlaybackCoordinator.cancelOpen(targetBridgeRequestId)
                         linkedPageCastCoordinator.cancelOpen(targetBridgeRequestId)
                         if (pendingLinkedPageCast?.request?.bridgeRequestId == targetBridgeRequestId) {
                             pendingLinkedPageCast = null
@@ -1321,7 +1349,7 @@ class BrowserActivity : ComponentActivity() {
                         }
                         return@linkedRequest
                     }
-                    if (type != "linked_open") {
+                    if (type != "linked_open" && type != "linked_play") {
                         val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin"))
                         val tabId = message.optInt("tabId", -1)
                         val navigationGeneration = message.optLong("navigationGeneration", -1)
@@ -1437,6 +1465,7 @@ class BrowserActivity : ComponentActivity() {
                     }
                 }
                 Components.onPageNavigation = { tabId, navigationGeneration ->
+                    pagePlaybackCoordinator.navigation(tabId, navigationGeneration)
                     pendingPageCast?.takeIf {
                         pageRequestSuperseded(
                             it.tabId,
@@ -3515,6 +3544,7 @@ class BrowserActivity : ComponentActivity() {
         if (isFinishing) {
             tabManager.closeAllSessions()
         }
+        pagePlaybackCoordinator.end("host_closed")
         super.onDestroy()
     }
 

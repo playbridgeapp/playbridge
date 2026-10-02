@@ -5,6 +5,9 @@ import Network
 /// Top-level glue the UI observes: owns discovery, the socket, the inbound coordinator, and
 /// credential persistence. Mirrors the role of `ConnectionViewModel` on Android.
 final class ConnectionViewModel: ObservableObject {
+    @Published var websitePlayerItem: PlayerItem?
+    @MainActor private var preparedWebsitePlayback: WebsitePhonePlayback?
+    @MainActor private var websitePhonePlayback: WebsitePhonePlayback?
     let browser = BonjourBrowser()
     let googleCastBrowser = GoogleCastBrowser()
     let dlnaBrowser = DLNABrowser()
@@ -1201,6 +1204,82 @@ final class ConnectionViewModel: ObservableObject {
 }
 
 extension ConnectionViewModel: PageCastTransport {
+    var playbackDestination: [String: Any] {
+        let local = UserDefaults.standard.string(forKey: "last_receiver_protocol") == "this_phone" || (destinationID == nil)
+        if local { return ["id": "this-device", "name": "This device", "kind": "local", "connected": true] }
+        return ["id": destinationID ?? "unavailable", "name": receiverName ?? "TV",
+                "kind": isAirPlay || isExternalReceiver ? "external" : "native", "connected": isConnected]
+    }
+    @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws {
+        guard isConnected, isAirPlay || isExternalReceiver, request.items.count == 1 else { throw PageCastError(code: "unsupported_target") }
+        let target = destinationID
+        let item = request.items[0]
+        let resources = item["subtitleResources"] as? [[String: Any]] ?? []
+        var urls = item["subtitles"] as? [String] ?? []
+        for resource in resources { if let url = resource["url"] as? String, !urls.contains(url) { urls.append(url) } }
+        guard isAirPlay || urls.isEmpty else { throw PageCastError(code: "unsupported_subtitles") }
+        let route = StreamRoute(rawValue: UserDefaults.standard.string(forKey: "stream_route_default") ?? "direct") ?? .direct
+        let media = try await StreamRouteService().prepare(url: item["url"] as! String,
+            headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
+            route: route, configuration: StreamProxySettingsStore.load())
+        let routed = try await prepareAirPlayMedia(media, contentType: item["contentType"] as? String)
+        try Task.checkCancellation()
+        guard target == destinationID, isConnected else { throw PageCastError(code: "receiver_changed") }
+        let resume = item["start_position_ms"] as? Int ?? 0
+        if isAirPlay {
+            let attempt = airPlay.beginRequest(queue: false)
+            let subtitles = urls.enumerated().map { offset, raw -> AirPlaySubtitleSource in
+                let resource = resources.first { $0["url"] as? String == raw }
+                return .init(url: URL(string: raw)!, headers: resource?["headers"] as? [String: String] ?? [:],
+                    title: resource?["label"] as? String ?? resource?["language"] as? String ?? "Subtitle \(offset + 1)")
+            }
+            try await airPlay.send(media: routed, title: item["title"] as? String ?? "Video",
+                kind: item["mediaKind"] as? String ?? "video", subtitles: subtitles, queue: false, request: attempt,
+                resumeAt: Double(resume) / 1000)
+        } else {
+            try await googleCast.load(url: routed.url, title: item["title"] as? String, contentType: item["contentType"] as? String)
+            if resume > 0 { try await googleCast.control("seek_to:\(resume)") }
+            noteNewCast(mediaKind: item["mediaKind"] as? String ?? "video", title: item["title"] as? String)
+            coordinator.playback = googleCast.playback
+        }
+        try Task.checkCancellation()
+        guard target == destinationID, isConnected else { throw PageCastError(code: "receiver_changed") }
+        routedStreamRegistrations = [routed.registration, media.registration].compactMap { $0 }
+        recordCast(request.playlistCommand(allowedPrivateOrigins: []))
+    }
+    @MainActor var websiteLocalState: [String: Any]? { websitePhonePlayback?.snapshot() }
+    @MainActor func selectWebsiteLocalDestination() { disconnect() }
+    @MainActor func startWebsiteLocalPlayback(_ request: PageCastRequest, event: @escaping (String, [String: Any]) -> Void) async throws {
+        guard playbackDestination["id"] as? String == "this-device" else { throw PageCastError(code: "receiver_changed") }
+        let playback = try await WebsitePhonePlayback.start(request, event: event)
+        try Task.checkCancellation()
+        guard playbackDestination["id"] as? String == "this-device" else { playback.session.close(); throw PageCastError(code: "receiver_changed") }
+        preparedWebsitePlayback?.session.close()
+        preparedWebsitePlayback = playback
+    }
+    @MainActor func commitWebsiteLocalPlayback() {
+        guard let playback = preparedWebsitePlayback else { return }
+        preparedWebsitePlayback = nil
+        websitePhonePlayback?.session.close()
+        websitePhonePlayback = playback
+        var presentation = PlayerItem(session: playback.session)
+#if DEBUG
+        presentation.report = { [weak session = playback.session] in
+            session?.diagnosticsReport() ?? "PlayBridge native playback diagnostics\nSession has closed."
+        }
+#endif
+        websitePlayerItem = presentation
+    }
+    @MainActor func cancelWebsiteLocalPreparation() {
+        preparedWebsitePlayback?.session.close(); preparedWebsitePlayback = nil
+    }
+    @MainActor func appendWebsiteLocalItems(_ items: [[String: Any]], endOfList: Bool) { websitePhonePlayback?.append(items, endOfList: endOfList) }
+    @MainActor func jumpWebsiteLocalItem(_ index: Int) async throws {
+        guard let websitePhonePlayback else { throw PageCastError(code: "session_ended") }
+        try await websitePhonePlayback.jump(index)
+    }
+    @MainActor func detachWebsiteLocalPlayback() { websitePhonePlayback?.detach() }
+
     var canReconnectWebsiteReceiver: Bool { !isAirPlay && !isExternalReceiver && pairedDevice != nil }
     var websitePlayback: TvPlaybackStatus? { coordinator.playback }
     var websitePlaylist: PlaylistUiState? { coordinator.playlist }

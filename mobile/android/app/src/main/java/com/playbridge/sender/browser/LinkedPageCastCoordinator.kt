@@ -50,6 +50,7 @@ data class LinkedPageCastOpenRequest(
     val playlistMetadata: playbridge.VisualMetadata?,
     val skipPreplay: Boolean,
     val requestedPrivateOrigins: Set<String>,
+    val destinationId: String? = null,
 ) {
     fun withPrivateOriginPermission(origins: Collection<String>): LinkedPageCastOpenRequest = copy(
         items = items.map { item ->
@@ -211,6 +212,9 @@ class LinkedPageCastCoordinator(
         if (tabId < 0 || navigationGeneration < 0) return null
         val payload = message.optJSONObject("payload") ?: return null
         if (payload.toString().toByteArray().size > MAX_REQUEST_BYTES) return null
+        val destinationId = if (message.optString("type") == "linked_play") {
+            payload.requiredShortString("destinationId", 256)
+        } else null
         val items = parseItems(payload.optJSONArray("items"), emptySet()) ?: return null
         val startIndex = payload.optInt("startIndex", 0)
         if (startIndex !in items.indices) return null
@@ -235,6 +239,7 @@ class LinkedPageCastCoordinator(
             metadata,
             skipPreplay,
             parseRequestedPrivateOrigins(payload) ?: return null,
+            destinationId,
         )
     }.getOrNull()
 
@@ -669,7 +674,7 @@ class LinkedPageCastCoordinator(
             return MediaNetworkPolicy.normalizePrivateOrigins(origins)
         }
 
-        private fun parseItems(
+        internal fun parseItems(
             array: JSONArray?,
             allowedPrivateOrigins: Collection<String>,
         ): List<LinkedPageCastItem>? {

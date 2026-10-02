@@ -3,6 +3,16 @@ import Combine
 import CoreFoundation
 
 protocol PageCastTransport: AnyObject {
+    var playbackDestination: [String: Any] { get }
+    @MainActor var websiteLocalState: [String: Any]? { get }
+    @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws
+    @MainActor func selectWebsiteLocalDestination()
+    @MainActor func startWebsiteLocalPlayback(_ request: PageCastRequest, event: @escaping (String, [String: Any]) -> Void) async throws
+    @MainActor func commitWebsiteLocalPlayback()
+    @MainActor func cancelWebsiteLocalPreparation()
+    @MainActor func appendWebsiteLocalItems(_ items: [[String: Any]], endOfList: Bool)
+    @MainActor func jumpWebsiteLocalItem(_ index: Int) async throws
+    @MainActor func detachWebsiteLocalPlayback()
     var destinationID: String? { get }
     var isConnected: Bool { get }
     var isAirPlay: Bool { get }
@@ -20,6 +30,16 @@ protocol PageCastTransport: AnyObject {
 }
 
 extension PageCastTransport {
+    var playbackDestination: [String: Any] { ["id": destinationID ?? "this-device", "name": destinationID ?? "This device", "kind": destinationID == nil ? "local" : "native", "connected": destinationID == nil || isConnected] }
+    var websiteLocalState: [String: Any]? { nil }
+    @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws { throw PageCastError(code: "unsupported_target") }
+    @MainActor func selectWebsiteLocalDestination() {}
+    @MainActor func startWebsiteLocalPlayback(_ request: PageCastRequest, event: @escaping (String, [String: Any]) -> Void) async throws { throw PageCastError(code: "unsupported_target") }
+    @MainActor func commitWebsiteLocalPlayback() {}
+    @MainActor func cancelWebsiteLocalPreparation() {}
+    @MainActor func appendWebsiteLocalItems(_ items: [[String: Any]], endOfList: Bool) {}
+    @MainActor func jumpWebsiteLocalItem(_ index: Int) async throws { throw PageCastError(code: "unsupported_target") }
+    @MainActor func detachWebsiteLocalPlayback() {}
     func websiteMatchesReceiver(_ id: String) -> Bool { destinationID == id }
     func queryWebsiteState() { queryContext() }
 }
@@ -37,6 +57,7 @@ final class PageCastCoordinator: ObservableObject {
     @Published private(set) var controllerName: String?
     var isLinked: Bool { controllerName != nil }
     var onError: ((String) -> Void)?
+    var onChooseDestination: (() -> Void)?
 
     private final class Request {
         let identity = UUID()
@@ -72,6 +93,10 @@ final class PageCastCoordinator: ObservableObject {
         let id = UUID().uuidString
         let owner: Request
         let receiverID: String
+        let local: Bool
+        var external = false
+        var playbackID: String?
+        var externalState: [String: Any]?
         var ids: [String]
         var grants: Set<String>
         let created = Date()
@@ -84,8 +109,8 @@ final class PageCastCoordinator: ObservableObject {
         var lastAcceptedNeed: String?
         var lastState: Data?
         var lastStateAt = Date.distantPast
-        init(owner: Request, receiverID: String, items: [[String: Any]], grants: Set<String>) {
-            self.owner = owner; self.receiverID = receiverID
+        init(owner: Request, receiverID: String, items: [[String: Any]], grants: Set<String>, local: Bool = false) {
+            self.local = local; self.owner = owner; self.receiverID = receiverID
             ids = items.compactMap { $0["id"] as? String }; self.grants = grants
         }
     }
@@ -126,6 +151,17 @@ final class PageCastCoordinator: ObservableObject {
               let data = try? JSONSerialization.data(withJSONObject: message), data.count <= 66 * 1024 else {
             reply(request, error: "resource_limit"); return
         }
+        if ["destination", "choose_destination"].contains(request.operation) {
+            guard request.isCurrent(requireActive: true), let transport else { reply(request, error: "not_allowed"); return }
+            if request.operation == "choose_destination" {
+                if let destination = (request.payload as? [String: Any])?["destinationId"] {
+                    guard destination as? String == "this-device" else { reply(request, error: "invalid_request"); return }
+                    transport.selectWebsiteLocalDestination()
+                } else { onChooseDestination?() }
+            }
+            request.deliver(["requestId": request.requestID, "ok": true, "destination": transport.playbackDestination])
+            return
+        }
         if request.operation == "cancel" {
             if let target = (request.payload as? [String: Any])?["requestId"] as? String {
                 if let pending, pending.requestID == target, sameOwner(pending, request) { cancelPending("user_cancelled") }
@@ -148,7 +184,7 @@ final class PageCastCoordinator: ObservableObject {
         guard !recentRequests.contains(key) else { reply(request, error: "stale_request"); return }
         recentRequests.append(key)
         if recentRequests.count > 64 { recentRequests.removeFirst() }
-        let opening = ["cast", "open"].contains(request.operation)
+        let opening = ["cast", "open", "play"].contains(request.operation)
         if opening {
             guard request.isCurrent(requireActive: true) else { reply(request, error: "not_allowed"); return }
             cancelPending("superseded")
@@ -167,6 +203,7 @@ final class PageCastCoordinator: ObservableObject {
             } catch {
                 guard pending === request else { return }
                 let code = (error as? PageCastError)?.code ?? (error is CancellationError ? "session_ended" : "cast_failed")
+                if request.operation == "play" { transport?.cancelWebsiteLocalPreparation() }
                 reply(request, error: code)
                 completePending()
                 // Legacy cast() has no promise. Report a useful native error as well.
@@ -179,7 +216,7 @@ final class PageCastCoordinator: ObservableObject {
 
     private func check(_ request: Request) throws {
         try Task.checkCancellation()
-        guard pending === request, request.isCurrent(requireActive: ["cast", "open"].contains(request.operation)) else {
+        guard pending === request, request.isCurrent(requireActive: ["cast", "open", "play"].contains(request.operation)) else {
             throw PageCastError(code: "session_ended")
         }
     }
@@ -206,22 +243,61 @@ final class PageCastCoordinator: ObservableObject {
     }
 
     private func open(_ request: Request) async throws {
-        var parsed = try PageCastRequest.parse(request.payload, linked: request.operation == "open")
+        var parsed = try PageCastRequest.parse(request.payload, linked: request.operation != "cast")
         for index in parsed.items.indices where parsed.items[index]["title"] == nil {
             if let title = request.source?.pageCastTitle, !title.isEmpty, title != "New Tab" {
                 parsed.items[index]["title"] = String(title.prefix(4096))
             }
         }
+        let expected: String?
+        if request.operation == "play" {
+            guard let id = (request.payload as? [String: Any])?["destinationId"] as? String,
+                  !id.isEmpty, id.utf16.count <= 256 else { throw PageCastError(code: "invalid_request") }
+            expected = id
+            try checkDestination(id)
+        } else { expected = nil }
         let grants = try await authorize(request, items: parsed.items, declared: parsed.privateOrigins, metadata: parsed.metadata)
-        try await ensureReceiver(request)
+        if let expected { try checkDestination(expected) }
+        if request.operation == "play", transport?.playbackDestination["kind"] as? String == "local", let transport {
+            endSession("superseded")
+            let session = Session(owner: request, receiverID: "this-device", items: parsed.items, grants: grants, local: true)
+            try await transport.startWebsiteLocalPlayback(parsed) { [weak self, weak session] name, detail in
+                guard let self, let session, self.active === session, session.ready else { return }
+                var detail = detail
+                detail["items"] = session.ids.enumerated().map { ["index": $0.offset, "id": $0.element] }
+                self.event(session, name, detail)
+            }
+            try check(request)
+            try checkDestination("this-device")
+            guard permissions.isApproved(request.origin), grants.isSubset(of: permissions.privateOrigins(for: request.origin)) else { throw PageCastError(code: "not_allowed") }
+            active = session
+            transport.commitWebsiteLocalPlayback()
+            controllerName = Self.displayName(request.origin)
+            session.awaitingPlaylist = false
+            startTimer(); reply(request, sessionID: session.id)
+            return
+        }
+        if request.operation == "play", transport?.playbackDestination["kind"] as? String == "external", let transport, let expected {
+            endSession("superseded")
+            let session = Session(owner: request, receiverID: expected, items: parsed.items, grants: grants)
+            session.external = true
+            try await transport.startWebsiteExternalPlayback(parsed)
+            try check(request); try checkDestination(expected)
+            session.playbackID = transport.websitePlayback?.playbackId
+            active = session; controllerName = Self.displayName(request.origin)
+            startTimer(); reply(request, sessionID: session.id)
+            return
+        }
+        if request.operation != "play" { try await ensureReceiver(request) }
         try check(request)
         guard permissions.isApproved(request.origin), grants.isSubset(of: permissions.privateOrigins(for: request.origin)) else { throw PageCastError(code: "not_allowed") }
         guard let transport, let receiverID = transport.destinationID else { throw PageCastError(code: "no_receiver") }
         // Replace an old linked authority only once this request is ready to send.
         endSession("superseded")
-        let session = request.operation == "open" ? Session(owner: request, receiverID: receiverID, items: parsed.items, grants: grants) : nil
+        let session = request.operation != "cast" ? Session(owner: request, receiverID: receiverID, items: parsed.items, grants: grants) : nil
         try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: grants)
         try check(request)
+        if let expected { try checkDestination(expected) }
         guard transport.destinationID == receiverID else { throw PageCastError(code: "receiver_changed") }
         if let session {
             active = session
@@ -229,6 +305,11 @@ final class PageCastCoordinator: ObservableObject {
             startTimer()
             reply(request, sessionID: session.id)
         } else { reply(request) }
+    }
+
+    private func checkDestination(_ id: String) throws {
+        guard let destination = transport?.playbackDestination, destination["id"] as? String == id else { throw PageCastError(code: "receiver_changed") }
+        guard destination["connected"] as? Bool == true else { throw PageCastError(code: "connect_failed") }
     }
 
     private func ensureReceiver(_ request: Request) async throws {
@@ -279,12 +360,14 @@ final class PageCastCoordinator: ObservableObject {
 
     private func operate(_ request: Request) async throws {
         guard let session = ownedSession(request), let transport else { throw PageCastError(code: "session_ended") }
-        guard transport.isConnected else { throw PageCastError(code: "connect_failed") }
+        guard !session.external else { throw PageCastError(code: "unsupported_target") }
+        guard session.local || transport.isConnected else { throw PageCastError(code: "connect_failed") }
         session.lastActivity = Date()
         let payload = request.payload as? [String: Any] ?? [:]
         if request.operation == "jump" {
             guard let index = Self.integer(payload["index"]), session.ids.indices.contains(index) else { throw PageCastError(code: "invalid_request") }
-            guard transport.sendWebsiteCommand(action: "playlist_jump", payload: ["index": index]) else { throw PageCastError(code: "connect_failed") }
+            if session.local { try await transport.jumpWebsiteLocalItem(index) }
+            else if !transport.sendWebsiteCommand(action: "playlist_jump", payload: ["index": index]) { throw PageCastError(code: "connect_failed") }
             session.need = nil
             reply(request); return
         }
@@ -309,12 +392,13 @@ final class PageCastCoordinator: ObservableObject {
         let declared = try PageCastRequest.parsePrivateOrigins(payload["privateNetworkOrigins"])
         let grants = try await authorize(request, items: items, declared: declared, metadata: parsed?.metadata)
         try check(request)
-        guard active === session, ownedSession(request) === session, transport.isConnected else { throw PageCastError(code: "session_ended") }
+        guard active === session, ownedSession(request) === session, session.local || transport.isConnected else { throw PageCastError(code: "session_ended") }
         let combined = session.grants.union(grants)
         guard combined.count <= 16 else { throw PageCastError(code: "resource_limit") }
         let ids = items.compactMap { $0["id"] as? String }
         if let parsed {
-            try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: combined)
+            if session.local { throw PageCastError(code: "unsupported_target") }
+            else { try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: combined) }
             try check(request)
             guard active === session else { throw PageCastError(code: "session_ended") }
             session.ids = ids; session.need = nil; session.lastAcceptedNeed = nil
@@ -326,7 +410,8 @@ final class PageCastCoordinator: ObservableObject {
                 guard session.need?.id == suppliedID else { throw PageCastError(code: "stale_request") }
                 guard items.count <= (session.need?.count ?? 0) else { throw PageCastError(code: "invalid_request") }
             }
-            for var item in items {
+            if session.local { transport.appendWebsiteLocalItems(items, endOfList: endOfList) }
+            for var item in session.local ? [] : items {
                 item.removeValue(forKey: "id")
                 item["allowedPrivateOrigins"] = combined.sorted()
                 guard transport.sendWebsiteCommand(action: "queue_add", payload: ["item": item]) else {
@@ -334,7 +419,7 @@ final class PageCastCoordinator: ObservableObject {
                 }
             }
             session.ids += ids
-            if !ids.isEmpty { session.awaitingPlaylist = true }
+            if !ids.isEmpty && !session.local { session.awaitingPlaylist = true }
             if let suppliedID { session.lastAcceptedNeed = suppliedID; session.need = nil; session.endOfList = endOfList }
         }
         session.grants = combined
@@ -345,9 +430,41 @@ final class PageCastCoordinator: ObservableObject {
         if let pending, !pending.isCurrent() { cancelPending("navigation") }
         guard let session = active, let transport else { return }
         guard session.owner.isCurrent() else { unlink(reason: "navigation"); return }
-        guard !transport.isAirPlay, !transport.isExternalReceiver, transport.destinationID == session.receiverID else { unlink(reason: "receiver_changed"); return }
+        guard (session.local || session.external) ? transport.playbackDestination["id"] as? String == session.receiverID : (!transport.isAirPlay && !transport.isExternalReceiver && transport.destinationID == session.receiverID) else { unlink(reason: "receiver_changed"); return }
         guard now.timeIntervalSince(session.created) <= 7200, now.timeIntervalSince(session.lastActivity) <= 600 else { unlink(reason: "session_expired"); return }
-        guard session.ready, transport.isConnected else { return }
+        if session.external && !transport.isConnected { unlink(reason: "receiver_disconnected"); return }
+        guard session.ready, session.local || transport.isConnected else { return }
+        if session.external {
+            guard transport.isConnected else { unlink(reason: "receiver_disconnected"); return }
+            guard let playback = transport.websitePlayback else {
+                if var state = session.externalState, transport.websiteContext == "idle" {
+                    state["state"] = "stopped"; event(session, "statechange", state); unlink(reason: "receiver_stopped")
+                }
+                return
+            }
+            guard playback.playbackId == session.playbackID else { unlink(reason: "receiver_media_changed"); return }
+            let state: [String: Any] = ["state": playback.state, "positionMs": playback.positionMs,
+                "durationMs": playback.durationMs, "currentIndex": 0, "totalCount": 1,
+                "items": [["index": 0, "id": session.ids[0]]]]
+            session.externalState = state; event(session, "statechange", state)
+            if ["stopped", "error"].contains(playback.state) { unlink(reason: "receiver_stopped") }
+            return
+        }
+        if session.local {
+            guard var state = transport.websiteLocalState else { unlink(reason: "player_closed"); return }
+            let index = state["currentIndex"] as? Int ?? 0
+            state["items"] = session.ids.enumerated().map { ["index": $0.offset, "id": $0.element] }
+            state["totalCount"] = session.ids.count
+            event(session, "statechange", state)
+            if state["closed"] as? Bool == true { unlink(reason: "player_closed"); return }
+            if state["finished"] as? Bool == true { unlink(reason: "queue_finished"); return }
+            if let need = session.need, now.timeIntervalSince(need.sent) >= 5 {
+                session.need?.sent = now; needItems(session, count: session.ids.count)
+            } else if !session.endOfList && session.need == nil && session.ids.count - index <= 2 {
+                session.need = (UUID().uuidString, 1, now); needItems(session, count: session.ids.count)
+            }
+            return
+        }
         let playlist = transport.websitePlaylist
         if let playlist, playlist.totalCount == session.ids.count { session.awaitingPlaylist = false }
         // Ignore the previous player's context while the replacement playlist is
@@ -392,7 +509,7 @@ final class PageCastCoordinator: ObservableObject {
     }
     private func startTimer() {
         guard useTimer else { return }
-        timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect().sink { [weak self] date in self?.refresh(now: date) }
+        timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect().sink { [weak self] date in self?.refresh(now: date) }
     }
     func sourceInvalidated(_ source: PageCastSource) {
         if pending?.source === source { cancelPending("navigation") }
@@ -404,7 +521,16 @@ final class PageCastCoordinator: ObservableObject {
         endSession(reason)
     }
     private func endSession(_ reason: String) {
-        if let active { event(active, "ended", ["reason": reason]) }
+        if let active {
+            if active.local {
+                if var state = transport?.websiteLocalState {
+                    state["items"] = active.ids.enumerated().map { ["index": $0.offset, "id": $0.element] }
+                    event(active, "statechange", state)
+                }
+                transport?.detachWebsiteLocalPlayback()
+            }
+            event(active, "ended", ["reason": reason])
+        }
         active = nil; controllerName = nil; timer = nil
     }
     private func permissionsChanged(_ notification: Notification) {
@@ -422,7 +548,7 @@ final class PageCastCoordinator: ObservableObject {
     private func ownedSession(_ request: Request) -> Session? {
         guard let active, active.id == request.sessionID, sameOwner(active.owner, request), request.isCurrent(),
               permissions.isApproved(request.origin), active.grants.isSubset(of: permissions.privateOrigins(for: request.origin)),
-              let transport, !transport.isAirPlay, !transport.isExternalReceiver, transport.destinationID == active.receiverID else { return nil }
+              let transport, (active.local || active.external) ? transport.playbackDestination["id"] as? String == active.receiverID : (!transport.isAirPlay && !transport.isExternalReceiver && transport.destinationID == active.receiverID) else { return nil }
         return active
     }
     private func reply(_ request: Request, error: String? = nil, sessionID: String? = nil) {
@@ -437,7 +563,9 @@ final class PageCastCoordinator: ObservableObject {
     private func cancelPending(_ reason: String) {
         guard let request = pending else { return }
         reply(request, error: reason)
-        task?.cancel(); completePending()
+        task?.cancel()
+        if request.operation == "play" { transport?.cancelWebsiteLocalPreparation() }
+        completePending()
     }
     private func completePending() {
         pending = nil; task = nil; presentation = nil; selectedReceiverID = nil
@@ -457,7 +585,8 @@ final class PageCastCoordinator: ObservableObject {
         switch code {
         case "not_allowed": return "Website casting permission was not granted."
         case "connect_failed", "no_receiver": return "Couldn’t connect to the receiver. Choose a device and try again."
-        case "unsupported_target": return "This request needs a PlayBridge receiver."
+        case "unsupported_target": return "This device does not support the requested playback or queue action."
+        case "unsupported_subtitles": return "This receiver does not support external subtitles. Choose another playback device."
         case "invalid_request", "resource_limit": return "The website sent an unsupported cast request."
         case "receiver_changed": return "The selected device changed. Start the cast again."
         case "network_unavailable": return "Couldn’t reach the website’s media server. Check your connection and try again."

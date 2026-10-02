@@ -259,3 +259,46 @@ test('requests carry document identity and delayed messages from another documen
   b.receive({ documentToken: 'previous-document', sessionId: 'current', event: 'statechange', detail: {} });
   assert.equal(states.length, 0);
 });
+
+
+test('unified playback uses destination status and native picker, and creates a linked Play session', async () => {
+  const b = browser();
+  assert.equal(b.api.capabilities.playback, 1);
+  const status = b.api.getPlaybackDestination();
+  assert.equal(b.messages.at(-1).operation, 'destination');
+  b.result(b.messages.at(-1), { destination: { id: 'this-device', name: 'This device', kind: 'local', connected: true } });
+  assert.equal((await status).destination.kind, 'local');
+  const picker = b.api.choosePlaybackDestination({ destinationId: 'this-device' });
+  assert.deepEqual(b.messages.at(-1).payload, { destinationId: 'this-device' });
+  assert.equal(b.messages.at(-1).operation, 'choose_destination');
+  b.result(b.messages.at(-1));
+  await picker;
+  const payload = { destinationId: 'this-device', items: [{ id: 'episode', url: 'https://media.example/video.mp4', startPositionMs: 40000 }] };
+  const play = b.api.play(payload);
+  const opening = b.messages.at(-1);
+  assert.equal(opening.operation, 'play');
+  assert.deepEqual(opening.payload, payload);
+  b.result(opening, { sessionId: 'local-play' });
+  const session = await play;
+  assert.equal(session.sessionId, 'local-play');
+  await b.advance(0);
+  b.result(b.messages.at(-1));
+  const unlink = session.unlink();
+  b.result(b.messages.at(-1));
+  await unlink;
+  assert.equal(b.timers.size, 0);
+});
+
+
+test('destination picker and explicit local override require user activation when WebKit exposes it', async () => {
+  const b = browser();
+  b.window.navigator = { userActivation: { isActive: false } };
+  await assert.rejects(b.api.choosePlaybackDestination(), { code: 'user_gesture_required' });
+  await assert.rejects(b.api.choosePlaybackDestination({ destinationId: 'this-device' }), { code: 'user_gesture_required' });
+  assert.equal(b.messages.length, 0);
+  b.window.navigator.userActivation.isActive = true;
+  const picker = b.api.choosePlaybackDestination();
+  assert.equal(b.messages.at(-1).operation, 'choose_destination');
+  b.result(b.messages.at(-1));
+  await picker;
+});

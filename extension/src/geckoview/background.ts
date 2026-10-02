@@ -393,22 +393,35 @@ async function handleLinkedPageRequest(
   if (tabId == null || sender.frameId !== 0 || !origin) return linkedError("invalid_request");
   if (!pageCastRequestWithinLimit(message.payload ?? {})) return linkedError("resource_limit");
   const operation = message.operation;
+  const generation = currentNavigationGeneration(tabNavigationGenerations, tabId);
+  if (operation === "destination" || operation === "choose_destination") {
+    const response = await sendLinkedNative({ type: `linked_${operation}`, origin, tabId,
+      navigationGeneration: generation, payload: message.payload ?? {} }, 30_000);
+    if (!isCurrentNavigationGeneration(tabNavigationGenerations, tabId, generation)) return linkedError("session_ended");
+    return response;
+  }
+  const opening = operation === "open" || operation === "play";
   let payload: unknown;
-  if (operation === "open" || operation === "replace") payload = normalizeLinkedPageCastPayload(message.payload);
+  if (opening || operation === "replace") payload = normalizeLinkedPageCastPayload(message.payload);
+  if (operation === "play") {
+    const destinationId = (message.payload as Record<string, unknown>)?.destinationId;
+    if (typeof destinationId !== "string" || !destinationId || destinationId.length > 256) return linkedError("invalid_request");
+    if (payload) payload = { ...payload as object, destinationId };
+  }
   else if (operation === "append") payload = normalizeLinkedAppendPayload(message.payload);
   else if (operation === "jump") payload = normalizeLinkedJumpPayload(message.payload);
   else if (operation === "supply") payload = normalizeLinkedSupplyPayload(message.payload);
   else if (operation === "unlink") payload = {};
+  else if (operation === "ping") payload = { ready: true };
   if (!payload || !operation) return linkedError("invalid_request");
-  const generation = currentNavigationGeneration(tabNavigationGenerations, tabId);
   let sessionId = message.sessionId;
-  if (operation === "open") sessionId = randomId();
+  if (opening) sessionId = randomId();
   if (!sessionId) return linkedError("session_ended");
   if (linkedNativePending.size >= MAX_LINKED_NATIVE_PENDING) {
     return linkedError("resource_limit");
   }
 
-  if (operation !== "open") {
+  if (!opening) {
     const binding = linkedBindings.get(sessionId);
     if (!binding || binding.tabId !== tabId || binding.origin !== origin || binding.navigationGeneration !== generation) {
       return linkedError("session_ended");
@@ -417,7 +430,7 @@ async function handleLinkedPageRequest(
 
   try {
     const bridgeRequestId = randomId();
-    if (operation === "open") {
+    if (opening) {
       pendingLinkedOpens.set(sessionId, {
         sessionId,
         tabId,
@@ -433,15 +446,15 @@ async function handleLinkedPageRequest(
       tabId,
       navigationGeneration: generation,
       payload,
-    }, operation === "open" ? 600_000 : 30_000, bridgeRequestId);
-    if (operation === "open") pendingLinkedOpens.delete(sessionId);
+    }, opening ? 600_000 : 30_000, bridgeRequestId);
+    if (opening) pendingLinkedOpens.delete(sessionId);
     if (response.ok !== true) {
       return linkedError(
         typeof response.error === "string" ? response.error : "linked_cast_failed",
         typeof response.message === "string" ? response.message : undefined,
       );
     }
-    if (operation === "open") {
+    if (opening) {
       const currentOrigin = pageOrigin(tabLastUrl.get(tabId));
       if (
         !isCurrentNavigationGeneration(tabNavigationGenerations, tabId, generation) ||
@@ -462,9 +475,9 @@ async function handleLinkedPageRequest(
     } else if (operation === "unlink") {
       linkedBindings.delete(sessionId);
     }
-    return { ok: true, sessionId };
+    return { ...response, ok: true, sessionId };
   } catch (error) {
-    if (operation === "open") pendingLinkedOpens.delete(sessionId);
+    if (opening) pendingLinkedOpens.delete(sessionId);
     return linkedError("native_unavailable", (error as Error)?.message);
   }
 }

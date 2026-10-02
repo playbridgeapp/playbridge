@@ -89,6 +89,7 @@ object Components {
     var onNativePluginManagerRequested: ((tabId: String) -> Boolean)? = null
     private val pageCastCallbackGate = OwnedCallbackGate()
     private val pageNavigationGenerations = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+    val playbackDevicePickerRequests = kotlinx.coroutines.flow.MutableStateFlow(0L)
     val linkedDevicePickerRequests = kotlinx.coroutines.flow.MutableStateFlow(0L)
     private var linkedNativePort: GeckoWebExtension.Port? = null
 
@@ -772,7 +773,7 @@ object Components {
                 val type = jsonObject["type"]?.jsonPrimitive?.content
                 if (type?.startsWith("linked_") == true) {
                     if (jsonString.toByteArray().size > PAGE_CAST_REQUEST_BYTES) return
-                    if (type == "linked_open") {
+                    if (type in setOf("linked_open", "linked_play", "linked_destination", "linked_choose_destination")) {
                         val detectorTabId = jsonObject["tabId"]?.jsonPrimitive?.intOrNull
                         val generation =
                             jsonObject["navigationGeneration"]?.jsonPrimitive?.longOrNull

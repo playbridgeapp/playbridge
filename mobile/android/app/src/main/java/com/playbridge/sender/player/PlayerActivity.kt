@@ -219,6 +219,7 @@ data class SubtitleTrack(
 class PlayerActivity : ComponentActivity() {
 
     private var player: ExoPlayer? = null
+    private var attachedPageSessionId: String? = null
 
     /**
      * Background-mode toggle, hoisted here (single source of truth shared with the
@@ -403,7 +404,12 @@ class PlayerActivity : ComponentActivity() {
 
         val initialTitle: String?
         var episodeController: LazyEpisodeController? = null
-        if (isLazy) {
+        val pageSessionId = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
+        if (pageSessionId != null) {
+            attachedPageSessionId = pageSessionId
+            if (!PagePlayerSession.attach(pageSessionId, this, exo) { finish() }) { finish(); return }
+            initialTitle = title
+        } else if (isLazy) {
             // Series auto-play without a Hub/play-endpoint addon: only the first episode's
             // stream URL is known. We play it immediately and resolve each subsequent episode
             // on demand (see [LazyEpisodeController]) so the player still advances on its own.
@@ -482,6 +488,7 @@ class PlayerActivity : ComponentActivity() {
 
         setContent {
             PlayBridgeTheme {
+                val waitingForWebsiteQueue by PagePlayerSession.waitingForNext.collectAsState()
                 val isInPip by isInPipModeState
                 PlayerScreen(
                     player = exo,
@@ -489,8 +496,9 @@ class PlayerActivity : ComponentActivity() {
                     externalHeaders = headers,
                     externalContentType = contentType,
                     episodeController = episodeController,
+                    waitingForWebsiteQueue = pageSessionId != null && waitingForWebsiteQueue,
                     onClose = { finish() },
-                    onEnded = { finish() },
+                    onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
                     isInPip = isInPip,
                     backgroundMode = backgroundModeState,
                     onEnterBackgroundMode = {
@@ -500,6 +508,16 @@ class PlayerActivity : ComponentActivity() {
                     }
                 )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        // singleTask notification returns keep playback; a new website session replaces it.
+        val id = intent.getStringExtra(EXTRA_PAGE_SESSION_ID)
+        if (id != null && id != attachedPageSessionId) {
+            setIntent(intent)
+            recreate()
         }
     }
 
@@ -537,11 +555,13 @@ class PlayerActivity : ComponentActivity() {
         // cancelled with lifecycleScope). Only fires on real close, not on rotation — the
         // activity handles orientation config changes itself.
         if (tracksProgress) progressTracker.reportInAppStopped()
+        attachedPageSessionId?.let(PagePlayerSession::close)
         player?.release()
         player = null
     }
 
     companion object {
+        const val EXTRA_PAGE_SESSION_ID = "page_session_id"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_CONTENT_TYPE = "content_type"
@@ -668,12 +688,12 @@ object PlayerLauncher {
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LABELS, ArrayList(subtitles.map { it.label ?: "" }))
                 putStringArrayListExtra(PlayerActivity.EXTRA_SUB_LANGS, ArrayList(subtitles.map { it.language ?: "" }))
             }
+            if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
             if (tmdbId > 0) {
                 putExtra(PlayerActivity.EXTRA_TMDB_ID, tmdbId)
                 putExtra(PlayerActivity.EXTRA_MEDIA_TYPE, mediaType ?: "movie")
                 if (season != null) putExtra(PlayerActivity.EXTRA_SEASON, season)
                 if (episode != null) putExtra(PlayerActivity.EXTRA_EPISODE, episode)
-                if (startPositionMs > 0) putExtra(PlayerActivity.EXTRA_START_POSITION_MS, startPositionMs)
             }
         }
         context.startActivity(intent)
@@ -898,6 +918,7 @@ private fun PlayerScreen(
     episodeController: LazyEpisodeController? = null,
     onClose: () -> Unit,
     onEnded: () -> Unit,
+    waitingForWebsiteQueue: Boolean = false,
     isInPip: Boolean,
     /** Shared with the activity: onStop reads it, notification-return resets it. */
     backgroundMode: MutableState<Boolean>,
@@ -1344,8 +1365,7 @@ private fun PlayerScreen(
 
             // Buffering spinner — hide once a frame has painted even if ExoPlayer
             // still reports BUFFERING (local content:// edge case).
-            if ((isBuffering || isResolvingEpisode) &&
-                !hasRenderedFrame &&
+            if (((isBuffering || isResolvingEpisode) && !hasRenderedFrame || waitingForWebsiteQueue) &&
                 dragMode == DragMode.NONE &&
                 errorMessage == null
             ) {

@@ -58,7 +58,7 @@ enum PageCastScript {
             pending.delete(requestId);
             bestEffort('cancel', sessionId, {requestId: requestId, reason: 'timeout'});
             reject(failure('timeout', 'Cast request timed out'));
-          }, operation === 'open' || operation === 'cast' ? 600000 : 30000);
+          }, operation === 'open' || operation === 'play' || operation === 'cast' ? 600000 : 30000);
           pending.set(requestId, {
             operation: operation, sessionId: sessionId, resolve: resolve,
             reject: reject, timeout: timeout
@@ -159,7 +159,7 @@ enum PageCastScript {
         clearTimeout(waiter.timeout);
         if (message.ok !== true) {
           waiter.reject(failure(message.error || 'cast_failed', message.message || message.error));
-        } else if (waiter.operation === 'open') {
+        } else if (waiter.operation === 'open' || waiter.operation === 'play') {
           if (typeof message.sessionId !== 'string' || !message.sessionId || message.sessionId.length > 256) {
             waiter.reject(failure('invalid_response', 'PlayBridge returned an invalid session'));
           } else if (sessions.size >= 8 || sessions.has(message.sessionId)) {
@@ -176,9 +176,17 @@ enum PageCastScript {
       // on existing websites that intentionally do not await cast().
       api.cast = function (payload) { request('cast', null, payload).catch(function () {}); };
       api.capabilities = Object.assign({}, api.capabilities, {
-        linkedCast: 1, explicitHeaders: 1, privateNetworkOriginPermission: 1
+        linkedCast: 1, playback: 1, explicitHeaders: 1, privateNetworkOriginPermission: 1
       });
       api.linkCast = function (payload) { return request('open', null, payload); };
+      api.play = function (payload) { return request('play', null, payload); };
+      api.getPlaybackDestination = function () { return request('destination', null, {}); };
+      api.choosePlaybackDestination = function (options) {
+        if (window.navigator && window.navigator.userActivation && !window.navigator.userActivation.isActive) {
+          return Promise.reject(failure('user_gesture_required', 'Choose a playback device by tapping its destination button'));
+        }
+        return request('choose_destination', null, options || {});
+      };
 
       window.addEventListener('pagehide', function () {
         inactive = true;

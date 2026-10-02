@@ -65,6 +65,20 @@ final class FakeCastSession: GoogleCastSessionTransport {
             "status": ["state": "playing", "position_seconds": 1.25, "duration_seconds": 60]])
         await wait { controller.playback?.positionMs == 1250 }
         precondition(controller.playback?.durationMs == 60000)
+        let initialStatusID = native.last("status")!["request_id"] as! String
+        let initialMediaID = controller.playback?.playbackId
+        await wait { native.last("status")?["request_id"] as? String != initialStatusID }
+        let oldStatus = native.last("status")!
+        let replacement = Task { try await controller.load(url: URL(string: "https://example.test/second.mp4")!, title: "Second", contentType: "video/mp4") }
+        await wait { native.last("load")?["request_id"] as? String != command["request_id"] as? String }
+        native.acknowledge(native.last("load")!)
+        try await replacement.value
+        precondition(controller.playback?.playbackId != initialMediaID)
+        native.emit(["event": "status", "request_id": oldStatus["request_id"]!,
+            "status": ["state": "playing", "position_seconds": 45, "duration_seconds": 60]])
+        try await Task.sleep(nanoseconds: 100_000_000)
+        precondition(controller.playback?.title == "Second" && controller.playback?.positionMs == 0,
+            "An in-flight status from the previous media must not become the replacement stream's progress")
         let seek = Task { try await controller.control("seek_to:12500") }
         await wait { native.last("seek") != nil }
         precondition(native.last("seek")?["position_seconds"] as? Double == 12.5)
