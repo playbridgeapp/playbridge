@@ -229,6 +229,15 @@ class BrowserActivity : ComponentActivity() {
     private val browserViewModel: com.playbridge.sender.browser.BrowserViewModel by viewModel()
     private val updateChecker: com.playbridge.sender.update.UpdateChecker by inject()
     private var pendingLinkedDeviceRequest: LinkedPageCastOpenRequest? = null
+    private val installedAppStore by lazy { BridgedAppStore(this) }
+    private val browserSelectionPrefs by lazy { getSharedPreferences("browser_prefs", MODE_PRIVATE) }
+    private var lastBrowserTabId: String?
+        get() = browserSelectionPrefs.getString("last_browser_tab_id", null)
+        set(value) {
+            if (value != lastBrowserTabId) {
+                browserSelectionPrefs.edit().putString("last_browser_tab_id", value).apply()
+            }
+        }
 
     /**
      * Third-party protocols do not expose PlayBridge's native playlist command. Keep the
@@ -432,8 +441,16 @@ class BrowserActivity : ComponentActivity() {
     }
 
     private fun saveTabs() {
-        val selectedId = Components.store.state.selectedTabId
-        val tabs = Components.store.state.tabs
+        val state = Components.store.state
+        val tabs = state.tabs
+        // App sessions are saved too, but a cold launch returns to the regular browser.
+        val selectedId = resolveBrowserTabSelection(
+            tabIds = tabs.map { it.id },
+            selectedId = state.selectedTabId,
+            bridgedAppTabIds = installedAppStore.apps.value.mapNotNull { it.tabId }.toSet(),
+            previousBrowserTabId = lastBrowserTabId,
+        )
+        if (selectedId != null) lastBrowserTabId = selectedId
         val allStates = tabManager.captureAllStates()
         browserViewModel.saveTabs(tabs, selectedId, allStates, tabManager.parentIds)
     }
@@ -734,11 +751,11 @@ class BrowserActivity : ComponentActivity() {
             // Chrome-hidden mode belongs to the selected tab and intentionally remains
             // session-only: it survives tab switches/navigation, but not an app restart.
             var chromeHiddenTabIds by rememberSaveable { mutableStateOf(emptySet<String>()) }
-            val bridgedAppStore = remember { BridgedAppStore(this@BrowserActivity) }
+            val bridgedAppStore = remember { installedAppStore }
             val installedBridgedApps by bridgedAppStore.apps.collectAsStateWithLifecycle()
             var availableBridgedApp by remember { mutableStateOf<BridgedApp?>(null) }
             var activeBridgedAppTabId by rememberSaveable { mutableStateOf<String?>(null) }
-            var previousBrowserTabId by rememberSaveable { mutableStateOf<String?>(null) }
+            var previousBrowserTabId by rememberSaveable { mutableStateOf(lastBrowserTabId) }
             val tabIds = browserState.tabs.map { it.id }
             LaunchedEffect(tabIds, browserState.selectedTabId) {
                 Log.d("PB_STARTUP", "Compose: syncSessions triggered — tabCount=${browserState.tabs.size}, selectedTabId=${browserState.selectedTabId}")
@@ -757,8 +774,12 @@ class BrowserActivity : ComponentActivity() {
             val selectedTab = browserState.tabs.find { it.id == selectedTabId }
             val bridgedAppTabIds = installedBridgedApps.mapNotNull { it.tabId }.toSet()
             fun selectNormalBrowserTab() {
-                val normalIds = store.state.tabs.map { it.id }.filterNot { it in bridgedAppTabIds }
-                val normalId = previousBrowserTabId?.takeIf { it in normalIds } ?: normalIds.firstOrNull()
+                val normalId = resolveBrowserTabSelection(
+                    tabIds = store.state.tabs.map { it.id },
+                    selectedId = store.state.selectedTabId,
+                    bridgedAppTabIds = bridgedAppTabIds,
+                    previousBrowserTabId = previousBrowserTabId,
+                )
                 if (normalId != null) {
                     tabManager.selectTab(normalId, store)
                     previousBrowserTabId = normalId
@@ -2608,6 +2629,9 @@ class BrowserActivity : ComponentActivity() {
                             if (selectedTabId != null && selectedTabId != activeBridgedAppTabId &&
                                 selectedTabId !in bridgedAppTabIds) {
                                 previousBrowserTabId = selectedTabId
+                                // Persist before selecting the app, even if the debounced tab save
+                                // has not run since the user switched regular browser tabs.
+                                lastBrowserTabId = selectedTabId
                             }
                             val existingTab = app.tabId?.takeIf { id ->
                                 store.state.tabs.any { it.id == id && BridgedAppStore.originFor(it.content.url) == app.origin }
