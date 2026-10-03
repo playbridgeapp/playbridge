@@ -44,6 +44,16 @@ struct StreamRouteService {
     }
     var remote: (String, [String: String], String?, RemoteProxyConfiguration) async throws -> RoutedStream = RemoteProxyClient.register
 
+    /// Local players use loopback registrations, including rewritten HLS children.
+    /// The default router remains LAN-advertised for casts to another device.
+    static var localPlayback: Self {
+        Self(phone: { url, headers, type in
+            let registration = try await PhoneSenderServices.shared.register(url: url, headers: headers,
+                contentType: type, forLocalPlayback: true)
+            return RoutedStream(url: registration.url, headers: [:], registration: registration)
+        })
+    }
+
     func prepare(url: String, headers: [String: String], contentType: String?, route: StreamRoute,
                  configuration: RemoteProxyConfiguration) async throws -> RoutedStream {
         try Task.checkCancellation()

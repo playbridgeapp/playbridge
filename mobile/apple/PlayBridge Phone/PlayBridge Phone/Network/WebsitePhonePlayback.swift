@@ -31,13 +31,17 @@ import Foundation
         })
         session.onWebsiteClose = { [weak self] in self?.close() }
         session.onWebsiteSubtitleSelection = { [weak self] in self?.selectSubtitle($0) }
+        session.onSubtitleTimingChange = { [weak self] in self?.tick() }
+        session.onWebsiteJump = { [weak self] in self?.navigate(to: $0) }
         updateTracks()
-        tickTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        updateQueue()
+        tickTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
         session.onPlaybackEnd = { [weak self] in
             guard let self, !self.closed else { return }
             self.ended = true
+            self.updateQueue()
             self.event?("statechange", self.snapshot())
             self.advanceIfAvailable()
         }
@@ -60,7 +64,7 @@ import Foundation
 
     private static func prepare(_ item: [String: Any], route: StreamRoute, configuration: RemoteProxyConfiguration) async throws -> RoutedStream {
         guard (item["mediaKind"] as? String ?? "video") != "image" else { throw PageCastError(code: "unsupported_target") }
-        return try await StreamRouteService().prepare(url: item["url"] as! String,
+        return try await StreamRouteService.localPlayback.prepare(url: item["url"] as! String,
             headers: item["headers"] as? [String: String] ?? [:], contentType: item["contentType"] as? String,
             route: route, configuration: configuration)
     }
@@ -77,39 +81,66 @@ import Foundation
     }
     private func tick() {
         guard !closed, !changingItem else { return }
-        let position = session.positionSeconds
-        session.websiteCaption = cues.filter { $0.start <= position && position < $0.end }.map(\.text).joined(separator: "\n")
+        let caption = WebsiteCaptionParser.caption(cues, position: session.positionSeconds, delay: session.subtitleDelay)
+        if caption != session.websiteCaption { session.websiteCaption = caption }
     }
-    func append(_ supplied: [[String: Any]], endOfList: Bool) { items += supplied; self.endOfList = endOfList; advanceIfAvailable() }
+    func append(_ supplied: [[String: Any]], endOfList: Bool) {
+        guard !closed else { return }
+        items += supplied; self.endOfList = endOfList
+        updateQueue(); advanceIfAvailable()
+    }
+    private func updateQueue() {
+        session.websiteQueueTitles = items.enumerated().map { $0.element["title"] as? String ?? "Episode \($0.offset + 1)" }
+        session.websiteQueueIndex = index
+        session.websiteQueueChangingItem = changingItem
+        session.websiteWaitingForNext = !closed && ended && !endOfList && index + 1 >= items.count
+    }
     func jump(_ selected: Int) async throws {
         guard !closed, items.indices.contains(selected), !changingItem else { throw PageCastError(code: "stale_request") }
-        changingItem = true
-        defer { changingItem = false }
+        changingItem = true; session.websiteQueueError = nil; updateQueue()
+        defer { changingItem = false; updateQueue() }
         let item = items[selected]
         let media = try await Self.prepare(item, route: route, configuration: configuration)
         try Task.checkCancellation()
         guard !closed else { throw PageCastError(code: "session_ended") }
-        index = selected; ended = false; updateTracks()
+        // Native next/previous bypass the page jump operation. Flush the old
+        // identity and position before switching, just as EOF does.
+        if !ended { event?("statechange", snapshot()) }
+        guard !closed else { throw PageCastError(code: "session_ended") }
+        index = selected; ended = false; updateTracks(); updateQueue()
         let route = route; let configuration = configuration
         await session.replaceWebsiteMedia(media, title: item["title"] as? String ?? "", resumeMs: item["start_position_ms"] as? Int ?? 0,
             contentType: item["contentType"] as? String,
             prepare: { try await Self.prepare(item, route: route, configuration: configuration) })
     }
     private func advanceIfAvailable() {
-        guard ended, index + 1 < items.count, advanceTask == nil, !closed else { return }
+        guard ended, index + 1 < items.count else { return }
+        navigate(to: index + 1)
+    }
+    private func navigate(to selected: Int) {
+        guard !closed, !changingItem, advanceTask == nil, items.indices.contains(selected), selected != index else { return }
         advanceTask = Task { [weak self] in
             guard let self else { return }
             defer { advanceTask = nil }
-            do { try await jump(index + 1) }
-            catch { if !Task.isCancelled { session.websiteSubtitleError = "Couldn’t load the next episode. Return to Streams and try again." } }
+            do { try await jump(selected) }
+            catch {
+                if !Task.isCancelled && !closed {
+                    session.websiteQueueError = "Couldn’t load this episode. Choose it again in the queue to retry."
+                }
+            }
         }
     }
-    func detach() { event = nil }
+    func detach() {
+        event = nil
+        // Delivered items remain navigable, but there is no page authority to resolve more.
+        endOfList = true; updateQueue()
+    }
     private func close() {
         guard !closed else { return }
         var state = snapshot(); state["closed"] = true
         if !ended { state["state"] = "stopped" }
         finalState = state; closed = true
+        updateQueue(); session.onWebsiteJump = nil
         event?("statechange", state)
         advanceTask?.cancel(); subtitleTask?.cancel()
         tickTimer?.invalidate(); tickTimer = nil
@@ -120,10 +151,12 @@ import Foundation
         let resources = item["subtitleResources"] as? [[String: Any]] ?? []
         var urls = item["subtitles"] as? [String] ?? []
         for resource in resources { if let url = resource["url"] as? String, !urls.contains(url) { urls.append(url) } }
+        session.websiteSubtitleLanguages = urls.map { url in resources.first { $0["url"] as? String == url }?["language"] as? String }
         session.websiteSubtitleTracks = urls.enumerated().map { offset, url in
             let resource = resources.first { $0["url"] as? String == url }
             return (url, resource?["label"] as? String ?? resource?["language"] as? String ?? "Subtitle \(offset + 1)")
         }
+        session.applyPreferredTracks()
     }
     private func selectSubtitle(_ selected: Int?) {
         if selected != nil { session.alternativeEngine?.selectSubtitle(nil) }

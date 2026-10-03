@@ -4,7 +4,7 @@ import AVFoundation
 final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?) async throws -> PhoneProxyRegistration {
+    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
         fatalError("Unexpected proxy startup")
     }
 }
@@ -22,64 +22,72 @@ final class PhoneSenderServices {
         let formatError = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.fileFormatNotRecognized.rawValue)
         precondition(PlaybackFailure.describe(formatError, isMatroska: true).message.contains("MKV"))
         precondition(!PlaybackFailure.describe(formatError).message.contains("MKV"))
-        precondition(PlaybackFailure.describe(formatError, httpStatus: 403, isMatroska: true).message.contains("denied"),
-                     "A server access failure must not be misreported as an MKV format failure")
+        precondition(PlaybackFailure.describe(formatError, httpStatus: 403, isMatroska: true).message.contains("denied"))
+        var engines: [TestAlternativeEngine] = []
+        let factory: () -> PhoneAlternativePlaybackEngine? = {
+            let engine = TestAlternativeEngine(); engines.append(engine); return engine
+        }
         let signed = RoutedStream(url: URL(string: "https://user:password@cdn.test/private-path/video?token=secret")!,
                                   headers: ["Authorization": "Bearer private-value"],
                                   sourceURL: "https://user:password@source.test/signed-secret/video.mkv?token=secret")
-        let diagnosticSession = PlaybackSession(media: signed, route: .phone) { signed }
+        let diagnosticSession = PlaybackSession(media: signed, route: .phone, alternativeFactory: factory) { signed }
         let initialReport = diagnosticSession.diagnosticsReport()
-        precondition(initialReport.contains("Engine: AVPlayer") && initialReport.contains("Source host: source.test"))
+        precondition(initialReport.contains("Engine: mpv") && initialReport.contains("Source host: source.test"))
         precondition(initialReport.contains("Matroska (MKV)") && initialReport.contains("Request header count: 1"))
         for secret in ["user:", "password", "signed-secret", "private-path", "token", "private-value"] {
             precondition(!initialReport.contains(secret), "Copied diagnostics must omit credentials and signed paths")
         }
         let opaque = RoutedStream(url: URL(string: "https://cdn.test/opaque")!, headers: [:])
         await diagnosticSession.replaceWebsiteMedia(opaque, title: "Second item", resumeMs: 0, contentType: "video/x-matroska", autoplay: false)
-        precondition(diagnosticSession.diagnosticsReport().contains("Matroska (MKV)"), "Opaque URLs must retain declared format")
+        precondition(diagnosticSession.diagnosticsReport().contains("Matroska (MKV)"))
         await diagnosticSession.replaceWebsiteMedia(opaque, title: "Third item", resumeMs: 0, contentType: "video/mp4", autoplay: false)
-        precondition(!diagnosticSession.diagnosticsReport().contains("Matroska (MKV)"), "Queue replacement must update format diagnostics")
+        precondition(!diagnosticSession.diagnosticsReport().contains("Matroska (MKV)"), "mpv-only policy must not mislabel MP4 as MKV")
         diagnosticSession.close()
         precondition(!diagnosticSession.diagnosticsReport().isEmpty)
-        let origin = ProcessInfo.processInfo.environment["PLAYBACK_TEST_ORIGIN"]!
-        let media = RoutedStream(url: URL(string: origin + "/hls/blocked.m3u8")!, headers: [:])
+
+        let media = RoutedStream(url: URL(string: "https://media.invalid/blocked.m3u8")!, headers: [:])
         var retries = 0
-        let session = PlaybackSession(media: media, route: .proxy) {
+        let session = PlaybackSession(media: media, route: .proxy, alternativeFactory: factory) {
             retries += 1
             return media
         }
-        session.player.play()
-        for _ in 0..<250 {
-            if session.failure != nil { break }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        precondition(session.failure != nil, "AVPlayer failure must produce visible state")
-        precondition(session.diagnosticsReport().contains("Playback error:") || session.diagnosticsReport().contains("Player error log:"),
-                     "The report must include concrete AVPlayer evidence after playback fails")
+        let failed = engines.last!
+        failed.onState?(PhonePlaybackState(position: 17, duration: 120, paused: false))
+        failed.networkIssue = .http(403)
+        failed.onFailure?(-13)
+        precondition(session.failure?.message.contains("denied") == true && failed.pauses == 1)
+        precondition(session.diagnosticsReport().contains("mpv error code: -13") && session.diagnosticsReport().contains("Network: HTTP 403"))
         session.retry()
-        for _ in 0..<250 {
-            if retries == 1 && !session.retrying && session.failure != nil { break }
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        precondition(retries == 1 && session.route == .proxy && session.failure != nil)
-        session.close()
-        session.retry()
-        precondition(retries == 1 && session.player.currentItem == nil)
+        try await wait { retries == 1 && !session.retrying }
+        precondition(session.route == .proxy && session.failure == nil && engines.last!.loads.last!.2 == 17)
+        failed.onFailure?(-12)
+        precondition(session.failure == nil, "A replaced engine cannot overwrite the new attempt")
+        engines.last!.networkIssue = .certificate
+        engines.last!.onFailure?(-13)
+        precondition(session.failure?.message.contains("TLS certificate") == true)
+        precondition(session.diagnosticsReport().contains("TLS certificate verification failed"))
+        session.close(); session.retry()
+        precondition(retries == 1 && session.alternativeEngine == nil)
 
         var preparation: CheckedContinuation<RoutedStream, Never>?
-        let pending = PlaybackSession(media: media, route: .phone) {
+        let pending = PlaybackSession(media: media, route: .phone, alternativeFactory: factory) {
             await withCheckedContinuation { preparation = $0 }
         }
+        let count = engines.count
         pending.retry()
-        for _ in 0..<50 {
-            if preparation != nil { break }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        precondition(preparation != nil && pending.retrying)
+        try await wait { preparation != nil }
         pending.close()
         preparation?.resume(returning: media)
-        try await Task.sleep(nanoseconds: 100_000_000)
-        precondition(pending.player.currentItem == nil, "Dismissed retry must not restart playback")
-        print("PASS: safe failure messages, redacted nonempty native diagnostics, MKV format evidence, AVPlayer failure detection, explicit-route retry and dismissal cancellation")
+        try await Task.sleep(nanoseconds: 10_000_000)
+        precondition(pending.alternativeEngine == nil && engines.count == count, "Dismissed retry must not restart mpv")
+        print("PASS mpv failures, safe diagnostics, independent format evidence, explicit-route resume/retry, stale callbacks and dismissal fencing")
+    }
+
+    @MainActor private static func wait(_ predicate: () -> Bool) async throws {
+        for _ in 0..<1000 {
+            if predicate() { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        preconditionFailure("Timed out waiting for playback retry")
     }
 }

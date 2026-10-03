@@ -1,11 +1,16 @@
 import Foundation
 
 // A Direct route must never reach the native proxy, even with invalid proxy settings.
-final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
+final class PhoneProxyRegistration {
+    let url: URL
+    init(local: Bool) { url = URL(string: local ? "http://127.0.0.1/video" : "http://phone.test/video")! }
+}
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?) async throws -> PhoneProxyRegistration {
-        fatalError("Unexpected native proxy startup")
+    var localFlags: [Bool] = []
+    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+        localFlags.append(forLocalPlayback)
+        return PhoneProxyRegistration(local: forLocalPlayback)
     }
 }
 
@@ -26,7 +31,7 @@ final class PhoneSenderServices {
         })
         let direct = try await router.prepare(url: source, headers: headers, contentType: nil, route: .direct, configuration: .init())
         precondition(direct.url.absoluteString == source && direct.headers == headers)
-        precondition(phoneCalls == 0 && remoteCalls == 0)
+        precondition(phoneCalls == 0 && remoteCalls == 0 && PhoneSenderServices.shared.localFlags.isEmpty)
         let phone = try await router.prepare(url: source, headers: headers, contentType: nil, route: .phone, configuration: .init())
         precondition(phone.url.host == "phone.test" && phone.headers.isEmpty && phoneCalls == 1 && remoteCalls == 0)
         let config = RemoteProxyConfiguration(baseURL: "https://proxy.test/prefix/", password: "a&b+? secret")
@@ -46,6 +51,13 @@ final class PhoneSenderServices {
             _ = try await failing.prepare(url: source, headers: headers, contentType: nil, route: .phone, configuration: config)
             preconditionFailure("An explicit proxy route must not silently become Direct")
         } catch {}
+        let local = try await StreamRouteService.localPlayback.prepare(url: source, headers: headers, contentType: nil, route: .phone, configuration: .init())
+        precondition(local.url.host == "127.0.0.1" && local.headers.isEmpty && local.registration != nil)
+        precondition(local.sourceURL == source && local.sourceHeaders == headers)
+        let advertised = try await StreamRouteService().prepare(url: source, headers: headers, contentType: nil, route: .phone, configuration: .init())
+        precondition(advertised.url.host == "phone.test" && PhoneSenderServices.shared.localFlags == [true, false])
+        _ = try await StreamRouteService.localPlayback.prepare(url: source, headers: headers, contentType: nil, route: .direct, configuration: .init())
+        precondition(PhoneSenderServices.shared.localFlags == [true, false], "Local Direct must still bypass the proxy")
         let request = try RemoteProxyClient.request(url: source, headers: headers, contentType: "application/vnd.apple.mpegurl", configuration: config)
         precondition(request.httpMethod == "POST" && request.url?.path == "/prefix/register")
         let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
@@ -65,6 +77,6 @@ final class PhoneSenderServices {
                 precondition(error.localizedDescription.contains("403"))
             }
         }
-        print("PASS: Direct bypasses proxies; explicit phone/remote routes, no silent fallback, remote registration contract")
+        print("PASS Direct bypass, loopback local playback, LAN-advertised casting, explicit remote routes and no silent fallback")
     }
 }

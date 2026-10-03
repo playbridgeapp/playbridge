@@ -41,7 +41,9 @@ import Libmpv
             })
     }
 
+    func configure(_ options: PhonePlayerOptions) { guard !closed else { return }; core.configure(options) }
     func attach(_ layer: CAMetalLayer) { guard !closed else { return }; core.attach(layer) }
+    func resize() { guard !closed else { return }; core.resize() }
     func load(url: URL, headers: [String: String], resume: Double, autoplay: Bool) {
         guard !closed else { return }
         failureContext = "playback"; networkIssue = nil
@@ -50,7 +52,7 @@ import Libmpv
     func play() { core.setPaused(false) }
     func pause() { core.setPaused(true) }
     func seek(to seconds: Double) { core.seek(to: seconds) }
-    func selectAudio(_ id: Int) { core.setProperty("aid", value: String(id)) }
+    func selectAudio(_ id: Int?) { core.setProperty("aid", value: id.map(String.init) ?? "auto") }
     func selectSubtitle(_ id: Int?) { core.setProperty("sid", value: id.map(String.init) ?? "no") }
     func close() {
         guard !closed else { return }
@@ -83,6 +85,8 @@ private final class MPVPhoneCore: @unchecked Sendable {
     private var state = PhonePlaybackState()
     private var entryID: Int64?
     private var loaded = false
+    private var pendingOutputResize = false
+    private var options = PhonePlayerOptions()
     private var pendingSeek: Double?
     private var closed = false
     private var background = false
@@ -134,6 +138,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
             ticker.schedule(deadline: .now(), repeating: .milliseconds(250))
             ticker.setEventHandler { [weak self] in self?.poll() }
             timer = ticker; ticker.resume()
+            applyOptions()
             if request != nil { loadCurrent() }
         }
     }
@@ -154,8 +159,32 @@ private final class MPVPhoneCore: @unchecked Sendable {
         }
     }
 
+    func configure(_ options: PhonePlayerOptions) {
+        queue.async { [self] in
+            guard !closed else { return }
+            self.options = options
+            applyOptions()
+        }
+    }
+    private func applyOptions() {
+        guard let handle else { return }
+        let prefs = options.preferences
+        let values = ["speed": String(prefs.speed), "panscan": prefs.sizing == .fill ? "1" : "0",
+                      "sub-delay": String(options.subtitleDelay), "sub-scale": String(prefs.subtitleScale),
+                      "sub-color": prefs.subtitleColor == .yellow ? "#FFFF00" : "#FFFFFF",
+                      "sub-back-color": prefs.subtitleBackground ? "#000000BF" : "#00000000",
+                      "sub-border-size": "2", "sub-ass-override": "force",
+                      "sub-border-style": prefs.subtitleBackground ? "background-box" : "outline-and-shadow"]
+        for (name, value) in values.sorted(by: { $0.key < $1.key }) {
+            let status = mpv_set_property_string(handle, name, value)
+            if status < 0 { emit(.failed(status, "player setting: " + name)) }
+        }
+    }
+
     private func loadCurrent() {
         guard let handle, let request else { return }
+        pendingOutputResize = false
+        mpv_set_property_string(handle, "vo", "gpu-next")
         // A node array preserves commas in Cookie/Referer values and cannot turn
         // a header value into another header or an mpv option.
         let headers = request.headers.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)" }
@@ -183,6 +212,19 @@ private final class MPVPhoneCore: @unchecked Sendable {
         // resume as a file option rather than a best-effort global property.
         let status = command(["loadfile", request.url.absoluteString, "replace", "-1", "start=\(request.resume)"])
         if status < 0 { emit(.failed(status, "loadfile")) }
+    }
+
+    func resize() {
+        queue.async { [self] in
+            guard !closed, !background, loaded, !pendingOutputResize, let handle else { return }
+            // The embedded iOS VO doesn't receive window resize events. Merely
+            // resizing CAMetalLayer leaves mpv drawing with its old viewport.
+            // Recreate only the video output; keep the decoder, clock and pause
+            // choice. Restore after current-vo confirms the old output is gone.
+            let status = mpv_set_property_string(handle, "vo", "null")
+            if status >= 0 { pendingOutputResize = true }
+            else { emit(.failed(status, "resize video output")) }
+        }
     }
 
     func setPaused(_ paused: Bool) {
@@ -225,6 +267,15 @@ private final class MPVPhoneCore: @unchecked Sendable {
 
     private func poll() {
         guard !closed, let handle else { return }
+        if pendingOutputResize, !background, let pointer = mpv_get_property_string(handle, "current-vo") {
+            let output = String(cString: pointer)
+            mpv_free(pointer)
+            if output == "null" {
+                pendingOutputResize = false
+                let status = mpv_set_property_string(handle, "vo", "gpu-next")
+                if status < 0 { emit(.failed(status, "restore video output")) }
+            }
+        }
         var streamFailure: Int32?
         while let event = mpv_wait_event(handle, 0), event.pointee.event_id != MPV_EVENT_NONE {
             switch event.pointee.event_id {
@@ -269,6 +320,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
         mpv_get_property(handle, "paused-for-cache", MPV_FORMAT_FLAG, &buffering)
         state.paused = paused != 0
         state.buffering = buffering != 0
+        state.speed = Double(propertyString("speed") ?? "") ?? 1
         state.selectedAudio = Int(propertyString("aid") ?? "")
         state.selectedSubtitle = Int(propertyString("sid") ?? "")
         if let json = propertyString("track-list"), let data = json.data(using: .utf8),
@@ -278,7 +330,7 @@ private final class MPVPhoneCore: @unchecked Sendable {
                     guard track["type"] as? String == type, let id = track["id"] as? Int else { return nil }
                     let label = [track["title"] as? String, track["lang"] as? String, track["codec"] as? String]
                         .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
-                    return PhonePlaybackTrack(id: id, label: label.isEmpty ? "Track \(id)" : label)
+                    return PhonePlaybackTrack(id: id, label: label.isEmpty ? "Track \(id)" : label, language: track["lang"] as? String)
                 }
             }
             state.audioTracks = matching("audio"); state.subtitleTracks = matching("sub")

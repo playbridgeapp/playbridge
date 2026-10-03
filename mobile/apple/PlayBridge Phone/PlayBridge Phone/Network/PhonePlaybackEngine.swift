@@ -1,20 +1,13 @@
 import Foundation
 
 enum PhonePlaybackEngineKind: String {
-    case avplayer = "AVPlayer"
     case mpv = "mpv"
-
-    static func preferred(sourceURL: URL, contentType: String?) -> Self {
-        let mime = contentType?.split(separator: ";").first?
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return sourceURL.pathExtension.lowercased() == "mkv" ||
-            ["video/x-matroska", "video/matroska", "audio/x-matroska"].contains(mime ?? "") ? .mpv : .avplayer
-    }
 }
 
 struct PhonePlaybackTrack: Equatable, Identifiable {
     let id: Int
     let label: String
+    var language: String? = nil
 }
 
 struct PhonePlaybackState {
@@ -26,6 +19,7 @@ struct PhonePlaybackState {
     var subtitleTracks: [PhonePlaybackTrack] = []
     var selectedAudio: Int?
     var selectedSubtitle: Int?
+    var speed = 1.0
 }
 
 /// Keep only fixed categories from decoder logs. Raw FFmpeg messages can include
@@ -60,18 +54,19 @@ enum PhonePlaybackNetworkIssue: Equatable {
 }
 
 /// The website queue and progress tracker consume the session, never a specific
-/// decoder. Injectable here so lifecycle and mixed-engine queues can be tested.
+/// decoder. Injectable here so mpv lifecycle and multi-format queues can be tested.
 @MainActor protocol PhoneAlternativePlaybackEngine: AnyObject {
     var failureContext: String { get }
     var networkIssue: PhonePlaybackNetworkIssue? { get }
     var onState: ((PhonePlaybackState) -> Void)? { get set }
     var onEnd: (() -> Void)? { get set }
     var onFailure: ((Int32) -> Void)? { get set }
+    func configure(_ options: PhonePlayerOptions)
     func load(url: URL, headers: [String: String], resume: Double, autoplay: Bool)
     func play()
     func pause()
     func seek(to seconds: Double)
-    func selectAudio(_ id: Int)
+    func selectAudio(_ id: Int?)
     func selectSubtitle(_ id: Int?)
     func close()
 }

@@ -26,7 +26,9 @@ xcrun --sdk iphonesimulator swiftc -sdk "$sdk" -target "$(uname -m)-apple-ios16.
  "$source_dir/Data/PhoneMediaLibrary.swift" "$source_dir/Data/CollectionsStore.swift" \
  "$source_dir/UI/PhoneMediaThumbnail.swift" "$source_dir/UI/PhoneFilesScreen.swift" "$source_dir/UI/PhoneMediaDetail.swift" \
  "$source_dir/UI/CollectionDetailScreen.swift" "$source_dir/UI/Theme.swift" \
- "$source_dir/Network/LocalFileServer.swift" \
+ "$source_dir/Network/LocalFileServer.swift" "$source_dir/Network/StreamRouteService.swift" \
+ "$source_dir/Network/PhonePlayerPreferences.swift" "$source_dir/Network/PhonePlaybackEngine.swift" "$source_dir/Network/PlaybackSession.swift" \
+ "$repo_root/mobile/apple/tests/TestPhonePlaybackEngine.swift" \
  "$repo_root/mobile/apple/tests/PhoneMediaLibraryTests.swift" -o "$app/LibraryChecks"
 codesign --force --sign - "$app" >/dev/null
 xcrun simctl install "$simulator" "$app"

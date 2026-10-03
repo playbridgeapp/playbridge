@@ -112,6 +112,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.common.TrackGroup
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
@@ -496,6 +497,7 @@ class PlayerActivity : ComponentActivity() {
                     externalHeaders = headers,
                     externalContentType = contentType,
                     episodeController = episodeController,
+                    websiteQueue = pageSessionId != null,
                     waitingForWebsiteQueue = pageSessionId != null && waitingForWebsiteQueue,
                     onClose = { finish() },
                     onEnded = { if (pageSessionId == null || !PagePlayerSession.waitForNext(pageSessionId)) finish() },
@@ -918,6 +920,7 @@ private fun PlayerScreen(
     episodeController: LazyEpisodeController? = null,
     onClose: () -> Unit,
     onEnded: () -> Unit,
+    websiteQueue: Boolean = false,
     waitingForWebsiteQueue: Boolean = false,
     isInPip: Boolean,
     /** Shared with the activity: onStop reads it, notification-return resets it. */
@@ -1000,15 +1003,15 @@ private fun PlayerScreen(
         }
     }
 
-    // Playlist (series) state. With a lazy controller the full episode list is known up
-    // front (titles supplied); otherwise it's derived from the player's static timeline.
+    // Website queues start with one item and grow as Streams supplies episodes.
+    // Follow timeline changes rather than retaining the initial single-item list.
     val isLazy = episodeController != null
-    val episodeTitles = remember(episodeController) {
-        episodeController?.titles ?: (0 until player.mediaItemCount).map {
-            player.getMediaItemAt(it).mediaMetadata.title?.toString() ?: "Episode ${it + 1}"
-        }
+    fun readQueueTitles() = (0 until player.mediaItemCount).map {
+        player.getMediaItemAt(it).mediaMetadata.title?.toString() ?: "Episode ${it + 1}"
     }
-    val isPlaylist = episodeTitles.size > 1
+    var nativeEpisodeTitles by remember(player) { mutableStateOf(readQueueTitles()) }
+    val episodeTitles = episodeController?.titles ?: nativeEpisodeTitles
+    val isPlaylist = websiteQueue || episodeTitles.size > 1
     var nativeIndex by remember { mutableIntStateOf(player.currentMediaItemIndex) }
     val currentIndex = if (isLazy) episodeController!!.currentIndex.intValue else nativeIndex
     var showEpisodes by remember { mutableStateOf(false) }
@@ -1076,6 +1079,10 @@ private fun PlayerScreen(
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                nativeEpisodeTitles = readQueueTitles()
+                nativeIndex = player.currentMediaItemIndex
+            }
             override fun onIsPlayingChanged(playing: Boolean) { isPlaying = playing }
             override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
                 currentTracks = tracks
@@ -1122,6 +1129,8 @@ private fun PlayerScreen(
             }
         }
         player.addListener(listener)
+        nativeEpisodeTitles = readQueueTitles()
+        nativeIndex = player.currentMediaItemIndex
         onDispose { player.removeListener(listener) }
     }
 
@@ -1547,7 +1556,7 @@ private fun PlayerScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 if (isPlaylist) {
                                     IconButton(onClick = { showEpisodes = true; markInteraction() }) {
-                                        Icon(Icons.AutoMirrored.Filled.PlaylistPlay, "Episodes", tint = Color.White)
+                                        Icon(Icons.AutoMirrored.Filled.PlaylistPlay, if (websiteQueue) "Queue" else "Episodes", tint = Color.White)
                                     }
                                 }
                                 val subtitlesActive = currentTracks.groups.any {
@@ -1961,6 +1970,7 @@ private fun PlayerScreen(
 
             if (showEpisodes) {
                 EpisodeSheet(
+                    header = if (websiteQueue) "Queue" else "Episodes",
                     titles = episodeTitles,
                     currentIndex = currentIndex,
                     onSelect = { idx -> goToEpisode(idx) },
@@ -2347,6 +2357,7 @@ private fun EmptyTracksMessage(text: String) {
 /** Bottom sheet listing the episodes in the current playlist; tap to jump. */
 @Composable
 private fun EpisodeSheet(
+    header: String,
     titles: List<String>,
     currentIndex: Int,
     onSelect: (Int) -> Unit,
@@ -2355,7 +2366,7 @@ private fun EpisodeSheet(
     val rows = titles.mapIndexed { i, t ->
         SheetRow(t, i == currentIndex, true) { onSelect(i); onDismiss() }
     }
-    SelectionSheet(header = "Episodes", rows = rows, emptyMessage = null, onDismiss = onDismiss)
+    SelectionSheet(header = header, rows = rows, emptyMessage = null, onDismiss = onDismiss)
 }
 
 @Composable

@@ -211,9 +211,30 @@ Playback failures and retries:
 bash mobile/apple/tests/run-playback-error-checks.sh
 ```
 
-Uses AVPlayer and a local HTTP fixture to verify visible failure state,
-route-preserving retries, dismissal during preparation, and safe error messages.
-Requires local networking; it does not validate an actual AirPlay receiver.
+Uses injected mpv callbacks to verify visible failure state, redacted diagnostics,
+route-preserving resume/retries, dismissal during preparation, and safe HTTP/TLS
+error messages. It does not validate native decoding or an actual AirPlay receiver.
+`bash mobile/apple/tests/run-mpv-phone-probe.sh` checks the real production decoder
+with generated MKV, MP4, HLS, DASH, audio and local-file fixtures; the separate TLS
+rejection probe verifies that certificate validation remains enabled.
+
+`bash mobile/apple/tests/run-phone-player-features-checks.sh` validates the shared
+control timer (pause/buffering, sheets, scrubbing, VoiceOver, lock and dismissal),
+accumulating/clamped seeks, settings persistence and language restoration with
+isolated defaults. `MPV_FEATURES_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh`
+checks native speed/track restoration and uses screenshot pixel assertions for
+Fit vs Fill, yellow subtitle text and positive subtitle delay on a black fixture.
+
+`MPV_ORIENTATION_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh` exercises
+the production fullscreen view in portrait and both landscape orientations,
+including a paused rotation. Screenshot pixel checks catch stale Metal viewports;
+UIView bounds and playback-state checks alone do not prove the video is visible.
+
+`MPV_PHONE_PROXY_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh` links the
+existing optional Cast Core XCFramework and production Swift proxy/upstream code,
+then verifies mpv playback and seeking through loopback for MKV, MP4 and rewritten
+HLS. It requires a LAN address for the explicitly granted upstream fixture, a
+booted simulator, ffmpeg, and `mobile/apple/Native/PlayBridgeCastCore.xcframework`.
 
 Google Cast controller and discovery parsing checks (macOS, no receiver needed):
 

@@ -47,8 +47,10 @@ final class PhoneSenderServices: @unchecked Sendable {
         }
     }
 
-    func register(url: String, headers: [String: String], contentType: String?, allowedPrivateOrigins: [String] = []) async throws -> PhoneProxyRegistration {
-        let host = LocalFileServer.lanIPAddress() ?? "127.0.0.1"
+    func register(url: String, headers: [String: String], contentType: String?, allowedPrivateOrigins: [String] = [], forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+        // Local mpv must not loop out through Wi-Fi/VPN or require LAN access to
+        // reach its own proxy. Receivers still need the advertised LAN address.
+        let host = forLocalPlayback ? "127.0.0.1" : LocalFileServer.lanIPAddress() ?? "127.0.0.1"
         var command: [String: Any] = ["command": "proxy_register_url", "host": host,
                                       "url": url, "headers": headers,
                                       "allowed_private_origins": allowedPrivateOrigins]

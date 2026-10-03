@@ -1,5 +1,4 @@
 import SwiftUI
-import AVKit
 import QuickLookThumbnailing
 
 struct PhoneMediaDetail: View {
@@ -8,9 +7,7 @@ struct PhoneMediaDetail: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var url: URL?
-    @State private var player: AVPlayer?
-    @State private var playerObservation: NSKeyValueObservation?
-    @State private var playbackObservation: NSKeyValueObservation?
+    @State private var playback: PlaybackSession?
     @State private var localAudioOwner: UUID?
     @State private var image: UIImage?
     @State private var error: String?
@@ -27,7 +24,13 @@ struct PhoneMediaDetail: View {
                 } else if url == nil { ProgressView("Preparing media…").padding() }
                 else if item.kind == .image, let image {
                     Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: .infinity)
-                } else if let player { VideoPlayer(player: player).frame(minHeight: 220) }
+                } else if let playback {
+                    PhoneMediaMPVPreview(session: playback) { playing in
+                        if playing, localAudioOwner == nil {
+                            localAudioOwner = try? CastSystemPlayback.shared.beginLocalPlayback()
+                        } else if !playing { releaseLocalAudio() }
+                    }.frame(minHeight: 220)
+                }
                 else { Image(systemName: item.kind.icon).font(Theme.font(.largeTitle)) }
                 Text(item.source.title).font(Theme.font(.caption)).foregroundColor(Theme.onSurfaceVariant)
                 if sent { Text("Sent to your TV").font(Theme.font(.caption)).foregroundColor(Theme.primary) }
@@ -48,8 +51,7 @@ struct PhoneMediaDetail: View {
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { await prepare() }
             .onDisappear {
-                playbackObservation = nil
-                player?.pause()
+                playback?.close()
                 releaseLocalAudio()
             }
             .sheet(isPresented: $showCollections) { AddPhoneMediaToCollection(item: item) }
@@ -66,21 +68,9 @@ struct PhoneMediaDetail: View {
                 image = await PhoneMediaThumbnail.image(at: result, maxPixel: 1600)
                 if image == nil { error = "This image format can’t be previewed on this iPhone." }
             } else {
-                let media = AVPlayerItem(url: result)
-                player = AVPlayer(playerItem: media)
-                player?.isMuted = false
-                playbackObservation = player?.observe(\.timeControlStatus, options: [.new]) { observedPlayer, _ in
-                    DispatchQueue.main.async {
-                        guard playbackObservation != nil, player === observedPlayer else { return }
-                        if observedPlayer.timeControlStatus == .paused { releaseLocalAudio() }
-                        else if localAudioOwner == nil { localAudioOwner = try? CastSystemPlayback.shared.beginLocalPlayback() }
-                    }
-                }
-                playerObservation = media.observe(\.status, options: [.new]) { item, _ in
-                    if item.status == .failed {
-                        DispatchQueue.main.async { error = "This file can’t be played on this iPhone. You can still try casting to a device that supports its format." }
-                    }
-                }
+                playback?.close()
+                let media = RoutedStream(url: result, headers: [:], sourceURL: result.absoluteString)
+                playback = PlaybackSession(media: media, route: .direct, contentType: LocalFileServer.mimeType(for: result)) { media }
             }
         } catch { self.error = error.localizedDescription }
     }
@@ -89,7 +79,7 @@ struct PhoneMediaDetail: View {
         sending = true; sent = false
         defer { sending = false }
         let target = vm.destinationID
-        player?.pause()
+        playback?.pause()
         releaseLocalAudio()
         guard let served = await LocalFileServer.shared.serve(fileURL: url) else {
             error = "Couldn’t serve this file. Check Wi-Fi and Local Network access, then try again."; return
@@ -104,6 +94,24 @@ struct PhoneMediaDetail: View {
             CastSystemPlayback.shared.endLocalPlayback(localAudioOwner)
             self.localAudioOwner = nil
         }
+    }
+}
+
+/// Local files use the same mpv engine, controls, tracks and retry path as streams.
+private struct PhoneMediaMPVPreview: View {
+    @ObservedObject var session: PlaybackSession
+    let onPlaybackChange: (Bool) -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            MPVPhonePlayerView(session: session)
+            if let failure = session.failure {
+                Text(failure.message).multilineTextAlignment(.center)
+                Button("Try Again") { session.retry() }.disabled(session.retrying)
+            }
+        }
+        .onChange(of: session.isPlaying) { onPlaybackChange($0) }
+        .onDisappear { session.pause(); onPlaybackChange(false) }
     }
 }
 

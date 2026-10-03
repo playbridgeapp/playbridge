@@ -12,7 +12,7 @@ struct RoutedStream {
 }
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?) async throws -> PhoneProxyRegistration {
+    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
         fatalError("No real media routes are opened by packaging unit tests")
     }
 }

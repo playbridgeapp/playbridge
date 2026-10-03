@@ -4,30 +4,9 @@ import AVFoundation
 final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
 final class PhoneSenderServices {
     static let shared = PhoneSenderServices()
-    func register(url: String, headers: [String: String], contentType: String?) async throws -> PhoneProxyRegistration { fatalError("Unexpected proxy startup") }
+    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration { fatalError("Unexpected proxy startup") }
 }
 enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration { .init() } }
-
-@MainActor final class TestAlternativeEngine: PhoneAlternativePlaybackEngine {
-    var onState: ((PhonePlaybackState) -> Void)?
-    var onEnd: (() -> Void)?
-    var onFailure: ((Int32) -> Void)?
-    var loads: [(URL, [String: String], Double, Bool)] = []
-    var plays = 0
-    var closes = 0
-    var seeks: [Double] = []
-    var selectedSubtitle: Int?
-    func load(url: URL, headers: [String: String], resume: Double, autoplay: Bool) {
-        loads.append((url, headers, resume, autoplay))
-        onState?(PhonePlaybackState(position: resume, paused: !autoplay))
-    }
-    func play() { plays += 1 }
-    func pause() {}
-    func seek(to seconds: Double) { seeks.append(seconds) }
-    func selectAudio(_ id: Int) {}
-    func selectSubtitle(_ id: Int?) { selectedSubtitle = id }
-    func close() { closes += 1 }
-}
 
 @main struct PhonePlaybackEngineTests {
     @MainActor static func main() async throws {
@@ -42,15 +21,12 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         precondition(PlaybackFailure.describeMPV(-13, networkIssue: .certificate).message.contains("TLS certificate"))
         let mkv = URL(string: "https://source.test/video.MKV?token=secret")!
         let mp4 = URL(string: "https://source.test/video.mp4")!
-        precondition(PhonePlaybackEngineKind.preferred(sourceURL: mkv, contentType: nil) == .mpv)
-        precondition(PhonePlaybackEngineKind.preferred(sourceURL: mp4, contentType: " Video/X-Matroska ; codecs=h264") == .mpv)
-        precondition(PhonePlaybackEngineKind.preferred(sourceURL: mp4, contentType: "video/mp4") == .avplayer)
         let media = RoutedStream(url: URL(string: "https://proxy.test/opaque")!, headers: ["Cookie": "first=1, second=2"],
                                  sourceURL: mkv.absoluteString)
         var engines: [TestAlternativeEngine] = []
         let factory: () -> PhoneAlternativePlaybackEngine? = { let engine = TestAlternativeEngine(); engines.append(engine); return engine }
         let session = PlaybackSession(media: media, route: .proxy, alternativeFactory: factory) { media }
-        precondition(session.engineKind == .mpv && session.player.currentItem == nil)
+        precondition(session.engineKind == .mpv && session.alternativeEngine === engines[0])
         precondition(engines[0].loads[0].0 == media.url && engines[0].loads[0].1 == media.headers,
                      "Decoder must use the selected proxy route and preserve headers")
         precondition(!engines[0].loads[0].3 && engines[0].plays == 0, "Preparing must not start decoding/playback before authorization")
@@ -70,9 +46,8 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         precondition(session.failure == nil && session.positionSeconds == 13, "A replaced decoder's callbacks must be ignored")
         let compatible = RoutedStream(url: mp4, headers: [:])
         await session.replaceWebsiteMedia(compatible, title: "MP4", resumeMs: 0, autoplay: false)
-        precondition(session.engineKind == .avplayer && engines[1].closes == 1 && session.player.currentItem != nil)
-        session.tryWithMPV()
-        precondition(session.engineKind == .mpv && engines.count == 3 && engines[2].loads[0].0 == mp4)
+        precondition(session.engineKind == .mpv && engines[1].closes == 1 && engines.count == 3 && engines[2].loads[0].0 == mp4,
+                     "MP4 must stay on mpv rather than falling back to AVPlayer")
         session.close(); session.play(); session.retry()
         engines[2].onState?(PhonePlaybackState(position: 666)); engines[2].onFailure?(-12)
         precondition(engines[2].closes == 1 && engines[2].plays == 0 && session.positionSeconds != 666)
@@ -91,17 +66,30 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         playback.append(try PageCastRequest.parseItems([["id": "mp4", "url": mp4.absoluteString]], linked: true), endOfList: false)
         first.onEnd?()
         for _ in 0..<100 { if playback.index == 1 { break }; try await Task.sleep(nanoseconds: 1_000_000) }
-        precondition(playback.index == 1 && playback.session.engineKind == .avplayer, "MKV EOF must advance to an AVPlayer episode")
+        precondition(playback.index == 1 && playback.session.engineKind == .mpv, "MKV EOF must advance to the MP4 episode on mpv")
         playback.append(try PageCastRequest.parseItems([["id": "mkv-2", "url": mkv.absoluteString]], linked: true), endOfList: true)
-        NotificationCenter.default.post(name: .AVPlayerItemDidPlayToEndTime, object: playback.session.player.currentItem)
+        engines.last!.onEnd?()
         for _ in 0..<100 { if playback.index == 2 { break }; try await Task.sleep(nanoseconds: 1_000_000) }
-        precondition(playback.index == 2 && playback.session.engineKind == .mpv, "AVPlayer EOF must advance to an mpv episode")
+        precondition(playback.index == 2 && playback.session.engineKind == .mpv, "MP4 EOF must advance to the MKV episode on mpv")
         let last = engines.last!
         last.onState?(PhonePlaybackState(position: 30, duration: 30, paused: true)); last.onEnd?()
         precondition(playback.snapshot()["finished"] as? Bool == true)
         playback.session.close()
         precondition(events.last?["closed"] as? Bool == true && events.last?["positionMs"] as? Int64 == 30000,
                      "Closing must persist mpv's final position before releasing the decoder")
-        print("PASS engine selection, routed headers, paused preparation, resume/retry, redacted diagnostics, stale callbacks, mixed-engine queue and final progress")
+        for (url, mime) in [(mp4, "video/mp4"), (URL(string: "https://source.test/video.m3u8")!, "application/vnd.apple.mpegurl"),
+                            (URL(string: "https://source.test/video.mpd")!, "application/dash+xml"),
+                            (URL(fileURLWithPath: "/tmp/local.mp3"), "audio/mpeg"),
+                            (URL(string: "https://source.test/opaque")!, "application/octet-stream")] {
+            let media = RoutedStream(url: url, headers: [:])
+            let candidate = PlaybackSession(media: media, route: .direct, contentType: mime, alternativeFactory: factory) { media }
+            precondition(candidate.engineKind == .mpv && engines.last!.loads.last!.0 == url && !engines.last!.loads.last!.3)
+            candidate.close()
+        }
+        let missing = PlaybackSession(media: compatible, route: .direct, alternativeFactory: { nil }) { compatible }
+        precondition(missing.failure != nil && missing.alternativeEngine == nil && !missing.isPlaying,
+                     "Missing mpv must fail explicitly, never fall back to AVPlayer")
+        missing.close()
+        print("PASS mpv-only formats/files, explicit unavailable engine, routed headers, resume/retry, diagnostics, stale callbacks, multi-format queue and final progress")
     }
 }

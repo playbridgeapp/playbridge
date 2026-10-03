@@ -6,8 +6,9 @@ trap 'rm -rf "$test_dir"' EXIT
 phone="$repo_root/mobile/apple/PlayBridge Phone/PlayBridge Phone"
 swiftc -module-cache-path "$test_dir/cache" \
   "$phone/Models/Models.swift" "$phone/Browser/PageCastRequest.swift" \
-  "$phone/Network/StreamRouteService.swift" "$phone/Network/PhonePlaybackFallback.swift" \
-  "$phone/Network/PhonePlaybackEngine.swift" "$phone/Network/PlaybackSession.swift" \
+  "$phone/Network/StreamRouteService.swift" \
+  "$phone/Network/PhonePlayerPreferences.swift" "$phone/Network/PhonePlaybackEngine.swift" "$phone/Network/PlaybackSession.swift" \
   "$phone/Network/WebsitePhonePlayback.swift" "$phone/Network/WebsiteCaptionParser.swift" \
+  "$repo_root/mobile/apple/tests/TestPhonePlaybackEngine.swift" \
   "$repo_root/mobile/apple/tests/PhonePlaybackEngineTests.swift" -o "$test_dir/check"
 "$test_dir/check"

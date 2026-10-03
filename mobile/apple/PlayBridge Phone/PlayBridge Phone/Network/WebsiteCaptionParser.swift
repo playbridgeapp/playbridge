@@ -1,6 +1,10 @@
 import Foundation
 
 enum WebsiteCaptionParser {
+    static func caption(_ cues: [(start: Double, end: Double, text: String)], position: Double, delay: Double) -> String {
+        let time = position - delay
+        return cues.filter { $0.start <= time && time < $0.end }.map(\.text).joined(separator: "\n")
+    }
     static func parse(_ raw: String) -> [(start: Double, end: Double, text: String)] {
         let normalized = raw.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
         let timing = try! NSRegularExpression(pattern: #"(?m)^\s*((?:\d+:)?\d{2}:\d{2}[.,]\d{3})\s+-->\s+((?:\d+:)?\d{2}:\d{2}[.,]\d{3})[^\n]*\n"#)

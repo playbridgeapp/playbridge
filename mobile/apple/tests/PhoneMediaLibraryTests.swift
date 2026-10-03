@@ -2,8 +2,26 @@ import UIKit
 import SwiftUI
 import Combine
 
-// Isolate unrelated connections/discovery; library, collections, local MIME types
-// and the library/detail screens use production code.
+// Isolate connections, the audio session and native rendering. Library, collections,
+// local MIME types, detail screens and mpv-only PlaybackSession use production code.
+// Real decoding is covered separately by the simulator MPV probe.
+final class PhoneProxyRegistration { let url = URL(string: "http://phone.test/video")! }
+final class PhoneSenderServices {
+    static let shared = PhoneSenderServices()
+    func register(url: String, headers: [String: String], contentType: String?, forLocalPlayback: Bool = false) async throws -> PhoneProxyRegistration {
+        fatalError("Unexpected proxy startup")
+    }
+}
+typealias MPVPhonePlayback = TestAlternativeEngine
+struct MPVPhonePlayerView: View {
+    @ObservedObject var session: PlaybackSession
+    var body: some View { Text("Fixture mpv surface") }
+}
+@MainActor final class CastSystemPlayback {
+    static let shared = CastSystemPlayback()
+    func beginLocalPlayback() throws -> UUID { UUID() }
+    func endLocalPlayback(_ owner: UUID) {}
+}
 final class BrowserDownload {
     var id = UUID(); var state = "Complete"; var fileURL: URL?
 }

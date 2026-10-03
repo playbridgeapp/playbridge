@@ -64,7 +64,7 @@ final class CastSystemPlayback: NSObject, CastPlaybackRendering, AVAudioPlayerDe
         clearNowPlaying()
     }
 
-    /// Local AVPlayer UI has priority over the remote cast's system controls.
+    /// Local phone playback has priority over the remote cast's system controls.
     /// A token prevents one dismissed player from deactivating another's session.
     func beginLocalPlayback(externalAirPlay: Bool = false) throws -> UUID {
         if !externalAirPlay { onLocalPlaybackBegan?() }

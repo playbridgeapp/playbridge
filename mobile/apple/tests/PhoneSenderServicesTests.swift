@@ -1,9 +1,11 @@
 import Foundation
 import AVFoundation
 
-// Host harness: the same public-facing proxy address as the local fixture.
+// Host harness: casts advertise LAN, while the local player uses loopback.
 enum LocalFileServer {
-    static func lanIPAddress() -> String? { "127.0.0.1" }
+    static func lanIPAddress() -> String? {
+        ProcessInfo.processInfo.environment["UPSTREAM_TEST_ORIGIN"].flatMap(URL.init(string:))?.host
+    }
 }
 
 @main struct PhoneSenderServicesTests {
@@ -34,12 +36,12 @@ enum LocalFileServer {
         var registration: PhoneProxyRegistration? = try await PhoneSenderServices.shared.register(
             url: origin + "/hls/master.m3u8",
             headers: ["Referer": "https://example.test/player", "User-Agent": "AppleFixture", "Authorization": "Bearer fixture-secret", "Cookie": "fixture=secret"],
-            contentType: "application/vnd.apple.mpegurl", allowedPrivateOrigins: [origin, ProcessInfo.processInfo.environment["UPSTREAM_SEGMENT_ORIGIN"]!])
+            contentType: "application/vnd.apple.mpegurl", allowedPrivateOrigins: [origin, ProcessInfo.processInfo.environment["UPSTREAM_SEGMENT_ORIGIN"]!], forLocalPlayback: true)
         let mp4 = try await PhoneSenderServices.shared.register(
             url: origin + "/download.mp4/?token=fixture",
             headers: ["Referer": "https://example.test/player", "User-Agent": "AppleFixture", "Authorization": "Bearer fixture-secret", "Cookie": "fixture=secret"],
             contentType: nil, allowedPrivateOrigins: [origin, ProcessInfo.processInfo.environment["UPSTREAM_SEGMENT_ORIGIN"]!])
-        precondition(mp4.url.lastPathComponent == "media.mp4")
+        precondition(mp4.url.lastPathComponent == "media.mp4" && mp4.url.host == LocalFileServer.lanIPAddress(), "External playback must retain LAN advertisement")
         for (range, expectedRange, expectedBody) in [("bytes=0-1", "bytes 0-1/10", "01"), ("bytes=4-7", "bytes 4-7/10", "4567")] {
             var request = URLRequest(url: mp4.url)
             request.setValue(range, forHTTPHeaderField: "Range")
@@ -52,6 +54,7 @@ enum LocalFileServer {
         withExtendedLifetime(mp4) {}
         print("PASS: Swift/Rust redirected MP4 probe and seek ranges with scoped headers")
         let root = registration!.url
+        precondition(root.host == "127.0.0.1", "Local playback must not need Wi-Fi/VPN routing to reach its own proxy")
         func fetch(_ url: URL) async throws -> (Data, HTTPURLResponse) {
             let (data, response) = try await URLSession.shared.data(from: url)
             return (data, response as! HTTPURLResponse)
@@ -64,11 +67,11 @@ enum LocalFileServer {
         let (master, masterResponse) = try await fetch(root)
         precondition(masterResponse.statusCode == 200, "Fixture HTTP \(masterResponse.statusCode): \(String(decoding: master, as: UTF8.self))")
         let mediaURL = child(master, base: root)
-        precondition(mediaURL.port == root.port && mediaURL.path.contains("/s/"))
+        precondition(mediaURL.host == root.host && mediaURL.port == root.port && mediaURL.path.contains("/s/"))
         let (media, mediaResponse) = try await fetch(mediaURL)
         precondition(mediaResponse.statusCode == 200)
         let segmentURL = child(media, base: mediaURL)
-        precondition(segmentURL.port == root.port && segmentURL.path.contains("/s/"))
+        precondition(segmentURL.host == root.host && segmentURL.port == root.port && segmentURL.path.contains("/s/"))
         let (segment, segmentResponse) = try await fetch(segmentURL)
         precondition(segmentResponse.statusCode == 200 && segment.count == 188 && segment.first == 0x47)
         precondition(segmentResponse.mimeType == "video/mp2t", "HLS video named .jpg must have a video MIME type")

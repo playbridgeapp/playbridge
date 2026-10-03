@@ -1,5 +1,4 @@
 import SwiftUI
-import AVKit
 import UniformTypeIdentifiers
 
 /// Single source of truth for the player/browser picker options on iOS.
@@ -40,13 +39,12 @@ struct TvCapabilityOptions {
     }
 }
 
-/// Identifiable wrapper for AVPlayer to trigger SwiftUI full screen cover.
+/// Identifiable wrapper for mpv playback to trigger SwiftUI full screen cover.
 struct PlayerItem: Identifiable {
     let id = UUID()
     let session: PlaybackSession
 #if DEBUG
     var report: () -> String = { "" }
-    var diagnostics: PlaybackDiagnostics?
 #endif
 }
 
@@ -700,7 +698,7 @@ struct CastSheet: View {
             defer { if playbackPreparationID == attempt { playbackPreparationID = nil } }
             do {
                 let prepare: () async throws -> RoutedStream = {
-                    try await StreamRouteService().prepare(url: url, headers: VideoDetector.mediaHeaders(for: video),
+                    try await StreamRouteService.localPlayback.prepare(url: url, headers: VideoDetector.mediaHeaders(for: video),
                         contentType: video.kind == .hls ? "application/vnd.apple.mpegurl" : video.contentType,
                         route: route, configuration: configuration)
                 }
@@ -711,9 +709,6 @@ struct CastSheet: View {
                 var presentation = PlayerItem(session: session)
 #if DEBUG
                 presentation.report = { [weak session] in session?.diagnosticsReport() ?? "PlayBridge native playback diagnostics\nSession closed" }
-                presentation.diagnostics = PlaybackDiagnostics(player: session.player) { [weak detector] report in
-                    detector?.recordPlaybackDiagnostics("Route: \(route.label)\n" + report, for: video.id)
-                }
 #endif
                 fullscreenPlayerItem = presentation
             } catch {
@@ -1101,85 +1096,24 @@ struct FullScreenVideoPlayerView: View {
     @ObservedObject var session: PlaybackSession
     let diagnosticsReport: () -> String
     let onDismiss: () -> Void
-    private var player: AVPlayer { session.player }
-    private var canAirPlay: Bool { session.canAirPlay }
 #if DEBUG
     @State private var copiedDiagnostics = false
 #endif
     @State private var audioSessionError: String?
     @State private var localAudioOwner: UUID?
     @State private var previousIdleTimerDisabled: Bool?
+    var playerControls: PhonePlayerControls? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark")
-                        .foregroundColor(.white)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("Close player")
-                Spacer()
-                if session.engineKind == .mpv, !session.mpvState.audioTracks.isEmpty {
-                    Menu {
-                        ForEach(session.mpvState.audioTracks) { track in
-                            Button(track.label) { session.alternativeEngine?.selectAudio(track.id) }
-                        }
-                    } label: {
-                        Image(systemName: "waveform").frame(width: 44, height: 44).foregroundColor(.white)
-                    }.accessibilityLabel("Audio tracks")
-                }
-                if !session.websiteSubtitleTracks.isEmpty || !session.mpvState.subtitleTracks.isEmpty {
-                    Menu {
-                        Button("Off") {
-                            session.onWebsiteSubtitleSelection?(nil)
-                            session.alternativeEngine?.selectSubtitle(nil)
-                        }
-                        ForEach(session.mpvState.subtitleTracks) { track in
-                            Button(track.label) {
-                                session.onWebsiteSubtitleSelection?(nil)
-                                session.alternativeEngine?.selectSubtitle(track.id)
-                            }
-                        }
-                        ForEach(session.websiteSubtitleTracks.indices, id: \.self) { index in
-                            Button(session.websiteSubtitleTracks[index].label) { session.onWebsiteSubtitleSelection?(index) }
-                        }
-                    } label: {
-                        Image(systemName: "captions.bubble").frame(width: 44, height: 44).foregroundColor(.white)
-                    }.accessibilityLabel("Subtitles")
-                }
-            }
-            .padding(.horizontal, 8)
-
-            if session.engineKind == .avplayer && !canAirPlay {
-                Text("Connect to Wi-Fi to use AirPlay.")
-                    .font(Theme.font(.footnote))
-                    .foregroundColor(.white)
-                    .padding(.bottom, 8)
-            }
-            ZStack {
-                if session.engineKind == .mpv {
-                    MPVPhonePlayerView(session: session)
-                } else {
-                    VideoPlayer(player: player)
-                }
-                VStack {
-                    if let error = session.websiteSubtitleError { Text(error).font(.footnote).padding(8).background(.black.opacity(0.8)) }
-                    Spacer()
-                    if !session.websiteCaption.isEmpty {
-                        Text(session.websiteCaption).font(.title3).multilineTextAlignment(.center)
-                            .foregroundColor(.white).padding(8).background(.black.opacity(0.75))
-                            .padding(.horizontal, 20).padding(.bottom, session.engineKind == .mpv ? 128 : 64)
-                    }
-                }.allowsHitTesting(false)
-
+        ZStack {
+            MPVPhonePlayerView(session: session, controls: playerControls, onDismiss: onDismiss)
                 if let failure = session.failure {
-                    Color.black.opacity(0.94)
+                    Color.black.opacity(0.94).ignoresSafeArea()
                     ScrollView {
                         VStack(spacing: 16) {
                             Image(systemName: "exclamationmark.triangle")
                                 .font(Theme.font(.largeTitle))
-                            Text(player.isExternalPlaybackActive ? "AirPlay playback failed" : "Playback failed")
+                            Text("Playback failed")
                                 .font(Theme.font(.title2).bold())
                             Text(failure.message)
                                 .multilineTextAlignment(.center)
@@ -1191,10 +1125,6 @@ struct FullScreenVideoPlayerView: View {
                             } else {
                                 Button("Try again") { session.retry() }
                                     .buttonStyle(.borderedProminent)
-                                if session.engineKind == .avplayer && !player.isExternalPlaybackActive {
-                                    Button("Try with mpv") { session.tryWithMPV() }
-                                        .buttonStyle(.bordered)
-                                }
                             }
 #if DEBUG
                             Button(copiedDiagnostics ? "Diagnostics copied" : "Copy diagnostics") {
@@ -1213,18 +1143,16 @@ struct FullScreenVideoPlayerView: View {
                         .frame(maxWidth: .infinity)
                     }
                 }
-            }
         }
         .background(Color.black.ignoresSafeArea())
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
         .onAppear {
             do {
                 if localAudioOwner == nil { localAudioOwner = try CastSystemPlayback.shared.beginLocalPlayback() }
             } catch {
                 audioSessionError = error.localizedDescription
             }
-            player.isMuted = false
-            player.volume = 1
-            player.allowsExternalPlayback = canAirPlay
             if previousIdleTimerDisabled == nil {
                 previousIdleTimerDisabled = UIApplication.shared.isIdleTimerDisabled
                 UIApplication.shared.isIdleTimerDisabled = true
