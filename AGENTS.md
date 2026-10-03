@@ -34,7 +34,7 @@ Load a task workflow only when its description matches the request. A normal com
 
 ## Local agent instructions
 
-If `SUBAGENTS.local.md` exists at the repository root, read and follow it for optional machine-local subagent tools and workflows. The file is intentionally gitignored; shared repository instructions in this file take precedence if they conflict.
+If `AGENTS.local.md` exists at the repository root, read and follow it for optional machine-local instructions. The file is intentionally gitignored; shared repository instructions in this file take precedence if they conflict.
 
 ## Project layout
 
