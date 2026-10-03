@@ -6,8 +6,12 @@ struct DashboardScreen: View {
     @EnvironmentObject private var store: BrowserStore
     @State private var tilePage = 0
     @State private var appToRemove: BridgedApp?
-    @State private var showComingSoonAlert = false
-    @State private var comingSoonFeatureName = ""
+    @State private var showReorder = false
+    @State private var tileToMove: DashboardTile?
+    @AppStorage("dashboard_tile_order") private var savedOrder = "[]"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ScaledMetric(relativeTo: .body) private var largeTileHeight = 150.0
+    @ScaledMetric(relativeTo: .body) private var smallTileHeight = 120.0
 
     private var isConnected: Bool { vm.isConnected }
     private var isSecure: Bool {
@@ -30,7 +34,7 @@ struct DashboardScreen: View {
     var body: some View {
         ZStack {
             // ── Animated Ambient Mesh Background ─────────────────────────────────
-            MeshBackground()
+            MeshBackground().accessibilityHidden(true)
 
             // ── Main Content ─────────────────────────────────────────────────────
             ScrollView {
@@ -69,15 +73,20 @@ struct DashboardScreen: View {
                 }
                 .padding(.horizontal, 24)
             }
+            .allowsHitTesting(!showReorder)
+            .accessibilityHidden(showReorder)
 
             // ── Top Left Close Button ─────────────────────────────────────────
             closeButton
+                .allowsHitTesting(!showReorder)
+                .accessibilityHidden(showReorder)
         }
-        .alert("\(comingSoonFeatureName) Coming Soon", isPresented: $showComingSoonAlert) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("This feature is not yet ported from Android to iOS. The core bridge and web browser are fully functional.")
+        .overlay {
+            if showReorder { reorderPopup.transition(.opacity) }
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showReorder)
+        .onAppear { normalizeOrder() }
+        .onChange(of: availableTiles.map(\.id)) { _ in normalizeOrder() }
         .alert("Remove Bridged App?", isPresented: Binding(
             get: { appToRemove != nil }, set: { if !$0 { appToRemove = nil } }
         )) {
@@ -93,127 +102,242 @@ struct DashboardScreen: View {
 
     // MARK: - Components
 
+    private var availableTiles: [DashboardTile] {
+        var tiles = [
+            DashboardTile(id: "browser", title: "Browser", subtitle: "Browse the web", systemImage: "globe",
+                          gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)], isActive: isSource(.browser),
+                          action: { nav.openBrowser() }),
+            DashboardTile(id: "connection", title: "Connection", subtitle: isConnected ? "Connected" : "Not connected",
+                          systemImage: "tv",
+                          gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
+                          isActive: isSource(.connection), action: { nav.navigate(to: .connection) }),
+            DashboardTile(id: "phone-files", title: "Media Library", subtitle: "Videos, images & audio", systemImage: "folder",
+                          gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)], isActive: isSource(.phoneFiles),
+                          action: { nav.navigate(to: .phoneFiles) }),
+            DashboardTile(id: "iptv", title: "IPTV", subtitle: "Live channels", systemImage: "tv.fill",
+                          gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)], isActive: isSource(.iptv),
+                          action: { nav.navigate(to: .iptv) }),
+            DashboardTile(id: "collections", title: "Collections", subtitle: "Your playlists", systemImage: "play.rectangle.fill",
+                          gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)], isActive: isSource(.collections),
+                          action: { nav.navigate(to: .collections) }),
+            DashboardTile(id: "remote", title: "Remote", subtitle: "Control your TV", systemImage: "av.remote",
+                          gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)], isActive: isSource(.remote),
+                          action: { nav.navigate(to: .remote) }),
+            DashboardTile(id: "cast-history", title: "Cast History", subtitle: "Recent casts", systemImage: "clock.arrow.circlepath",
+                          gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)], isActive: isSource(.castHistory),
+                          action: { nav.navigate(to: .castHistory) }),
+        ]
+        if store.bridgedApps.apps.isEmpty {
+            tiles.append(DashboardTile(
+                id: "bridged-apps", title: "Bridged Apps", subtitle: "Open Browser to add", systemImage: "app.connected.to.app.below.fill",
+                gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)], isActive: false,
+                action: { nav.openBrowser() }
+            ))
+        } else {
+            tiles += store.bridgedApps.apps.map { app in
+                DashboardTile(
+                    id: "app:\(app.origin.absoluteString)", title: app.name, subtitle: "Bridged App",
+                    systemImage: "app.connected.to.app.below.fill",
+                    gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)],
+                    isActive: store.activeBridgedApp?.origin == app.origin,
+                    app: app,
+                    action: { if store.openBridgedApp(app) != nil { nav.navigate(to: .browser) } }
+                )
+            }
+        }
+        return tiles
+    }
+
+    private var orderedTiles: [DashboardTile] {
+        let available = availableTiles
+        let byID = Dictionary(uniqueKeysWithValues: available.map { ($0.id, $0) })
+        return DashboardTileOrder.reconcile(saved: DashboardTileOrder.decode(savedOrder), available: available.map(\.id))
+            .compactMap { byID[$0] }
+    }
+
+    private var pages: [[DashboardTile]] {
+        let tiles = orderedTiles
+        return stride(from: 0, to: tiles.count, by: DashboardTileOrder.tilesPerPage).map {
+            Array(tiles[$0..<min($0 + DashboardTileOrder.tilesPerPage, tiles.count)])
+        }
+    }
+
+    private func saveOrder(_ ids: [String]) {
+        savedOrder = DashboardTileOrder.encode(ids)
+    }
+
+    private func normalizeOrder() {
+        saveOrder(orderedTiles.map(\.id))
+        tilePage = min(tilePage, max(0, pages.count - 1))
+    }
+
+    private var tileGridHeight: Double { largeTileHeight + 2 * smallTileHeight + 24 }
+
     private var tilePages: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button { showReorder = true } label: {
+                    Label("Reorder", systemImage: "arrow.up.arrow.down")
+                        .font(Theme.font(.subheadline))
+                        .padding(.vertical, 12)
+                }
+                .accessibilityIdentifier("dashboard-reorder")
+            }
             TabView(selection: $tilePage) {
-                cardsGrid.tag(0)
-                appsGrid.tag(1)
+                ForEach(pages.indices, id: \.self) { page in
+                    tileGrid(pages[page]).tag(page)
+                }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .frame(height: max(414, CGFloat((store.bridgedApps.apps.count + 2) / 2) * 132 - 12))
-            HStack(spacing: 12) {
-                ForEach(0..<2) { page in
-                    Button { withAnimation { tilePage = page } } label: {
-                        Circle().fill(tilePage == page ? Theme.primary : Theme.onSurfaceVariant.opacity(0.4))
-                            .frame(width: 8, height: 8).padding(8)
+            // Match the two row gaps plus breathing room inside the pager's clip.
+            .frame(height: tileGridHeight + 16)
+            if pages.count > 1 {
+                HStack(spacing: 0) {
+                    ForEach(pages.indices, id: \.self) { page in
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { tilePage = page }
+                        } label: {
+                            Circle().fill(tilePage == page ? Theme.primary : Theme.onSurfaceVariant.opacity(0.4))
+                                .frame(width: tilePage == page ? 10 : 7, height: tilePage == page ? 10 : 7)
+                                .frame(width: 44, height: 44)
+                        }
+                        .accessibilityLabel("Dashboard page \(page + 1)")
+                        .accessibilityAddTraits(tilePage == page ? .isSelected : [])
                     }
-                    .accessibilityLabel(page == 0 ? "Dashboard tiles" : "Apps and history tiles")
-                    .accessibilityAddTraits(tilePage == page ? .isSelected : [])
+                }
+                .padding(.top, 6)
+            }
+        }
+    }
+
+    private func tileGrid(_ tiles: [DashboardTile]) -> some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                ForEach(Array(tiles.prefix(2))) { tile in tileView(tile, tall: true) }
+                if tiles.count == 1 { Color.clear.frame(maxWidth: .infinity) }
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
+                ForEach(Array(tiles.dropFirst(2))) { tile in tileView(tile, tall: false) }
+            }
+        }
+        // A Spacer in a spaced VStack adds another gap even when its height is zero.
+        // Top-align sparse pages without making a full page taller than its viewport.
+        .frame(height: tileGridHeight, alignment: .top)
+        .padding(.vertical, 8)
+    }
+
+    private func tileView(_ tile: DashboardTile, tall: Bool) -> some View {
+        cardView(
+            title: tile.title, subtitle: tile.subtitle, systemImage: tile.systemImage,
+            gradient: tile.gradient, tall: tall, isActive: tile.isActive,
+            iconURL: tile.app?.iconURL, action: tile.action
+        )
+        .frame(maxWidth: .infinity)
+        .contextMenu {
+            Button { showReorder = true } label: {
+                Label("Reorder Tiles", systemImage: "arrow.up.arrow.down")
+            }
+            if let app = tile.app {
+                Button("Remove Bridged App", role: .destructive) { appToRemove = app }
+            }
+        }
+        .accessibilityLabel(tile.app == nil ? "\(tile.title), \(tile.subtitle)" : "\(tile.title), Bridged App")
+        .accessibilityIdentifier(tile.app.map { "bridged-app-\($0.origin.absoluteString)" } ?? "dashboard-\(tile.id)")
+    }
+
+    private var reorderPopup: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.45)
+                    .ignoresSafeArea()
+                    .onTapGesture { dismissReorder() }
+                    .accessibilityHidden(true)
+
+                reorderEditor
+                    .frame(width: min(geometry.size.width - 32, 420),
+                           height: min(geometry.size.height * 0.8, 640))
+                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    .shadow(color: .black.opacity(0.25), radius: 24, y: 8)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("dashboard-reorder-popup")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .accessibilityAction(.escape) { dismissReorder() }
+    }
+
+    private var reorderEditor: some View {
+        NavigationStack {
+            Group {
+                if let tile = tileToMove {
+                    positionList(for: tile)
+                } else {
+                    reorderList
+                }
+            }
+            .navigationTitle(tileToMove.map { "Move \($0.title)" } ?? "Reorder Tiles")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismissReorder() }
+                }
+                if tileToMove != nil {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Back") { tileToMove = nil }
+                    }
                 }
             }
         }
     }
 
-    private var appsGrid: some View {
-        VStack(spacing: 12) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                cardView(title: "Cast History", subtitle: "Recent casts", systemImage: "clock.arrow.circlepath",
-                         gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)], tall: false,
-                         isActive: isSource(.castHistory), action: { nav.navigate(to: .castHistory) })
-                ForEach(store.bridgedApps.apps) { app in
-                    cardView(title: app.name, subtitle: "Bridged App", systemImage: "app.connected.to.app.below.fill",
-                             gradient: [Color(hex: 0x1565C0), Color(hex: 0x5E35B1)], tall: false,
-                             isActive: store.activeBridgedApp?.origin == app.origin, iconURL: app.iconURL,
-                             action: {
-                                 if store.openBridgedApp(app) != nil { nav.navigate(to: .browser) }
-                             })
-                    .contextMenu {
-                        Button("Remove Bridged App", role: .destructive) { appToRemove = app }
+    private var reorderList: some View {
+        List {
+            Section {
+                ForEach(Array(orderedTiles.enumerated()), id: \.element.id) { index, tile in
+                    Button { tileToMove = tile } label: {
+                        HStack(spacing: 12) {
+                            Text("\(index + 1)")
+                                .monospacedDigit().foregroundStyle(Theme.primary)
+                                .frame(minWidth: 32, alignment: .trailing)
+                                .fixedSize(horizontal: true, vertical: false)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(tile.title).foregroundStyle(.primary)
+                                Text("\(index % DashboardTileOrder.tilesPerPage < 2 ? "Large" : "Compact") · Page \(index / DashboardTileOrder.tilesPerPage + 1)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
                     }
-                    .accessibilityLabel("\(app.name), Bridged App")
-                    .accessibilityIdentifier("bridged-app-\(app.origin.absoluteString)")
+                    .accessibilityLabel("Position \(index + 1), \(tile.title)")
+                    .accessibilityHint("Choose a new position")
                 }
+                .onMove { source, destination in
+                    var ids = orderedTiles.map(\.id)
+                    ids.move(fromOffsets: source, toOffset: destination)
+                    saveOrder(ids)
+                }
+            } header: {
+                Text("The first two tiles on each page are larger.")
+            } footer: {
+                Text("Drag the handles to reorder, or tap a tile to choose its exact position. Changes are saved automatically.")
             }
-            if store.bridgedApps.apps.isEmpty {
-                Text("Open a supported website in Browser, then choose Add Bridged App from its menu.")
-                    .font(Theme.font(.footnote)).foregroundStyle(Theme.onSurfaceVariant)
-                    .multilineTextAlignment(.center).padding(.top, 16)
+        }
+        .environment(\.editMode, .constant(.active))
+    }
+
+    private func positionList(for tile: DashboardTile) -> some View {
+        List(Array(orderedTiles.enumerated()), id: \.element.id) { index, target in
+            Button("\(index + 1) · \(target.title)") {
+                saveOrder(DashboardTileOrder.move(orderedTiles.map(\.id), id: tile.id, to: index))
+                tileToMove = nil
             }
-            Spacer(minLength: 0)
         }
     }
 
-    private var cardsGrid: some View {
-        VStack(spacing: 12) {
-            // Row 1: Primary features (Browser, Connection)
-            HStack(spacing: 12) {
-                cardView(
-                    title: "Browser",
-                    subtitle: "Browse the web",
-                    systemImage: "globe",
-                    gradient: [Color(hex: 0x1565C0), Color(hex: 0x1E88E5)],
-                    tall: true,
-                    isActive: isSource(.browser),
-                    action: { nav.openBrowser() }
-                )
-
-                cardView(
-                    title: "Connection",
-                    subtitle: isConnected ? "Connected" : "Not connected",
-                    systemImage: "tv",
-                    gradient: isConnected ? [Color(hex: 0x2E7D32), Color(hex: 0x43A047)] : [Color(hex: 0x424242), Color(hex: 0x616161)],
-                    tall: true,
-                    isActive: isSource(.connection),
-                    action: { nav.navigate(to: .connection) }
-                )
-            }
-
-            // Row 2: Phone Files (live), IPTV
-            HStack(spacing: 12) {
-                cardView(
-                    title: "Media Library",
-                    subtitle: "Videos, images & audio",
-                    systemImage: "folder",
-                    gradient: [Color(hex: 0x4527A0), Color(hex: 0x5E35B1)],
-                    tall: false,
-                    isActive: isSource(.phoneFiles),
-                    action: { nav.navigate(to: .phoneFiles) }
-                )
-
-                cardView(
-                    title: "IPTV",
-                    subtitle: "Live channels",
-                    systemImage: "tv.fill",
-                    gradient: [Color(hex: 0x00695C), Color(hex: 0x00897B)],
-                    tall: false,
-                    isActive: isSource(.iptv),
-                    action: { nav.navigate(to: .iptv) }
-                )
-            }
-
-            // Row 3: Collections, Cast History
-            HStack(spacing: 12) {
-                cardView(
-                    title: "Collections",
-                    subtitle: "Your playlists",
-                    systemImage: "play.rectangle.fill",
-                    gradient: [Color(hex: 0xAD1457), Color(hex: 0xD81B60)],
-                    tall: false,
-                    isActive: isSource(.collections),
-                    action: { nav.navigate(to: .collections) }
-                )
-
-                cardView(
-                    title: "Remote",
-                    subtitle: "Control your TV",
-                    systemImage: "av.remote",
-                    gradient: [Color(hex: 0xE65100), Color(hex: 0xFB8C00)],
-                    tall: false,
-                    isActive: isSource(.remote),
-                    action: { nav.navigate(to: .remote) }
-                )
-            }
-        }
+    private func dismissReorder() {
+        tileToMove = nil
+        showReorder = false
     }
 
     @ViewBuilder
@@ -224,18 +348,10 @@ struct DashboardScreen: View {
         gradient: [Color],
         tall: Bool,
         isActive: Bool,
-        comingSoon: Bool = false,
         iconURL: URL? = nil,
         action: (() -> Void)? = nil
     ) -> some View {
-        Button {
-            if comingSoon {
-                comingSoonFeatureName = title
-                showComingSoonAlert = true
-            } else {
-                action?()
-            }
-        } label: {
+        Button { action?() } label: {
             ZStack(alignment: .topTrailing) {
                 // Background Gradient
                 RoundedRectangle(cornerRadius: 20)
@@ -254,7 +370,7 @@ struct DashboardScreen: View {
 
                 // Translucent borders
                 RoundedRectangle(cornerRadius: 20)
-                    .stroke(
+                    .strokeBorder(
                         LinearGradient(
                             colors: [Color.white.opacity(isActive ? 0.35 : 0.15), Color.white.opacity(0.03)],
                             startPoint: .topLeading,
@@ -268,7 +384,6 @@ struct DashboardScreen: View {
                     .fill(Color.white.opacity(0.08))
                     .frame(width: 80, height: 80)
                     .offset(x: 15, y: -15)
-                    .clipped()
 
                 // Content Column
                 VStack(alignment: .leading, spacing: 0) {
@@ -296,7 +411,7 @@ struct DashboardScreen: View {
                         Text(title)
                             .font(Theme.font(size: tall ? 16 : 13, weight: .semibold))
                             .foregroundColor(.white)
-                            .lineLimit(1)
+                            .lineLimit(tall ? 1 : 2)
 
                         Text(subtitle)
                             .font(Theme.font(size: tall ? 12 : 10))
@@ -314,8 +429,8 @@ struct DashboardScreen: View {
                         .padding(.trailing, 12)
                 }
             }
-            .frame(height: tall ? 150 : 120)
-            .opacity(comingSoon ? 0.4 : 1.0)
+            .frame(height: tall ? largeTileHeight : smallTileHeight)
+            .clipShape(RoundedRectangle(cornerRadius: 20))
         }
         .buttonStyle(.plain)
     }
@@ -343,6 +458,17 @@ struct DashboardScreen: View {
             Spacer()
         }
     }
+}
+
+private struct DashboardTile: Identifiable {
+    let id: String
+    let title: String
+    let subtitle: String
+    let systemImage: String
+    let gradient: [Color]
+    let isActive: Bool
+    var app: BridgedApp? = nil
+    let action: () -> Void
 }
 
 // MARK: - Helper Views

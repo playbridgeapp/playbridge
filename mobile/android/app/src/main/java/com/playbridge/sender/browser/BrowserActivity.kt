@@ -455,7 +455,7 @@ class BrowserActivity : ComponentActivity() {
     private fun saveTabs() {
         val state = Components.store.state
         val tabs = state.tabs
-        // App sessions are saved too, but a cold launch returns to the regular browser.
+        // App sessions are saved too; Browser from the launch Dashboard restores the regular browser.
         val selectedId = resolveBrowserTabSelection(
             tabIds = tabs.map { it.id },
             selectedId = state.selectedTabId,
@@ -624,15 +624,20 @@ class BrowserActivity : ComponentActivity() {
             // rememberSaveable + Screen.Saver: survives Activity recreation (memory-pressure
             // destroy while the in-app player / another Activity is in front), so Back
             // returns to the exact screen — e.g. a library detail page — instead of
-            // resetting to the persisted main tab.
+            // resetting to the launch Dashboard.
             var currentScreen by androidx.compose.runtime.saveable.rememberSaveable(
                 stateSaver = Screen.Saver
             ) {
+                // Every fresh launch starts at the hub. Saved Activity state still
+                // restores the current destination, and incoming links open Browser.
+                mutableStateOf<Screen>(Screen.Dashboard)
+            }
+            // Remember the main return destination without using it as the launch
+            // screen. Dashboard close and Settings still return to the previous area.
+            var lastMainScreen by remember {
                 val sp = getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
-                // First launch (no main screen ever persisted) lands on the Dashboard,
-                // which doubles as the home for the one-time onboarding overlay.
-                mutableStateOf<Screen>(
-                    if (!sp.contains("last_main_screen")) Screen.Dashboard
+                mutableStateOf(
+                    if (currentScreen != Screen.Dashboard) currentScreen
                     else when (sp.getString("last_main_screen", "browser")) {
                         "library" -> Screen.Library
                         "debrid" ->
@@ -641,12 +646,6 @@ class BrowserActivity : ComponentActivity() {
                         else -> Screen.Browser
                     }
                 )
-            }
-            // Tracks the last "main" tab so Settings/overlays know where to return.
-            // When we start on the Dashboard (first launch), fall back to Browser so
-            // closing the Dashboard has somewhere sensible to go.
-            var lastMainScreen by remember {
-                mutableStateOf(if (currentScreen == Screen.Dashboard) Screen.Browser else currentScreen)
             }
             // The screen the Remote was opened from, so Back returns there (e.g. Phone Files,
             // Connection) rather than always falling back to the last main tab.
@@ -1078,7 +1077,7 @@ class BrowserActivity : ComponentActivity() {
             val browserSettings = remember { getSharedPreferences("browser_settings", android.content.Context.MODE_PRIVATE) }
 
 
-            // Persist the active main screen so it survives app restarts and Settings navigation
+            // Persist the main return destination, not the fresh-launch screen.
             LaunchedEffect(currentScreen) {
                 if (currentScreen is Screen.Browser || currentScreen is Screen.Library || currentScreen is Screen.DebridLibrary || currentScreen is Screen.LibraryDetail) {
                     lastMainScreen = currentScreen

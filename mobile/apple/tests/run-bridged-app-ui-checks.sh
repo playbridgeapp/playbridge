@@ -25,4 +25,5 @@ python3 "$repo_root/mobile/apple/tests/make-popup-ui-project.py" "$test_dir" \
   "$repo_root/mobile/apple/tests/BridgedAppUITests.swift"
 TEST_RUNNER_BROWSER_FIXTURE="$fixture_base" xcodebuild -project "$test_dir/PopupTests.xcodeproj" -scheme PopupTests \
   -destination "platform=iOS Simulator,id=$simulator" -derivedDataPath "$test_dir/test-build" \
-  -only-testing:PopupTests/BridgedAppUITests test
+  -resultBundlePath "${IOS_UI_RESULT_BUNDLE:-$test_dir/results.xcresult}" \
+  -only-testing:"${IOS_UI_TEST_FILTER:-PopupTests/BridgedAppUITests}" test

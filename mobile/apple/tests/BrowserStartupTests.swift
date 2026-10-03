@@ -1051,12 +1051,14 @@ extension BrowserStartupChecks {
         store = browser
         browser.browserVisible = true
         let nav = NavigationViewModel()
+        try check(nav.currentScreen == .dashboard, "Fresh app navigation did not start on Dashboard")
         nav.browserStore = browser
         let normal = browser.activeTab!
         let app = await BridgedAppDeclarationCache.shared.discover(URL(string: base)!)
         try check(app != nil, "Valid declaration was not discoverable for installation")
         installed.install(app!)
         let tab = browser.openBridgedApp(app!)!
+        nav.navigate(to: .browser) // Opening an app tile also navigates from the launch hub.
         let view = tab.webView
         view.frame = window!.bounds
         window!.rootViewController!.view.addSubview(view)

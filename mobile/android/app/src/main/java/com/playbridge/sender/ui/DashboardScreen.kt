@@ -2,7 +2,14 @@ package com.playbridge.sender.ui
 
 import com.playbridge.sender.browser.Screen
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.core.*
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -10,10 +17,26 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.rememberScrollState
@@ -23,9 +46,36 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.LibraryBooks
 import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.automirrored.filled.ScreenShare
+import androidx.compose.material.icons.filled.Apps
+import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.ripple
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -45,8 +95,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.playbridge.sender.R
 import com.playbridge.sender.browser.BridgedApp
 import coil.compose.AsyncImage
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -77,7 +125,7 @@ fun DashboardScreen(
     val selectPage: (Int) -> Unit = { page ->
         pagerScope.launch { pagerState.animateScrollToPage(page) }
     }
-    BackHandler(enabled = pagerState.currentPage == 1) { selectPage(0) }
+    BackHandler(enabled = pagerState.currentPage > 0) { selectPage(0) }
     LaunchedEffect(Unit) { visible = true }
 
     // One-time onboarding tour (first launch lands here; see BrowserActivity).
@@ -87,6 +135,124 @@ fun DashboardScreen(
     }
     var showOnboarding by remember {
         mutableStateOf(!onboardingPrefs.getBoolean("dashboard_onboarding_seen", false))
+    }
+
+    var showReorder by remember { mutableStateOf(false) }
+    var tileToMove by remember { mutableStateOf<String?>(null) }
+    var savedOrder by remember {
+        mutableStateOf(runCatching {
+            val array = org.json.JSONArray(onboardingPrefs.getString("dashboard_tile_order", "[]"))
+            (0 until array.length()).map { array.getString(it) }
+        }.getOrDefault(emptyList()))
+    }
+    val builtInItems = listOf(
+        DashboardItem(
+            icon = Icons.Default.Language,
+            title = "Browser",
+            subtitle = "Browse the web",
+            screen = Screen.Browser,
+            gradientColors = listOf(Color(0xFF1565C0), Color(0xFF1E88E5))
+        ),
+        DashboardItem(
+            icon = Icons.AutoMirrored.Filled.LibraryBooks,
+            title = "Legacy Library",
+            subtitle = "Your media library",
+            screen = Screen.Library,
+            gradientColors = listOf(Color(0xFF6A1B9A), Color(0xFF8E24AA))
+        ),
+        DashboardItem(
+            icon = Icons.Default.Tv,
+            title = "Connection",
+            subtitle = if (isConnected) "Connected" else "Not connected",
+            screen = Screen.Connection,
+            gradientColors = if (isConnected)
+                listOf(Color(0xFF2E7D32), Color(0xFF43A047))
+            else
+                listOf(Color(0xFF424242), Color(0xFF616161))
+        ),
+        DashboardItem(
+            icon = Icons.AutoMirrored.Filled.ScreenShare,
+            title = "Screen Mirror",
+            subtitle = "Share your screen",
+            screen = Screen.ScreenMirror,
+            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
+        ),
+        DashboardItem(
+            icon = Icons.Default.Folder,
+            title = "Phone Files",
+            subtitle = "Cast videos & audio",
+            screen = Screen.PhoneFiles,
+            gradientColors = listOf(Color(0xFF4527A0), Color(0xFF5E35B1))
+        ),
+        DashboardItem(
+            icon = Icons.Default.Cloud,
+            title = "Debrid",
+            subtitle = "Cloud torrents",
+            screen = Screen.DebridLibrary,
+            gradientColors = listOf(Color(0xFF00838F), Color(0xFF00ACC1))
+        ),
+        DashboardItem(
+            icon = Icons.Default.LiveTv,
+            title = "IPTV",
+            subtitle = "Live channels",
+            screen = Screen.Iptv,
+            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
+        ),
+        DashboardItem(
+            icon = Icons.AutoMirrored.Filled.PlaylistPlay,
+            title = "Collections",
+            subtitle = "Your playlists",
+            screen = Screen.Collections,
+            gradientColors = listOf(Color(0xFFAD1457), Color(0xFFD81B60))
+        ),
+    ).filter {
+        // Debrid is FOSS-only; the Play flavor hides the tile entirely.
+        com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED || it.screen != Screen.DebridLibrary
+    }
+
+    val availableItems = builtInItems + DashboardItem(
+        icon = Icons.Default.History,
+        title = "Cast History",
+        subtitle = "Recent casts",
+        screen = Screen.CastHistory,
+        gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00)),
+    ) + if (bridgedApps.isEmpty()) {
+        listOf(DashboardItem(
+            icon = Icons.Default.Apps,
+            title = "Bridged Apps",
+            subtitle = "Open Browser to add",
+            screen = Screen.Browser,
+            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
+            id = "bridged-apps",
+        ))
+    } else {
+        bridgedApps.map { app ->
+            DashboardItem(
+                icon = Icons.Default.Apps,
+                title = app.name,
+                subtitle = "Bridged App",
+                screen = Screen.Browser,
+                gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
+                id = "app:${app.origin}",
+                app = app,
+            )
+        }
+    }
+    val availableIds = availableItems.map { it.id }
+    val orderedIds = DashboardTileOrder.reconcile(savedOrder, availableIds)
+    val itemsById = availableItems.associateBy { it.id }
+    val orderedItems = orderedIds.mapNotNull { itemsById[it] }
+    val pages = orderedItems.chunked(DashboardTileOrder.TILES_PER_PAGE)
+    fun saveOrder(ids: List<String>) {
+        savedOrder = ids
+        onboardingPrefs.edit().putString("dashboard_tile_order", org.json.JSONArray(ids).toString()).apply()
+    }
+    fun moveTile(id: String, position: Int) {
+        saveOrder(DashboardTileOrder.move(orderedIds, id, position))
+    }
+    LaunchedEffect(availableIds) { saveOrder(orderedIds) }
+    LaunchedEffect(pages.size) {
+        if (pagerState.currentPage >= pages.size) pagerState.scrollToPage(pages.lastIndex.coerceAtLeast(0))
     }
 
     val logoScale by animateFloatAsState(
@@ -159,9 +325,12 @@ fun DashboardScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                // Keep the gesture inset outside the scroll viewport so even partially
+                // visible tiles/page controls cannot draw against the system handle.
+                .navigationBarsPadding()
+                .padding(bottom = 16.dp)
                 .verticalScroll(homeScrollState)
-                .padding(horizontal = 24.dp)
-                .navigationBarsPadding(),
+                .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(modifier = Modifier.height(48.dp))
@@ -311,198 +480,70 @@ fun DashboardScreen(
             Spacer(modifier = Modifier.height(36.dp))
 
             // Each page contains only dashboard tiles; the logo and connection stay put.
-            val items = listOf(
-                DashboardItem(
-                    icon = Icons.Default.Language,
-                    title = "Browser",
-                    subtitle = "Browse the web",
-                    screen = Screen.Browser,
-                    gradientColors = listOf(Color(0xFF1565C0), Color(0xFF1E88E5))
-                ),
-                DashboardItem(
-                    icon = Icons.AutoMirrored.Filled.LibraryBooks,
-                    title = "Library",
-                    subtitle = "Your media library",
-                    screen = Screen.Library,
-                    gradientColors = listOf(Color(0xFF6A1B9A), Color(0xFF8E24AA))
-                ),
-                DashboardItem(
-                    icon = Icons.Default.Tv,
-                    title = "Connection",
-                    subtitle = if (isConnected) "Connected" else "Not connected",
-                    screen = Screen.Connection,
-                    gradientColors = if (isConnected)
-                        listOf(Color(0xFF2E7D32), Color(0xFF43A047))
-                    else
-                        listOf(Color(0xFF424242), Color(0xFF616161))
-                ),
-                DashboardItem(
-                    icon = Icons.Default.ScreenShare,
-                    title = "Screen Mirror",
-                    subtitle = "Share your screen",
-                    screen = Screen.ScreenMirror,
-                    gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
-                ),
-                DashboardItem(
-                    icon = Icons.Default.Folder,
-                    title = "Phone Files",
-                    subtitle = "Cast videos & audio",
-                    screen = Screen.PhoneFiles,
-                    gradientColors = listOf(Color(0xFF4527A0), Color(0xFF5E35B1))
-                ),
-                DashboardItem(
-                    icon = Icons.Default.Cloud,
-                    title = "Debrid",
-                    subtitle = "Cloud torrents",
-                    screen = Screen.DebridLibrary,
-                    gradientColors = listOf(Color(0xFF00838F), Color(0xFF00ACC1))
-                ),
-                DashboardItem(
-                    icon = Icons.Default.LiveTv,
-                    title = "IPTV",
-                    subtitle = "Live channels",
-                    screen = Screen.Iptv,
-                    gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B))
-                ),
-                DashboardItem(
-                    icon = Icons.AutoMirrored.Filled.PlaylistPlay,
-                    title = "Collections",
-                    subtitle = "Your playlists",
-                    screen = Screen.Collections,
-                    gradientColors = listOf(Color(0xFFAD1457), Color(0xFFD81B60))
-                ),
-            ).filter {
-                // Debrid is FOSS-only; the Play flavor hides the tile entirely.
-                com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED || it.screen != Screen.DebridLibrary
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = { showReorder = true }) {
+                    Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Reorder")
+                }
             }
-
-            val mainRows = items.drop(2).chunked(3).size
-            val extraAppRows = (bridgedApps.size - 1).coerceAtLeast(0).let { (it + 1) / 2 }
-            val mainTilesHeight = (150 + if (mainRows > 0) 12 + mainRows * 132 else 0).dp
-            val appsTilesHeight = (120 + extraAppRows * 132).dp
-            // Keep the dots in one place while switching between tile pages.
-            val tilesHeight = maxOf(mainTilesHeight, appsTilesHeight)
+            // All pages share the same hierarchy, including pages of installed apps.
             HorizontalPager(
                 state = pagerState,
-                modifier = Modifier.fillMaxWidth().height(tilesHeight),
+                modifier = Modifier.fillMaxWidth().height(414.dp),
                 pageSpacing = 12.dp,
                 verticalAlignment = Alignment.Top,
             ) { page ->
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    if (page == 0) {
-                        // Top row: 2 large cards (Browser + Library).
+                val pageItems = pages.getOrElse(page) { emptyList() }
+                val rows = listOf(pageItems.take(2)) + pageItems.drop(2).chunked(3)
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    rows.forEachIndexed { rowIndex, rowItems ->
+                        val columns = if (rowIndex == 0) 2 else 3
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            items.take(2).forEachIndexed { index, item ->
-                                DashboardCard(
-                                    item = item,
-                                    isActive = isCurrentScreen(currentScreen, item.screen),
-                                    animDelay = 100 + index * 80,
-                                    visible = visible,
-                                    modifier = Modifier.weight(1f),
-                                    tall = true,
-                                    onClick = { onNavigate(item.screen) }
-                                )
-                            }
-                        }
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        // Remaining cards, 3 per row.
-                        items.drop(2).chunked(3).forEachIndexed { rowIdx, rowItems ->
-                            if (rowIdx > 0) Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                rowItems.forEachIndexed { index, item ->
+                            rowItems.forEach { item ->
+                                key(item.id) {
                                     DashboardCard(
                                         item = item,
-                                        isActive = isCurrentScreen(currentScreen, item.screen),
-                                        animDelay = 260 + index * 80,
+                                        isActive = item.app == null && item.id != "bridged-apps" &&
+                                            isCurrentScreen(currentScreen, item.screen),
+                                        animDelay = 0,
                                         visible = visible,
                                         modifier = Modifier.weight(1f),
-                                        tall = false,
-                                        onClick = { onNavigate(item.screen) },
+                                        tall = rowIndex == 0,
+                                        onClick = {
+                                            item.app?.let(onOpenBridgedApp) ?: onNavigate(item.screen)
+                                        },
+                                        onLongClick = {
+                                            if (item.app != null) appToRemove = item.app
+                                            else showReorder = true
+                                        },
+                                        onLongClickLabel = if (item.app != null) "Remove ${item.title}" else "Reorder tiles",
+                                        appIconUrl = item.app?.iconUrl,
                                     )
                                 }
-                                repeat(3 - rowItems.size) { Spacer(modifier = Modifier.weight(1f)) }
                             }
-                        }
-                    } else {
-                        val historyCard = DashboardItem(
-                            icon = Icons.Default.History,
-                            title = "Cast History",
-                            subtitle = "Recent casts",
-                            screen = Screen.CastHistory,
-                            gradientColors = listOf(Color(0xFFE65100), Color(0xFFFB8C00)),
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            DashboardCard(
-                                item = historyCard,
-                                isActive = isCurrentScreen(currentScreen, Screen.CastHistory),
-                                animDelay = 100,
-                                visible = visible,
-                                modifier = Modifier.weight(1f),
-                                tall = false,
-                                onClick = { onNavigate(Screen.CastHistory) },
-                            )
-                            val firstApp = bridgedApps.firstOrNull()
-                            if (firstApp != null) {
-                                BridgedAppDashboardCard(
-                                    app = firstApp,
-                                    visible = visible,
-                                    modifier = Modifier.weight(1f),
-                                    tall = false,
-                                    onClick = { onOpenBridgedApp(firstApp) },
-                                    onLongClick = { appToRemove = firstApp },
-                                )
-                            } else {
-                                DashboardCard(
-                                    item = DashboardItem(
-                                        icon = Icons.Default.Apps,
-                                        title = "Bridged Apps",
-                                        subtitle = "Open Browser to add",
-                                        screen = Screen.Browser,
-                                        gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
-                                    ),
-                                    isActive = false,
-                                    animDelay = 180,
-                                    visible = visible,
-                                    modifier = Modifier.weight(1f),
-                                    tall = false,
-                                    onClick = { onNavigate(Screen.Browser) },
-                                )
-                            }
-                        }
-                        bridgedApps.drop(1).chunked(2).forEach { row ->
-                            Spacer(modifier = Modifier.height(12.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                row.forEach { app ->
-                                    BridgedAppDashboardCard(
-                                        app = app,
-                                        visible = visible,
-                                        modifier = Modifier.weight(1f),
-                                        tall = false,
-                                        onClick = { onOpenBridgedApp(app) },
-                                        onLongClick = { appToRemove = app },
-                                    )
-                                }
-                                if (row.size == 1) Spacer(modifier = Modifier.weight(1f))
-                            }
+                            repeat(columns - rowItems.size) { Spacer(Modifier.weight(1f)) }
                         }
                     }
                 }
             }
-            Spacer(modifier = Modifier.height(18.dp))
-            DashboardPageDots(selectedPage = pagerState.currentPage, onSelect = selectPage)
+            if (pages.size > 1) {
+                Spacer(modifier = Modifier.height(18.dp))
+                DashboardPageDots(
+                    selectedPage = pagerState.currentPage,
+                    pageCount = pages.size,
+                    onSelect = selectPage,
+                )
+            }
             Spacer(modifier = Modifier.height(24.dp))
         }
 
@@ -561,6 +602,38 @@ fun DashboardScreen(
             }
         }
 
+        if (showReorder) {
+            DashboardReorderDialog(
+                tiles = orderedItems.map { DashboardReorderTile(it.id, it.title) },
+                onReorder = { ids -> saveOrder(DashboardTileOrder.reconcile(ids, availableIds)) },
+                onChoosePosition = { id -> tileToMove = id },
+                onDismiss = { showReorder = false },
+            )
+        }
+        tileToMove?.let { id ->
+            val tile = itemsById[id]
+            if (tile != null) {
+                AlertDialog(
+                    onDismissRequest = { tileToMove = null },
+                    title = { Text("Move ${tile.title}") },
+                    text = {
+                        LazyColumn(modifier = Modifier.heightIn(max = 400.dp)) {
+                            itemsIndexed(orderedItems, key = { _, item -> item.id }) { index, item ->
+                                TextButton(
+                                    onClick = { moveTile(id, index); tileToMove = null },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text("${index + 1} · ${item.title}", modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = { TextButton(onClick = { tileToMove = null }) { Text("Cancel") } },
+                )
+            }
+        }
+
         // First-launch coach marks, drawn above everything on the Dashboard.
         if (showOnboarding) {
             DashboardOnboardingOverlay(
@@ -607,17 +680,17 @@ fun DashboardScreen(
 }
 
 @Composable
-private fun DashboardPageDots(selectedPage: Int, onSelect: (Int) -> Unit) {
+private fun DashboardPageDots(selectedPage: Int, pageCount: Int, onSelect: (Int) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        repeat(2) { index ->
+        repeat(pageCount) { index ->
             Box(
                 modifier = Modifier
-                    .size(30.dp)
-                    .clickable(onClickLabel = if (index == 0) "Show dashboard tiles" else "Show apps and history tiles") {
+                    .size(48.dp)
+                    .clickable(onClickLabel = "Show dashboard page ${index + 1}") {
                         onSelect(index)
                     },
                 contentAlignment = Alignment.Center,
@@ -634,35 +707,6 @@ private fun DashboardPageDots(selectedPage: Int, onSelect: (Int) -> Unit) {
             }
         }
     }
-}
-
-@Composable
-private fun BridgedAppDashboardCard(
-    app: BridgedApp,
-    visible: Boolean,
-    modifier: Modifier,
-    tall: Boolean,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-) {
-    DashboardCard(
-        item = DashboardItem(
-            icon = Icons.Default.Apps,
-            title = app.name,
-            subtitle = "Bridged App",
-            screen = Screen.Browser,
-            gradientColors = listOf(Color(0xFF00695C), Color(0xFF00897B)),
-        ),
-        isActive = false,
-        animDelay = 180,
-        visible = visible,
-        modifier = modifier,
-        tall = tall,
-        onClick = onClick,
-        onLongClick = onLongClick,
-        onLongClickLabel = "Remove ${app.name}",
-        appIconUrl = app.iconUrl,
-    )
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -787,7 +831,7 @@ private fun DashboardCard(
             )
 
             val horizontalPadding = if (tall) 16.dp else 10.dp
-            val verticalPadding = 16.dp
+            val verticalPadding = if (tall) 16.dp else 12.dp
 
             val titleStyle = if (tall) {
                 MaterialTheme.typography.titleMedium.copy(
@@ -844,7 +888,7 @@ private fun DashboardCard(
                         text = item.title,
                         style = titleStyle,
                         color = Color.White,
-                        maxLines = 1,
+                        maxLines = if (tall) 1 else 2,
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
@@ -902,5 +946,18 @@ private data class DashboardItem(
     val title: String,
     val subtitle: String,
     val screen: Screen,
-    val gradientColors: List<Color>
+    val gradientColors: List<Color>,
+    val id: String = when (screen) {
+        Screen.Browser -> "browser"
+        Screen.Library -> "library"
+        Screen.Connection -> "connection"
+        Screen.ScreenMirror -> "screen-mirror"
+        Screen.PhoneFiles -> "phone-files"
+        Screen.DebridLibrary -> "debrid"
+        Screen.Iptv -> "iptv"
+        Screen.Collections -> "collections"
+        Screen.CastHistory -> "cast-history"
+        else -> error("Unsupported dashboard destination")
+    },
+    val app: BridgedApp? = null,
 )

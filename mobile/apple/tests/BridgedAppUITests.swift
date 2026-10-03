@@ -13,11 +13,89 @@ final class BridgedAppUITests: XCTestCase {
         super.tearDown()
     }
 
+    func testDashboardReorderPopupMovesTilesAndDismisses() {
+        continueAfterFailure = false
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.bridged-app-ui-checks")
+        app.launch()
+        let reorder = app.buttons["dashboard-reorder"]
+        XCTAssertTrue(reorder.waitForExistence(timeout: 20), app.debugDescription)
+        reorder.tap()
+        let popup = app.otherElements["dashboard-reorder-popup"]
+        XCTAssertTrue(popup.waitForExistence(timeout: 10), app.debugDescription)
+        // SwiftUI reports its accessibility group's frame as the whole overlay.
+        // The native navigation bar reports the editor's actual onscreen bounds.
+        let toolbar = app.navigationBars["Reorder Tiles"]
+        XCTAssertTrue(toolbar.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertGreaterThan(toolbar.frame.minX, app.frame.minX + 8, "Popup has no left margin")
+        XCTAssertLessThan(toolbar.frame.maxX, app.frame.maxX - 8, "Popup has no right margin")
+        XCTAssertGreaterThan(toolbar.frame.minY, app.frame.minY + 70, "Popup is not vertically inset")
+        let snapshot = XCTAttachment(screenshot: app.screenshot())
+        snapshot.name = "Centered dashboard reorder popup"
+        snapshot.lifetime = .keepAlways
+        add(snapshot)
+
+        app.buttons["Position 1, Browser"].tap()
+        XCTAssertTrue(app.buttons["2 · Connection"].waitForExistence(timeout: 5))
+        app.buttons["Back"].tap()
+        XCTAssertTrue(app.buttons["Position 1, Browser"].waitForExistence(timeout: 5),
+                      "Cancelling exact-position selection changed the order")
+        app.buttons["Position 1, Browser"].tap()
+        app.buttons["2 · Connection"].tap()
+        XCTAssertTrue(app.buttons["Position 2, Browser"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        XCTAssertFalse(popup.exists)
+
+        reorder.tap()
+        XCTAssertTrue(app.buttons["Position 2, Browser"].waitForExistence(timeout: 5))
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.01, dy: 0.5)).tap()
+        XCTAssertFalse(popup.exists, "Tapping outside did not close the popup")
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(reorder.waitForExistence(timeout: 20))
+        reorder.tap()
+        XCTAssertTrue(app.buttons["Position 2, Browser"].waitForExistence(timeout: 5),
+                      "Popup order did not persist across relaunch")
+        // The suite shares its isolated app installation. Restore the default order
+        // so the following install/reorder test still starts with Connection at #2.
+        app.buttons["Position 2, Browser"].tap()
+        app.buttons["1 · Connection"].tap()
+        XCTAssertTrue(app.buttons["Position 1, Browser"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+    }
+
+    func testColdLaunchStartsOnDashboardAndKeepsBrowserTabs() {
+        continueAfterFailure = false
+        let base = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
+        let app = XCUIApplication(bundleIdentifier: "com.playbridge.bridged-app-ui-checks")
+        app.launch()
+        let dashboard = app.buttons["dashboard-reorder"]
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 20), app.debugDescription)
+        let address = app.textFields["Search or enter address"]
+        XCTAssertFalse(address.exists, "Fresh launch opened Browser")
+        app.buttons["dashboard-browser"].tap()
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        address.tap()
+        address.typeText(base + "/detection\n")
+        XCTAssertTrue(app.buttons["Browser menu"].waitForExistence(timeout: 10))
+        app.buttons["Dashboard"].tap()
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 10))
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(dashboard.waitForExistence(timeout: 20), "Relaunch did not return to Dashboard")
+        XCTAssertFalse(address.exists)
+        app.buttons["dashboard-browser"].tap()
+        XCTAssertTrue(address.waitForExistence(timeout: 10))
+        XCTAssertTrue((address.value as? String)?.contains("/detection") == true,
+                      "Opening Browser from the launch hub lost the saved tab")
+    }
+
     func testInstallOpenRemoteReturnAndRemove() {
         continueAfterFailure = false
         let base = ProcessInfo.processInfo.environment["BROWSER_FIXTURE"]!
         let app = XCUIApplication(bundleIdentifier: "com.playbridge.bridged-app-ui-checks")
         app.launch()
+        XCTAssertTrue(app.buttons["dashboard-reorder"].waitForExistence(timeout: 20), app.debugDescription)
+        app.buttons["dashboard-browser"].tap()
         let address = app.textFields["Search or enter address"]
         XCTAssertTrue(address.waitForExistence(timeout: 20), app.debugDescription)
         address.tap()
@@ -29,14 +107,43 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(install.waitForExistence(timeout: 15), app.debugDescription)
         install.tap()
         XCTAssertTrue(app.staticTexts["Fixture added to Dashboard"].waitForExistence(timeout: 5))
-        app.buttons["Done"].tap()
+        app.buttons["Close menu"].tap()
         app.buttons["Dashboard"].tap()
-        // Wait for the incoming Dashboard before tapping its page control.
-        // The control can appear in the accessibility tree during the transition.
-        XCTAssertTrue(app.buttons["Apps and history tiles"].waitForExistence(timeout: 10))
-        app.buttons["Apps and history tiles"].tap()
+        let reorder = app.buttons["dashboard-reorder"]
+        XCTAssertTrue(reorder.waitForExistence(timeout: 10), app.debugDescription)
         let tile = app.buttons["bridged-app-\(base)/"]
         XCTAssertTrue(tile.waitForExistence(timeout: 10), app.debugDescription)
+        reorder.tap()
+        let fixtureRow = app.buttons["Position 8, Fixture"]
+        // The centered popup intentionally shows fewer rows than the old sheet.
+        for _ in 0..<4 {
+            if fixtureRow.exists && fixtureRow.isHittable { break }
+            app.collectionViews.firstMatch.swipeUp()
+        }
+        XCTAssertTrue(fixtureRow.waitForExistence(timeout: 10), app.debugDescription)
+        fixtureRow.tap()
+        let secondPosition = app.buttons["2 · Connection"]
+        XCTAssertTrue(secondPosition.waitForExistence(timeout: 5), app.debugDescription)
+        secondPosition.tap()
+        XCTAssertTrue(app.buttons["Position 2, Fixture"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        let browserTile = app.buttons["dashboard-browser"]
+        let connectionTile = app.buttons["dashboard-connection"]
+        XCTAssertEqual(tile.frame.height, browserTile.frame.height, accuracy: 1)
+        XCTAssertGreaterThan(tile.frame.height, connectionTile.frame.height)
+        XCTAssertEqual(tile.frame.minY, browserTile.frame.minY, accuracy: 1)
+        let dashboardSnapshot = XCTAttachment(screenshot: app.screenshot())
+        dashboardSnapshot.name = "Dashboard with Bridged App in second large slot"
+        dashboardSnapshot.lifetime = .keepAlways
+        add(dashboardSnapshot)
+        // A fresh process must restore the same order, not just the current View state.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(reorder.waitForExistence(timeout: 20), "Relaunch did not return to Dashboard")
+        XCTAssertFalse(address.exists, "Relaunch opened Browser instead of Dashboard")
+        reorder.tap()
+        XCTAssertTrue(app.buttons["Position 2, Fixture"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
         tile.tap()
         let edge = app.buttons["Bridged app menu"]
         XCTAssertTrue(edge.waitForExistence(timeout: 10), app.debugDescription)
@@ -123,16 +230,17 @@ final class BridgedAppUITests: XCTestCase {
         // At the start URL, Back exits to Dashboard.
         edge.tap()
         app.buttons["Back"].tap()
-        XCTAssertTrue(app.buttons["Apps and history tiles"].waitForExistence(timeout: 10))
-        app.buttons["Apps and history tiles"].tap()
+        XCTAssertTrue(reorder.waitForExistence(timeout: 10))
+        reorder.tap()
+        XCTAssertTrue(app.buttons["Position 2, Fixture"].waitForExistence(timeout: 5), "Dashboard lost the saved tile order")
+        app.buttons["Done"].tap()
         tile.press(forDuration: 1.2)
         let remove = app.buttons["Remove Bridged App"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5), app.debugDescription)
         remove.tap()
         app.alerts["Remove Bridged App?"].buttons["Remove"].tap()
         XCTAssertFalse(tile.exists, "Removal left the tile installed")
-        app.buttons["Dashboard tiles"].tap()
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Browser")).firstMatch.tap()
+        app.buttons["dashboard-browser"].tap()
         XCTAssertTrue(app.buttons["Tabs, 1 open"].waitForExistence(timeout: 10), "App session leaked into the browser tab count")
         menu.tap()
         XCTAssertTrue(install.waitForExistence(timeout: 10), "Removal did not make the website installable again")

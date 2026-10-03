@@ -1,5 +1,42 @@
 # iPhone standalone fixture checks
 
+Dashboard tile ordering and persistence (host model checks):
+
+```sh
+bash mobile/apple/tests/run-dashboard-order-checks.sh
+```
+
+Checks exact-position moves, cross-page ordering, restored preferences, duplicate/stale
+IDs, new-app append behavior, and page-count boundaries. The bridged-app UI runner
+below also checks moving an installed app into the second large slot and retaining
+that order after a process restart and when returning to Dashboard. Its dashboard
+screenshot can also be used to review card edges and pager spacing. To retain the
+UI screenshots and test results outside the runner's temporary directory, set
+`IOS_UI_RESULT_BUNDLE=/tmp/playbridge-ui-results.xcresult` to a path that does not
+already exist.
+
+Centered dashboard reorder popup (focused simulator UI check):
+
+```sh
+IOS_UI_TEST_FILTER=PopupTests/BridgedAppUITests/testDashboardReorderPopupMovesTilesAndDismisses \
+  bash mobile/apple/tests/run-bridged-app-ui-checks.sh
+```
+
+Checks the popup's screen margins, exact-position selection and cancellation,
+Done/outside-tap dismissal, and saved order after relaunch. Reordering still uses
+native drag handles; the editor and position picker no longer use bottom sheets.
+
+Cold-launch Dashboard and browser-tab restoration (focused simulator UI check):
+
+```sh
+IOS_UI_TEST_FILTER=PopupTests/BridgedAppUITests/testColdLaunchStartsOnDashboardAndKeepsBrowserTabs \
+  bash mobile/apple/tests/run-bridged-app-ui-checks.sh
+```
+
+Checks that both the first launch and a new process start on Dashboard, and that
+the Browser tile restores the saved ordinary tab. Bringing an already running app
+back to the foreground intentionally retains its current screen.
+
 Bridged-app installation, persistence, isolated sessions, navigation and UI:
 
 ```sh

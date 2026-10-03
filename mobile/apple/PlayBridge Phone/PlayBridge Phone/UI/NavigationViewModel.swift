@@ -17,7 +17,8 @@ enum AppScreen: Hashable {
 }
 
 final class NavigationViewModel: ObservableObject {
-    @Published var currentScreen: AppScreen = .browser
+    // A new app process opens the hub; foregrounding retains the current screen.
+    @Published var currentScreen: AppScreen = .dashboard
     @Published var lastMainScreen: AppScreen = .browser
     @Published var remoteOrigin: AppScreen? = nil
     @Published var dashboardOrigin: AppScreen? = nil

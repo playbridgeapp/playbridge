@@ -322,7 +322,10 @@ fun AppNavHost(
     val librarySearchResultsListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val libraryCatalogRowScrollStates = remember { mutableStateMapOf<String, LazyListState>() }
     // AnimatedContent recreates DashboardScreen after navigating away; keep its tile page here.
-    val dashboardPagerState = rememberPagerState(pageCount = { 2 })
+    val dashboardPagerState = rememberPagerState(pageCount = {
+        val builtInCount = if (com.playbridge.sender.FlavorConfig.DEBRID_SUPPORTED) 8 else 7
+        com.playbridge.sender.ui.DashboardTileOrder.pageCount(builtInCount + 1 + bridgedApps.size.coerceAtLeast(1))
+    })
 
     // State to determine if search focus should be requested
     var shouldFocusSearch by remember { mutableStateOf(false) }
