@@ -19,7 +19,7 @@ description: Work on the PlayBridge public Svelte website, Cloudflare Pages down
 2. Keep release/download data compatible with the repository's publication conventions.
 3. Preserve static pages and the existing Cloudflare Pages Functions boundary; do not introduce a SvelteKit runtime server dependency.
 4. Do not place credentials, authenticated URLs, or private operational data in client assets.
-5. Keep the Cast receiver URL public, stable, HTTPS-compatible, and consistent with `docs/google-cast-receiver.md`; `CC1AD845` remains the unbranded development fallback.
+5. Keep the Cast receiver URL public, stable, HTTPS-compatible, and consistent with `docs/google-cast-receiver.md`. Use that document's PlayBridge application ID; do not invent or copy another product's ID.
 
 ## Verify
 
