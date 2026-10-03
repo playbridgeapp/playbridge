@@ -5,7 +5,6 @@ import android.content.Intent
 import com.playbridge.sender.cast.CastSessionManager
 import com.playbridge.sender.cast.MediaItem
 import com.playbridge.sender.cast.PlaybackState
-import com.playbridge.sender.cast.SessionPhase
 import com.playbridge.sender.cast.SubtitleRef
 import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.sender.connection.WebSocketClient
@@ -39,7 +38,7 @@ class PagePlaybackCoordinator(
         val connected = when (route) {
             is CastSessionManager.Route.ThisDevice -> true
             is CastSessionManager.Route.NativeTv -> connection.connectionState.value is WebSocketClient.ConnectionState.Connected
-            is CastSessionManager.Route.External -> connection.castSessionState.value.phase in setOf(SessionPhase.CONNECTED, SessionPhase.PLAYING)
+            is CastSessionManager.Route.External -> connection.castSessionState.value.isReadyForPlayback
         }
         return JSONObject().put("id", if (local) "this-device" else device?.endpointKey?.toString() ?: "unavailable")
             .put("name", if (local) "This device" else device?.name ?: "TV")

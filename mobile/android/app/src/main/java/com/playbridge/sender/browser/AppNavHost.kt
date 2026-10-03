@@ -1741,13 +1741,20 @@ fun AppNavHost(
                             onFinishActivity()
                         }
                     }
-                    val isConnected = connectionState is WebSocketClient.ConnectionState.Connected
+                    val castSessionState by connectionViewModel.castSessionState.collectAsStateWithLifecycle()
+                    val externalSelected = castRoute is CastSessionManager.Route.External
+                    val isConnected = if (externalSelected) {
+                        castSessionState.isReadyForPlayback
+                    } else {
+                        connectionState is WebSocketClient.ConnectionState.Connected
+                    }
                     DashboardScreen(
                         pagerState = dashboardPagerState,
                         currentScreen = lastMainScreen,
                         isConnected = isConnected,
-                        isSecure = (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
-                        connectedDeviceName = tvDevice?.name,
+                        isSecure = !externalSelected &&
+                            (connectionState as? WebSocketClient.ConnectionState.Connected)?.secure == true,
+                        connectedDeviceName = if (externalSelected) activeExternalDevice?.name else tvDevice?.name,
                         onNavigate = { screen ->
                             onScreenChange(screen)
                         },

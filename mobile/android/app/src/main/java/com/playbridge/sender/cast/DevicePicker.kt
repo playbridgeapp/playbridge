@@ -219,10 +219,7 @@ fun DeviceChip(
 
     val externalSelected = route is CastSessionManager.Route.External && activeExternalDevice != null
     val nativeSelected = route is CastSessionManager.Route.NativeTv
-    val externalConnected = externalSelected && castSessionState.phase in setOf(
-        SessionPhase.CONNECTED,
-        SessionPhase.PLAYING,
-    )
+    val externalConnected = externalSelected && castSessionState.isReadyForPlayback
     val isConnected = externalConnected ||
         (nativeSelected && connectionState is WebSocketClient.ConnectionState.Connected)
     val isConnecting = if (externalSelected) {

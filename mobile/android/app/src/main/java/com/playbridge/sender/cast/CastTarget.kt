@@ -168,4 +168,18 @@ data class CastSessionState(
     val isExternal: Boolean
         get() = endpointKey != null && targetKind != null && targetKind != TargetKind.NATIVE
     val isActive: Boolean get() = phase != SessionPhase.LOCAL
+
+    /**
+     * DLNA and Roku have no persistent connection handshake: selecting their transport
+     * is enough to accept the first load, and buffering media does not disconnect them.
+     * Do not apply this to Google Cast, which must launch/join the receiver application
+     * before it is ready.
+     */
+    val isReadyForPlayback: Boolean
+        get() = when (phase) {
+            SessionPhase.CONNECTED, SessionPhase.PLAYING -> true
+            SessionPhase.SELECTED, SessionPhase.CONNECTING -> isExternal &&
+                (targetKind == TargetKind.DLNA || targetKind == TargetKind.ROKU)
+            else -> false
+        }
 }
