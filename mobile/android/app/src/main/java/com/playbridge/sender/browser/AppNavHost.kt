@@ -122,6 +122,7 @@ fun AppNavHost(
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
+    onEditBridgedApp: (BridgedApp, String, String) -> Boolean = { _, _, _ -> false },
     backPressedTime: Long,
     onBackPressedTimeChange: (Long) -> Unit,
     onFinishActivity: () -> Unit,
@@ -1768,6 +1769,7 @@ fun AppNavHost(
                         bridgedApps = bridgedApps,
                         onOpenBridgedApp = onOpenBridgedApp,
                         onRemoveBridgedApp = onRemoveBridgedApp,
+                        onEditBridgedApp = onEditBridgedApp,
                     )
                 }
                 Screen.ScreenMirror -> {

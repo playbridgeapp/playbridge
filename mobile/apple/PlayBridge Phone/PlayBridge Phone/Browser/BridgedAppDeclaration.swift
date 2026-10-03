@@ -7,6 +7,14 @@ struct BridgedApp: Codable, Identifiable, Equatable, Sendable {
     let iconURL: URL?
     var id: URL { origin }
 
+    /// Home edits cannot transfer an installed app’s identity or grants to another origin.
+    func editing(name: String, homeURL: String) -> BridgedApp? {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: homeURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        let edited = BridgedApp(origin: origin, name: name, startURL: url, iconURL: iconURL)
+        return edited.isValid ? edited : nil
+    }
+
     var isValid: Bool {
         BridgedAppDeclaration.origin(of: origin) == origin &&
         BridgedAppDeclaration.origin(of: startURL) == origin &&

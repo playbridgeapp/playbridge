@@ -48,13 +48,15 @@ bash mobile/apple/tests/run-bridged-app-ui-checks.sh
 The first suite runs on macOS. The other two need a booted iOS simulator
 (`IOS_TEST_SIMULATOR` can select its UUID). The integration fixture checks
 retained page state, external POST links and redirects, ordinary-tab close actions,
-lazy restoration, Remote/Dashboard return, and detection suppression with an
+lazy restoration at the saved home URL (instead of the last deep link), edits of
+live/lazy sessions, Remote/Dashboard return, and detection suppression with an
 unavailable declaration. The UI runner builds the shipping app under an isolated
 bundle identifier and checks Add Bridged App, dashboard tiles, the edge menu,
 canvas-player fullscreen hiding/restoration (with a fixture matching Movi’s CSS fallback),
 edge-to-edge web view bounds and edge-button alignment in portrait and both
 landscape orientations (opposite the front camera, including menu taps), Remote
-return, removal, and tab count without changing
+return, long-press App Info, name/home edits and persistence, invalid cross-origin
+edits, draft cancellation, confirmed removal, and tab count without changing
 the user's app data.
 Real receiver playback and physical iPhone interaction still require device testing.
 

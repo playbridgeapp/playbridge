@@ -1113,8 +1113,17 @@ extension BrowserStartupChecks {
         try check(restored.tabs.first(where: \.isBridgedApp)?.loadedWebView == nil,
                   "Restoration eagerly loaded the inactive app")
         let reopened = restored.openBridgedApp(app!)!
-        try check(reopened.urlString == base + "/saved-route", "Relaunch lost the saved app URL")
+        try check(reopened.urlString == app!.startURL.absoluteString, "Fresh launch restored a deep link instead of the app home")
         restored.closeTab(reopened.id)
+        // Updating the home must not navigate or replace an already-loaded page.
+        try check(browser.editBridgedApp(app!, name: "Edited Fixture", homeURL: base + "/detection"), "Home edit was rejected")
+        try check(browser.openBridgedApp(app!) === tab && view.url?.path == "/saved-route", "Edit replaced a live app session")
+        let editedRestore = BrowserStore(tabsFileURL: file, bridgedApps: installed)
+        try check(editedRestore.tabs.first(where: \.isBridgedApp)?.urlString == base + "/detection", "Fresh launch ignored edited home")
+        try check(editedRestore.editBridgedApp(app!, name: "Edited again", homeURL: base + "/child"), "Lazy home edit was rejected")
+        let editedTab = editedRestore.openBridgedApp(app!)!
+        try check(editedTab.urlString == base + "/child", "Lazy tab or stale tile opened the old home")
+        editedRestore.closeTab(editedTab.id)
         browser.openBridgedApp(app!)
         nav.navigate(to: .remote)
         browser.removeBridgedApp(app!)

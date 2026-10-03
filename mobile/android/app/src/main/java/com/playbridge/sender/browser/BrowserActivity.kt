@@ -616,7 +616,7 @@ class BrowserActivity : ComponentActivity() {
             }
         }
 
-        browserViewModel.restoreTabs(tabManager, Components.store) {
+        browserViewModel.restoreTabs(tabManager, Components.store, freshLaunch = savedInstanceState == null) {
             tabsRestoredOrReady.value = true
         }
 
@@ -2713,6 +2713,19 @@ class BrowserActivity : ComponentActivity() {
                             isEditing = false
                             showFindBar = false
                             currentScreen = Screen.Browser
+                        },
+                        onEditBridgedApp = { app, name, homeUrl ->
+                            val saved = bridgedAppStore.edit(app.origin, name, homeUrl)
+                            if (saved) {
+                                val apps = bridgedAppStore.apps.value
+                                val tab = store.state.tabs.firstOrNull { it.id == app.tabId }
+                                val editedTab = tab?.atEditedBridgedAppHome(apps)
+                                if (tab != null && editedTab != null && editedTab != tab) {
+                                    tabManager.closeTab(tab.id, store, rememberClosed = false, hiddenTabIds = bridgedAppTabIds)
+                                    tabManager.restoreTabs(listOf(editedTab), null, store)
+                                }
+                            }
+                            saved
                         },
                         onRemoveBridgedApp = { app ->
                             bridgedAppStore.remove(app.origin)

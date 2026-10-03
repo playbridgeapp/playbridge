@@ -235,6 +235,37 @@ final class BridgedAppUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Position 2, Fixture"].waitForExistence(timeout: 5), "Dashboard lost the saved tile order")
         app.buttons["Done"].tap()
         tile.press(forDuration: 1.2)
+        XCTAssertTrue(app.navigationBars["Bridged App Info"].waitForExistence(timeout: 5), app.debugDescription)
+        let name = app.textFields["bridged-app-name"]
+        let home = app.textFields["bridged-app-home-url"]
+        XCTAssertTrue(name.exists, app.debugDescription)
+        XCTAssertTrue(home.exists, app.debugDescription)
+        func replace(_ field: XCUIElement, with value: String) {
+            field.tap()
+            field.press(forDuration: 1.1)
+            let selectAll = app.menuItems["Select All"]
+            XCTAssertTrue(selectAll.waitForExistence(timeout: 5), app.debugDescription)
+            selectAll.tap()
+            field.typeText(value)
+        }
+        replace(name, with: "Edited Fixture")
+        replace(home, with: "https://other.example/")
+        XCTAssertFalse(app.buttons["Save"].isEnabled, "Cross-origin edit was accepted")
+        replace(home, with: base + "/detection")
+        app.buttons["Save"].tap()
+        XCTAssertFalse(app.navigationBars["Bridged App Info"].exists)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(tile.waitForExistence(timeout: 20))
+        tile.press(forDuration: 1.2)
+        XCTAssertTrue(app.navigationBars["Bridged App Info"].waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "Edited Fixture")
+        XCTAssertEqual(home.value as? String, base + "/detection")
+        replace(name, with: "Unsaved edit")
+        app.buttons["Cancel"].tap()
+        tile.press(forDuration: 1.2)
+        XCTAssertTrue(app.navigationBars["Bridged App Info"].waitForExistence(timeout: 5))
+        XCTAssertEqual(name.value as? String, "Edited Fixture", "Cancel saved the draft")
         let remove = app.buttons["Remove Bridged App"]
         XCTAssertTrue(remove.waitForExistence(timeout: 5), app.debugDescription)
         remove.tap()

@@ -18,7 +18,15 @@ data class BridgedApp(
     val startUrl: String,
     val iconUrl: String?,
     val tabId: String? = null,
-)
+) {
+    fun editing(name: String, homeUrl: String): BridgedApp? {
+        val trimmedName = name.trim()
+        val trimmedUrl = homeUrl.trim()
+        if (trimmedName.isEmpty() || trimmedName.length > 60 ||
+            BridgedAppStore.originFor(trimmedUrl) != origin) return null
+        return copy(name = trimmedName, startUrl = trimmedUrl)
+    }
+}
 
 /** The installed list is local to this PlayBridge installation; cast grants remain separate. */
 class BridgedAppStore(context: Context) {
@@ -28,6 +36,12 @@ class BridgedAppStore(context: Context) {
 
     fun install(app: BridgedApp) = update { existing ->
         existing.filterNot { it.origin == app.origin } + app.copy(tabId = existing.find { it.origin == app.origin }?.tabId)
+    }
+
+    fun edit(origin: String, name: String, homeUrl: String): Boolean {
+        val edited = mutableApps.value.find { it.origin == origin }?.editing(name, homeUrl) ?: return false
+        update { apps -> apps.map { if (it.origin == origin) edited else it } }
+        return true
     }
 
     fun remove(origin: String) = update { it.filterNot { app -> app.origin == origin } }

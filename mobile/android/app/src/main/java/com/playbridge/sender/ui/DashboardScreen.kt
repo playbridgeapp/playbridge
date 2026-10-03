@@ -75,6 +75,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -115,11 +116,12 @@ fun DashboardScreen(
     bridgedApps: List<BridgedApp> = emptyList(),
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
+    onEditBridgedApp: (BridgedApp, String, String) -> Boolean = { _, _, _ -> false },
 ) {
     // ── Entrance animations ─────────────────────────────────────────────────
     var visible by remember { mutableStateOf(false) }
     var showExitConfirm by remember { mutableStateOf(false) }
-    var appToRemove by remember { mutableStateOf<BridgedApp?>(null) }
+    var appToInspectOrigin by rememberSaveable { mutableStateOf<String?>(null) }
     val homeScrollState = rememberScrollState()
     val pagerScope = rememberCoroutineScope()
     val selectPage: (Int) -> Unit = { page ->
@@ -523,10 +525,10 @@ fun DashboardScreen(
                                             item.app?.let(onOpenBridgedApp) ?: onNavigate(item.screen)
                                         },
                                         onLongClick = {
-                                            if (item.app != null) appToRemove = item.app
+                                            if (item.app != null) appToInspectOrigin = item.app.origin
                                             else showReorder = true
                                         },
-                                        onLongClickLabel = if (item.app != null) "Remove ${item.title}" else "Reorder tiles",
+                                        onLongClickLabel = if (item.app != null) "App info for ${item.title}" else "Reorder tiles",
                                         appIconUrl = item.app?.iconUrl,
                                     )
                                 }
@@ -644,18 +646,15 @@ fun DashboardScreen(
             )
         }
 
-        // Confirm before fully quitting — this is a hard exit, not a background close.
-        appToRemove?.let { app ->
-            AlertDialog(
-                onDismissRequest = { appToRemove = null },
-                title = { Text("Remove ${app.name}?") },
-                text = { Text("Its dashboard tile will be removed. Website data and casting permissions are managed separately.") },
-                confirmButton = {
-                    TextButton(onClick = { onRemoveBridgedApp(app); appToRemove = null }) { Text("Remove") }
-                },
-                dismissButton = { TextButton(onClick = { appToRemove = null }) { Text("Cancel") } },
+        bridgedApps.firstOrNull { it.origin == appToInspectOrigin }?.let { app ->
+            BridgedAppInfoDialog(
+                app = app,
+                onSave = { name, homeUrl -> onEditBridgedApp(app, name, homeUrl) },
+                onRemove = { onRemoveBridgedApp(app); appToInspectOrigin = null },
+                onDismiss = { appToInspectOrigin = null },
             )
         }
+        // Confirm before fully quitting — this is a hard exit, not a background close.
         if (showExitConfirm) {
             AlertDialog(
                 onDismissRequest = { showExitConfirm = false },

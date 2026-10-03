@@ -247,14 +247,16 @@ final class BrowserStore: ObservableObject {
         else {
             var restoredActive: BrowserTab?
             for (index, item) in saved.tabs.enumerated() {
+                let app = bridgedApps.apps.first { $0.origin == item.bridgedAppOrigin }
                 if let origin = item.bridgedAppOrigin {
-                    guard bridgedApps.apps.contains(where: { $0.origin == origin }),
-                          let url = URL(string: item.url), BridgedAppDeclaration.origin(of: url) == origin,
-                          !tabs.contains(where: { $0.bridgedAppOrigin == origin }) else { continue }
+                    guard app != nil, !tabs.contains(where: { $0.bridgedAppOrigin == origin }) else { continue }
                 }
-                let tab = makeTab(url: item.isHome ? nil : item.url, activate: false, bridgedAppOrigin: item.bridgedAppOrigin)
+                // A fresh process starts apps at their saved home, never a stale deep link.
+                // Keep restoration lazy and leave ordinary browser tabs unchanged.
+                let url = app?.startURL.absoluteString ?? (item.isHome ? nil : item.url)
+                let tab = makeTab(url: url, activate: false, bridgedAppOrigin: item.bridgedAppOrigin)
                 if index == saved.activeIndex { restoredActive = tab }
-                tab.title = item.title.isEmpty ? (URL(string: item.url)?.host ?? "New Tab") : item.title
+                tab.title = app?.name ?? (item.title.isEmpty ? (URL(string: item.url)?.host ?? "New Tab") : item.title)
                 tab.isDesktopMode = item.desktop
                 tab.restoreUserAgent(
                     preset: BrowserUserAgentPreset(rawValue: item.userAgentPreset ?? "") ?? .automatic,
@@ -378,7 +380,7 @@ final class BrowserStore: ObservableObject {
 
     @discardableResult
     func openBridgedApp(_ app: BridgedApp) -> BrowserTab? {
-        guard bridgedApps.apps.contains(where: { $0.origin == app.origin }) else { return nil }
+        guard let app = bridgedApps.apps.first(where: { $0.origin == app.origin }) else { return nil }
         if let tab = tabs.first(where: { $0.bridgedAppOrigin == app.origin &&
             URL(string: $0.urlString).flatMap(BridgedAppDeclaration.origin(of:)) == app.origin }) {
             select(tab.id)
@@ -387,6 +389,20 @@ final class BrowserStore: ObservableObject {
         let stale = Set(tabs.filter { $0.bridgedAppOrigin == app.origin }.map(\.id))
         closeTabs(stale)
         return makeTab(url: app.startURL.absoluteString, bridgedAppOrigin: app.origin)
+    }
+
+    @discardableResult
+    func editBridgedApp(_ app: BridgedApp, name: String, homeURL: String) -> Bool {
+        guard bridgedApps.edit(app.origin, name: name, homeURL: homeURL) else { return false }
+        // Keep loaded sessions intact, but update lazy tabs so first open uses the new home.
+        let edited = bridgedApps.apps.first { $0.origin == app.origin }!
+        for tab in tabs where tab.bridgedAppOrigin == app.origin && tab.loadedWebView == nil {
+            tab.urlString = edited.startURL.absoluteString
+            tab.title = edited.name
+            pendingInitialLoads[tab.id] = tab.urlString
+        }
+        saveTabs()
+        return true
     }
 
     func removeBridgedApp(_ app: BridgedApp) {

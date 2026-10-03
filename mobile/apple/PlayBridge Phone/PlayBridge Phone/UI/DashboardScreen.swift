@@ -5,7 +5,7 @@ struct DashboardScreen: View {
     @EnvironmentObject private var nav: NavigationViewModel
     @EnvironmentObject private var store: BrowserStore
     @State private var tilePage = 0
-    @State private var appToRemove: BridgedApp?
+    @State private var appToInspect: BridgedApp?
     @State private var showReorder = false
     @State private var tileToMove: DashboardTile?
     @AppStorage("dashboard_tile_order") private var savedOrder = "[]"
@@ -87,16 +87,8 @@ struct DashboardScreen: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: showReorder)
         .onAppear { normalizeOrder() }
         .onChange(of: availableTiles.map(\.id)) { _ in normalizeOrder() }
-        .alert("Remove Bridged App?", isPresented: Binding(
-            get: { appToRemove != nil }, set: { if !$0 { appToRemove = nil } }
-        )) {
-            Button("Remove", role: .destructive) {
-                if let app = appToRemove { store.removeBridgedApp(app) }
-                appToRemove = nil
-            }
-            Button("Cancel", role: .cancel) { appToRemove = nil }
-        } message: {
-            Text("Its dashboard tile and app session will be removed. Website data and casting permissions are managed separately.")
+        .sheet(item: $appToInspect) { app in
+            BridgedAppInfoView(app: app)
         }
     }
 
@@ -228,18 +220,23 @@ struct DashboardScreen: View {
     }
 
     private func tileView(_ tile: DashboardTile, tall: Bool) -> some View {
-        cardView(
+        let card = cardView(
             title: tile.title, subtitle: tile.subtitle, systemImage: tile.systemImage,
             gradient: tile.gradient, tall: tall, isActive: tile.isActive,
             iconURL: tile.app?.iconURL, action: tile.action
-        )
-        .frame(maxWidth: .infinity)
-        .contextMenu {
-            Button { showReorder = true } label: {
-                Label("Reorder Tiles", systemImage: "arrow.up.arrow.down")
-            }
+        ).frame(maxWidth: .infinity)
+        return Group {
             if let app = tile.app {
-                Button("Remove Bridged App", role: .destructive) { appToRemove = app }
+                card.highPriorityGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in
+                    appToInspect = app
+                })
+                .accessibilityAction(named: "App Info") { appToInspect = app }
+            } else {
+                card.contextMenu {
+                    Button { showReorder = true } label: {
+                        Label("Reorder Tiles", systemImage: "arrow.up.arrow.down")
+                    }
+                }
             }
         }
         .accessibilityLabel(tile.app == nil ? "\(tile.title), \(tile.subtitle)" : "\(tile.title), Bridged App")

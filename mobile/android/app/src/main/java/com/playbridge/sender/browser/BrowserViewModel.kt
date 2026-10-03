@@ -137,9 +137,11 @@ class BrowserViewModel(
     fun restoreTabs(
         tabManager: TabManager,
         store: BrowserStore,
+        freshLaunch: Boolean = true,
         onComplete: () -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
+            val apps = BridgedAppStore(getApplication()).apps.value
             try {
                 if (store.state.tabs.isEmpty()) {
                     Log.d("PB_STARTUP", "Store is empty — querying DB")
@@ -157,7 +159,7 @@ class BrowserViewModel(
                                 engineState = EngineState(
                                     engineSessionState = TabManager.bytesToEngineState(entity.sessionState)
                                 )
-                            )
+                            ).atBridgedAppHome(apps)
                         }
                         val selectedId = savedTabs.find { it.isSelected }?.id
 
@@ -166,6 +168,18 @@ class BrowserViewModel(
                             tabManager.restoreTabs(sessionTabs, selectedId, store)
                             Log.d("PB_STARTUP", "restoreTabs done — store now has ${store.state.tabs.size} tabs")
                         }
+                    }
+                } else if (freshLaunch) {
+                    // Finishing/reopening an Activity can reuse the singleton store.
+                    // Rebuild app tabs only; configuration changes keep live pages.
+                    withContext(Dispatchers.Main) {
+                        val appIds = apps.mapNotNull { it.tabId }.toSet()
+                        val appTabs = store.state.tabs.filter { it.id in appIds }
+                            .map { it.atBridgedAppHome(apps) }
+                        appTabs.forEach {
+                            tabManager.closeTab(it.id, store, rememberClosed = false, hiddenTabIds = appIds)
+                        }
+                        tabManager.restoreTabs(appTabs, null, store)
                     }
                 }
             } catch (e: Exception) {

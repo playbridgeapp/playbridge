@@ -20,6 +20,15 @@ final class BridgedAppStore: ObservableObject {
         save()
     }
 
+    @discardableResult
+    func edit(_ origin: URL, name: String, homeURL: String) -> Bool {
+        guard let index = apps.firstIndex(where: { $0.origin == origin }),
+              let edited = apps[index].editing(name: name, homeURL: homeURL) else { return false }
+        apps[index] = edited
+        save()
+        return true
+    }
+
     func remove(_ origin: URL) {
         apps.removeAll { $0.origin == origin }
         save()

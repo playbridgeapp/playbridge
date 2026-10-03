@@ -64,7 +64,22 @@ private actor Probe {
         precondition(BridgedAppStore(defaults: defaults).apps == [parsed], "Installation must survive relaunch")
         store.install(BridgedApp(origin: origin, name: "Bad", startURL: URL(string: "https://other.example/")!, iconURL: nil))
         precondition(store.apps == [parsed], "Invalid saved apps must be rejected")
+        let other = BridgedApp(origin: URL(string: "https://second.example/")!, name: "Second", startURL: URL(string: "https://second.example/")!, iconURL: nil)
+        store.install(other)
+        precondition(!store.edit(origin, name: " ", homeURL: origin.absoluteString))
+        precondition(!store.edit(origin, name: String(repeating: "x", count: 61), homeURL: origin.absoluteString))
+        for invalid in ["https://other.example/", "https://user:pass@app.example/", "javascript:alert(1)", "http://app.example/"] {
+            precondition(!store.edit(origin, name: "Edited", homeURL: invalid))
+        }
+        precondition(store.apps == [parsed, other], "Invalid edits must not mutate installations")
+        precondition(store.edit(origin, name: " Edited ", homeURL: " https://app.example/home?tab=movies#watch "))
+        let edited = store.apps[0]
+        precondition(edited.name == "Edited" && edited.startURL.absoluteString == "https://app.example/home?tab=movies#watch")
+        precondition(edited.origin == parsed.origin && edited.iconURL == parsed.iconURL && store.apps[1] == other, "Editing must preserve identity, icon and order")
+        precondition(BridgedAppStore(defaults: defaults).apps == [edited, other], "Edits must survive relaunch")
+        precondition(!store.edit(URL(string: "https://missing.example/")!, name: "Missing", homeURL: "https://missing.example/"))
         store.remove(origin)
+        store.remove(other.origin)
         precondition(BridgedAppStore(defaults: defaults).apps.isEmpty, "Removal must persist")
         defaults.set(try! JSONEncoder().encode([parsed, parsed]), forKey: "bridged_apps_v1")
         precondition(BridgedAppStore(defaults: defaults).apps == [parsed], "Duplicate saved origins must be filtered")
