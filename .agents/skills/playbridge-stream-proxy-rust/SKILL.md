@@ -30,8 +30,15 @@ cargo test -p stream-proxy-rust
 cargo check -p stream-proxy-rust
 ```
 
+For host-provided upstream changes, also exercise the Android feature set from
+the repository root: `cargo test -p stream-proxy-rust --no-default-features --features upstream-jni --locked`.
+Default-feature tests do not establish host callback ownership or behavior.
+
 Build the Docker image when container configuration or dependencies are updated:
 
 ```bash
-docker build -t playbridge-stream-proxy-rust -f stream-proxy-rust/Dockerfile .
+docker build -t playbridge-stream-proxy-rust stream-proxy-rust
 ```
+
+The Docker command runs from the repository root and uses the crate directory
+as its build context, matching `.github/workflows/stream_proxy_build.yml`.

@@ -14,25 +14,30 @@ description: Prepare a PlayBridge release by explicitly requested version uprevs
 | Desktop | `desktop/pubspec.yaml` and `desktop/lib/update/app_version.dart` | `desktop/CHANGELOG.md` |
 | iOS phone | `mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj/project.pbxproj` | `mobile/apple/CHANGELOG.md` |
 | Apple TV | `tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj/project.pbxproj` | `tv/apple/CHANGELOG.md` |
-| Extension | `extension/manifests/chrome.json` | `extension/CHANGELOG.md` |
+| Extension | `extension/manifests/chrome.json` and `extension/manifests/firefox.json` | `extension/CHANGELOG.md` |
 | CLI | `cli/Cargo.toml` | `cli/CHANGELOG.md` |
-| Stream proxy | `stream-proxy-dart/pubspec.yaml` | `stream-proxy-dart/CHANGELOG.md` |
+| Stream proxy (Rust) | `stream-proxy-rust/Cargo.toml` | `stream-proxy-rust/CHANGELOG.md` |
+| Stream proxy (Dart) | `stream-proxy-dart/pubspec.yaml` | `stream-proxy-dart/CHANGELOG.md` |
+
+The embedded GeckoView manifest has its own version; do not synchronize it to the
+store extension version automatically. Inspect the TV GeckoView plugin's own
+`tv/android/geckoview-plugin/app/build.gradle.kts` when releasing that product.
 
 For Desktop, keep `version: <semver>+<build>` and `kAppVersion = '<semver>'` in lockstep. CI checks this in `desktop/test/update_test.dart`.
 
-Monorepo release policy (PR checks → draft release-build on uprev → publish): see `docs/release.md`. CLI is the reference: uprev arms `cli_build.yml` (draft `cli-v*`); `cli_publish.yml` sets `draft=false`.
+Monorepo release policy (PR checks → draft release-build on uprev → publish): see `docs/release.md`. CLI is the reference: uprev arms `cli_build.yml` (draft `cli-v*`); `cli_publish.yml` sets `draft=false`. Inspect the affected workflow before shipping: the Rust proxy's current `stream_proxy_build.yml` publishes images directly on eligible main changes; it does not yet implement the draft/promotion model.
 
 ## Workflow
 
 1. Inspect `git status` and the diff against the intended base. Identify affected projects without absorbing unrelated worktree changes.
-   - Changes under `shared/` affect both Android phone and TV releases.
+   - Changes under `shared/` require checking both Android consumers; uprev only the products intended for this release.
    - Keep Apple versions in their existing unstable `0.x` scheme.
 2. Choose the bump requested by the user. If unspecified, use minor for features and patch for fixes/refactors; increment the numeric build/version code once.
 3. Update every affected project's version source and add a concise Keep a Changelog entry dated today.
 4. Stage only task and release-metadata files. Never use `git add -A` when unrelated changes exist.
 5. Run focused verification for each affected project. For Desktop, always run `flutter test test/update_test.dart`.
-6. Commit with a Conventional Commit message, push the feature/release branch, and create or update the PR with `gh`.
-7. Include new versions and verification results in the PR description.
+6. Commit with a Conventional Commit message and follow the user's requested branch/PR delivery workflow using `commit-and-open-pr`. An explicitly requested direct-main push does not require a PR.
+7. Include new versions and verification results in the PR description or direct-push report, as applicable.
 8. After merge, for CLI: confirm the **draft** GitHub Release from `CLI Release Build`, then run **CLI Publish** when ready (do not treat draft creation as public ship).
 
 Use the environment's configured Git/GitHub authentication. Do not clear or override authentication variables unless the user or environment specifically requires it.

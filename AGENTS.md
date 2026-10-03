@@ -43,7 +43,7 @@ If `SUBAGENTS.local.md` exists at the repository root, read and follow it for op
 | Android phone | `mobile/android/` | Kotlin, Compose, GeckoView; Gradle modules `:app` and `:shared` |
 | Android TV | `tv/android/` | Kotlin, TV UI, ExoPlayer/MPV; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
 | Shared Kotlin | `shared/` | KMP protocol and shared playback/domain logic, included by both Android builds |
-| Apple phone | `mobile/apple/` | SwiftUI/Xcode sender; optional Cast Core Google Cast adapter groundwork |
+| Apple phone | `mobile/apple/` | SwiftUI/Xcode sender, AVPlayer/MPVKit local playback; optional Cast Core external transports |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver and sender for macOS, Windows, and Linux |
 | Stream proxy (Dart) | `stream-proxy-dart/` | Standalone Dart proxy implementation; separate from Desktop's current Rust-backed in-process proxy |
@@ -66,12 +66,12 @@ On macOS, always run Gradle through `zsh -c "source ~/.zshrc && ./gradlew ..."` 
 
 ```bash
 # Phone — from mobile/android
-zsh -c "source ~/.zshrc && ./gradlew :app:assembleDebug"
+zsh -c "source ~/.zshrc && ./gradlew :app:assembleFossDebug"
 zsh -c "source ~/.zshrc && ./gradlew :app:testFossDebugUnitTest"
 zsh -c "source ~/.zshrc && ./gradlew :app:lintFossDebug"
 
 # TV — from tv/android
-zsh -c "source ~/.zshrc && ./gradlew :player:app:assembleDebug"
+zsh -c "source ~/.zshrc && ./gradlew :player:app:assembleFossDebug"
 zsh -c "source ~/.zshrc && ./gradlew test"
 zsh -c "source ~/.zshrc && ./gradlew lint"
 
@@ -173,6 +173,15 @@ The phone's built-in detector is generated from `extension/src/core/` and
 `pnpm build` from `extension/`, and when detector payload fields or lifecycle
 semantics change, check the Kotlin consumer in `VideoDetector.kt`, page-generation
 handling, ranking, and cast-sheet tests together.
+
+### Website playback bridge
+
+`docs/bridged-apps.md` describes the page API shared by the Android GeckoView and
+iOS WebKit hosts. Changes to playback destinations, linked sessions, queues,
+subtitles or document authority must check both hosts and their page scripts.
+Companion Streams and Jellyfin clients live in the separate `bridged-apps` repo;
+load that repo's guide/skill when changing those clients. The public `web/site/`
+project does not own companion app UI.
 
 ### Shared dependency versions
 

@@ -20,7 +20,7 @@ Upstream source: [httprunner/skills `android-adb`](https://github.com/httprunner
 | TV Gradle root | `tv/android/` |
 | Phone FOSS debug APKs | `mobile/android/app/build/outputs/apk/foss/debug/app-foss-*-debug.apk` |
 | TV FOSS debug APKs | `tv/android/player/app/build/outputs/apk/foss/debug/app-foss-*-debug.apk` |
-| Default ADB port | `5555` |
+| Legacy TCP ADB port | `5555`; modern wireless debugging uses an advertised dynamic port |
 
 - Prefer **debug / FOSS debug** APKs for on-device verification. Many detection, proxy, and network dumps are gated on `BuildConfig.DEBUG`.
 - On macOS, quote logcat filters that contain `*:S` so zsh does not glob.
@@ -30,16 +30,18 @@ Upstream source: [httprunner/skills `android-adb`](https://github.com/httprunner
 
 ## Default workflow for Android work
 
-When the user is working on Android phone or TV and on-device verification is useful (or they ask to install/run), do this **before** assuming a serial:
+When on-device verification is useful or requested, use this target-selection
+workflow. A target already named/selected by the user remains authorized; do not
+ask again just because other devices are connected.
 
-1. **Discover** devices already known to ADB and on the LAN (see [LAN discovery](#lan-discovery)).
+1. **Check existing devices** with `adb devices -l`. Reuse the selected authorized serial. If missing, check `adb mdns services` and the user-provided address before a subnet scan (see [LAN discovery](#lan-discovery)).
 2. **Classify** each hit (phone vs TV / Smart TV, authorized vs unauthorized, PlayBridge package present).
 3. **Prefer**:
    - TV / `tv/android` work → **Smart TV** targets first (`SmartTV`, Hisense/BRAVIA/Android TV leanback, `com.playbridge.player` installed, `_androidtvremote2` / Cast TV names).
    - Phone / `mobile/android` work → phone / non-TV targets first (`com.playbridge.sender`, handheld product).
-4. **List** candidates to the user (IP/serial, name, model, ADB state, package presence).
-5. **Ask** which device to use when more than one is usable, or when the preferred class is missing / unauthorized.
-6. **Connect** with `adb connect <ip>:5555` and keep using `adb -s SERIAL` for every later command.
+4. **List** candidates only when target selection is unresolved (IP/serial, name, model, ADB state, package presence).
+5. **Ask** when multiple suitable devices remain ambiguous. For an unauthorized target, report the device prompt rather than treating it as connected.
+6. **Connect** with `adb connect <ip>:<connection-port>` and keep using `adb -s SERIAL` for every later command. Use `5555` only for legacy TCP ADB, not as a wireless-debugging assumption.
 7. For install/run cycles, use [Stop → rebuild → install → launch](#stop--rebuild--install--launch).
 
 Do **not** silently pick a random device when several are online. Do **not** treat `unauthorized` as connected.
@@ -54,12 +56,26 @@ Do **not** silently pick a random device when several are online. Do **not** tre
 
 ## LAN discovery
 
+Start with already connected devices and mDNS. A /24 scan is a fallback for
+legacy TCP ADB on the intended local subnet; it cannot discover a modern
+wireless-debugging connection at an arbitrary port.
+
 ### 1. Known ADB devices
 
 ```bash
 adb start-server
 adb devices -l
+adb mdns services
 ```
+
+Modern wireless debugging advertises `_adb-tls-connect._tcp` for connections and
+`_adb-tls-pairing._tcp` for pairing. Use the connect port for `adb connect`.
+If not already paired, `adb pair IP:PAIRING_PORT` requires the current code from
+the device's Wireless debugging screen; then connect at its separate connection
+port. Ports can change after toggling wireless debugging. Do not assume the
+pairing port, connect port and `5555` are interchangeable.
+See [Android's ADB wireless-debugging guide](https://developer.android.com/tools/adb#wireless)
+for pairing and connection troubleshooting.
 
 ### 2. Find local IPv4 subnet
 
@@ -104,6 +120,8 @@ PY
 # brief browse; kill after a few seconds
 dns-sd -B _androidtvremote2._tcp local.
 dns-sd -B _adb._tcp local.
+dns-sd -B _adb-tls-connect._tcp local.
+dns-sd -B _adb-tls-pairing._tcp local.
 dns-sd -B _googlecast._tcp local.
 ```
 
@@ -137,9 +155,13 @@ Present a table to the user, for example:
 | `192.168.1.34:5555` | Master bedroom TV | Hisense SmartTV 4K FFM | Smart TV | device | `player` |
 | `192.168.1.32:5555` | ? | ? | ? | unauthorized | — |
 
-Then ask which serial to use (default recommendation: Smart TV for TV work).
+Ask which serial to use only if the user's requested target is still ambiguous
+(default recommendation: Smart TV for TV work).
 
 ## Wi-Fi / USB connection
+
+Use the modern mDNS/pairing path above when Wireless debugging is enabled.
+The commands below are for legacy USB-enabled TCP ADB:
 
 ```bash
 # USB first-time wireless enable
@@ -236,6 +258,12 @@ adb -s "$SERIAL" shell dumpsys package com.playbridge.player | grep -E 'versionN
 
 Success looks like focus/resumed activity on `com.playbridge.player/.MainActivity` (or the phone equivalent) and a non-empty `pidof`.
 
+Installation/launch alone does not verify the changed interaction. Check
+`dumpsys window` / a screenshot for a lock screen before claiming touch tests
+passed. Ask the user to unlock when needed; continue independent code checks.
+Do not uninstall or clear app data to repair an ordinary build/install issue
+without authorization, since saved tabs, accounts and pairing would be lost.
+
 ### Phone variant
 
 Same loop with:
@@ -308,8 +336,8 @@ adb -s SERIAL uninstall com.playbridge.sender
 
 | Symptom | What to do |
 |---|---|
-| `unauthorized` | Accept RSA prompt on device; `adb kill-server && adb start-server`; reconnect |
-| No port 5555 open | Enable wireless debugging / ADB over network on the TV; or USB + `tcpip 5555` |
+| `unauthorized` | Accept RSA prompt on device and reconnect the selected serial; avoid resetting the whole ADB server when other sessions are in use |
+| Wireless debugging enabled, no port 5555 open | Check `adb mdns services` / the device's connection address; modern wireless debugging uses a dynamic connect port |
 | `INSTALL_FAILED_NO_MATCHING_ABIS` | Read `ro.product.cpu.abi` and install the matching split (many Smart TVs are `armeabi-v7a` only) |
 | Install succeeds, blank focus | Wait 1–2s and re-check `mCurrentFocus` / `mResumedActivity`; re-launch with `monkey` or `am start` |
 | Glob fails on logcat `*:S` | Quote filters in zsh |

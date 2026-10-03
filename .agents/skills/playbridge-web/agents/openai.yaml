@@ -1,4 +1,4 @@
 interface:
   display_name: "PlayBridge Web"
-  short_description: "Build and review the PlayBridge web project"
+  short_description: "Maintain the public site and download/update functions"
   default_prompt: "Use $playbridge-web to implement and verify this web change."

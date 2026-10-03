@@ -12,7 +12,7 @@ or has meaningful blast-radius risk.
 
 Start with `get_minimal_context(task="...")`, then select only the graph tools needed.
 
-If the code-review graph tools are unavailable, continue with repository-native search, focused file inspection, version-control history, and relevant tests.
+If tools are unavailable, or the graph is empty, stale, or reports `not_ready`, continue with Serena when available, repository-native search, focused file inspection, version-control history, and relevant tests. An empty graph result is not evidence that there are no callers or affected consumers. Do not rebuild or retry the graph mechanically when source inspection can resolve the task.
 
 ## Explore
 

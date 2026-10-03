@@ -1,4 +1,4 @@
 interface:
   display_name: "Commit and Open PR"
-  short_description: "Safely commit, push, and open a PR"
-  default_prompt: "Use $commit-and-open-pr to commit these changes and open a pull request."
+  short_description: "Review, commit and deliver to the requested branch or PR"
+  default_prompt: "Use $commit-and-open-pr to verify and commit these changes, then follow the requested push or PR workflow."
