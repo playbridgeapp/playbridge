@@ -39,10 +39,27 @@ rate, output channel counts, latency, routing policy and preplay state.
 System volume readings do not necessarily reflect an external HDMI receiver's
 volume. See [mpv-audio-check.md](mpv-audio-check.md) for the phone/TV build comparison.
 
+## AV1 investigation: deprioritized
+
+On the tested Apple TV 4K (3rd generation, A15, 128 GB), MPV AV1 playback
+was visibly choppy at 1080p and worse at 4K. AVPlayer did not play the tested
+AV1 sample. Native frame counters reported no drops despite visible stutter;
+fixed SDR 60 Hz with both display-matching settings off did not resolve it.
+A capped 1080p SDR GPU experiment with measured refresh-rate synchronization
+also failed to produce smooth playback. These observations did not establish
+whether decoding, frame upload or presentation was the bottleneck.
+
+The user also reported the same AV1 playback issue in **Infuse** on Apple TV.
+This is a user-reported comparison, not a controlled benchmark or proof of a
+shared root cause. It nevertheless argues against treating the problem as
+unique to PlayBridge. The user chose to stop the investigation; further
+speculative AV1 tuning is deprioritized unless new profiling evidence or a
+concrete upstream fix gives reason to revisit it.
+
 MPV always uses native AVFoundation video. The AV1-only GPU experiment,
-refresh override and performance sampling were removed after investigation
-was discontinued. AV1 on the tested A15 remains software/best-effort; prefer
-H.264/HEVC when available. Host checks do not certify playback smoothness.
+refresh override and performance sampling were removed. AV1 on the tested A15
+remains software/best-effort; prefer H.264/HEVC when available. Host checks do
+not certify playback smoothness.
 
 ## Host checks
 
