@@ -50,6 +50,17 @@ test("preserves an explicit pre-play preference", () => {
   }), undefined);
 });
 
+test("preserves and validates the optional phone opening orientation", () => {
+  const items = [{ id: "movie", url: "https://media.example/movie.mp4" }];
+  for (const initialOrientation of ["auto", "portrait", "landscape"]) {
+    assert.equal(normalizeLinkedPageCastPayload({ items, initialOrientation })?.initialOrientation, initialOrientation);
+  }
+  for (const initialOrientation of [null, true, 1, "sideways", ["portrait"]]) {
+    assert.equal(normalizeLinkedPageCastPayload({ items, initialOrientation }), undefined);
+  }
+  assert.equal(normalizeLinkedPageCastPayload({ items })?.initialOrientation, undefined);
+});
+
 test("preserves bounded resume positions for direct and linked casts", () => {
   const direct = normalizePageCastPayload({ url: "https://media.example/movie.mkv", startPositionMs: 120_000 });
   const linked = normalizeLinkedPageCastPayload({ items: [{ id: "episode-1", url: "https://media.example/episode.mkv", startPositionMs: 240_000 }] });

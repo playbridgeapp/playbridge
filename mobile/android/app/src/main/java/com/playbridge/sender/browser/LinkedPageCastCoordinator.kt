@@ -9,6 +9,7 @@ import com.playbridge.sender.connection.TvQueueCoordinator
 import com.playbridge.sender.connection.WebSocketClient
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.model.TvDevice
+import com.playbridge.sender.player.PhonePlayerOpeningOrientation
 import com.playbridge.shared.network.MediaNetworkPolicy
 import com.playbridge.shared.protocol.createContextQueryJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
@@ -51,6 +52,7 @@ data class LinkedPageCastOpenRequest(
     val skipPreplay: Boolean,
     val requestedPrivateOrigins: Set<String>,
     val destinationId: String? = null,
+    val initialOrientation: PhonePlayerOpeningOrientation? = null,
 ) {
     fun withPrivateOriginPermission(origins: Collection<String>): LinkedPageCastOpenRequest = copy(
         items = items.map { item ->
@@ -215,6 +217,9 @@ class LinkedPageCastCoordinator(
         val destinationId = if (message.optString("type") == "linked_play") {
             payload.requiredShortString("destinationId", 256)
         } else null
+        val initialOrientation = if (payload.has("initialOrientation")) {
+            PhonePlayerOpeningOrientation.parse(payload.opt("initialOrientation")) ?: return null
+        } else null
         val items = parseItems(payload.optJSONArray("items"), emptySet()) ?: return null
         val startIndex = payload.optInt("startIndex", 0)
         if (startIndex !in items.indices) return null
@@ -240,6 +245,7 @@ class LinkedPageCastCoordinator(
             skipPreplay,
             parseRequestedPrivateOrigins(payload) ?: return null,
             destinationId,
+            initialOrientation,
         )
     }.getOrNull()
 

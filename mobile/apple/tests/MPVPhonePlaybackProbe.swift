@@ -31,6 +31,7 @@ enum LocalFileServer {
     @StateObject private var controls = PhonePlayerControls()
     @State private var result = "Loading MKV"
     @State private var playerReady = false
+    @State private var playerVisible = true
     private let media: RoutedStream
 
     init() {
@@ -39,14 +40,19 @@ enum LocalFileServer {
         media = RoutedStream(url: url, headers: headers, sourceURL: url.absoluteString)
         let media = media
         let route: StreamRoute = ProcessInfo.processInfo.environment["MPV_PHONE_PROXY_PROBE"] == "1" ? .phone : .direct
-        _session = StateObject(wrappedValue: PlaybackSession(media: media, route: route, contentType: "video/x-matroska") { media })
+        _playerVisible = State(initialValue: ProcessInfo.processInfo.environment["MPV_OPENING_ORIENTATION_PROBE"] != "1")
+        _session = StateObject(wrappedValue: PlaybackSession(media: media, route: route, contentType: "video/x-matroska",
+            initialOrientation: ProcessInfo.processInfo.environment["MPV_OPENING_ORIENTATION"]) { media })
     }
 
     var body: some Scene {
         WindowGroup {
             ZStack(alignment: .top) {
-                FullScreenVideoPlayerView(session: session, diagnosticsReport: { session.diagnosticsReport() }, onDismiss: {}, playerControls: controls)
-                    .onAppear { playerReady = true }
+                if playerVisible {
+                    FullScreenVideoPlayerView(session: session, diagnosticsReport: { session.diagnosticsReport() }, onDismiss: { playerVisible = false }, playerControls: controls)
+                        .onAppear { playerReady = true }
+                        .onDisappear { playerReady = false }
+                }
                 Text(result).font(.caption).foregroundStyle(.white).accessibilityIdentifier("probe-result")
             }.background(.black)
                 .task { await checkPlayback() }
@@ -64,6 +70,11 @@ enum LocalFileServer {
 
     @MainActor private func checkPlayback() async {
         do {
+            if ProcessInfo.processInfo.environment["MPV_OPENING_ORIENTATION_PROBE"] == "1" {
+                try await checkOpeningOrientation()
+                result = "PASS native opening orientation, decoded video and preceding page restoration"
+                write(result); return
+            }
             // Fullscreen normally starts playback on appearance. Complete that
             // lifecycle before the probe deliberately prepares a paused item.
             try await wait("Fullscreen presentation") { playerReady }
@@ -229,6 +240,33 @@ enum LocalFileServer {
             try await wait("Via phone seek " + name) { session.positionSeconds > 5.6 && session.isPlaying }
             session.pause()
         }
+    }
+
+    @MainActor private func checkOpeningOrientation() async throws {
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene else { throw ProbeError(message: "Missing window scene") }
+        try await wait("Preceding page geometry") { scene.interfaceOrientation != .unknown }
+        let previous = scene.interfaceOrientation
+        playerVisible = true
+        try await wait("Fullscreen presentation") { playerReady }
+        let portrait = session.initialOrientation == "portrait"
+        try await wait("Requested opening orientation") { portrait ? scene.interfaceOrientation == .portrait : scene.interfaceOrientation.isLandscape }
+        try await wait("Decoded opening video") { session.durationSeconds > 0 && session.positionSeconds > 0.5 && session.isPlaying }
+        session.pause()
+        try await wait("Paused opening video") { !session.isPlaying }
+        try await Task.sleep(nanoseconds: 700_000_000)
+        guard let window = scene.windows.first(where: \.isKeyWindow), let surface = metalSurface(window),
+              surface.convert(surface.bounds, to: window).contains(CGPoint(x: window.bounds.midX, y: window.bounds.midY)) else {
+            throw ProbeError(message: "Opening video surface is outside the viewport")
+        }
+        let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let name = "native-opening"
+        let layer = surface.layer as! CAMetalLayer
+        try "orientation=\(scene.interfaceOrientation.rawValue), window=\(window.bounds), view=\(surface.bounds), drawable=\(layer.drawableSize)\n"
+            .write(to: directory.appendingPathComponent(name + ".geometry.txt"), atomically: true, encoding: .utf8)
+        try name.write(to: directory.appendingPathComponent("stage.txt"), atomically: true, encoding: .utf8)
+        try await wait("Opening frame capture") { FileManager.default.fileExists(atPath: directory.appendingPathComponent(name + ".ack").path) }
+        playerVisible = false
+        try await wait("Preceding page orientation restored") { !playerReady && scene.interfaceOrientation == previous }
     }
 
     @MainActor private func checkOrientations() async throws {

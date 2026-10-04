@@ -70,6 +70,8 @@ bash mobile/apple/tests/run-playback-error-checks.sh
 bash mobile/apple/tests/run-mpv-phone-probe.sh # booted iOS simulator and ffmpeg required
 MPV_FEATURES_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh # native speed/language and fit/fill/subtitle pixel checks
 MPV_ORIENTATION_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh # fullscreen pixel checks, including paused rotation
+MPV_OPENING_ORIENTATION_PROBE=1 MPV_OPENING_ORIENTATION=landscape bash mobile/apple/tests/run-mpv-phone-probe.sh # opening preference, decoded pixels and page-orientation restoration
+# Repeat the opening probe with MPV_OPENING_ORIENTATION=portrait for portrait entry.
 MPV_PHONE_PROXY_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh # requires existing optional Cast Core XCFramework
 MPV_TLS_REJECTION_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh
 MPV_NETWORK_PROBE=1 MPV_REMOTE_FIXTURE=https://download.blender.org/durian/trailer/sintel_trailer-480p.mp4 bash mobile/apple/tests/run-mpv-phone-probe.sh

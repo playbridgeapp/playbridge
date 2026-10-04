@@ -98,6 +98,7 @@ struct PlaybackFailure: Equatable {
     @Published var websiteQueueError: String?
     var onWebsiteJump: ((Int) -> Void)?
     let route: StreamRoute
+    let initialOrientation: String?
     @Published private(set) var failure: PlaybackFailure?
     @Published private(set) var retrying = false
     private(set) var registration: PhoneProxyRegistration?
@@ -116,9 +117,10 @@ struct PlaybackFailure: Equatable {
     var isPlaying: Bool { alternativeEngine != nil && !mpvState.paused }
 
     init(media: RoutedStream, route: StreamRoute, contentType: String? = nil,
-         preferencesStore: UserDefaults = .standard,
+         initialOrientation: String? = nil, preferencesStore: UserDefaults = .standard,
          alternativeFactory: (() -> PhoneAlternativePlaybackEngine?)? = nil, prepare: @escaping () async throws -> RoutedStream) {
         self.route = route
+        self.initialOrientation = initialOrientation
         self.preferencesStore = preferencesStore
         preferences = PhonePlayerPreferences.load(from: preferencesStore)
         self.prepare = prepare

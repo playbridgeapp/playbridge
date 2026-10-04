@@ -26,7 +26,7 @@ import Foundation
         items = request.items; index = request.startIndex; self.event = event
         self.route = route; self.configuration = configuration
         let item = request.items[request.startIndex]
-        session = PlaybackSession(media: media, route: route, contentType: item["contentType"] as? String, alternativeFactory: alternativeFactory, prepare: {
+        session = PlaybackSession(media: media, route: route, contentType: item["contentType"] as? String, initialOrientation: request.initialOrientation, alternativeFactory: alternativeFactory, prepare: {
             try await Self.prepare(item, route: route, configuration: configuration)
         })
         session.onWebsiteClose = { [weak self] in self?.close() }

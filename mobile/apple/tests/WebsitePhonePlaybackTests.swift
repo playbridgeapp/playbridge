@@ -35,12 +35,13 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
         let factory: () -> PhoneAlternativePlaybackEngine? = {
             let engine = TestAlternativeEngine(); engines.append(engine); return engine
         }
-        let request = try PageCastRequest.parse(["items": [["id": "first", "url": "https://media.invalid/first.mp4", "title": "Episode one",
+        let request = try PageCastRequest.parse(["initialOrientation": "landscape", "items": [["id": "first", "url": "https://media.invalid/first.mp4", "title": "Episode one",
             "subtitleResources": [["url": "https://media.invalid/en.vtt", "label": "English"]]]]], linked: true)
         let playback = try await WebsitePhonePlayback.start(request, alternativeFactory: factory) { events.append(($0, $1)) }
         precondition(engines.last!.plays == 0 && !engines.last!.loads.last!.3, "Preparation must not start playback before owner and destination validation")
         precondition(playback.session.websiteSubtitleTracks.count == 1 && playback.session.websiteSubtitleTracks[0].label == "English")
         precondition(playback.snapshot()["currentIndex"] as? Int == 0)
+        precondition(playback.session.initialOrientation == "landscape")
         let second = try PageCastRequest.parseItems([["id": "second", "url": "https://media.invalid/second.mp4", "title": "Episode two"]], linked: true)
         precondition(playback.session.websiteQueueTitles == ["Episode one"] && playback.session.websiteQueueIndex == 0)
         playback.append(second, endOfList: false)
@@ -59,6 +60,7 @@ enum StreamProxySettingsStore { static func load() -> RemoteProxyConfiguration {
             $0.1["currentIndex"] as? Int == 1 && $0.1["positionMs"] as? Int64 == 17000
         }, "Manual native navigation must flush the old episode progress before changing identity")
         precondition(playback.session.websiteSubtitleTracks.count == 1, "Previous uses the same queue and restores sidecars")
+        precondition(playback.session.initialOrientation == "landscape", "Episode changes must retain the opening policy without rotating again")
         playback.session.onWebsiteJump?(1)
         try await wait { playback.session.websiteQueueIndex == 1 && !playback.session.websiteQueueChangingItem }
 

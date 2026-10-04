@@ -25,7 +25,8 @@ source = root / 'PlayBridge Phone'
 source.mkdir()
 for name in ['Network/PhonePlaybackEngine.swift', 'Network/MPVPhonePlayback.swift', 'Network/PlaybackSession.swift',
              'Network/StreamRouteService.swift', 'Network/PhonePlayerPreferences.swift',
-             'UI/PhonePlayerControls.swift', 'UI/PhonePlayerSettingsView.swift', 'UI/MPVPhonePlayerView.swift', 'UI/Theme.swift']:
+             'UI/PhonePlayerControls.swift', 'UI/PhonePlayerSettingsView.swift', 'UI/MPVPhonePlayerView.swift',
+             'UI/PhonePlayerOpeningOrientationView.swift', 'UI/Theme.swift']:
     shutil.copy2(phone / 'PlayBridge Phone' / name, source / Path(name).name)
 shutil.copy2(repo / 'mobile/apple/tests/MPVPhonePlaybackProbe.swift', source / 'Probe.swift')
 # Exercise the actual fullscreen layout without importing the unrelated cast-sheet UI.
@@ -118,6 +119,8 @@ SIMCTL_CHILD_MPV_FIXTURE="${MPV_REMOTE_FIXTURE:-$fixture_scheme://$MPV_FIXTURE_H
   SIMCTL_CHILD_MPV_PHONE_PROXY_PROBE="${MPV_PHONE_PROXY_PROBE:-0}" \
   SIMCTL_CHILD_MPV_FEATURES_PROBE="${MPV_FEATURES_PROBE:-0}" \
   SIMCTL_CHILD_MPV_ORIENTATION_PROBE="${MPV_ORIENTATION_PROBE:-0}" \
+  SIMCTL_CHILD_MPV_OPENING_ORIENTATION="${MPV_OPENING_ORIENTATION:-}" \
+  SIMCTL_CHILD_MPV_OPENING_ORIENTATION_PROBE="${MPV_OPENING_ORIENTATION_PROBE:-0}" \
   SIMCTL_CHILD_MPV_NETWORK_PROBE="${MPV_NETWORK_PROBE:-0}" \
   SIMCTL_CHILD_MPV_TLS_REJECTION_PROBE="${MPV_TLS_REJECTION_PROBE:-0}" \
   xcrun simctl launch "$simulator" com.playbridge.mpv-probe
@@ -140,6 +143,9 @@ xcrun simctl io "$simulator" screenshot /private/tmp/playbridge-mpv-probe.png >/
 if [[ "$(head -c 4 "$container/Documents/result.txt")" != PASS ]]; then exit 1; fi
 if [[ "${MPV_FEATURES_PROBE:-0}" == 1 ]]; then
   swift "$repo_root/mobile/apple/tests/VerifyMPVFeatures.swift" /private/tmp/playbridge-mpv-{fit,fill,subtitle-style,subtitle-delayed}.png
+fi
+if [[ "${MPV_OPENING_ORIENTATION_PROBE:-0}" == 1 ]]; then
+  swift "$repo_root/mobile/apple/tests/VerifyMPVFrames.swift" /private/tmp/playbridge-mpv-native-opening.png
 fi
 if [[ "${MPV_ORIENTATION_PROBE:-0}" == 1 ]]; then
   swift "$repo_root/mobile/apple/tests/VerifyMPVFrames.swift" \

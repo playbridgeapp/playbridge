@@ -29,6 +29,7 @@ export type LinkedPageCastItem = PageCastItem & {
 export type LinkedPageCastRequest = {
   items: LinkedPageCastItem[];
   startIndex: number;
+  initialOrientation?: "auto" | "portrait" | "landscape";
   metadata?: Record<string, unknown>;
   skipPreplay?: boolean;
   privateNetworkOrigins?: string[];
@@ -305,6 +306,8 @@ export function normalizeLinkedPageCastPayload(payload: unknown): LinkedPageCast
     ? payload.startIndex
     : 0;
   if (requestedIndex < 0 || requestedIndex >= items.length) return undefined;
+  const initialOrientation = payload.initialOrientation;
+  if (initialOrientation !== undefined && initialOrientation !== "auto" && initialOrientation !== "portrait" && initialOrientation !== "landscape") return undefined;
   const visualMetadata = payload.metadata === undefined ? undefined : metadata(payload.metadata);
   if (payload.metadata !== undefined && !visualMetadata) return undefined;
   if (payload.skipPreplay !== undefined && typeof payload.skipPreplay !== "boolean") return undefined;
@@ -313,6 +316,7 @@ export function normalizeLinkedPageCastPayload(payload: unknown): LinkedPageCast
   return {
     items,
     startIndex: requestedIndex,
+    ...(initialOrientation !== undefined ? { initialOrientation } : {}),
     ...(visualMetadata ? { metadata: visualMetadata } : {}),
     ...(payload.skipPreplay !== undefined ? { skipPreplay: payload.skipPreplay } : {}),
     ...(privateOrigins?.length ? { privateNetworkOrigins: privateOrigins } : {}),

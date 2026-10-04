@@ -84,7 +84,8 @@ export const PAGE_PLAYBACK_BRIDGE_SCRIPT = `
         linkedCast: 1,
         explicitHeaders: 1,
         privateNetworkOriginPermission: 1,
-        playback: 1
+        playback: 1,
+        localPlaybackOrientation: 1
       });
       window.playbridge.getPlaybackDestination = function() { return request('destination', null, {}); };
       window.playbridge.choosePlaybackDestination = function(options) { return request('choose_destination', null, options || {}); };

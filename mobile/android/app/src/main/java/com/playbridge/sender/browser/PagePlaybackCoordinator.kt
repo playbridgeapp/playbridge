@@ -115,6 +115,7 @@ class PagePlaybackCoordinator(
                 .putExtra(PlayerActivity.EXTRA_CONTENT_TYPE, item.payload.content_type)
                 .putExtra(PlayerActivity.EXTRA_HEADERS, JSONObject(item.payload.headers).toString())
                 .putExtra(PlayerActivity.EXTRA_PAGE_SESSION_ID, request.sessionId)
+                .putExtra(PlayerActivity.EXTRA_INITIAL_ORIENTATION, request.initialOrientation?.wireValue)
             try { context.startActivity(intent); replyRequest(request) }
             catch (_: Exception) { reject(request, "playback_failed"); end("playback_failed") }
         } else {

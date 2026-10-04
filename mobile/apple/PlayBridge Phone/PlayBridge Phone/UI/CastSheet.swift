@@ -1102,6 +1102,7 @@ struct FullScreenVideoPlayerView: View {
     @State private var audioSessionError: String?
     @State private var localAudioOwner: UUID?
     @State private var previousIdleTimerDisabled: Bool?
+    @State private var openingOrientationUnavailable = false
     var playerControls: PhonePlayerControls? = nil
 
     var body: some View {
@@ -1145,6 +1146,16 @@ struct FullScreenVideoPlayerView: View {
                 }
         }
         .background(Color.black.ignoresSafeArea())
+        .background(PhonePlayerOpeningOrientationView(orientation: session.initialOrientation,
+            onUnavailable: { openingOrientationUnavailable = true }))
+        .overlay(alignment: .top) {
+            if openingOrientationUnavailable {
+                Text("The opening orientation could not be changed on this device.")
+                    .font(Theme.font(.footnote)).foregroundStyle(.white)
+                    .padding(12).background(.black.opacity(0.8)).padding()
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
+        }
         .statusBarHidden(true)
         .persistentSystemOverlays(.hidden)
         .onAppear {

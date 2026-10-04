@@ -232,6 +232,8 @@ the production fullscreen view in portrait and both landscape orientations,
 including a paused rotation. Screenshot pixel checks catch stale Metal viewports;
 UIView bounds and playback-state checks alone do not prove the video is visible.
 
+`MPV_OPENING_ORIENTATION_PROBE=1 MPV_OPENING_ORIENTATION=landscape bash mobile/apple/tests/run-mpv-phone-probe.sh` checks the production opening-orientation controller, centred decoded pixels and restoration of the preceding page on dismissal. Repeat with `MPV_OPENING_ORIENTATION=portrait` for portrait entry. These simulator checks do not verify physical-device rotation or OS restrictions.
+
 `MPV_PHONE_PROXY_PROBE=1 bash mobile/apple/tests/run-mpv-phone-probe.sh` links the
 existing optional Cast Core XCFramework and production Swift proxy/upstream code,
 then verifies mpv playback and seeking through loopback for MKV, MP4 and rewritten

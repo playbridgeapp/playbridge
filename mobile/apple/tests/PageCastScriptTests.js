@@ -264,6 +264,7 @@ test('requests carry document identity and delayed messages from another documen
 test('unified playback uses destination status and native picker, and creates a linked Play session', async () => {
   const b = browser();
   assert.equal(b.api.capabilities.playback, 1);
+  assert.equal(b.api.capabilities.localPlaybackOrientation, 1);
   const status = b.api.getPlaybackDestination();
   assert.equal(b.messages.at(-1).operation, 'destination');
   b.result(b.messages.at(-1), { destination: { id: 'this-device', name: 'This device', kind: 'local', connected: true } });
@@ -273,7 +274,7 @@ test('unified playback uses destination status and native picker, and creates a 
   assert.equal(b.messages.at(-1).operation, 'choose_destination');
   b.result(b.messages.at(-1));
   await picker;
-  const payload = { destinationId: 'this-device', items: [{ id: 'episode', url: 'https://media.example/video.mp4', startPositionMs: 40000 }] };
+  const payload = { destinationId: 'this-device', initialOrientation: 'landscape', items: [{ id: 'episode', url: 'https://media.example/video.mp4', startPositionMs: 40000 }] };
   const play = b.api.play(payload);
   const opening = b.messages.at(-1);
   assert.equal(opening.operation, 'play');

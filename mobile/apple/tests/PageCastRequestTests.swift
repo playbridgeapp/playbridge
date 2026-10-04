@@ -15,6 +15,16 @@ import Foundation
             "startIndex": 20, "skipPreplay": true, "metadata": ["title": "Series"],
         ])
         precondition(request.startIndex == 0 && request.skipPreplay)
+        precondition(request.initialOrientation == nil)
+        for orientation in ["auto", "portrait", "landscape"] {
+            let oriented = try PageCastRequest.parse(["items": [["id": "movie", "url": media]], "initialOrientation": orientation], linked: true)
+            precondition(oriented.initialOrientation == orientation)
+            let wire = try JSONSerialization.jsonObject(with: Data(oriented.playlistCommand(allowedPrivateOrigins: []).utf8)) as! [String: Any]
+            precondition((wire["payload"] as! [String: Any])["initialOrientation"] == nil, "Phone opening orientation must not leak into receiver commands")
+        }
+        for invalid in [NSNull(), true, 1, "sideways", ["portrait"]] as [Any] {
+            rejects(["items": [["id": "movie", "url": media]], "initialOrientation": invalid], linked: true)
+        }
         let data = Data(request.playlistCommand(allowedPrivateOrigins: ["http://192.168.1.1:80"]).utf8)
         let envelope = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let payload = envelope["payload"] as! [String: Any]

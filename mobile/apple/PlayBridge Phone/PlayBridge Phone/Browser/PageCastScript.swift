@@ -176,7 +176,7 @@ enum PageCastScript {
       // on existing websites that intentionally do not await cast().
       api.cast = function (payload) { request('cast', null, payload).catch(function () {}); };
       api.capabilities = Object.assign({}, api.capabilities, {
-        linkedCast: 1, playback: 1, explicitHeaders: 1, privateNetworkOriginPermission: 1
+        linkedCast: 1, playback: 1, localPlaybackOrientation: 1, explicitHeaders: 1, privateNetworkOriginPermission: 1
       });
       api.linkCast = function (payload) { return request('open', null, payload); };
       api.play = function (payload) { return request('play', null, payload); };

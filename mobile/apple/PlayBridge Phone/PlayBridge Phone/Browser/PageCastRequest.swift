@@ -14,6 +14,7 @@ struct PageCastRequest {
     var metadata: [String: Any]?
     var skipPreplay: Bool
     var privateOrigins: Set<String>
+    var initialOrientation: String? = nil
 
     static func parse(_ value: Any, linked: Bool = false) throws -> PageCastRequest {
         try checkSize(value)
@@ -24,11 +25,18 @@ struct PageCastRequest {
         let items = try parseItems(source["items"] ?? (linked ? [] : [source]), linked: linked)
         let requestedIndex = integer(source["startIndex"]) ?? 0
         if linked && !(0..<items.count).contains(requestedIndex) { throw PageCastError(code: "invalid_request") }
+        let initialOrientation: String?
+        if let value = source["initialOrientation"] {
+            guard let orientation = value as? String, ["auto", "portrait", "landscape"].contains(orientation) else {
+                throw PageCastError(code: "invalid_request")
+            }
+            initialOrientation = orientation
+        } else { initialOrientation = nil }
         let metadata = try source["metadata"].map(parseMetadata)
         if let skip = source["skipPreplay"], !isBoolean(skip) { throw PageCastError(code: "invalid_request") }
         return PageCastRequest(items: items, startIndex: max(0, min(requestedIndex, items.count - 1)),
                                metadata: metadata, skipPreplay: source["skipPreplay"] as? Bool ?? false,
-                               privateOrigins: try parsePrivateOrigins(source["privateNetworkOrigins"]))
+                               privateOrigins: try parsePrivateOrigins(source["privateNetworkOrigins"]), initialOrientation: initialOrientation)
     }
 
     static func parseItems(_ value: Any, linked: Bool, allowEmpty: Bool = false) throws -> [[String: Any]] {

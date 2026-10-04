@@ -34,12 +34,16 @@ await playbridge.choosePlaybackDestination() // opens the existing native destin
 await playbridge.choosePlaybackDestination({ destinationId: 'this-device' }) // explicit local recovery
 const session = await playbridge.play({
   destinationId: destination.id,
+  // Only for This device, when capabilities.localPlaybackOrientation === 1:
+  initialOrientation: 'landscape', // 'auto' | 'portrait' | 'landscape'
   items: [{ id: 'episode-1', url: 'https://media.example/one.mp4', startPositionMs: 120000 }],
   startIndex: 0
 })
 ```
 
 `play()` uses the linked-session event and `provideItems()` contract. Phone playback opens the existing native fullscreen player; a selected receiver uses its normal native transport. Resume positions, explicit media headers, metadata and supported subtitles travel with the items. Website and private-server permissions apply to playback just as they do to casting. The requested destination is checked again after asynchronous preparation; a changed or disconnected target rejects the request, allowing the website to offer reconnect or explicit local playback.
+
+Phone hosts advertise `capabilities.localPlaybackOrientation === 1`. The optional top-level `play()` field `initialOrientation` accepts only `auto`, `portrait`, or `landscape` and is honored only for **This device**. Omission/`auto` preserves the host’s existing orientation policy; explicit choices set the opening orientation without removing native rotation controls. iOS requests scene geometry once and restores the preceding page on dismissal; if the OS refuses the request, playback continues with a visible explanation. Orientation is session presentation state, not receiver playlist metadata, and episode changes do not reopen or rotate the player. Websites must feature-detect this capability rather than assume older hosts support it.
 
 Local playback and native PlayBridge receivers support the website's lazy episode queue. The Android and iOS phone players expose a live **Queue** with next/previous controls; it updates when the website supplies items. Queued episodes advance automatically, and a late supply can continue after the current episode ends. Only resolved items appear in the queue, so Next stays disabled until another item is supplied. The owning page must remain loaded to resolve further episodes; already-delivered items remain playable after Unlink. External receivers retain their existing single-item capabilities; they do not request next episodes. Unsupported external queues or subtitle delivery fail explicitly. Unlinking releases website control and progress reporting while playback continues. Existing `cast()` and `linkCast()` remain available for compatibility. A website without the bridge uses its own web player.
 

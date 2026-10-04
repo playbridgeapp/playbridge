@@ -349,8 +349,11 @@ class PlayerActivity : ComponentActivity() {
             )
         }
 
-        // Fullscreen, landscape, immersive — and keep the screen awake while playing.
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        // Website preferences affect only the opening policy, not the manual rotate control.
+        val openingOrientation = PhonePlayerOpeningOrientation.parse(intent.getStringExtra(EXTRA_INITIAL_ORIENTATION))
+            ?: PhonePlayerOpeningOrientation.AUTOMATIC
+        autoOrientationEnabled = openingOrientation.automatic
+        requestedOrientation = openingOrientation.requestedOrientation
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).apply {
@@ -564,6 +567,7 @@ class PlayerActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_PAGE_SESSION_ID = "page_session_id"
+        const val EXTRA_INITIAL_ORIENTATION = "initial_orientation"
         const val EXTRA_URL = "url"
         const val EXTRA_TITLE = "title"
         const val EXTRA_CONTENT_TYPE = "content_type"
