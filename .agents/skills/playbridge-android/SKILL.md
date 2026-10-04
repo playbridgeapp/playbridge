@@ -29,6 +29,10 @@ description: Work across PlayBridge's Android phone, Android TV, and shared Kotl
 ## Website playback and device plugins
 
 - Read `docs/bridged-apps.md` for installed-app lifecycle, detection opt-out, permissions, and the page API. Keep normal browser tab selection separate from app sessions across process death; preserve the app's identity and return target when opening Dashboard or Remote.
+- Installed apps save a Home URL (initially the manifest’s `start_url`). Fresh process launches and finishing/reopening the Activity start app tabs at that URL without restoring old page history; configuration recreation and Dashboard/Remote switches retain live sessions. `BridgedAppStartup.kt` owns the tab-reset policy. Do not reset ordinary browser tabs or select hidden app tabs during startup cleanup.
+- Restore tab metadata/history on launch Dashboard without loading pages. `BrowserSessionRestorePolicy` allows engine creation only for a page explicitly opened in Browser/app mode; tab-switcher fallback selection must remain unloaded. Preserve live sessions across Dashboard/Remote/configuration changes, fence host ownership before suspension on finish, and keep one navigation/Tabs tree mounted while the selected engine is absent. Website picker requests are consumable events, not replayable counters.
+- The phone-only GeckoView disconnect guard and document-port cleanup are described in `docs/android-browser-lifecycle.md`. Keep permission revocation/cancellation immediate without competing native teardown; run `./gradlew -p buildSrc test` when changing the guard or GeckoView. Review/remove the transform if the upstream port shape changes, and never suppress first-time native failures.
+- Long-press app tiles open Info with name/home editing and confirmed removal. Edits preserve origin, icon, tab identity and tile order; home URLs stay on the installed origin under the existing HTTPS/local-HTTP and no-credentials policy. Update never-loaded tabs after home edits without interrupting live or hibernated pages. Preserve editor selection/drafts across Activity recreation. Removal closes the app session but keeps website data and casting grants; installation management is native UI, not a website API.
 - `PagePlaybackCoordinator.kt` selects local/native/external playback; `PagePlayerSession.kt` and `PlayerActivity.kt` own local progress and lazy queues. The page's `play()` uses the existing device picker and selected destination, including **This device**. Recheck it after asynchronous preparation and reject stale document/session results. Unlink releases website authority while playback continues.
 - A valid bridged-site declaration suppresses automatic detection. **Media detect → Advanced → Detect on bridged sites** is an override, off by default; toggling categories must stop their work, remove existing rows and reject late results.
 - Device Nuvio plugins are opt-in, FOSS-only, and shared by Library and installed Bridged Apps. Keep QuickJS and bundled scraper dependencies in `src/foss/` / `fossImplementation`; `src/play/` advertises no native resolver. Preserve installed-app/top-frame authority, provider code/domain approvals and cancellation. The page may send installed identifiers, never arbitrary code, HTTP fetch commands or account secrets.
@@ -58,7 +62,9 @@ Validate `shared/` changes through both roots when both consume the affected cod
 
 For flavor-specific plugin or shared phone changes that could affect store builds,
 also assemble `:app:assemblePlayDebug`; passing the FOSS build does not verify the
-Play source set.
+Play source set. For installed-app startup or editing changes, include
+`BridgedAppStartupTest`, `BridgedAppStoreTest`, `BrowserTabSelectionTest` and
+`RemoteReturnTargetTest`; model tests do not verify physical long-press/rotation UI.
 
 When Cast Core JNI, sender services, proxy callbacks, or their ABI changes, run
 `sh cast/build-android.sh` from the repository root before the phone checks and
