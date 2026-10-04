@@ -29,6 +29,7 @@ struct ContentView: View {
     let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     init() {
+        PlaybackEngine.migrateLegacyPreference(in: .standard)
         let hStore = HistoryStore()
         let pStore = PlaylistStore()
         _historyStore = StateObject(wrappedValue: hStore)

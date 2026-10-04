@@ -1,12 +1,12 @@
+import Foundation
+
 enum PlaybackEngine: String, CaseIterable {
     case avplayer
-    case vlc
     case mpv
 
     var name: String {
         switch self {
         case .avplayer: return "AVPlayer"
-        case .vlc: return "VLC"
         case .mpv: return "MPV"
         }
     }
@@ -14,9 +14,15 @@ enum PlaybackEngine: String, CaseIterable {
     var menuID: Int {
         switch self {
         case .avplayer: return 0
-        case .vlc: return 1
         case .mpv: return 2
         }
+    }
+
+    static let capabilityPlayers = allCases.map(\.rawValue)
+
+    static func migrateLegacyPreference(in defaults: UserDefaults) {
+        guard defaults.string(forKey: "preferredPlayer")?.lowercased() == "vlc" else { return }
+        defaults.set(PlaybackEngine.mpv.rawValue, forKey: "preferredPlayer")
     }
 
     static func menuOrder(current: PlaybackEngine) -> [PlaybackEngine] {
@@ -26,8 +32,8 @@ enum PlaybackEngine: String, CaseIterable {
     init?(command: String) {
         switch command.lowercased() {
         case "avplayer", "native", "exo", "exoplayer": self = .avplayer
-        case "vlc": self = .vlc
-        case "mpv": self = .mpv
+        // Older senders/history can still request VLC; route them to the broad-format engine.
+        case "vlc", "mpv": self = .mpv
         default: return nil
         }
     }

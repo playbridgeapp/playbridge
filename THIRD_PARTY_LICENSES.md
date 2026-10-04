@@ -15,6 +15,7 @@ notices, and make the corresponding source available — see *Source availabilit
 | **FFmpeg** | `mpv-android.aar`, `lib-decoder-ffmpeg-*.aar`, `nextlib`, desktop `media_kit` | LGPL-2.1-or-later (GPL-2.0-or-later if built with `--enable-gpl`) — https://ffmpeg.org |
 | **mpv / libmpv** | `mpv-android.aar`, desktop | LGPL-2.1-or-later — https://github.com/mpv-player/mpv |
 | **MPVKit 1.0.0** (standard product, libmpv / FFmpeg and supporting libraries) | iOS phone, Swift Package Manager | LGPL-3.0 for the standard MPVKit bundle; supporting libraries retain their own notices — https://github.com/mpvkit/MPVKit/tree/1.0.0 |
+| **MPVKit 0.41.0-av** (combined framework, locally patched AudioUnit driver) | Apple TV, CocoaPods | GPL-3.0 per the fork's podspec; component licenses retained — https://github.com/mpv-ios/MPVKit/tree/0.41.0-av |
 | **mpv-android** (prebuilt AAR build) | `tv/.../libs/mpv-android.aar` | GPL — https://github.com/mpv-android/mpv-android · https://github.com/marlboro-advance/mpvEx |
 | **nextlib** | `nextlib-mediainfo-local.aar` | GPL-3.0 — https://github.com/anilbeesetti/nextlib |
 | **libgav1** (AV1) | `lib-decoder-av1-*.aar` | Apache-2.0 — https://chromium.googlesource.com/codecs/libgav1 |
@@ -62,6 +63,12 @@ source/version references are in
 [`Sources/BuildScripts`](https://github.com/mpvkit/MPVKit/tree/1.0.0/Sources/BuildScripts)
 and [`Package.swift`](https://github.com/mpvkit/MPVKit/blob/1.0.0/Package.swift).
 The phone bundles the MPVKit license and source-reference notice in `Licenses/`.
+
+The TV separately pins the `mpv-ios/MPVKit` **0.41.0-av** combined framework.
+Its AudioUnit driver is rebuilt from checksum-pinned mpv v0.41.0 source with
+[a channel-layout fallback patch and reproducible build instructions](tv/apple/native/mpv-audiounit/README.md).
+All other native archive members are preserved. Retain the patch, upstream
+corresponding sources and dependency notices when distributing this modified bundle.
 
 ---
 

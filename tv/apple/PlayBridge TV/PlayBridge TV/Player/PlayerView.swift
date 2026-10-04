@@ -1,9 +1,9 @@
 import SwiftUI
 
-/// Session-scoped track preferences shared by all three engines, so a pick made on one
+/// Session-scoped track preferences shared by both engines, so a pick made on one
 /// episode carries into the next — the player views (and their underlying players) are
 /// recreated per item, losing any in-player selection state. AVPlayer matches by language
-/// tag, VLC/MPV by track display name (stable across episodes of the same release).
+/// tag, MPV by track display name (stable across episodes of the same release).
 /// Reset by the WebSocket server when a new cast session starts.
 final class TrackPreferences {
     static let shared = TrackPreferences()
@@ -11,7 +11,7 @@ final class TrackPreferences {
     /// Language tag of the picked track (AVPlayer; locale id or extended language tag).
     var audioLanguage: String?
     var subtitleLanguage: String?
-    /// Display name of the picked track (VLC/MPV).
+    /// Display name of the picked track (MPV).
     var audioName: String?
     var subtitleName: String?
     /// Explicit "subtitles off" pick — also carried forward.
@@ -62,7 +62,8 @@ struct PlayerView: View {
     }
 
     /// Engine for this item: a manual session switch wins; otherwise honor the phone's
-    /// `player_mode` ("avplayer"/"vlc"/"mpv"); "tv"/unset/unknown fall back to the stored default.
+    /// `player_mode` ("avplayer"/"mpv"); legacy "vlc" maps to MPV.
+    /// "tv"/unset/unknown fall back to the stored default.
     private func effectiveEngine(for item: Playbridge_PlayPayload) -> PlaybackEngine {
         if let session = sessionEngine { return session }
         if item.hasPlayerMode, let requested = PlaybackEngine(command: item.playerMode) {
@@ -97,12 +98,14 @@ struct PlayerView: View {
     private func handleNext() {
         server.progressWebhook.advance()
         stillWatching.reset()
-        mediaGeneration &+= 1
         // A player may also advance after a stream error. Completion is inferred from
         // the last position instead of marking every advance as a successful finish.
         historyStore.flushProgress()
         consumeStartPosition(at: playlistStore.currentIndex)
         if let nextRequest = playlistStore.next(), let nextURL = nextRequest.validURL {
+            // Only an actual next item needs a new decoder identity. Incrementing on
+            // terminal EOF briefly reloaded the old payload while dismissal rendered.
+            mediaGeneration &+= 1
             if !nextRequest.skipHistory { historyStore.addToHistory(url: nextURL, title: nextRequest.titleOrNil, headers: nextRequest.headersOrNil) }
             resumeTime = 0
         } else {
@@ -160,23 +163,7 @@ struct PlayerView: View {
             if let currentURL = currentRequest.validURL {
                 let currentEngine = effectiveEngine(for: currentRequest)
                 let currentGeneration = mediaGeneration
-                if currentEngine == .vlc {
-                    VLCPlayerView(
-                        url: currentURL,
-                        headers: currentRequest.headersOrNil,
-                        subtitles: currentRequest.subtitlesOrNil,
-                        initialTime: initialSeekTime(for: currentRequest),
-                        isPreBuffering: isPreBuffering,
-                        title: currentRequest.titleOrNil,
-                        onDismiss: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { handleNext() } },
-                        onExit: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { exitPlayback() } },
-                        onSwitch: { handleSwitch(to: $0, currentTime: $1, from: currentEngine, generation: currentGeneration) },
-                        onBroadcast: { if isCurrentPlayback(currentEngine, generation: currentGeneration) { broadcast($0, for: currentRequest) } }
-                    )
-                    .ignoresSafeArea()
-                    .focused($isPlayerFocused)
-                    .id("vlc-\(mediaGeneration)")
-                } else if currentEngine == .mpv {
+                if currentEngine == .mpv {
                     MPVPlayerView(
                         url: currentURL,
                         headers: currentRequest.headersOrNil,

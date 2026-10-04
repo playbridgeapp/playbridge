@@ -124,6 +124,19 @@ struct ReceiverReviewTests {
         assert(PlaybackTime.seconds(3661.9) == 3661)
         print("PASS: unknown/overflow playback times cannot crash integer conversion")
 
+        var timelineGate = PlaybackUIUpdateGate()
+        assert(timelineGate.shouldUpdate(at: 0))
+        assert(!timelineGate.shouldUpdate(at: 0.01))
+        assert(!timelineGate.shouldUpdate(at: 0.09))
+        assert(timelineGate.shouldUpdate(at: 0.11))
+        assert(!timelineGate.shouldUpdate(at: 0.12))
+        assert(!timelineGate.shouldUpdate(at: .nan))
+        assert(!timelineGate.shouldUpdate(at: .infinity))
+        timelineGate.reset()
+        assert(timelineGate.shouldUpdate(at: 0.13))
+        assert(timelineGate.shouldUpdate(at: 0)) // a clock reset cannot freeze the HUD
+        print("PASS: playback timeline UI updates are bounded and reset for a new item")
+
         assert(PlaybackPauseCommand.targetPaused(for: "play", isPlaying: true) == false)
         assert(PlaybackPauseCommand.targetPaused(for: "play", isPlaying: false) == false)
         assert(PlaybackPauseCommand.targetPaused(for: "pause", isPlaying: true) == true)
@@ -133,15 +146,91 @@ struct ReceiverReviewTests {
         assert(PlaybackPauseCommand.targetPaused(for: "stop", isPlaying: true) == nil)
         print("PASS: idempotent MPV play/pause and explicit toggle behavior")
 
-        assert(PlaybackEngine.allCases.map(\.name) == ["AVPlayer", "VLC", "MPV"])
-        assert(PlaybackEngine.allCases.map(\.menuID) == [0, 1, 2])
-        assert(PlaybackEngine.menuOrder(current: .vlc) == [.vlc, .avplayer, .mpv])
+        assert(PlaybackEngine.allCases.map(\.name) == ["AVPlayer", "MPV"])
+        assert(PlaybackEngine.allCases.map(\.menuID) == [0, 2])
+        assert(PlaybackEngine.capabilityPlayers == ["avplayer", "mpv"])
+        assert(PlaybackEngine.menuOrder(current: .avplayer) == [.avplayer, .mpv])
+        assert(PlaybackEngine.menuOrder(current: .mpv) == [.mpv, .avplayer])
         assert(PlaybackEngine(command: "native") == .avplayer)
         assert(PlaybackEngine(command: "exo") == .avplayer)
-        assert(PlaybackEngine(command: "vlc") == .vlc)
+        assert(PlaybackEngine(command: "vlc") == .mpv)
+        assert(PlaybackEngine(command: "VLC") == .mpv)
         assert(PlaybackEngine(command: "mpv") == .mpv)
         assert(PlaybackEngine(command: "unsupported") == nil)
-        print("PASS: explicit player targets and current-player menu options")
+        let preferenceSuite = "playbridge-engine-migration-\(UUID().uuidString)"
+        let engineDefaults = UserDefaults(suiteName: preferenceSuite)!
+        defer { engineDefaults.removePersistentDomain(forName: preferenceSuite) }
+        for legacy in ["vlc", "VLC"] {
+            engineDefaults.set(legacy, forKey: "preferredPlayer")
+            PlaybackEngine.migrateLegacyPreference(in: engineDefaults)
+            assert(engineDefaults.string(forKey: "preferredPlayer") == "mpv")
+            PlaybackEngine.migrateLegacyPreference(in: engineDefaults)
+            assert(engineDefaults.string(forKey: "preferredPlayer") == "mpv")
+        }
+        for unchanged in ["avplayer", "mpv", "unsupported"] {
+            engineDefaults.set(unchanged, forKey: "preferredPlayer")
+            PlaybackEngine.migrateLegacyPreference(in: engineDefaults)
+            assert(engineDefaults.string(forKey: "preferredPlayer") == unchanged)
+        }
+        engineDefaults.removeObject(forKey: "preferredPlayer")
+        PlaybackEngine.migrateLegacyPreference(in: engineDefaults)
+        assert(engineDefaults.string(forKey: "preferredPlayer") == nil)
+        print("PASS: two engines/capabilities/menu targets and idempotent legacy VLC-to-MPV preference/command migration")
+
+        var videoRecovery = MPVVideoRecoveryState()
+        assert(videoRecovery.begin(rendererNeedsFlush: false) == nil)
+        videoRecovery.enterBackground()
+        assert(videoRecovery.begin(rendererNeedsFlush: true) == nil)
+        videoRecovery.becomeActive()
+        let firstRecovery = videoRecovery.begin(rendererNeedsFlush: false)!
+        assert(videoRecovery.begin(rendererNeedsFlush: true) == nil)
+        videoRecovery.enterBackground()
+        assert(!videoRecovery.finish(firstRecovery))
+        videoRecovery.becomeActive()
+        let secondRecovery = videoRecovery.begin(rendererNeedsFlush: false)!
+        assert(videoRecovery.finish(secondRecovery))
+        assert(!videoRecovery.finish(secondRecovery))
+        assert(videoRecovery.begin(rendererNeedsFlush: false) == nil)
+        let failedRendererRecovery = videoRecovery.begin(rendererNeedsFlush: true)!
+        videoRecovery.invalidate() // Item changed while flush was pending.
+        assert(!videoRecovery.finish(failedRendererRecovery))
+        let finalRecovery = videoRecovery.begin(rendererNeedsFlush: true)!
+        videoRecovery.stop()
+        assert(!videoRecovery.finish(finalRecovery))
+        videoRecovery.becomeActive()
+        assert(videoRecovery.begin(rendererNeedsFlush: true) == nil)
+        print("PASS: native MPV video recovery deduplicates flushes and rejects background/item/teardown completions")
+
+        var reusedAudioOptions = ["aid": "3", "mute": "yes", "volume": "75"]
+        for (name, value) in MPVAudioPolicy.loadOptions(isPreBuffering: false) { reusedAudioOptions[name] = value }
+        assert(reusedAudioOptions["aid"] == "auto" && reusedAudioOptions["mute"] == "no")
+        assert(reusedAudioOptions["volume"] == "75")
+        for (name, value) in MPVAudioPolicy.loadOptions(isPreBuffering: true) { reusedAudioOptions[name] = value }
+        assert(reusedAudioOptions["aid"] == "auto" && reusedAudioOptions["mute"] == "yes")
+        assert(MPVAudioPolicy.muteValue(isPreBuffering: false) == "no")
+        assert(MPVAudioPolicy.muteValue(isPreBuffering: true) == "yes")
+        let audioTestPath = "https://example.test/video?parts=1,2"
+        assert(MPVAudioPolicy.loadArguments(path: audioTestPath, isPreBuffering: false) ==
+               ["loadfile", audioTestPath, "replace", "-1", "aid=auto,mute=no"])
+        assert(MPVAudioPolicy.loadArguments(path: "/tmp/movie.mp4", isPreBuffering: true) ==
+               ["loadfile", "/tmp/movie.mp4", "replace", "-1", "aid=auto,mute=yes"])
+        print("PASS: MPV per-file audio resets stale track IDs/preplay mute without touching outgoing tracks or volume")
+
+        let playbackHeaders = MPVHTTPHeaders.fields(from: [
+            "Range": "bytes=0-", "If-Range": "captured-etag",
+            "User-Agent": "Browser UA", "Referer": "https://video.example.com/",
+            "Authorization": "Bearer test-token", "Cookie": "session=test",
+            "Accept": "video/mp4,video/*", "X-Test": "a\\b,c"
+        ])
+        assert(playbackHeaders == "Accept: video/mp4\\,video/*,Authorization: Bearer test-token,Cookie: session=test,Referer: https://video.example.com/,X-Test: a\\\\b\\,c")
+        for name in ["range", "RANGE", "rAnGe", "if-range", "IF-RANGE", "uSeR-aGeNt"] {
+            assert(MPVHTTPHeaders.fields(from: [name: "captured"]) == "")
+        }
+        assert(MPVHTTPHeaders.fields(from: nil) == "")
+        assert(MPVHTTPHeaders.fields(from: [:]) == "")
+        assert(MPVHTTPHeaders.fields(from: ["User-Agent": "Browser UA", "Range": "bytes=10-20"]) == "")
+        assert(MPVHTTPHeaders.fields(from: ["Referer": "https://next.example.com/"]) == "Referer: https://next.example.com/")
+        print("PASS: MPV owns byte ranges; playback headers preserve credentials/escaping and clear between items")
 
         let subtitles = ExternalSubtitleCatalog(urls: [
             "https://example.com/first.srt", "https://example.com/second.vtt",

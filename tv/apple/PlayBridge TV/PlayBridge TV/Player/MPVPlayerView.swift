@@ -48,13 +48,20 @@ struct MPVPlayerView: UIViewControllerRepresentable {
         // instead of paying a full mpv re-init per item.
         if uiViewController.url != url || uiViewController.mediaIdentity != mediaIdentity {
             uiViewController.mediaIdentity = mediaIdentity
-            uiViewController.loadNewItem(
-                url: url,
-                headers: headers,
-                subtitles: subtitles,
-                initialTime: initialTime,
-                title: title
-            )
+            uiViewController.url = url
+            // Mark the request synchronously, but publish the per-item HUD reset only
+            // after SwiftUI's update pass. The identity guard cancels superseded loads.
+            DispatchQueue.main.async { [weak uiViewController] in
+                guard let controller = uiViewController,
+                      controller.mediaIdentity == mediaIdentity, controller.url == url else { return }
+                controller.loadNewItem(
+                    url: url,
+                    headers: headers,
+                    subtitles: subtitles,
+                    initialTime: initialTime,
+                    title: title
+                )
+            }
         }
     }
 
@@ -83,7 +90,7 @@ class MPVViewController: UIViewController {
     var onSwitch: ((PlaybackEngine, Double) -> Void)?
     var onBroadcast: (([String: Any]) -> Void)?
     private var statusTimer: Timer?
-
+    private var videoRecovery = MPVVideoRecoveryState()
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
     }
@@ -102,7 +109,7 @@ class MPVViewController: UIViewController {
     /// to a deallocating object. Balanced (released) once in `teardown()`.
     private var callbackSelfPtr: UnsafeMutableRawPointer?
 
-    // MARK: Rendering — AVSampleBufferDisplayLayer fed by vo=avfoundation
+    // MARK: Rendering — native AVFoundation video output
     private let displayLayer = AVSampleBufferDisplayLayer()
 
     // MARK: UI
@@ -112,6 +119,7 @@ class MPVViewController: UIViewController {
     private var holdTimer: Timer?
     private var virtualScrubTickTimer: Timer?
     private var ignoreTimeUpdatesUntil: Date = .distantPast
+    private var timelineUpdateGate = PlaybackUIUpdateGate()
     /// Seconds buffered ahead of the play head (from mpv `demuxer-cache-duration`). Main-thread only.
     private var cacheAheadSec: Double = 0
     /// When the current file started loading — used to log time-to-audio for diagnosing delays.
@@ -138,9 +146,9 @@ class MPVViewController: UIViewController {
         videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(videoView)
 
-        displayLayer.frame = videoView.bounds
         displayLayer.videoGravity = .resizeAspect
         displayLayer.backgroundColor = UIColor.black.cgColor
+        updateRenderingSurface()
         videoView.layer.addSublayer(displayLayer)
 
         playbackState.title = mediaTitle ?? ""
@@ -154,6 +162,10 @@ class MPVViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        updateRenderingSurface()
+    }
+
+    private func updateRenderingSurface() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         displayLayer.frame = videoView.bounds
@@ -162,7 +174,77 @@ class MPVViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        teardown()
+        // Home Screen, system overlays and temporary presentations are not an exit.
+        // SwiftUI's dismantle hook owns removal; only actual dismissal tears down here.
+        if isBeingDismissed || isMovingFromParent || parent?.isBeingDismissed == true {
+            teardown()
+        }
+    }
+
+    @objc private func onApplicationBackground() {
+        guard !isMpvStopped else { return }
+        videoRecovery.enterBackground()
+    }
+
+    @objc private func onApplicationActive() {
+        guard !isMpvStopped else { return }
+        videoRecovery.becomeActive()
+        configureAudioSession()
+        updateRenderingSurface()
+        recoverNativeVideoIfNeeded()
+    }
+
+    @objc private func onVideoRendererRequiresFlush() {
+        // Renderer notifications may arrive from a decoder thread.
+        DispatchQueue.main.async { [weak self] in self?.recoverNativeVideoIfNeeded() }
+    }
+
+    private func recoverNativeVideoIfNeeded() {
+        guard !isMpvStopped,
+              UIApplication.shared.applicationState == .active else { return }
+        let requiresFlush: Bool
+        let status: AVQueuedSampleBufferRenderingStatus
+        if #available(tvOS 17.0, *) {
+            requiresFlush = displayLayer.sampleBufferRenderer.requiresFlushToResumeDecoding
+            status = displayLayer.sampleBufferRenderer.status
+        } else {
+            requiresFlush = displayLayer.requiresFlushToResumeDecoding
+            status = displayLayer.status
+        }
+        guard let token = videoRecovery.begin(rendererNeedsFlush: requiresFlush || status == .failed) else { return }
+        let identity = mediaIdentity
+        #if DEBUG
+        print("[MPV video-recovery] flushing status=\(status.rawValue) requiresFlush=\(requiresFlush)")
+        #endif
+        let complete = { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.isMpvStopped,
+                      self.videoRecovery.finish(token), self.mediaIdentity == identity else { return }
+                // The VO supplies decoded pixel buffers, so continuing playback supplies
+                // fresh images after flush. A paused player needs a same-position redraw.
+                // Do not unpause, reload the URL, change tracks, or seek a live stream.
+                self.mpvQueue.async { [weak self] in
+                    guard let self, let handle = self.mpv, !self.isMpvStopped,
+                          self.mediaIdentity == identity else { return }
+                    if self.stringProperty(handle, "pause") == "yes",
+                       self.stringProperty(handle, "seekable") == "yes" {
+                        let result = self.mpvCommand(handle, ["seek", "0", "relative+exact"])
+                        #if DEBUG
+                        print("[MPV video-recovery] paused redraw status=\(result)")
+                        #endif
+                    }
+                }
+                #if DEBUG
+                print("[MPV video-recovery] flush complete; playback state preserved")
+                #endif
+            }
+        }
+        if #available(tvOS 17.0, *) {
+            displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: false, completionHandler: complete)
+        } else {
+            displayLayer.flush()
+            complete()
+        }
     }
 
     deinit {
@@ -183,17 +265,23 @@ class MPVViewController: UIViewController {
         }
         mpv = handle
 
-        // Pass the display layer pointer so vo_avfoundation can render into it
+        // Native VO expects an AVSampleBufferDisplayLayer, retained through teardown.
         var widVal = Int64(Int(bitPattern: Unmanaged.passUnretained(displayLayer).toOpaque()))
-        mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &widVal)
-
-        // vo=avfoundation renders video frames directly into AVSampleBufferDisplayLayer
-        mpv_set_option_string(handle, "vo", "avfoundation")
-
-        // MUST follow vo=avfoundation immediately, before any hwdec option.
-        // On tvOS "yes" causes a freeze when the player exits; "no" is correct here.
-        // On iOS "yes" is needed for PiP subtitle compositing (not applicable on tvOS).
-        mpv_set_option_string(handle, "avfoundation-composite-osd", "no")
+        let windowStatus = mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &widVal)
+        guard windowStatus >= 0 else {
+            initializationFailed(operation: "wid", code: windowStatus)
+            return
+        }
+        // Disable composite OSD before hwdec setup: native tvOS controls own subtitles.
+        for (name, value) in [("vo", "avfoundation"),
+                              ("avfoundation-composite-osd", "no"),
+                              ("target-colorspace-hint", "yes")] {
+            let status = mpv_set_option_string(handle, name, value)
+            guard status >= 0 else {
+                initializationFailed(operation: name, code: status)
+                return
+            }
+        }
 
         // VideoToolbox hardware decoding, with software fallback enabled. Fallback is required for
         // codecs Apple TV has no HW decoder for — notably AV1 (no shipping Apple TV decodes AV1 in
@@ -210,23 +298,20 @@ class MPVViewController: UIViewController {
         mpv_set_option_string(handle, "hwdec-codecs", "h264,hevc,vp9")
         mpv_set_option_string(handle, "hwdec-software-fallback", "yes")
 
-        // Use dav1d for AV1 — the fast, well-threaded software decoder VLC also uses. This only
+        // Use dav1d for AV1, a threaded software decoder. This only
         // takes effect now that av1 is out of hwdec-codecs (above). dav1d decodes only AV1, so it
         // has no effect on H.264/HEVC, which keep their VideoToolbox hardware path.
         mpv_set_option_string(handle, "vd", "libdav1d")
 
-        // Drop late frames at the decoder when the pipeline can't keep up, instead of letting
-        // audio/video desync. This is the safety valve for software-decoded 4K AV1 (no Apple TV
-        // has HW AV1, and dav1d can't always sustain 2160p in real time on these cores). It's the
-        // mpv equivalent of the `--skip-frames=1 --drop-late-frames=1` we already give VLC — which
-        // is the only reason VLC looks smooth on these files. Default framedrop ("vo") only drops
-        // at display and doesn't relieve decode load; "decoder+vo" lets mpv skip decoding frames
-        // it's already late for. Harmless for HW-decoded HEVC/H.264 (it triggers only when behind).
+        // Allow late-frame dropping at both decoder and output when mpv can detect
+        // lateness. This is best-effort load relief, not a guarantee of real-time AV1
+        // on the tested A15 Apple TV. In particular, video-only playback may not
+        // increment decoder-drop counters even when the pipeline cannot keep up.
         mpv_set_option_string(handle, "framedrop", "decoder+vo")
 
         // Buffering for high-bitrate remuxes (4K HEVC, ~80–100 Mbps). mpv's defaults read only
         // ~1s ahead, so a momentary network/NAS shortfall drains the buffer and audio/video drop
-        // out — VLC rides over this with its 15s cache. Widen the demuxer read-ahead (bounded to
+        // out. Widen the demuxer read-ahead (bounded to
         // 256 MiB so tvOS doesn't jetsam-kill us on a 56 GB file) and grow the audio output buffer
         // from its ~200ms default to 1s so a brief audio-decode/scheduling stall can't underrun.
         mpv_set_option_string(handle, "cache", "yes")
@@ -235,12 +320,15 @@ class MPVViewController: UIViewController {
         mpv_set_option_string(handle, "demuxer-readahead-secs", "30")
         mpv_set_option_string(handle, "audio-buffer", "1.0")
 
-        // Signal content colourspace to the display system so tvOS can switch HDR modes
-        mpv_set_option_string(handle, "target-colorspace-hint", "yes")
-
-        // Force the iOS/tvOS audio output. Auto-detection can probe an output that blocks and
-        // only fall back after a ~minute timeout — that's the "audio appears after ~1 min" symptom.
-        mpv_set_option_string(handle, "ao", "audiounit")
+        // The pinned 0.41.0-av tvOS library contains AudioUnit, NOT the AVFoundation
+        // audio backend available in the phone's MPVKit 1.0.0 build. Its native
+        // AVFoundation VIDEO output is independent of audio. Check option acceptance;
+        // actual output initialization is reported by current-ao and driver warnings.
+        let audioOutputStatus = mpv_set_option_string(handle, "ao", "audiounit")
+        guard audioOutputStatus >= 0 else {
+            initializationFailed(operation: "ao", code: audioOutputStatus)
+            return
+        }
 
         // Subtitle defaults
         mpv_set_option_string(handle, "sub-scale-with-window", "no")
@@ -249,13 +337,16 @@ class MPVViewController: UIViewController {
         mpv_set_option_string(handle, "subs-fallback", "yes")
 
         #if DEBUG
-        mpv_request_log_messages(handle, "v")  // verbose: capture cache/underrun/sync events
+        // Verbose scaler/frame logs are delivered even when handleEvent discards them.
+        // Keep Debug playback lightweight; errors and warnings remain available.
+        mpv_request_log_messages(handle, "warn")
         #else
         mpv_request_log_messages(handle, "no")
         #endif
 
-        guard mpv_initialize(handle) >= 0 else {
-            print("[MPV] mpv_initialize() failed")
+        let initializeStatus = mpv_initialize(handle)
+        guard initializeStatus >= 0 else {
+            initializationFailed(operation: "mpv_initialize", code: initializeStatus)
             return
         }
 
@@ -284,24 +375,63 @@ class MPVViewController: UIViewController {
         if let url { loadFile(url) }
     }
 
+    private func initializationFailed(operation: String, code: Int32) {
+        print("[MPV] initialization failed at \(operation): \(code)")
+        // Do not leave a failed renderer on a black player screen or advance the queue.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isMpvStopped else { return }
+            self.teardown()
+            self.onExit?()
+        }
+    }
+
     private func configureAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
-            try session.setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: [])
+            // Match the working AVPlayer and local phone playback policy. Long-form
+            // audio routing is not required for movie playback on the TV.
+            try session.setCategory(.playback, mode: .moviePlayback, policy: .default, options: [])
             try session.setActive(true)
+            #if DEBUG
+            logAudioSession(reason: "configured")
+            #endif
         } catch {
             print("[MPV] audio session config failed: \(error)")
         }
     }
 
     private func activateAudioSession() {
-        try? AVAudioSession.sharedInstance().setActive(true)
+        guard !isMpvStopped else { return }
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+            #if DEBUG
+            logAudioSession(reason: "activated")
+            #endif
+        } catch {
+            print("[MPV] audio session activation failed: \(error)")
+        }
     }
+
+    #if DEBUG
+    private func logAudioSession(reason: String) {
+        let session = AVAudioSession.sharedInstance()
+        // Port types only: never include device names, IDs, URLs or credentials.
+        let ports = session.currentRoute.outputs.map { $0.portType.rawValue }.joined(separator: ",")
+        print("[MPV audio-session] reason=\(reason) category=\(session.category.rawValue) "
+              + "mode=\(session.mode.rawValue) policy=\(session.routeSharingPolicy.rawValue) "
+              + "ports=\(ports) sampleRate=\(session.sampleRate) "
+              + "outputChannels=\(session.outputNumberOfChannels) "
+              + "maxOutputChannels=\(session.maximumOutputNumberOfChannels) "
+              + "outputLatency=\(session.outputLatency) ioBufferSeconds=\(session.ioBufferDuration) "
+              + "systemVolume=\(session.outputVolume) preplay=\(isPreBuffering)")
+    }
+    #endif
 
     /// Swap in the next item on the live mpv core (episode advance). All per-item
     /// state is reset; the handle, render context, and demuxer caches survive.
     func loadNewItem(url: URL, headers: [String: String]?, subtitles: [String]?,
                      initialTime: Double, title: String?) {
+        guard !isMpvStopped else { return }
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil
@@ -335,10 +465,15 @@ class MPVViewController: UIViewController {
     private func loadFile(_ url: URL) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         pendingExternalSubtitles = subtitles ?? []
+        videoRecovery.invalidate()
+        timelineUpdateGate.reset()
         // Clear buffered-ahead state so a looped/next file doesn't flash the prior buffer.
         cacheAheadSec = 0
         playbackState.bufferedTime = 0
         loadStartTime = Date()
+        configureAudioSession()
+        let path = url.isFileURL ? url.path : url.absoluteString
+        let loadArguments = MPVAudioPolicy.loadArguments(path: path, isPreBuffering: isPreBuffering)
 
         mpvQueue.async { [weak self] in
             guard let self, let handle = self.mpv else { return }
@@ -359,8 +494,7 @@ class MPVViewController: UIViewController {
                 // resume point or the next file would start there too.
                 mpv_set_property_string(handle, "start", "none")
             }
-            let path = url.isFileURL ? url.path : url.absoluteString
-            self.mpvCommand(handle, ["loadfile", path, "replace"])
+            self.mpvCommand(handle, loadArguments)
         }
     }
 
@@ -432,8 +566,12 @@ class MPVViewController: UIViewController {
         guard let handle = mpv else { return }
 
         detectAndApplyHDR(handle: handle)
-        if isPreBuffering {
-            mpv_set_property_string(handle, "mute", "yes")
+        // Reconcile mute with current main-thread state even if preplay ended while
+        // the asynchronous load was in flight. Reused cores must clear mute too.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isMpvStopped else { return }
+            self.setPropertyAsync("mute", value: MPVAudioPolicy.muteValue(isPreBuffering: self.isPreBuffering))
+            self.activateAudioSession()
         }
 
         // Surface embedded audio/subtitle tracks right away. (mpvQueue context; updateTracks
@@ -454,7 +592,10 @@ class MPVViewController: UIViewController {
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
             DispatchQueue.main.async { [weak self] in
-                guard let self, Date() > self.ignoreTimeUpdatesUntil else { return }
+                guard let self, !self.isMpvStopped, Date() > self.ignoreTimeUpdatesUntil,
+                      self.timelineUpdateGate.shouldUpdate(at: CACurrentMediaTime()) else { return }
+                // UI progress does not need a SwiftUI redraw for every decoded frame.
+                // Keep AVFoundation's main-thread presentation work free of that churn.
                 self.playbackState.currentTime = val
                 self.playbackState.bufferedTime = val + self.cacheAheadSec
             }
@@ -463,9 +604,10 @@ class MPVViewController: UIViewController {
             guard prop.format == MPV_FORMAT_DOUBLE,
                   let val = prop.data?.assumingMemoryBound(to: Double.self).pointee else { break }
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, !self.isMpvStopped else { return }
+                // Store every cache sample, but publish the buffer bar with the throttled
+                // time-pos update instead of triggering another per-frame HUD redraw.
                 self.cacheAheadSec = val
-                self.playbackState.bufferedTime = self.playbackState.currentTime + val
             }
 
         case "paused-for-cache":
@@ -511,7 +653,7 @@ class MPVViewController: UIViewController {
             if let handle = mpv {
                 let ao = stringProperty(handle, "current-ao") ?? "nil"
                 let elapsed = String(format: "%.1f", Date().timeIntervalSince(loadStartTime))
-                print("[MPV] audio output up: \(ao) at +\(elapsed)s")
+                print("[MPV] audio output=\(ao) at +\(elapsed)s")
             }
             DispatchQueue.main.async { [weak self] in self?.activateAudioSession() }
 
@@ -564,6 +706,7 @@ class MPVViewController: UIViewController {
     private func updateTracks() {
         dispatchPrecondition(condition: .notOnQueue(.main))
         guard let handle = mpv else { return }
+        let itemIdentity = mediaIdentity
 
         var count: Int64 = 0
         mpv_get_property(handle, "track-list/count", MPV_FORMAT_INT64, &count)
@@ -607,7 +750,7 @@ class MPVViewController: UIViewController {
         mpv_get_property(handle, "sid", MPV_FORMAT_INT64, &currentSid)
 
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
+            guard let self, !self.isMpvStopped, self.mediaIdentity == itemIdentity else { return }
             self.playbackState.audioTracks = audioTracks
             self.playbackState.subtitleTracks = subtitleTracks
             self.playbackState.externalSubtitleTracks = self.externalSubtitleCatalog.unloadedTracks(excluding: loadedExternalURLs)
@@ -757,12 +900,12 @@ class MPVViewController: UIViewController {
     }
 
     private func applyPreBufferingState() {
+        setPropertyAsync("mute", value: MPVAudioPolicy.muteValue(isPreBuffering: isPreBuffering))
         if isPreBuffering {
-            setPropertyAsync("mute", value: "yes")
             playbackState.showUI = false
             hideControlsTimer?.invalidate()
         } else {
-            setPropertyAsync("mute", value: "no")
+            activateAudioSession()
             showUI(autoHide: true)
             NotificationCenter.default.post(
                 name: .playBridgePlaybackActivity, object: nil,
@@ -976,26 +1119,10 @@ class MPVViewController: UIViewController {
     }
 
     private func setHTTPHeaders(_ headers: [String: String]?, on handle: OpaquePointer) {
-        // User-Agent is handled separately via the "user-agent" option; exclude it here.
-        let filtered = headers?.filter {
-            $0.key.caseInsensitiveCompare("user-agent") != .orderedSame
-        }
-
-        guard let filtered, !filtered.isEmpty else {
-            mpv_set_property(handle, "http-header-fields", MPV_FORMAT_NONE, nil)
-            return
-        }
-
-        // http-header-fields is OPT_STRINGLIST in mpv: comma-separated entries.
-        // Literal commas and backslashes inside values must be escaped.
-        let str = filtered.map { key, value in
-            let escaped = value
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: ",", with: "\\,")
-            return "\(key): \(escaped)"
-        }.joined(separator: ",")
-
-        mpv_set_property_string(handle, "http-header-fields", str)
+        let fields = MPVHTTPHeaders.fields(from: headers)
+        // An empty string clears the string-list property on the reused core.
+        // MPV_FORMAT_NONE is not a value format for setting this property.
+        mpv_set_property_string(handle, "http-header-fields", fields)
     }
 
     @discardableResult
@@ -1034,6 +1161,23 @@ class MPVViewController: UIViewController {
     // MARK: - Phone Now-Playing Sync & Remote Commands
 
     private func startRemoteSync() {
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onApplicationBackground),
+            name: UIApplication.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(onApplicationActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
+        if #available(tvOS 17.0, *) {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(onVideoRendererRequiresFlush),
+                name: AVSampleBufferVideoRenderer.requiresFlushToResumeDecodingDidChangeNotification,
+                object: displayLayer.sampleBufferRenderer)
+        } else {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(onVideoRendererRequiresFlush),
+                name: .AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange,
+                object: displayLayer)
+        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(onControlNotification(_:)),
             name: WebSocketServer.controlCommand, object: nil)
@@ -1230,6 +1374,7 @@ class MPVViewController: UIViewController {
     func teardown() {
         guard !isMpvStopped else { return }
         isMpvStopped = true
+        videoRecovery.stop()
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil
@@ -1271,7 +1416,6 @@ class MPVViewController: UIViewController {
         }
 
         resetDisplayCriteria()
-
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             if #available(tvOS 17.0, *) {

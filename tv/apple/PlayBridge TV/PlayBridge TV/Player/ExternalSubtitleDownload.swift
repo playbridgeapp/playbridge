@@ -15,7 +15,7 @@ enum ExternalSubtitleDownloadError: Error {
         case .httpStatus(let status): return "The subtitle server returned HTTP \(status)."
         case .tooLarge: return "The subtitle file is too large."
         case .unsupportedFormat: return "This subtitle is not a WebVTT or SRT file."
-        case .attachmentFailed: return "VLC could not attach this subtitle. Playback will continue."
+        case .attachmentFailed: return "The player could not attach this subtitle. Playback will continue."
         }
     }
 }

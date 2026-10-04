@@ -9,8 +9,12 @@ swiftc -module-cache-path "$test_dir/cache" \
   "$source_root/Models/PairingCredentialState.swift" \
   "$source_root/Data/HistoryStore.swift" \
   "$source_root/Player/PlaybackTime.swift" \
+  "$source_root/Player/PlaybackUIUpdateGate.swift" \
   "$source_root/Player/PlaybackPauseCommand.swift" \
   "$source_root/Player/PlaybackEngine.swift" \
+  "$source_root/Player/MPVHTTPHeaders.swift" \
+  "$source_root/Player/MPVAudioPolicy.swift" \
+  "$source_root/Player/MPVVideoRecoveryState.swift" \
   "$source_root/Player/ExternalSubtitleCatalog.swift" \
   "$source_root/Player/ExternalSubtitleDownload.swift" \
   "$source_root/Player/ExternalSubtitleCues.swift" \

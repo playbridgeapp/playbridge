@@ -185,7 +185,7 @@ iPhone / iPad intentionally omits the open Library / add-on ecosystem (third-par
 |---|---|---|---|---|
 | Supported platforms | Android TV, Fire TV | tvOS | macOS, Windows, Linux | Compatible smart TVs and renderers |
 | Receiver installation | PlayBridge TV app | PlayBridge TV app (build from source) | PlayBridge Desktop app | None |
-| Playback engines | Media3 / ExoPlayer + MPV | AVPlayer + VLC + MPV | MPV | TV's built-in player |
+| Playback engines | Media3 / ExoPlayer + MPV | AVPlayer + MPV | MPV | TV's built-in player |
 | Direct streams, HLS, DASH, and local files | ✓ | ✓ | ✓ | Renderer-dependent; the phone proxies local files and header-protected HLS |
 | Verified, encrypted pairing | ✓ | ✓ | ✓ | N/A — standard local-network DLNA |
 | Phone playback controls | Full controls, including seek, volume, and track selection | Transport, seek, and track selection | Full controls, including seek, system volume, and track selection | Play, pause, stop, and seek; no volume or track selection |

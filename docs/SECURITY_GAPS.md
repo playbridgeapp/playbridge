@@ -61,9 +61,9 @@ host and collect credentials.
   redirects.
 - `shared/.../MpvPlayerEngine.kt` passes the complete map through mpv's global
   `http-header-fields` option for the loaded item.
-- `tv/apple/.../VLCPlayerView.swift` and `VLCProxyServer.swift` use URLSession and
-  proxy rewriting for redirect and HLS flows without a project-level
-  origin/credential policy.
+- The Apple TV MPV path passes playback headers to `http-header-fields`;
+  redirects and child-resource requests still require a project-level
+  origin/credential policy. The former VLC player/proxy has been removed.
 - Subtitle and content-sniffing paths accept and reuse the playback header map.
 
 **Required remediation:**

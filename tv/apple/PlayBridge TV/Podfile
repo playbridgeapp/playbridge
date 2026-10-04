@@ -3,10 +3,6 @@ platform :tvos, '14.0'
 target 'PlayBridge TV' do
   use_frameworks!
 
-  # VLCKit 4.0 (unified iOS/tvOS/macOS framework, replaces the legacy TVVLCKit 3.x).
-  # 3.6.0 bundled an old dav1d that crashes decoding some AV1 streams (i8mm motion-comp);
-  # 4.0's newer dav1d fixes it. This is the version the shipping VLC app uses.
-  pod 'VLCKit', '4.0.0a19'
   pod 'SwiftProtobuf', '~> 1.28'
   pod 'MPVKit', :podspec => 'https://raw.githubusercontent.com/mpv-ios/MPVKit/0.41.0-av/MPVKit.podspec'
 
@@ -14,6 +10,16 @@ target 'PlayBridge TV' do
 end
 
 post_install do |installer|
+  # Rebuild only the pinned AudioUnit object with an unsupported-layout PCM fallback.
+  # This preserves the fork's native AVFoundation video/HDR path. Unknown binary or
+  # source checksums fail closed; see ../native/mpv-audiounit/README.md.
+  patcher = File.expand_path('../native/mpv-audiounit/patch_framework.py', __dir__)
+  framework = installer.sandbox.root.join('MPVKit/MPVKit.xcframework')
+  cache = installer.sandbox.root.join('MPVKitAudioPatch')
+  unless system('python3', patcher, framework.to_s, '--cache', cache.to_s)
+    raise 'MPVKit AudioUnit patch failed; refusing an unpatched dependency installation'
+  end
+
   installer.pods_project.targets.each do |target|
     target.build_configurations.each do |config|
       config.build_settings['TVOS_DEPLOYMENT_TARGET'] = '14.0'
