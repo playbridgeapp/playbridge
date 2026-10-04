@@ -342,21 +342,17 @@ fun AppNavHost(
     // Device picker opened from the idle cast bar (rendered once at the host level so
     // it survives screen transitions in the AnimatedContent below).
     var showDevicePicker by remember { mutableStateOf(false) }
-    val playbackPickerRequest by Components.playbackDevicePickerRequests.collectAsStateWithLifecycle()
-    var handledPlaybackPickerRequest by rememberSaveable { mutableLongStateOf(0L) }
+    val playbackPickerRequest by Components.playbackDevicePicker.requests.collectAsStateWithLifecycle()
     LaunchedEffect(playbackPickerRequest) {
-        if (playbackPickerRequest > handledPlaybackPickerRequest) {
-            handledPlaybackPickerRequest = playbackPickerRequest
+        if (Components.playbackDevicePicker.consume(playbackPickerRequest)) {
             showDevicePicker = true
         }
     }
-    val linkedDevicePickerRequest by Components.linkedDevicePickerRequests.collectAsStateWithLifecycle()
-    var handledLinkedDevicePickerRequest by rememberSaveable { mutableLongStateOf(0L) }
+    val linkedDevicePickerRequest by Components.linkedDevicePicker.requests.collectAsStateWithLifecycle()
     var linkedPickerVisible by remember { mutableStateOf(false) }
     var linkedPickerCompleted by remember { mutableStateOf(false) }
     LaunchedEffect(linkedDevicePickerRequest) {
-        if (linkedDevicePickerRequest > handledLinkedDevicePickerRequest) {
-            handledLinkedDevicePickerRequest = linkedDevicePickerRequest
+        if (Components.linkedDevicePicker.consume(linkedDevicePickerRequest)) {
             linkedPickerCompleted = false
             linkedPickerVisible = true
         }

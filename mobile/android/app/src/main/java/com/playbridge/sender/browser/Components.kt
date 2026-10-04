@@ -89,8 +89,8 @@ object Components {
     var onNativePluginManagerRequested: ((tabId: String) -> Boolean)? = null
     private val pageCastCallbackGate = OwnedCallbackGate()
     private val pageNavigationGenerations = java.util.concurrent.ConcurrentHashMap<Int, Long>()
-    val playbackDevicePickerRequests = kotlinx.coroutines.flow.MutableStateFlow(0L)
-    val linkedDevicePickerRequests = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    internal val playbackDevicePicker = PendingUiRequest()
+    internal val linkedDevicePicker = PendingUiRequest()
     private var linkedNativePort: GeckoWebExtension.Port? = null
 
     fun claimPageCastCallbacks(owner: Any) {
@@ -101,6 +101,12 @@ object Components {
     fun clearPageCastCallbacks(owner: Any) {
         if (!pageCastCallbackGate.release(owner)) return
         clearPageCastCallbackValues()
+        clearDevicePickerRequests()
+    }
+
+    fun clearDevicePickerRequests() {
+        playbackDevicePicker.clear()
+        linkedDevicePicker.clear()
     }
 
     private fun clearPageCastCallbackValues() {
@@ -128,7 +134,7 @@ object Components {
     }
 
     fun requestLinkedDevicePicker() {
-        linkedDevicePickerRequests.value += 1L
+        linkedDevicePicker.request()
     }
 
     /**

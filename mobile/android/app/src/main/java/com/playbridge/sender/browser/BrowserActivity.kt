@@ -407,6 +407,7 @@ class BrowserActivity : ComponentActivity() {
      * (theme change, system-initiated recreation). See [Components.tabManager].
      */
     private val tabManager: TabManager get() = Components.tabManager
+    private val browserHostOwner = Any()
 
     /**
      * A web URL captured from the launching/incoming Intent (a link tapped in another app),
@@ -556,9 +557,12 @@ class BrowserActivity : ComponentActivity() {
 
 
 
+        tabManager.beginBrowserHost(browserHostOwner)
+        if (savedInstanceState == null) Components.clearDevicePickerRequests()
         if (!Components.isEngineInitialized()) {
             Components.initialize(applicationContext)
         }
+        if (savedInstanceState == null) tabManager.closeAllSessions()
         VideoDetector.init(applicationContext)
 
         // Fire-and-forget update check on cold start; only surfaces UI if a newer build exists.
@@ -710,6 +714,15 @@ class BrowserActivity : ComponentActivity() {
                 mutableStateOf(store.state)
             }
 
+            SideEffect {
+                tabManager.setVisibleBrowserTab(
+                    browserHostOwner,
+                    browserState.selectedTabId.takeIf {
+                        currentScreen == Screen.Browser && tabsRestoredOrReady.value
+                    }
+                )
+            }
+
             // Consume a pending web link once tabs are restored: open it in a fresh tab.
             val pendingLink = pendingLinkUrl.value
             LaunchedEffect(pendingLink, tabsRestoredOrReady.value) {
@@ -842,147 +855,9 @@ class BrowserActivity : ComponentActivity() {
             var isTabsMultiSelectMode by rememberSaveable { mutableStateOf(false) }
             var showTabsCloseAllConfirm by remember { mutableStateOf(false) }
 
-            if (session == null) {
-                Log.d("PB_STARTUP", "Compose: session==null path — browserStateTabs=${browserState.tabs.size}, selectedTabId=$selectedTabId, tabsRestored=${tabsRestoredOrReady.value}, sessionsInMap=${sessions.keys.joinToString()}")
-                if (currentScreen == Screen.Tabs) {
-                    PlayBridgeTheme {
-                        Scaffold(
-                            topBar = {
-                                @OptIn(ExperimentalMaterial3Api::class)
-                                TopAppBar(
-                                    title = { Text("Tabs") },
-                                    actions = {
-                                        IconButton(onClick = {
-                                            tabManager.createTab("about:blank", store)
-                                            currentScreen = Screen.Browser
-                                        }) {
-                                            Icon(Icons.Default.Add, "New Tab")
-                                        }
-
-                                        var menuExpanded by remember { mutableStateOf(false) }
-                                        val playingTabIds = tabManager.playingTabIds
-
-                                        Box {
-                                            IconButton(onClick = { menuExpanded = true }) {
-                                                Icon(Icons.Default.MoreVert, "More options")
-                                            }
-                                            DropdownMenu(
-                                                expanded = menuExpanded,
-                                                onDismissRequest = { menuExpanded = false }
-                                            ) {
-                                                DropdownMenuItem(
-                                                    text = { Text("Go to playing tab") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        playingTabIds.keys.firstOrNull { it !in bridgedAppTabIds }?.let {
-                                                            tabManager.selectTab(it, store)
-                                                            currentScreen = Screen.Browser
-                                                        }
-                                                    },
-                                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.VolumeUp, null) },
-                                                    enabled = playingTabIds.keys.any { it !in bridgedAppTabIds }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Reopen Closed Tab") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        tabManager.reopenClosedTab(store)?.let {
-                                                            currentScreen = Screen.Browser
-                                                        }
-                                                    },
-                                                    leadingIcon = { Icon(Icons.Default.Restore, null) },
-                                                    enabled = tabManager.canReopenClosedTab()
-                                                )
-                                                HorizontalDivider()
-                                                DropdownMenuItem(
-                                                    text = { Text(if (isTabsSearchVisible) "Hide Search" else "Search Tabs") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        isTabsSearchVisible = !isTabsSearchVisible
-                                                    },
-                                                    leadingIcon = { Icon(Icons.Default.Search, null) }
-                                                )
-                                                DropdownMenuItem(
-                                                    text = { Text("Select Tabs") },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        isTabsMultiSelectMode = true
-                                                    },
-                                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) }
-                                                )
-                                                HorizontalDivider()
-                                                DropdownMenuItem(
-                                                    text = { Text("Close All Tabs", color = MaterialTheme.colorScheme.error) },
-                                                    onClick = {
-                                                        menuExpanded = false
-                                                        showTabsCloseAllConfirm = true
-                                                    },
-                                                    leadingIcon = { 
-                                                        Icon(
-                                                            Icons.Default.Delete, 
-                                                            null,
-                                                            tint = MaterialTheme.colorScheme.error
-                                                        ) 
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                )
-                            }
-                        ) { innerPadding ->
-                            Surface(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                                TabsScreen(
-                                    hiddenTabIds = bridgedAppTabIds,
-                                    onTabSelected = { tabId ->
-                                        tabManager.selectTab(tabId, store)
-                                        currentScreen = Screen.Browser
-                                    },
-                                    onTabClosed = { tabId ->
-                                        tabManager.closeTab(tabId, store, hiddenTabIds = bridgedAppTabIds)
-                                        if (store.state.tabs.none { it.id !in bridgedAppTabIds }) {
-                                            previousBrowserTabId = tabManager.createTab("about:blank", store)
-                                        }
-                                    },
-                                    onNewTab = {
-                                        tabManager.createTab("about:blank", store)
-                                        currentScreen = Screen.Browser
-                                    },
-                                    onTabDuplicate = { tabId ->
-                                        tabManager.duplicateTab(tabId, store)
-                                    },
-                                    onTabBookmark = { tabId ->
-                                         val targetTab = store.state.tabs.find { it.id == tabId }
-                                         targetTab?.let { tab ->
-                                              val url = tab.content.url
-                                              if (url.isNotEmpty() && url != "about:blank") {
-                                                  browserViewModel.addBookmark(url, tab.content.title)
-                                                  Toast.makeText(this@BrowserActivity, "Bookmark added", Toast.LENGTH_SHORT).show()
-                                              }
-                                         }
-                                     },
-                                     isSearchVisibleExternal = isTabsSearchVisible,
-                                     onSearchVisibleChangeExternal = { isTabsSearchVisible = it },
-                                     isMultiSelectModeExternal = isTabsMultiSelectMode,
-                                     onMultiSelectModeChangeExternal = { isTabsMultiSelectMode = it },
-                                     showCloseAllConfirmExternal = showTabsCloseAllConfirm,
-                                     onCloseAllConfirmChangeExternal = { showTabsCloseAllConfirm = it }
-                                )
-                            }
-                        }
-                    }
-                    return@setContent
-                }
-
-                // First launch / restore: nothing to keep on screen yet.
-                if (!tabsRestoredOrReady.value) {
-                    return@setContent
-                }
-                // Selected tab session is still being created (new tab, hibernate
-                // restore). Do NOT tear down chrome, connection dialogs, or
-                // page-cast callbacks — remounting them is what makes the
-                // connections/cast-to picker pop open on every new tab.
-            }
+            // Engine availability must not change the navigation/overlay tree. In
+            // particular, selected-tab closure keeps the same Tabs list mounted.
+            if (!tabsRestoredOrReady.value) return@setContent
 
             // UI state variables — keyed to selectedTabId so they reset when switching tabs
             var currentUrl by remember(selectedTabId) { mutableStateOf(selectedTab?.content?.url ?: "about:blank") }
@@ -3553,8 +3428,10 @@ class BrowserActivity : ComponentActivity() {
         // On configuration-change recreation (theme, split screen, etc.) the
         // singleton TabManager keeps the live sessions and the new Activity
         // re-renders them — closing them here caused blank tabs + lost history.
-        if (isFinishing) {
+        val ownsHost = tabManager.endBrowserHost(browserHostOwner)
+        if (isFinishing && ownsHost) {
             tabManager.closeAllSessions()
+            Components.clearDevicePickerRequests()
         }
         pagePlaybackCoordinator.end("host_closed")
         super.onDestroy()

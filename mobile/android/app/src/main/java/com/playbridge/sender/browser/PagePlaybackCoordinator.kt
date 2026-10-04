@@ -58,7 +58,7 @@ class PagePlaybackCoordinator(
                     if (payload.has("destinationId")) {
                         if (payload.opt("destinationId") != "this-device") { reply(message, "invalid_request"); return@launch }
                         connection.selectThisDevice()
-                    } else Components.playbackDevicePickerRequests.value += 1
+                    } else Components.playbackDevicePicker.request()
                 }
                 val value = destination()
                 if (Components.isCurrentPageNavigation(tab, generation)) reply(message, destination = value)

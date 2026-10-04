@@ -30,7 +30,11 @@ internal object NativePluginBridge {
             override fun onConnect(port: WebExtension.Port) {
                 val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
                 val requests = mutableMapOf<String, Pair<String, Job>>()
-                var disconnected = false
+                val lifetime = DocumentPortLifetime {
+                    documentChecks.remove(port)
+                    scope.cancel()
+                    requests.clear()
+                }
 
                 fun authorized(): Boolean = NativePluginBridgePolicy.authorized(
                     senderUrl = port.sender.url,
@@ -43,7 +47,7 @@ internal object NativePluginBridge {
                 )
 
                 fun reply(id: String, data: JSONObject? = null, error: String? = null) {
-                    if (disconnected) return
+                    if (lifetime.closed) return
                     val permitted = authorized()
                     runCatching { port.postMessage(JSONObject().apply {
                         put("type", "plugin_response")
@@ -56,23 +60,20 @@ internal object NativePluginBridge {
                 }
 
                 documentChecks[port] = {
-                    if (!authorized()) {
-                        disconnected = true
-                        scope.cancel()
-                        documentChecks.remove(port)
-                        runCatching { port.disconnect() }
+                    if (!authorized() && lifetime.close()) {
+                        // Revoke authority/cancel work immediately, but do not race
+                        // Gecko's document teardown with a second native shutdown.
+                        runCatching { port.postMessage(JSONObject().put("type", "plugin_disconnected")) }
                     }
                 }
 
                 port.setDelegate(object : WebExtension.PortDelegate {
                     override fun onDisconnect(port: WebExtension.Port) {
-                        disconnected = true
-                        documentChecks.remove(port)
-                        scope.cancel()
-                        requests.clear()
+                        lifetime.close()
                     }
 
                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                        if (lifetime.closed) return
                         val raw = message.toString()
                         if (raw.toByteArray(Charsets.UTF_8).size > NativePluginBridgePolicy.MAX_REQUEST_BYTES) return
                         val request = runCatching { JSONObject(raw) }.getOrNull() ?: return

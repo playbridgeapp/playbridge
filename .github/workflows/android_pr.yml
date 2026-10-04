@@ -71,6 +71,10 @@ jobs:
         if: steps.filter.outputs.relevant == 'true'
         run: chmod +x gradlew
 
+      - name: Test GeckoView port disconnect guard
+        if: steps.filter.outputs.relevant == 'true' && matrix.name == 'phone'
+        run: ./gradlew -p buildSrc test --stacktrace
+
       # Blocking gate: compile all apps, run unit tests across every module
       # (including :shared's KMP host tests), and run Android Lint. Pre-existing
       # lint issues are recorded in per-module lint-baseline.xml files, so Lint

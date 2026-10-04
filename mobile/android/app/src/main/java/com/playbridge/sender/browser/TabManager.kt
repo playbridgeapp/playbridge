@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import mozilla.components.browser.engine.gecko.GeckoEngineSession
@@ -168,6 +169,12 @@ class TabManager {
     private val crashGivenUp = mutableSetOf<String>()
 
     private var mirrorScope: CoroutineScope? = null
+    private val restorePolicy = BrowserSessionRestorePolicy()
+
+    /** Only the page actually opened in Browser may be created/recovered automatically. */
+    fun beginBrowserHost(owner: Any) { restorePolicy.attach(owner) }
+    fun setVisibleBrowserTab(owner: Any, tabId: String?) { restorePolicy.show(owner, tabId) }
+    fun endBrowserHost(owner: Any): Boolean = restorePolicy.detach(owner)
 
     // ── Store mirroring ──────────────────────────────────────────────
 
@@ -175,7 +182,7 @@ class TabManager {
      * Start mirroring [store] state. Idempotent; called once from
      * [Components.initialize]. Keeps [sessions]/[navigationStates] in sync,
      * fires [onAnyStateUpdated] on engine-state changes, and makes sure the
-     * selected tab always has a live engine session — including automatic
+     * selected tab explicitly visible in Browser has a live engine session — including automatic
      * recovery after content-process crashes/kills (the store marks the tab
      * crashed / suspends it; we restore + recreate, which EngineMiddleware
      * does from the last saved state).
@@ -185,7 +192,7 @@ class TabManager {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         mirrorScope = scope
         scope.launch {
-            store.flow().collect { state ->
+            combine(store.flow(), restorePolicy.visibleTabId) { state, _ -> state }.collect { state ->
                 val liveTabIds = mutableSetOf<String>()
                 state.tabs.forEach { tab ->
                     liveTabIds.add(tab.id)
@@ -237,8 +244,10 @@ class TabManager {
                 val selectedId = state.selectedTabId
                 if (selectedId != null) crashGivenUp.retainAll(setOf(selectedId)) else crashGivenUp.clear()
 
-                // 4. Ensure the selected tab has a live engine session.
-                val selected = selectedId?.let { id -> state.tabs.find { it.id == id } }
+                // 4. Restore only an explicitly opened page, never a fallback selection
+                // on Dashboard/Tabs or a selected tab suspended during host shutdown.
+                // Read the current policy so a queued emission cannot undo shutdown.
+                val selected = restorePolicy.tabToRestore(state)
                 if (selected != null) {
                     when {
                         selected.engineState.crashed -> {
@@ -466,6 +475,7 @@ class TabManager {
      * store; a new process restores them from the DB.
      */
     fun closeAllSessions() {
+        restorePolicy.hide()
         Components.store.state.tabs.forEach { tab ->
             if (tab.engineState.engineSession != null) {
                 Components.store.dispatch(EngineAction.SuspendEngineSessionAction(tab.id))

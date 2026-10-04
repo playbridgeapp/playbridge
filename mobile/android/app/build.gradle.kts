@@ -1,5 +1,13 @@
 import com.android.build.api.artifact.ScopedArtifact
 import com.android.build.api.variant.ScopedArtifacts
+import com.android.build.api.instrumentation.InstrumentationScope
+import com.android.build.api.instrumentation.FramesComputationMode
+import com.android.build.api.instrumentation.AsmClassVisitorFactory
+import com.android.build.api.instrumentation.ClassContext
+import com.android.build.api.instrumentation.ClassData
+import com.android.build.api.instrumentation.InstrumentationParameters
+import com.playbridge.buildlogic.GeckoPortDisconnectGuard
+import org.objectweb.asm.ClassVisitor
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.Directory
 import org.gradle.api.file.RegularFile
@@ -21,6 +29,15 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+// Kept beside the Android plugin so its API uses the plugin classloader.
+abstract class GeckoPortDisconnectGuardFactory : AsmClassVisitorFactory<InstrumentationParameters.None> {
+    override fun isInstrumentable(classData: ClassData): Boolean =
+        classData.className == "org.mozilla.geckoview.WebExtension\$Port"
+
+    override fun createClassVisitor(classContext: ClassContext, nextClassVisitor: ClassVisitor): ClassVisitor =
+        GeckoPortDisconnectGuard(nextClassVisitor)
 }
 
 @CacheableTask
@@ -220,6 +237,14 @@ android {
 }
 
 androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.instrumentation.transformClassesWith(
+            GeckoPortDisconnectGuardFactory::class.java, InstrumentationScope.ALL,
+        ) {}
+        variant.instrumentation.setAsmFramesComputationMode(
+            FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS,
+        )
+    }
     onVariants(selector().withBuildType("release")) { variant ->
         val taskName = "strip${variant.name.replaceFirstChar { it.uppercase() }}GeckoViewWebRtc"
         val stripTask = tasks.register<StripGeckoViewWebRtcClasses>(taskName)

@@ -473,7 +473,7 @@ fun TabsScreen(
                 }
             }
             // Whether we've reached the bottom of the list
-            val isAtBottom by remember {
+            val isAtBottom by remember(filteredTabs.size) {
                 derivedStateOf {
                     val lastVisibleItem = listState.layoutInfo.visibleItemsInfo.lastOrNull()
                     lastVisibleItem == null || lastVisibleItem.index >= filteredTabs.size - 1
@@ -543,6 +543,7 @@ fun TabsScreen(
                         val bookmarkHandler = remember(tab.id, onTabBookmark) { { onTabBookmark(tab.id) } }
                         
                         TabRowCard(
+                            modifier = Modifier.animateItem(),
                             tab = tab,
                             onSelect = selectHandler,
                             onClose = closeHandler,
@@ -637,14 +638,15 @@ private fun TabRowCard(
     isPlaying: Boolean,
     isMultiSelectMode: Boolean,
     isChecked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     val context = androidx.compose.ui.platform.LocalContext.current
 
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .combinedClickable(
                 onClick = {
