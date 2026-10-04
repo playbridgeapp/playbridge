@@ -21,6 +21,20 @@ flutter build macos         # or: windows, linux
 - Flutter SDK (Dart `^3.6`)
 - libmpv available on the host (used for playback)
 
+## Sender automatic reconnect
+
+After an authenticated PlayBridge receiver session unexpectedly disconnects,
+Desktop keeps that TV selected and retries up to 30 times, with a three-second
+wait between attempts. Socket opening and saved-token authentication each have
+a ten-second timeout; connection time is additional to the retry delay.
+Retries reuse the saved token/certificate pin, prefer a newly discovered address,
+and query receiver context after reconnecting to restore the remote view.
+
+The Send to TV banner and tray show retry progress. Cancel/Disconnect, Forget,
+rejected authentication, certificate mismatch or pairing denial stop retries.
+After exhaustion, use manual Reconnect. First-time pairing and other receiver
+protocols do not automatically retry.
+
 ## Investigating memory growth
 
 Enable **Settings → Diagnostics → Enable logging** before reproducing playback.

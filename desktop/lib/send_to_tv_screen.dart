@@ -189,6 +189,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
         _StatusBanner(
           state: controller.state,
           activeTv: controller.activeTv,
+          reconnectStatus: controller.reconnectStatus,
           onDisconnect: controller.disconnect,
         ),
         if (controller.isConnected) ...[
@@ -296,8 +297,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
                 ),
                 connectable: controller.canConnectTo(tv),
                 busy: _isBusy(controller.state),
-                active: controller.isConnected &&
-                    controller.activeTv?.identityKey == tv.identityKey,
+                active: _isActiveTarget(controller, tv.identityKey),
                 onTap: () => controller.connectToDiscovered(tv),
                 onForget: () =>
                     controller.forget(tv.uuid, protocol: tv.protocol),
@@ -416,6 +416,10 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
       s == SenderConnectionState.waitingForChallenge ||
       s == SenderConnectionState.waitingForCodeInput ||
       s == SenderConnectionState.verifyingCode;
+
+  bool _isActiveTarget(TvSenderController controller, String identity) =>
+      controller.activeTv?.identityKey == identity &&
+      (controller.isConnected || controller.reconnectStatus != null);
 
   Future<void> _pickAndCast() async {
     final group = XTypeGroup(label: 'Media', extensions: _mediaExts.toList());
@@ -760,11 +764,13 @@ class _StatusBanner extends StatelessWidget {
   const _StatusBanner({
     required this.state,
     required this.activeTv,
+    required this.reconnectStatus,
     required this.onDisconnect,
   });
 
   final SenderConnectionState state;
   final TvRecord? activeTv;
+  final ReceiverReconnectStatus? reconnectStatus;
   final VoidCallback onDisconnect;
 
   @override
@@ -772,6 +778,7 @@ class _StatusBanner extends StatelessWidget {
     final (icon, color, text) = _describe();
     final connected = state == SenderConnectionState.connected ||
         state == SenderConnectionState.selected;
+    final reconnecting = reconnectStatus != null;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       decoration: BoxDecoration(
@@ -787,10 +794,10 @@ class _StatusBanner extends StatelessWidget {
             child: Text(text,
                 style: const TextStyle(fontSize: 14, color: Colors.white)),
           ),
-          if (connected)
+          if (connected || reconnecting)
             TextButton(
               onPressed: onDisconnect,
-              child: const Text('Disconnect'),
+              child: Text(reconnecting && !connected ? 'Cancel' : 'Disconnect'),
             ),
         ],
       ),
@@ -798,6 +805,14 @@ class _StatusBanner extends StatelessWidget {
   }
 
   (IconData, Color, String) _describe() {
+    final reconnecting = reconnectStatus;
+    if (reconnecting != null) {
+      return (
+        Icons.sync,
+        Colors.tealAccent,
+        reconnecting.label,
+      );
+    }
     final name = activeTv?.name;
     final protocol = activeTv?.protocol.label;
     return switch (state) {

@@ -41,6 +41,9 @@ class _FakeSender extends Fake implements TvSenderController {
   bool get isConnected => connected;
 
   @override
+  ReceiverReconnectStatus? get reconnectStatus => null;
+
+  @override
   SenderConnectionState get state => connected
       ? SenderConnectionState.connected
       : SenderConnectionState.disconnected;

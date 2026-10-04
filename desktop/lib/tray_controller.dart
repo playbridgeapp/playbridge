@@ -248,19 +248,23 @@ class TrayController with TrayListener {
     final saved = sender.pairedTvs;
     final nearby =
         sender.discovered.map((device) => device.identityKey).toSet();
+    final reconnecting = sender.reconnectStatus;
     final active = sender.isConnected ? sender.activeTv : null;
-    final senderStatus = switch (sender.state) {
-      SenderConnectionState.connected =>
-        active == null ? 'Connected' : 'Connected to ${active.name}',
-      SenderConnectionState.selected =>
-        active == null ? 'Destination selected' : 'Selected: ${active.name}',
-      SenderConnectionState.connecting => 'Connecting…',
-      SenderConnectionState.waitingForChallenge ||
-      SenderConnectionState.waitingForCodeInput ||
-      SenderConnectionState.verifyingCode =>
-        'Pairing…',
-      _ => 'Disconnected',
-    };
+    final senderStatus = reconnecting != null
+        ? reconnecting.label
+        : switch (sender.state) {
+            SenderConnectionState.connected =>
+              active == null ? 'Connected' : 'Connected to ${active.name}',
+            SenderConnectionState.selected => active == null
+                ? 'Destination selected'
+                : 'Selected: ${active.name}',
+            SenderConnectionState.connecting => 'Connecting…',
+            SenderConnectionState.waitingForChallenge ||
+            SenderConnectionState.waitingForCodeInput ||
+            SenderConnectionState.verifyingCode =>
+              'Pairing…',
+            _ => 'Disconnected',
+          };
     final hasRemotePlayback = _hasRemotePlayback;
     final remoteTitle = hasRemotePlayback ? sender.castingTitle : null;
     final remotePlaybackState = hasRemotePlayback ? sender.remoteState : '';
@@ -269,6 +273,7 @@ class TrayController with TrayListener {
     final signature = jsonEncode([
       status,
       senderStatus,
+      reconnecting?.attempt,
       active?.identityKey,
       sender.castRouteThroughProxy,
       _launchAtLogin,
@@ -295,7 +300,7 @@ class TrayController with TrayListener {
       savedDevices: saved,
       nearbyDeviceKeys: nearby,
       activeDeviceKey: active?.identityKey,
-      canDisconnect: sender.isConnected,
+      canDisconnect: sender.isConnected || reconnecting != null,
       routeThroughDesktop: sender.castRouteThroughProxy,
       launchAtLogin: _launchAtLogin,
       hasRemotePlayback: hasRemotePlayback,

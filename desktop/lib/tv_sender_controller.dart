@@ -44,6 +44,24 @@ TvCastRouteDecision decideTvCastRoute({
   );
 }
 
+/// Progress for an automatic PlayBridge receiver retry. Android's phone
+/// sender uses the same budget: one attempt every 3 seconds, 30 times.
+@immutable
+class ReceiverReconnectStatus {
+  const ReceiverReconnectStatus({
+    required this.attempt,
+    required this.maxAttempts,
+    required this.deviceName,
+  });
+
+  final int attempt;
+  final int maxAttempts;
+  final String deviceName;
+
+  String get label =>
+      'Reconnecting to $deviceName ($attempt/$maxAttempts)\u2026';
+}
+
 /// Orchestrates the desktop's **sender** role: LAN discovery, the paired-TV
 /// store, and multi-protocol receiver transport clients (`wss://`, DLNA, Roku).
 /// Connect to a discovered TV (first-time pairing) or reconnect a known one by token;
@@ -56,10 +74,20 @@ class TvSenderController extends ChangeNotifier {
     required PairingStore identity,
     required TvConnectionStore store,
     TvTransport? transport,
+    this.reconnectDelay = defaultReconnectDelay,
+    this.reconnectGiveUp = defaultReconnectGiveUp,
   })  : _identity = identity,
         _store = store,
         _discovery = TvDiscoveryBrowser(),
         _transport = transport ?? PlayBridgeTransport();
+
+  /// Matches the phone's retry count/delay. Connection and authentication time
+  /// is additional, so 30 retries are not a 90-second wall-clock deadline.
+  static const defaultReconnectDelay = Duration(seconds: 3);
+  static const defaultReconnectGiveUp = 30;
+
+  final Duration reconnectDelay;
+  final int reconnectGiveUp;
 
   final PairingStore _identity;
   final TvConnectionStore _store;
@@ -87,6 +115,19 @@ class TvSenderController extends ChangeNotifier {
   SenderConnectionState _state = SenderConnectionState.disconnected;
   DiscoveredTv? _pending; // target of the in-flight / most recent connect
   TvRecord? _activeTv;
+
+  // PlayBridge-only reconnect supervisor. The socket itself stays one-shot;
+  // this layer retries an unexpected drop of a session that already authenticated.
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+  bool _hasConnectedThisSession = false;
+  bool _userClosed = false;
+  bool _suppressReconnect = false;
+  bool _retryInFlight = false;
+  bool _disposed = false;
+  int _sessionGeneration = 0;
+  TvRecord? _retryTarget;
+  ReceiverReconnectStatus? _reconnectStatus;
   String? _currentSas;
 
   // Live now-casting snapshot, updated from the TV's `status` messages.
@@ -121,6 +162,9 @@ class TvSenderController extends ChangeNotifier {
   bool get isConnected =>
       _state == SenderConnectionState.connected ||
       _state == SenderConnectionState.selected;
+
+  /// Non-null while an unexpected PlayBridge drop is being retried.
+  ReceiverReconnectStatus? get reconnectStatus => _reconnectStatus;
   String? get currentSas => _currentSas;
   BrowserHostInfo? get browserHost => _browserHost;
   bool get browserReceiverRunning => _browserHost != null;
@@ -199,6 +243,14 @@ class TvSenderController extends ChangeNotifier {
     _bindTransportSubscriptions();
     _servicesSub = StreamProxyServer.instance.events.listen(_onServicesEvent);
     await _discovery.start();
+  }
+
+  /// Subscribes to the injected transport without starting discovery. Tests use
+  /// this so a dropped session can be observed without a LAN scan.
+  @visibleForTesting
+  void bindTransportForTest({List<DiscoveredTv>? discoveredDevices}) {
+    if (discoveredDevices != null) _discoveredRaw = discoveredDevices;
+    _bindTransportSubscriptions();
   }
 
   Future<void> rescan() => _discovery.rescan();
@@ -282,16 +334,22 @@ class TvSenderController extends ChangeNotifier {
 
     _stateSub = _transport.state.listen(_onState);
     _credSub = _transport.credentials.listen(_onCredentials);
-    _msgSub = _transport.messages.listen(handleReceiverMessage);
+    _msgSub = _transport.messages.listen((message) {
+      if (!_disposed && !_userClosed) handleReceiverMessage(message);
+    });
     _sasSub = _transport.sasCode.listen((sas) {
+      if (_disposed || _userClosed) return;
       _currentSas = sas;
       notifyListeners();
     });
   }
 
-  Future<void> _ensureTransportFor(TvProtocol protocol) async {
-    if (_transport.protocol == protocol) return;
+  Future<void> _ensureTransportFor(TvProtocol protocol, int generation) async {
+    if (!_isCurrentSession(generation) || _transport.protocol == protocol) {
+      return;
+    }
     await _transport.dispose();
+    if (!_isCurrentSession(generation)) return;
     _transport = TvTransportFactory.create(protocol);
     _bindTransportSubscriptions();
   }
@@ -312,52 +370,76 @@ class TvSenderController extends ChangeNotifier {
       );
       return;
     }
-    _pending = tv;
-    await _ensureTransportFor(tv.protocol);
-    final known = tv.protocol == TvProtocol.webBrowser
-        ? null
-        : _store.byIdentity(tv.protocol, tv.uuid);
-    await _transport.connect(
-      tv: tv,
-      deviceName: _identity.deviceName,
-      deviceUUID: _identity.deviceId,
-      token: known?.token,
-      expectedPin: known?.certFingerprint,
+    final sameSession = _activeTv?.identityKey == tv.identityKey ||
+        _retryTarget?.identityKey == tv.identityKey;
+    await _connectFromUser(
+      (generation) async {
+        _pending = tv;
+        await _ensureTransportFor(tv.protocol, generation);
+        if (!_isCurrentSession(generation)) return;
+        final known = tv.protocol == TvProtocol.webBrowser
+            ? null
+            : _store.byIdentity(tv.protocol, tv.uuid);
+        await _transport.connect(
+          tv: tv,
+          deviceName: _identity.deviceName,
+          deviceUUID: _identity.deviceId,
+          token: known?.token,
+          expectedPin: known?.certFingerprint,
+        );
+      },
+      preserveEstablishedSession:
+          sameSession && tv.protocol == TvProtocol.playBridge,
     );
   }
 
   /// Reconnect a known TV by token (e.g. from the paired list). Prefers a fresh
   /// discovered address when the TV is currently visible (survives DHCP changes).
-  Future<void> reconnect(TvRecord tv) async {
-    final fresh = _discoveredByIdentity(tv.protocol, tv.uuid);
+  Future<void> reconnect(TvRecord tv) => _connectFromUser(
+        (generation) => _connectRecord(tv, generation),
+        preserveEstablishedSession: _activeTv?.identityKey == tv.identityKey ||
+            _retryTarget?.identityKey == tv.identityKey,
+      );
+
+  Future<void> _connectRecord(TvRecord tv, int generation) async {
+    final saved = _store.byIdentity(tv.protocol, tv.uuid);
+    final record = saved ?? tv;
+    final fresh = _discoveredByIdentity(record.protocol, record.uuid);
     final target = DiscoveredTv(
-      uuid: tv.uuid,
-      protocol: tv.protocol,
-      name: tv.name,
-      host: fresh?.host ?? tv.host,
-      addresses: fresh?.allAddresses ?? tv.allAddresses,
-      port: fresh?.port ?? tv.port,
-      wssPort: fresh?.wssPort ?? tv.wssPort,
-      location: fresh?.location ?? tv.location,
+      uuid: record.uuid,
+      protocol: record.protocol,
+      name: record.name,
+      host: fresh?.host ?? record.host,
+      addresses: fresh?.allAddresses ?? record.allAddresses,
+      port: fresh?.port ?? record.port,
+      wssPort: fresh?.wssPort ?? record.wssPort,
+      location: fresh?.location ?? record.location,
     );
     _pending = target;
-    await _ensureTransportFor(target.protocol);
+    await _ensureTransportFor(target.protocol, generation);
+    if (!_isCurrentSession(generation)) return;
     await _transport.connect(
       tv: target,
       deviceName: _identity.deviceName,
       deviceUUID: _identity.deviceId,
-      token: tv.token,
-      expectedPin: tv.certFingerprint,
+      token: record.token,
+      expectedPin: record.certFingerprint,
     );
   }
 
-  Future<void> disconnect() => _transport.disconnect();
+  Future<void> disconnect() {
+    _beginUserClose();
+    return _transport.disconnect();
+  }
 
   Future<void> forget(
     String uuid, {
     TvProtocol protocol = TvProtocol.playBridge,
   }) async {
-    if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
+    if ((_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) ||
+        (_pending?.uuid == uuid && _pending?.protocol == protocol) ||
+        (_retryTarget?.uuid == uuid && _retryTarget?.protocol == protocol)) {
+      _beginUserClose();
       await _transport.disconnect();
     }
     await _store.forget(uuid, protocol: protocol);
@@ -706,6 +788,9 @@ class TvSenderController extends ChangeNotifier {
 
   // ─── Internals ──────────────────────────────────────────────────────────────
   void _onState(SenderConnectionState s) {
+    if (_disposed) return;
+    // Ignore late connection/handshake events after Cancel or terminal auth failure.
+    if (_userClosed && s != SenderConnectionState.disconnected) return;
     _state = s;
     if (s != SenderConnectionState.waitingForCodeInput) {
       _currentSas = null;
@@ -755,22 +840,33 @@ class TvSenderController extends ChangeNotifier {
             _store.upsert(_activeTv!);
           }
         }
+        _noteSessionEstablished();
+        if (_transport.protocol == TvProtocol.playBridge) {
+          // The receiver only broadcasts context on its own transitions, so a
+          // client that reconnects mid-playback would otherwise stay idle.
+          unawaited(_transport.sendContextQuery());
+        }
         break;
       case SenderConnectionState.selected:
         // Google Cast receiver exited on the TV. Keep the destination so the
         // next explicit cast can launch a clean receiver session.
         break;
       case SenderConnectionState.disconnected:
+      case SenderConnectionState.error:
+        final keepDestination = _considerReconnect();
+        if (!keepDestination && s == SenderConnectionState.disconnected) {
+          _activeTv = null;
+        }
+        if (s == SenderConnectionState.disconnected || keepDestination) {
+          _clearRemotePlayback();
+        }
+        break;
       case SenderConnectionState.authFailed:
       case SenderConnectionState.pinMismatch:
+      case SenderConnectionState.pairingDenied:
+        _noteAuthTerminal();
         _activeTv = null;
-        _activePlaybackId = null;
-        _stoppedPlaybackId = null;
-        _awaitingFreshPlayback = false;
-        _castingTitle = null;
-        _remoteState = '';
-        _remotePositionMs = 0;
-        _remoteDurationMs = 0;
+        _clearRemotePlayback();
         break;
       default:
         break;
@@ -778,7 +874,199 @@ class TvSenderController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _clearRemotePlayback() {
+    _activePlaybackId = null;
+    _stoppedPlaybackId = null;
+    _awaitingFreshPlayback = false;
+    _castingTitle = null;
+    _remoteState = '';
+    _remotePositionMs = 0;
+    _remoteDurationMs = 0;
+  }
+
+  bool _isCurrentSession(int generation) =>
+      !_disposed && !_userClosed && generation == _sessionGeneration;
+
+  Future<void> _connectFromUser(
+    Future<void> Function(int generation) connect, {
+    required bool preserveEstablishedSession,
+  }) async {
+    if (_disposed) return;
+    _beginUserConnect(preserveEstablishedSession: preserveEstablishedSession);
+    final generation = _sessionGeneration;
+    _suppressReconnect = true;
+    try {
+      await connect(generation);
+    } finally {
+      if (generation == _sessionGeneration) _suppressReconnect = false;
+    }
+    if (_isCurrentSession(generation) &&
+        _hasConnectedThisSession &&
+        _state != SenderConnectionState.connected &&
+        _state != SenderConnectionState.connecting) {
+      _considerReconnect();
+      notifyListeners();
+    }
+  }
+
+  void _beginUserConnect({required bool preserveEstablishedSession}) {
+    _sessionGeneration++;
+    _retryInFlight = false;
+    final target = _retryTarget ?? _recordForRetry();
+    final preserve = preserveEstablishedSession &&
+        _hasConnectedThisSession &&
+        !_userClosed &&
+        target != null &&
+        target.token.isNotEmpty;
+    _userClosed = false;
+    _cancelReconnect(clearEstablished: !preserve);
+    if (!preserve) return;
+    _hasConnectedThisSession = true;
+    _retryTarget = target;
+  }
+
+  void _beginUserClose() {
+    _sessionGeneration++;
+    _userClosed = true;
+    _retryInFlight = false;
+    _suppressReconnect = false;
+    _cancelReconnect(clearEstablished: true);
+  }
+
+  void _noteAuthTerminal() => _beginUserClose();
+
+  void _noteSessionEstablished() {
+    final active = _activeTv;
+    final canRetry = _transport.protocol == TvProtocol.playBridge &&
+        active != null &&
+        active.token.isNotEmpty;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectStatus = null;
+    _reconnectAttempt = 0;
+    _userClosed = false;
+    _hasConnectedThisSession = canRetry;
+    _retryTarget = canRetry ? active : null;
+  }
+
+  TvRecord? _recordForRetry() {
+    final active = _activeTv ?? _retryTarget;
+    if (active == null) return null;
+    // An explicitly cleared token must not be replaced by cached credentials.
+    return _store.byIdentity(active.protocol, active.uuid) ?? active;
+  }
+
+  /// Returns true when the destination should stay selected for another try.
+  bool _considerReconnect() {
+    if (_disposed ||
+        _suppressReconnect ||
+        _userClosed ||
+        !_hasConnectedThisSession) {
+      return false;
+    }
+    if (_transport.protocol != TvProtocol.playBridge) return false;
+    if (_state == SenderConnectionState.connecting ||
+        _state == SenderConnectionState.connected) {
+      return _reconnectStatus != null;
+    }
+    final target = _recordForRetry();
+    if (target == null ||
+        target.protocol != TvProtocol.playBridge ||
+        target.token.isEmpty) {
+      return false;
+    }
+    _retryTarget = target;
+    if (_reconnectTimer != null || _retryInFlight) {
+      _activeTv = target;
+      return true;
+    }
+    if (_reconnectAttempt >= reconnectGiveUp) {
+      _giveUpReconnect();
+      return false;
+    }
+    _reconnectAttempt += 1;
+    final name = target.name.isEmpty ? 'TV' : target.name;
+    _reconnectStatus = ReceiverReconnectStatus(
+      attempt: _reconnectAttempt,
+      maxAttempts: reconnectGiveUp,
+      deviceName: name,
+    );
+    _activeTv = target;
+    debugPrint(
+      '[tv-sender] scheduling reconnect '
+      '${_reconnectStatus!.attempt}/${_reconnectStatus!.maxAttempts} '
+      'to $name',
+    );
+    _reconnectTimer = Timer(reconnectDelay, () {
+      _reconnectTimer = null;
+      unawaited(_runReconnectAttempt());
+    });
+    return true;
+  }
+
+  Future<void> _runReconnectAttempt() async {
+    if (_disposed ||
+        _userClosed ||
+        !_hasConnectedThisSession ||
+        _suppressReconnect ||
+        _retryInFlight) {
+      return;
+    }
+    final generation = _sessionGeneration;
+    final tv = _recordForRetry();
+    if (tv == null || tv.token.isEmpty) {
+      debugPrint('[tv-sender] reconnect stopped: no saved token');
+      _cancelReconnect(clearEstablished: true);
+      _activeTv = null;
+      notifyListeners();
+      return;
+    }
+    if (_state == SenderConnectionState.connected ||
+        _state == SenderConnectionState.connecting) {
+      return;
+    }
+    debugPrint(
+      '[tv-sender] reconnect attempt $_reconnectAttempt/$reconnectGiveUp',
+    );
+    _retryInFlight = true;
+    try {
+      await _connectRecord(tv, generation);
+    } on Object {
+      debugPrint('[tv-sender] reconnect attempt failed');
+    } finally {
+      if (generation == _sessionGeneration) _retryInFlight = false;
+    }
+    if (_isCurrentSession(generation) &&
+        _hasConnectedThisSession &&
+        _reconnectTimer == null &&
+        _state != SenderConnectionState.connected &&
+        _state != SenderConnectionState.connecting) {
+      _considerReconnect();
+      notifyListeners();
+    }
+  }
+
+  void _giveUpReconnect() {
+    debugPrint(
+      '[tv-sender] reconnect gave up after $reconnectGiveUp attempts',
+    );
+    _cancelReconnect(clearEstablished: true);
+    _activeTv = null;
+  }
+
+  void _cancelReconnect({required bool clearEstablished}) {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _reconnectStatus = null;
+    _reconnectAttempt = 0;
+    if (clearEstablished) {
+      _hasConnectedThisSession = false;
+      _retryTarget = null;
+    }
+  }
+
   void _onCredentials(TvCredentials creds) {
+    if (_disposed || _userClosed) return;
     final p = _pending;
     if (p == null) return;
     // upsert is keyed by uuid, so this covers both first-pair and token refresh.
@@ -1005,6 +1293,9 @@ class TvSenderController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _beginUserClose();
     _devSub?.cancel();
     _scanSub?.cancel();
     _stateSub?.cancel();

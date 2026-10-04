@@ -72,12 +72,29 @@ class TvCredentials {
 }
 
 /// Sender-side WebSocket client: connects the desktop to a TV receiver over
-/// pinned `wss://` (or plain `ws://` fallback), runs the pairing/auth handshake,
+/// pinned `wss://`, runs the pairing/auth handshake,
 /// then ships cast commands. Dart counterpart to the phone's `WebSocketClient`.
 class TvSenderClient {
+  TvSenderClient({
+    this.connectTimeout = const Duration(seconds: 10),
+    this.authTimeout = const Duration(seconds: 10),
+    IOWebSocketChannel Function(Uri uri, HttpClient client)? connectChannel,
+  }) : _connectChannel = connectChannel;
+
+  final Duration connectTimeout;
+  final Duration authTimeout;
+  final IOWebSocketChannel Function(Uri uri, HttpClient client)?
+      _connectChannel;
   IOWebSocketChannel? _channel;
+  HttpClient? _httpClient;
   StreamSubscription? _sub;
+  Timer? _authTimer;
   bool _userClosed = false;
+  bool _disposed = false;
+  int _generation = 0;
+
+  bool _isCurrent(int generation) =>
+      !_disposed && !_userClosed && generation == _generation;
 
   // Pin the server presented this handshake, and whether it failed to match.
   String? _capturedPin;
@@ -128,6 +145,11 @@ class TvSenderClient {
   bool get isConnected => _current == SenderConnectionState.connected;
 
   void _setState(SenderConnectionState s) {
+    if (_disposed) return;
+    if (s != SenderConnectionState.connecting) {
+      _authTimer?.cancel();
+      _authTimer = null;
+    }
     _current = s;
     if (!_state.isClosed) _state.add(s);
   }
@@ -145,8 +167,12 @@ class TvSenderClient {
     String? token,
     String? expectedPin,
   }) async {
-    await _close();
+    if (_disposed) return;
+    final generation = ++_generation;
     _userClosed = false;
+    await _close();
+    if (!_isCurrent(generation)) return;
+    _clearPairingSecrets();
     _capturedPin = null;
     _pinMismatch = false;
     _setState(SenderConnectionState.connecting);
@@ -159,6 +185,7 @@ class TvSenderClient {
 
     final customClient = HttpClient()
       ..badCertificateCallback = (X509Certificate cert, String h, int p) {
+        if (!_isCurrent(generation)) return false;
         final pin = spkiPinFromCertDer(cert.der);
         _capturedPin = pin;
         if (expectedPin == null) return true; // trust-on-first-use at pairing
@@ -167,16 +194,30 @@ class TvSenderClient {
         return false;
       };
 
+    _httpClient = customClient;
     try {
-      final channel = IOWebSocketChannel.connect(
-        uri,
-        customClient: customClient,
-        pingInterval: const Duration(seconds: 15),
-      );
-      await channel.ready;
+      final channel = _connectChannel?.call(uri, customClient) ??
+          IOWebSocketChannel.connect(
+            uri,
+            customClient: customClient,
+            connectTimeout: connectTimeout,
+            pingInterval: const Duration(seconds: 15),
+          );
+      // Own the pending socket too, so Cancel closes a not-yet-ready connection.
       _channel = channel;
-      _sub =
-          channel.stream.listen(_onMessage, onError: _onError, onDone: _onDone);
+      await channel.ready.timeout(connectTimeout);
+      if (!_isCurrent(generation)) return;
+      _sub = channel.stream.listen(
+        (data) {
+          if (_isCurrent(generation)) _onMessage(data);
+        },
+        onError: (Object error) {
+          if (_isCurrent(generation)) _onError(error);
+        },
+        onDone: () {
+          if (_isCurrent(generation)) _onDone();
+        },
+      );
 
       if (token == null || token.isEmpty) {
         // Generate ephemeral X25519 keys and nonce.
@@ -198,9 +239,21 @@ class TvSenderClient {
         _setState(SenderConnectionState.waitingForChallenge);
       } else {
         channel.sink.add(senderAuthJson(token));
+        // A socket can be open yet never answer auth. Keep retries bounded even
+        // when a restarting receiver accepts TCP/WSS before its command loop runs.
+        _authTimer = Timer(authTimeout, () {
+          if (!_isCurrent(generation) ||
+              _current != SenderConnectionState.connecting) {
+            return;
+          }
+          unawaited(_close());
+          _setState(SenderConnectionState.error);
+        });
       }
     } catch (e) {
+      if (!_isCurrent(generation)) return;
       await _close();
+      if (!_isCurrent(generation)) return;
       if (_pinMismatch) {
         _setState(SenderConnectionState.pinMismatch);
       } else {
@@ -440,7 +493,7 @@ class TvSenderClient {
   /// Sends a pre-built protocol message (use the `sender*Json` builders).
   bool send(String message) {
     final c = _channel;
-    if (c == null) return false;
+    if (c == null || !isConnected || _userClosed || _disposed) return false;
     c.sink.add(message);
     return true;
   }
@@ -448,24 +501,40 @@ class TvSenderClient {
   bool sendPing() => send(senderPingJson());
 
   Future<void> disconnect() async {
+    final generation = ++_generation;
     _userClosed = true;
     await _close();
-    _setState(SenderConnectionState.disconnected);
+    if (generation == _generation) {
+      _setState(SenderConnectionState.disconnected);
+    }
   }
 
   Future<void> _close() async {
-    await _sub?.cancel();
+    _authTimer?.cancel();
+    _authTimer = null;
+    // Detach all owned resources before the first await. An older close must
+    // never clear a newer connection's subscription or channel.
+    final sub = _sub;
     _sub = null;
     final c = _channel;
     _channel = null;
+    final client = _httpClient;
+    _httpClient = null;
+    client?.close(force: true);
+    _clearPairingSecrets();
+    await sub?.cancel();
     if (c != null) {
       try {
-        await c.sink.close();
+        await c.sink.close().timeout(const Duration(seconds: 1));
       } catch (_) {}
     }
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    _userClosed = true;
+    ++_generation;
     await _close();
     await _state.close();
     await _messages.close();
