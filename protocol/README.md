@@ -27,7 +27,7 @@ with the implementations listed below.
 | Sender | Desktop | Hand-written Dart envelopes and generated Dart payload models |
 | Receiver | Android TV | Shared Kotlin JSON parsing and generated Kotlin payload models |
 | Receiver | Apple TV | Swift JSON handling plus generated Swift payload models |
-| Receiver | Desktop | Dart JSON handling plus generated Dart payload models |
+| Receiver | Desktop | Rust `cast/receiver` runtime via Dart FFI; Dart playback adapter and generated payload models |
 | Browser extension | Firefox / Chromium | Native messaging to Desktop; it does not open receiver WSS directly |
 
 ## Changing the WSS protocol

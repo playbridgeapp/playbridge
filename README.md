@@ -34,7 +34,11 @@ PlayBridge is an open-source casting suite: browse on your phone, play on the bi
 - [License](#license)
 - [Contact](#contact)
 
+<a id="installation"></a>
+
 ## Installation & Store Listings
+
+<a id="store-listings"></a>
 
 ### Official Store Listings
 
@@ -172,7 +176,7 @@ Ensure your sender device (Phone, Desktop app, Browser Extension, or Rust CLI) a
 | Ad blocking | uBlock Origin | WebKit content blocker with EasyList and custom rules | — | — |
 | Queue support | ✓, including episode auto-advance | ✓ | Multi-file playlists | Single detected item |
 | Remote controls | Full remote: transport, seek, volume, D-pad, touchpad, keyboard, and track selection | Transport, seek, D-pad, touchpad, and track selection | Transport, seek, and playlist navigation | Use Desktop or a phone remote |
-| Play on the sender device | ✓ | Browser preview only | ✓ | Plays through Desktop when no receiver is selected |
+| Play on the sender device | ✓, native phone player | ✓, native phone player | ✓ | Plays through Desktop when no receiver is selected |
 | Companion app required | No | No | No | PlayBridge Desktop |
 
 Browser detection depends on what each browser exposes. Protected streams may require captured request headers, and some MSE / blob players cannot be replayed outside their original page.
@@ -198,45 +202,6 @@ iPhone / iPad intentionally omits the open Library / add-on ecosystem (third-par
 
 Media and codec support ultimately depends on the selected playback engine, operating system, and device hardware. DLNA behavior varies the most between TV manufacturers and models.
 
-## Installation
-
-- **Android TV / Fire TV (receiver)**
-  - Open the **Downloader** app on your TV and enter code `9557748` to install the TV Player directly, or
-  - download the latest `tv-player` APK from [Releases](https://github.com/playbridgeapp/playbridge/releases) and sideload it.
-  - *Note:* on first launch the TV app asks for "Display over other apps" — required for the receiver to come to the foreground when a cast arrives.
-  - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing.
-- **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
-- **Desktop (receiver)**: download the build for your OS from [Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
-- **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
-- **Android Phone (sender)**:
-  - <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
-  - or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) and install it.
-- **Browser Extension (sender)**:
-  - <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="40"></a>
-  - <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="40"></a>
-- **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
-
-### Store Listings
-
-The PlayBridge senders and extensions are available on official store registries:
-
-* **Android Phone (Sender)**:
-  * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
-  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
-* **Browser Extension (Sender — Firefox & Chrome)**:
-  * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
-  * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
-* **Android TV (Player) — open testing**
-  * <a href="https://play.google.com/store/apps/details?id=com.playbridge.player"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge for Android TV on Google Play" height="80"></a>
-
-## How to connect & cast
-
-1. Connect your phone and receiver to the **same Wi-Fi network**, and open the PlayBridge app on both.
-2. On the phone, tap the **device chip** (top of the Library and browser cast screens) — it lists discovered receivers. Tap yours to connect.
-   - *Not discovered?* Tap **"All devices & manual connect"** and enter the receiver's IP address (shown on its screen).
-3. On first connect, the receiver displays a **6-digit pairing code**. Enter it on the phone to verify and secure the connection — devices you've already paired reconnect automatically.
-4. Browse any video site in the phone browser, play a video, and tap cast when PlayBridge detects the stream — or send a movie/episode directly from the Library.
-
 ## Components
 
 PlayBridge is a monorepo; each component has its own documentation:
@@ -248,7 +213,7 @@ PlayBridge is a monorepo; each component has its own documentation:
 5. **[Rust Cast](cast/)** (`cast/core/`, `cast/receiver/`, `cast/ffi/`) — Portable discovery/casting core, secure reusable receiver runtime, and UniFFI/C/JNI/Dart bindings.
 6. **[Rust Stream Proxy](stream-proxy-rust/)** (`stream-proxy-rust/`) — High-performance Rust streaming proxy and MediaFlow AES-256 encryption.
 7. **[Rust CLI](cli/)** (`cli/`) — Command-line client binary (`playbridge`) for Rust Core.
-8. **[Shared Module](shared/)** (`shared/`) — Kotlin Multiplatform logic, player engines, and protocol bindings.
+8. **[Shared Module](shared/)** (`shared/`) — Kotlin Multiplatform module currently targeting Android only, shared by the phone and TV builds; player engines and protocol bindings.
 9. **[Protocol](protocol/)** (`protocol/`) — AsyncAPI WSS contract, detailed connection flow, and retained protobuf bindings.
 
 ## Documentation
@@ -270,9 +235,10 @@ permission under **Settings → Browser → Website casting permissions**.
 Websites that intentionally reference LAN media servers declare up to 16 exact
 `privateNetworkOrigins` (scheme, host, and port; no wildcards or subnets). PlayBridge asks for
 separate website-to-media-origin grants, keeps webpage headers on each resource's exact origin,
-and revalidates manifest children and redirects on the receiver. Private-origin grants can be
-reset without removing the site's basic casting permission. Website-controlled casts use
-a PlayBridge receiver so these checks cannot be bypassed by an external receiver protocol.
+and revalidates manifest children and redirects on native receivers. Private-origin grants can be
+reset without removing the site's basic casting permission. The unified `play()` API also supports
+phone-local playback and selected external destinations, subject to their capabilities; see
+[Bridged Apps](docs/bridged-apps.md#unified-playback-destinations).
 
 A live demo that exercises direct payloads, linked lazy queueing, and browser detection is hosted at
 **[playbridge.app/cast-demo](https://playbridge.app/cast-demo/)** — open it in the PlayBridge
@@ -282,26 +248,26 @@ phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/
 
 ### Prerequisites
 
-- **Android apps**: Android Studio Ladybug or later, JDK 17+, Android SDK 26+
+- **Android apps**: Android Studio, JDK 17+ (the phone Gradle toolchain resolves JDK 21), Android SDK 37
 - **Desktop**: Flutter SDK (Dart `^3.6`) and libmpv
 - **Apple TV**: Xcode with CocoaPods (see [tv/](tv/))
 - **Browser Extension**: Node.js and `pnpm`
-- **Rust Core & Proxy**: Rust 1.85+ (`cargo`)
+- **Rust Core & Proxy**: Rust 1.88+ (`cargo`; required by the current `Cargo.lock`)
 
 ### Building
 
 ```bash
 # Phone app
-cd mobile/android && ./gradlew :app:assembleDebug
+(cd mobile/android && ./gradlew :app:assembleFossDebug)
 
 # TV player & browser
-cd tv/android && ./gradlew :player:app:assembleDebug :browser:app:assembleDebug
+(cd tv/android && ./gradlew :player:app:assembleFossDebug :geckoview-plugin:app:assembleDebug)
 
 # Desktop
-cd desktop && flutter pub get && flutter run    # -d macos | windows | linux
+(cd desktop && flutter pub get && flutter run)    # -d macos | windows | linux
 
 # Browser extension
-cd extension && pnpm install && pnpm build
+(cd extension && pnpm install && pnpm build)
 
 # Rust core & stream proxy
 cargo build --workspace

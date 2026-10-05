@@ -33,16 +33,22 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
 |---|---|---|
 | `PORT` | `8888` | Port for the proxy server to listen on. |
 | `ADDRESS` | `0.0.0.0` | Bind IP address (`0.0.0.0` for all interfaces). |
-| `API_PASSWORD` | *(None)* | Password for registering sessions and authenticating proxy requests. |
+| `PB_PROXY_PASSWORD` | *(None)* | Required password for registration and administrative endpoints; media URLs carry their own session/token capability. |
+| `FFMPEG_PATH` | *(Auto-detected)* | Optional FFmpeg path for AVIO library discovery. |
 
 ## Quick Start
 
 ### Standalone CLI
 ```bash
-cargo run --release -p stream-proxy-rust
+PB_PROXY_PASSWORD=your-unique-password cargo run --release -p stream-proxy-rust
 ```
 
 ### Docker Compose
+
+Set a unique `PB_PROXY_PASSWORD` in the service's `environment` section in
+`docker-compose.yml` before starting it. The checked-in example sets a literal
+password; setting only a host-shell variable does not override that value.
+
 ```bash
 docker compose up -d
 ```
@@ -51,7 +57,7 @@ docker compose up -d
 
 ### 1. Stateful Session Registration (`POST /register`)
 ```http
-POST /register?token=YOUR_API_PASSWORD
+POST /register?token=YOUR_PROXY_PASSWORD
 Content-Type: application/json
 
 {
