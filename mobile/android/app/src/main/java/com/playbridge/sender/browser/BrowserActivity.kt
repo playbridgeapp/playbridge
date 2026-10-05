@@ -433,6 +433,7 @@ class BrowserActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        Components.extensionPrompts.attach(this)
         Log.d("PB_STARTUP", "onResume: existingSessions=${tabManager.sessions.size}")
         lifecycleScope.launch(Dispatchers.Main) {
             val state = Components.store.state   // read CURRENT state when coroutine runs
@@ -448,6 +449,7 @@ class BrowserActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        Components.extensionPrompts.detach(this)
         super.onPause()
         saveTabs()
     }
@@ -2105,29 +2107,34 @@ class BrowserActivity : ComponentActivity() {
                 isSecureConnection = isSecureConnectionState,
                 siteSecurityInfo = siteSecurityInfoState,
                 pendingPopup = pendingPopupState,
-                onXpiDetected = { url ->
-                    runOnUiThread {
-                        Toast.makeText(this@BrowserActivity, "Installing extension...", Toast.LENGTH_SHORT).show()
-                    }
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        try {
-                            Components.addonManager.installAddon(
-                                url = url,
-                                onSuccess = { addon ->
-                                    Log.d(TAG, "Addon installed: ${addon.id}")
-                                    runOnUiThread {
-                                        Toast.makeText(this@BrowserActivity, "Extension installed successfully!", Toast.LENGTH_LONG).show()
+                onXpiDetected = xpi@{ url ->
+                    val requestingTabId = selectedTab?.id ?: return@xpi
+                    val requestingPage = currentUrlState.value
+                    Components.extensionPrompts.requestWebsiteInstall(this@BrowserActivity, url, isCurrent = {
+                        !isFinishing && !isDestroyed && store.state.selectedTabId == requestingTabId &&
+                            tabManager.sessions[requestingTabId] === session && currentUrlState.value == requestingPage
+                    }) {
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            try {
+                                Toast.makeText(this@BrowserActivity, "Checking extension...", Toast.LENGTH_SHORT).show()
+                                Components.addonManager.installAddon(
+                                    url = url,
+                                    onSuccess = { addon ->
+                                        Log.d(TAG, "Addon installed: ${addon.id}")
+                                        runOnUiThread {
+                                            Toast.makeText(this@BrowserActivity, "Extension installed successfully!", Toast.LENGTH_LONG).show()
+                                        }
+                                    },
+                                    onError = { throwable ->
+                                        Log.e(TAG, "Addon install failed", throwable)
+                                        runOnUiThread {
+                                            Toast.makeText(this@BrowserActivity, "Extension was not installed.", Toast.LENGTH_LONG).show()
+                                        }
                                     }
-                                },
-                                onError = { throwable ->
-                                    Log.e(TAG, "Addon install failed", throwable)
-                                    runOnUiThread {
-                                        Toast.makeText(this@BrowserActivity, "Install failed: ${throwable.message}", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            )
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error installing addon", e)
+                                )
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Error installing addon", e)
+                            }
                         }
                     }
                 },
@@ -3424,6 +3431,7 @@ class BrowserActivity : ComponentActivity() {
  }
 
     override fun onDestroy() {
+        Components.extensionPrompts.detach(this)
         Log.d("PB_STARTUP", "onDestroy: isFinishing=$isFinishing, sessions=${tabManager.sessions.size}")
         // Only tear sessions down when the Activity is actually finishing.
         // On configuration-change recreation (theme, split screen, etc.) the
