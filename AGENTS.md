@@ -219,5 +219,5 @@ quotas when more evidence is needed.
 - Android compile SDK 37; target SDK 36; phone/TV min SDK 26
 - Gradle 9.5.1; AGP 9.2.1; Kotlin 2.4.0
 - CI bootstraps JDK 17; the phone Gradle daemon criteria resolve JetBrains JDK 21; Android source/target compatibility is Java 11
-- Rust stable 1.88+ (current lockfile dependencies); Dart SDK `^3.6.0`; extension Node.js 20+ with pnpm 9.15.2; web CI uses Node.js 22
+- Rust stable 1.91+ (current workspace lockfile dependencies); Dart SDK `^3.6.0`; extension Node.js 20+ with pnpm 9.15.2; web CI uses Node.js 22
 - Root version catalog: `gradle/libs.versions.toml`

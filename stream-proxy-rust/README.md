@@ -33,7 +33,7 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
 |---|---|---|
 | `PORT` | `8888` | Port for the proxy server to listen on. |
 | `ADDRESS` | `0.0.0.0` | Bind IP address (`0.0.0.0` for all interfaces). |
-| `PB_PROXY_PASSWORD` | *(None)* | Required password for registration and administrative endpoints; media URLs carry their own session/token capability. |
+| `PB_PROXY_PASSWORD` | *(None)* | Required for `/register` and `/epg`. |
 | `FFMPEG_PATH` | *(Auto-detected)* | Optional FFmpeg path for AVIO library discovery. |
 
 ## Quick Start

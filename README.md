@@ -46,7 +46,7 @@ The PlayBridge senders and extensions are available on official store registries
 
 * **Android Phone (Sender)**:
   * <a href="https://play.google.com/store/apps/details?id=com.playbridge.sender"><img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png" alt="Get PlayBridge on Google Play" height="80"></a>
-  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=5c9b2f&expanded=true).
+  * Or download the latest `phone` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 * **Browser Extension (Sender — Firefox & Chrome)**:
   * **Firefox Add-ons**: <a href="https://addons.mozilla.org/en-US/firefox/addon/playbridge-video-detector/"><img src="https://img.shields.io/badge/Firefox_Add--ons-FF7139?style=for-the-badge&logo=firefox-browser&logoColor=white" alt="Firefox Add-ons" height="44"></a>
   * **Chrome Web Store**: <a href="https://chromewebstore.google.com/detail/playbridge-video-detector/gofdcnocpnieoonficfnfccolcocoaim?hl=en"><img src="https://img.shields.io/badge/Chrome_Web_Store-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Chrome Web Store" height="44"></a>
@@ -57,11 +57,11 @@ The PlayBridge senders and extensions are available on official store registries
 
 - **Android TV / Fire TV (receiver)**:
   - Open the **Downloader** app on your TV and enter code `9557748` to install the TV Player directly, or
-  - download the latest `tv-player` APK from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=8d2a1c&expanded=true) and sideload it.
+  - download the latest `tv-player` APK from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) and sideload it.
   - *Note:* on first launch the TV app asks for "Display over other apps" — required for the receiver to come to the foreground when a cast arrives.
-  - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing (download from [TV Browser Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=3e7f9a&expanded=true)).
+  - Optional: the ad-blocked **TV Browser** APK (GeckoView + uBlock Origin) extends the player with web browsing (download from [TV Browser Releases](https://github.com/playbridgeapp/playbridge/releases)).
 - **Apple TV (receiver)**: no prebuilt binary yet — build and deploy from Xcode; see the [TV README](tv/).
-- **Desktop (receiver)**: download the build for your OS from [GitHub Releases](https://github.com/playbridgeapp/PlayBridge/releases?q=1a4b6c&expanded=true) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
+- **Desktop (receiver)**: download the build for your OS from [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) (`playbridge-desktop-windows-*.zip`, `-linux-*.tar.gz`, `-macos-*.zip`). Linux needs `libmpv2`; the macOS build is unsigned (right-click → Open on first launch).
 - **CLI (sender & receiver)**: on macOS or Linux, run `curl -fsSL https://playbridge.app/install.sh | sh`; on Windows PowerShell, run `irm https://playbridge.app/install.ps1 | iex`. Manual archives remain on [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases).
 - **DLNA TVs**: nothing to install — the phone discovers renderers on your network automatically.
 - **Staying up to date**: the phone and TV apps can check for new releases and install updates from within the app, so sideloaded builds don't go stale.
@@ -252,7 +252,7 @@ phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/
 - **Desktop**: Flutter SDK (Dart `^3.6`) and libmpv
 - **Apple TV**: Xcode with CocoaPods (see [tv/](tv/))
 - **Browser Extension**: Node.js and `pnpm`
-- **Rust Core & Proxy**: Rust 1.88+ (`cargo`; required by the current `Cargo.lock`)
+- **Rust Core & Proxy**: Rust 1.91+ (`cargo`; required by the current workspace `Cargo.lock`)
 
 ### Building
 
