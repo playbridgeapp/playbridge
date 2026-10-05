@@ -702,8 +702,9 @@ object Components {
             // lists, keeps regional/locale list selection intact, exposes the full
             // dashboard, and can actually update — we trigger the update check
             // ourselves since GeckoView has no background extension updater.
-            // First installation also asks for native consent; defer setup until its UI exists.
-            extensionPrompts.runWhenResumed { installOrUpdateUblock() }
+            // Startup only maintains existing installs. First-time setup is an explicit
+            // onboarding/native Extensions action, never a surprise startup prompt.
+            extensionPrompts.runWhenResumed { maintainInstalledUblock() }
         }
     }
     
@@ -717,24 +718,23 @@ object Components {
     private const val UBLOCK_UPDATE_INTERVAL_MS = 24 * 60 * 60 * 1000L
 
     /**
-     * Ensure uBlock Origin is installed as a real AMO install and kept current.
+     * Maintain an existing uBlock Origin without installing it behind onboarding.
      * Runs on the main looper (posted by [installBundledExtension]) like every
      * other webExtensionController call in this file. Three cases:
      *
-     *  - not installed → install from AMO (an offline first launch simply retries
-     *    on the next startup, since this runs every launch);
+     *  - not installed → do nothing; the user can opt in during onboarding or Extensions;
      *  - legacy bundled built-in copy present → retain it until the user explicitly
      *    replaces it through Extensions. Never remove a working ad blocker before
      *    the replacement's permission prompt can be cancelled;
      *  - AMO copy present → trigger a signed update check via its AMO update_url,
      *    throttled to once a day (GeckoView never updates extensions on its own).
      */
-    private fun installOrUpdateUblock() {
+    private fun maintainInstalledUblock() {
         val controller = runtime.webExtensionController
         controller.list().then({ extensions ->
             val existing = extensions?.firstOrNull { it.id == UBLOCK_ID }
             when {
-                existing == null -> installUblockFromAmo(reason = "fresh install")
+                existing == null -> Unit
                 existing.isBuiltIn -> {
                     Log.i(TAG, "Keeping bundled uBlock; store replacement requires explicit user action")
                 }
@@ -747,17 +747,41 @@ object Components {
         })
     }
 
-    private fun installUblockFromAmo(reason: String) {
-        Log.i(TAG, "Installing uBlock Origin from AMO ($reason)…")
-        runtime.webExtensionController
-            .install(UBLOCK_AMO_XPI, WebExtensionController.INSTALLATION_METHOD_MANAGER)
-            .then({ extension ->
-                Log.i(TAG, "uBlock Origin ${extension?.metaData?.version} installed from AMO ($reason)")
-                GeckoResult.fromValue(null)
-            }, { throwable ->
-                Log.e(TAG, "uBlock Origin AMO install failed ($reason) — will retry next launch", throwable)
-                GeckoResult.fromValue(null)
-            })
+    internal val ublockOnboarding by lazy {
+        UblockOnboardingSetup(
+            checkInstalled = { complete ->
+                runtime.webExtensionController.list().then({ extensions ->
+                    complete(extensions?.any { it.id == UBLOCK_ID })
+                    GeckoResult.fromValue(null)
+                }, { _ ->
+                    complete(null)
+                    GeckoResult.fromValue(null)
+                })
+            },
+            install = { complete ->
+                val request = runtime.webExtensionController.install(
+                    UBLOCK_AMO_XPI, WebExtensionController.INSTALLATION_METHOD_ONBOARDING,
+                )
+                request.then({ extension ->
+                    complete(extension?.id == UBLOCK_ID)
+                    GeckoResult.fromValue(null)
+                }, { _ ->
+                    complete(false)
+                    GeckoResult.fromValue(null)
+                })
+                val cancel: CancelUblockInstall = { onCancelled ->
+                    extensionPrompts.cancelInstallPrompt(UBLOCK_ID)
+                    request.cancel().then({ cancelled ->
+                        onCancelled(cancelled == true)
+                        GeckoResult.fromValue(null)
+                    }, { _ ->
+                        onCancelled(false)
+                        GeckoResult.fromValue(null)
+                    })
+                }
+                cancel
+            },
+        )
     }
 
     private fun maybeCheckUblockUpdate(extension: GeckoWebExtension) {

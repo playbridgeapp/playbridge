@@ -55,6 +55,27 @@ internal class ExtensionPromptHost {
         approvals.requestWebsiteInstall(url, isCurrent, install)?.let { show(owner, it) }
     }
 
+    // A new full-window setup guide must not cover an already pending native prompt.
+    fun reShowPendingPrompt() = onMain {
+        val owner = usableActivity() ?: return@onMain
+        val pending = approvals.pending ?: return@onMain
+        val previous = dialog
+        previous?.setOnDismissListener(null)
+        previous?.setOnCancelListener(null)
+        previous?.dismiss()
+        dialog = null
+        show(owner, pending)
+    }
+
+    fun cancelInstallPrompt(extensionId: String) = onMain {
+        val pending = approvals.pending ?: return@onMain
+        if (pending.request.kind != ExtensionApprovalKind.INSTALL || pending.request.extensionId != extensionId) return@onMain
+        val shown = dialog
+        approvals.decide(pending.id, ExtensionApprovalDecision())
+        shown?.dismiss()
+        if (dialog === shown) dialog = null
+    }
+
     private fun usableActivity(): Activity? = activity?.takeUnless { it.isFinishing || it.isDestroyed }
 
     private fun onMain(action: () -> Unit) {
