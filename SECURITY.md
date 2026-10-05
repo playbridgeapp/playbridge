@@ -2,10 +2,18 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 1.0.x   | :white_check_mark: |
-| < 1.0   | :x:                |
+PlayBridge currently ships **0.x alpha releases**, with separate versions for
+each component. There is no supported 1.0.x release line.
+
+| Version | Security support |
+| ------- | ---------------- |
+| Latest published alpha release of each component | Reports accepted; fixes target the next release |
+| Current `main` development branch | Reports accepted; fixes developed here |
+| Older component releases | Upgrade recommended; no maintained backport branches |
+
+See [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) for
+published versions. Include the component, version, and commit (if known) in
+your report; a draft release is not a published security update.
 
 ## Reporting a Vulnerability
 

@@ -1,10 +1,10 @@
 # iOS website casting
 
-The iOS browser supports Android's `window.playbridge.cast()` and
-`window.playbridge.linkCast()` page APIs. Website requests use a PlayBridge
-receiver (TV or Desktop). If the selected destination uses another protocol,
-the request opens a PlayBridge device picker. Normal user-initiated casting
-from the detected-media sheet still supports its existing destination types.
+The iOS browser supports `window.playbridge.cast()`, `linkCast()`, and the
+unified `play()` page API. `play()` uses the selected native destination: this
+phone, a PlayBridge receiver, or a supported external destination. Legacy
+`cast()`/`linkCast()` use PlayBridge receiver selection. Normal user-initiated
+casting from the detected-media sheet retains its existing destination types.
 
 ## Permission and device flow
 
@@ -25,9 +25,9 @@ from the detected-media sheet still supports its existing destination types.
 - Same-document SPA navigation retains a linked session. Switching to Remote
   or another tab does not transfer ownership to that tab.
 
-Linked casts keep the browser visible and show a **Controlled by [website]**
-mini bar with Remote access and **Unlink**. One-off website casts also leave the
-browser visible.
+Receiver casts keep the browser visible without a mini playback bar over the
+page. Remote shows **Controlled by [website]** with **Unlink**. Phone-local
+`play()` opens the native fullscreen player and returns to the page on dismissal.
 
 ## Page API
 
@@ -36,8 +36,18 @@ and these capability flags:
 
 ```js
 window.playbridge.capabilities
-// { linkedCast: 1, explicitHeaders: 1, privateNetworkOriginPermission: 1 }
+// { linkedCast: 1, playback: 1, localPlaybackOrientation: 1,
+//   explicitHeaders: 1, privateNetworkOriginPermission: 1 }
 ```
+
+`getPlaybackDestination()` reads the native destination. Call
+`choosePlaybackDestination()` from a user interaction to show the native picker,
+or pass `{ destinationId: "this-device" }` for explicit phone playback.
+`play({ destinationId, items, initialOrientation })` returns a linked session and
+rechecks the destination after asynchronous preparation. Feature-detect
+`capabilities.playback` and `capabilities.localPlaybackOrientation`; see
+[Unified playback destination](bridged-apps.md#unified-playback-destinations) for
+examples, local queues, external limitations, and orientation behavior.
 
 `cast()` is the legacy, fire-and-forget API. It accepts one media object, an array
 of objects, or `{ items, startIndex, metadata, skipPreplay, privateNetworkOrigins }`.
@@ -93,13 +103,16 @@ rejected. Only one website owns the linked playlist at a time.
 The native bridge validates 64 KiB requests, at most 50 items per request, 200
 items per linked session, 16 subtitle URLs/resources per item, and 16 private
 origins per linked session. Replayed request IDs, subframes, cross-tab commands,
-and commands from a replaced document are rejected. Page response delivery is
-bound to both native document identity and a per-document JavaScript token.
+and commands from a replaced document are rejected. Native frame, origin and
+document identity are the authority. The per-document JavaScript token correlates
+response delivery; it is not a secret or an authentication boundary within a page.
 
 The bridge uses readiness acknowledgement before initial events, a 20-second
 heartbeat, and bounded timeouts. Sessions expire after 10 minutes without page
-activity or 2 hours total, matching Android's limits. WebKit can suspend page
-JavaScript while iOS is backgrounded; on-demand resolution needs a live page.
+activity or 2 hours total. Android has the same duration bounds but different
+transport/heartbeat behavior; these are not a cross-platform liveness guarantee.
+WebKit can suspend page JavaScript while iOS is backgrounded; on-demand resolution
+needs a live page.
 Already-delivered items remain on the receiver.
 
 ## Verification
