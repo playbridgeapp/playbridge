@@ -6,7 +6,6 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.CheckBox
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import com.playbridge.sender.R
 
@@ -127,7 +126,7 @@ internal class ExtensionPromptHost {
         try {
             val shown = TouchProtectedExtensionDialog(owner).apply {
                 setTitle(title)
-                setView(ScrollView(owner).apply { addView(content) })
+                setApprovalContent(content)
                 setButton(AlertDialog.BUTTON_NEGATIVE, "Cancel") { _, _ ->
                     approvals.decide(pending.id, ExtensionApprovalDecision())
                 }

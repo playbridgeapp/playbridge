@@ -1,6 +1,7 @@
 package com.playbridge.sender.browser
 
 import android.view.MotionEvent
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -55,6 +56,33 @@ class ExtensionDialogTouchGuardTest {
         assertFalse(guard.allows(MotionEvent.ACTION_UP, 0))
         assertTrue(guard.allows(MotionEvent.ACTION_DOWN, 0))
         assertTrue(guard.allows(MotionEvent.ACTION_UP, 0))
+    }
+
+    @Test fun warningIsShownOnceAcrossEventsAndRepeatedObscuredGestures() {
+        val updates = mutableListOf<Boolean>()
+        val guard = ExtensionDialogTouchGuard { updates += it }
+        for (flags in overlayFlags) {
+            assertFalse(guard.allows(MotionEvent.ACTION_DOWN, flags))
+            assertFalse(guard.allows(MotionEvent.ACTION_MOVE, flags))
+            assertFalse(guard.allows(MotionEvent.ACTION_UP, 0))
+        }
+        assertEquals(listOf(true), updates)
+    }
+
+    @Test fun cleanNewGestureClearsWarningAndLaterBlockingCanNotifyAgain() {
+        val updates = mutableListOf<Boolean>()
+        val guard = ExtensionDialogTouchGuard { updates += it }
+        assertTrue(guard.allows(MotionEvent.ACTION_DOWN, 0))
+        assertTrue(updates.isEmpty())
+        assertFalse(guard.allows(MotionEvent.ACTION_MOVE, MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED))
+        assertFalse(guard.allows(MotionEvent.ACTION_UP, 0))
+        assertFalse(guard.allows(MotionEvent.ACTION_CANCEL, 0))
+        assertEquals(listOf(true), updates)
+        assertTrue(guard.allows(MotionEvent.ACTION_DOWN, 0))
+        assertTrue(guard.allows(MotionEvent.ACTION_UP, 0))
+        assertEquals(listOf(true, false), updates)
+        assertFalse(guard.allows(MotionEvent.ACTION_DOWN, MotionEvent.FLAG_WINDOW_IS_OBSCURED))
+        assertEquals(listOf(true, false, true), updates)
     }
 
     @Test fun unrelatedFlagsDoNotBlockCleanInput() {

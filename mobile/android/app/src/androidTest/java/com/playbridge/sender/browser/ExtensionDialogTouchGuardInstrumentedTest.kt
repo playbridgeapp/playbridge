@@ -5,8 +5,11 @@ import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.TextView
+import com.playbridge.sender.R
 import androidx.activity.ComponentActivity
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import org.junit.Assert.assertFalse
@@ -30,7 +33,7 @@ class ExtensionDialogTouchGuardInstrumentedTest {
             technicalData = CheckBox(owner).apply { text = "Technical data" }
             dialog = TouchProtectedExtensionDialog(owner).apply {
                 setTitle("Permission touch guard fixture")
-                setView(LinearLayout(owner).apply {
+                setApprovalContent(LinearLayout(owner).apply {
                     orientation = LinearLayout.VERTICAL
                     addView(privateMode)
                     addView(technicalData)
@@ -44,6 +47,10 @@ class ExtensionDialogTouchGuardInstrumentedTest {
         compose.waitForIdle()
         try {
             compose.runOnIdle {
+                val warning = warning(dialog)
+                assertTrue(warning.visibility == View.INVISIBLE)
+                assertTrue(warning.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO)
+                assertTrue(warning.accessibilityLiveRegion == View.ACCESSIBILITY_LIVE_REGION_POLITE)
                 val controls = listOf(privateMode, technicalData,
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE), dialog.getButton(AlertDialog.BUTTON_NEGATIVE))
                 for (control in controls) {
@@ -54,6 +61,8 @@ class ExtensionDialogTouchGuardInstrumentedTest {
                         gesture(dialog, control, moveFlags = flag)
                         gesture(dialog, control, upFlags = flag)
                         assertFalse(control.isPressed)
+                        assertTrue(warning.visibility == View.VISIBLE)
+                        assertTrue(warning.importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_YES)
                     }
                 }
             }
@@ -67,9 +76,14 @@ class ExtensionDialogTouchGuardInstrumentedTest {
             }
             compose.runOnIdle {
                 assertTrue(privateMode.isChecked)
+                assertTrue(warning(dialog).visibility == View.INVISIBLE)
+                assertTrue(warning(dialog).importantForAccessibility == View.IMPORTANT_FOR_ACCESSIBILITY_NO)
                 gesture(dialog, technicalData)
             }
             compose.runOnIdle {
+                assertTrue(technicalData.isChecked)
+                gesture(dialog, privateMode, downFlags = MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED)
+                assertTrue(privateMode.isChecked)
                 assertTrue(technicalData.isChecked)
                 gesture(dialog, dialog.getButton(AlertDialog.BUTTON_POSITIVE))
             }
@@ -77,6 +91,18 @@ class ExtensionDialogTouchGuardInstrumentedTest {
         } finally {
             compose.runOnIdle { dialog.dismiss() }
         }
+    }
+
+    private fun warning(dialog: TouchProtectedExtensionDialog): TextView {
+        val message = compose.activity.getString(R.string.extension_overlay_touch_warning)
+        fun find(view: View): TextView? {
+            if (view is TextView && view.text.toString() == message) return view
+            if (view is ViewGroup) {
+                for (index in 0 until view.childCount) find(view.getChildAt(index))?.let { return it }
+            }
+            return null
+        }
+        return checkNotNull(find(dialog.window!!.decorView))
     }
 
     private fun gesture(
