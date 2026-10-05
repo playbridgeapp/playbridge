@@ -38,6 +38,18 @@ export interface DetectionPolicy {
   options?: Partial<DetectionOptions>;
 }
 
+export const DETECTION_POLICY_PORT = "playbridge-detection-policy";
+
+export function validDetectionPolicy(value: unknown): value is DetectionPolicy {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const policy = value as DetectionPolicy;
+  return policy.type === "detection_policy" && Number.isSafeInteger(policy.revision) && policy.revision >= 0 &&
+    typeof policy.enabled === "boolean" && typeof policy.browserEnabled === "boolean" &&
+    Array.isArray(policy.bridgedAppOrigins) && policy.bridgedAppOrigins.every(origin => typeof origin === "string") &&
+    (policy.options == null || (typeof policy.options === "object" && !Array.isArray(policy.options) &&
+      Object.values(policy.options).every(option => typeof option === "boolean")));
+}
+
 export class TabDetectionPolicy {
   private revision = -1;
   private browserEnabled = false;
