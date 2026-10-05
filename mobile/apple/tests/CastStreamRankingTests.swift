@@ -48,6 +48,28 @@ struct CastStreamRankingTests {
         let dashQualities = await DASHParser.variants(mpdURL: dash.url, headers: [:])
         precondition(hlsQualities.map(\.label) == ["1080p", "480p"])
         precondition(hlsQualities.first?.url == "https://example.test/high.m3u8")
+        // Peak bandwidth must win regardless of average-attribute order or tolerated whitespace.
+        for attributes in [
+            "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
+            "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000",
+            "PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "BANDWIDTH=9000000",
+        ] {
+            let body = """
+            #EXTM3U
+            #EXT-X-STREAM-INF:\(attributes),RESOLUTION=1920x1080
+            peak.m3u8
+            #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000,RESOLUTION=1920x1080
+            average.m3u8
+            """
+            let variants = HLSParser.parse(body, masterURL: ladder.url).qualities
+            precondition(variants.map(\.bandwidth) == [9000000, 6000000])
+            precondition(variants.first?.url == "https://example.test/peak.m3u8")
+        }
+        precondition(HLSParser.parse("#EXTM3U\n#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=4000000\nonly-average.m3u8",
+                                    masterURL: ladder.url).qualities.isEmpty)
         precondition(childQualities.isEmpty)
         precondition(dashQualities.count == 2 && dashQualities.allSatisfy { $0.url == dash.url })
 

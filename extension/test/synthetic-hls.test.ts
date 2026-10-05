@@ -61,6 +61,32 @@ test("buildSyntheticFromMasterBody produces castable data URL multivariant", () 
   assert.ok(decoded.includes("session=sess-1"));
 });
 
+test("synthetic qualities and URLs rank by peak bandwidth in either attribute order", () => {
+  for (const attrs of [
+    "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
+    "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+    "AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000",
+    "PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+    "\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+  ]) {
+    const synth = buildSyntheticFromMasterBody(
+      `#EXTM3U
+#EXT-X-STREAM-INF:${attrs},RESOLUTION=1920x1080
+peak.m3u8
+#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000,RESOLUTION=1280x720
+average.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1000000
+peak-only.m3u8
+`,
+      MASTER,
+    )!;
+    assert.deepEqual(synth.qualities.map(q => q.bandwidth), [9000000, 6000000, 1000000]);
+    assert.deepEqual(synth.qualities.map(q => q.averageBandwidth), [4000000, 5000000, null]);
+    assert.ok(synth.videoUrls[0].includes("peak.m3u8"));
+    assert.ok(preferredSyntheticCastUrl(synth)!.includes("peak.m3u8"));
+  }
+});
+
 test("buildSyntheticFromObservations builds minimal demuxed master", () => {
   const synth = buildSyntheticFromObservations({
     groupKey: "https://edge.example/streams/x/",

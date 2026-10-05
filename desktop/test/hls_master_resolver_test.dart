@@ -60,6 +60,26 @@ void main() {
     );
   });
 
+  test('equal-resolution variants use peak bandwidth in either attribute order',
+      () async {
+    for (final attrs in [
+      'AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000',
+      'BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      'AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000',
+      'PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      '\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      'BANDWIDTH=9000000',
+    ]) {
+      routes['/master.m3u8'] = '#EXTM3U\n'
+          '#EXT-X-STREAM-INF:$attrs,RESOLUTION=1920x1080,CODECS="avc1.64002A"\n'
+          'peak.m3u8\n'
+          '#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000,'
+          'RESOLUTION=1920x1080,CODECS="avc1.64002A"\n'
+          'average.m3u8\n';
+      expect(await resolveHlsMaster('$base/master.m3u8'), '$base/peak.m3u8');
+    }
+  });
+
   test('leaves a media playlist unchanged', () async {
     routes['/media.m3u8'] = '#EXTM3U\n'
         '#EXT-X-TARGETDURATION:10\n'
