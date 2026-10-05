@@ -125,17 +125,20 @@ internal class ExtensionPromptHost {
             content.addView(this)
         } else null
         try {
-            val shown = AlertDialog.Builder(owner)
-                .setTitle(title)
-                .setView(ScrollView(owner).apply { addView(content) })
-                .setNegativeButton("Cancel") { _, _ -> approvals.decide(pending.id, ExtensionApprovalDecision()) }
-                .setPositiveButton(if (request.kind == ExtensionApprovalKind.WEBSITE_DOWNLOAD) "Download" else "Approve") { _, _ ->
+            val shown = TouchProtectedExtensionDialog(owner).apply {
+                setTitle(title)
+                setView(ScrollView(owner).apply { addView(content) })
+                setButton(AlertDialog.BUTTON_NEGATIVE, "Cancel") { _, _ ->
+                    approvals.decide(pending.id, ExtensionApprovalDecision())
+                }
+                setButton(AlertDialog.BUTTON_POSITIVE,
+                    if (request.kind == ExtensionApprovalKind.WEBSITE_DOWNLOAD) "Download" else "Approve") { _, _ ->
                     approvals.decide(pending.id, ExtensionApprovalDecision(
                         allowed = true, privateBrowsing = privateMode?.isChecked == true,
                         technicalData = technicalData?.isChecked == true,
                     ))
                 }
-                .create()
+            }
             shown.setOnCancelListener { approvals.decide(pending.id, ExtensionApprovalDecision()) }
             shown.setOnDismissListener {
                 approvals.decide(pending.id, ExtensionApprovalDecision())
@@ -143,7 +146,7 @@ internal class ExtensionPromptHost {
             }
             dialog = shown
             shown.show()
-            shown.getButton(AlertDialog.BUTTON_POSITIVE).filterTouchesWhenObscured = true
+            shown.window?.decorView?.filterTouchesWhenObscured = true
         } catch (_: RuntimeException) {
             approvals.decide(pending.id, ExtensionApprovalDecision())
             dialog?.dismiss()
