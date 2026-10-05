@@ -11,9 +11,9 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
     cd PlayBridge
     ```
 3.  **Set up the environment**:
-    - Ensure you have Android Studio Ladybug or later.
-    - Ensure you use JDK 17.
-    - Sync the project with Gradle files.
+    - See the component prerequisites in [Build Instructions](README.md#build-instructions).
+    - For Android, install SDK 37 and a JDK supported by Gradle; the phone build resolves its JDK 21 toolchain.
+    - Sync the owning Android project (`mobile/android/` or `tv/android/`), not the repository root.
 
 ## Making Changes
 
@@ -24,7 +24,11 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
 2.  **Make your changes**: Implement your feature or fix.
 3.  **Run tests**: Ensure all tests pass.
     ```bash
-    ./gradlew test
+    # From the repository root: run the tests for the components you changed.
+    (cd mobile/android && ./gradlew :app:testFossDebugUnitTest :shared:testAndroidHostTest)
+    (cd tv/android && ./gradlew :player:app:testFossDebugUnitTest :shared:testAndroidHostTest)
+    (cd extension && pnpm typecheck && pnpm test)
+    (cd desktop && flutter test)
     ```
 4.  **Commit your changes**:
     ```bash
@@ -46,7 +50,9 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
 - We use Kotlin's official coding conventions.
 - Please run the linter before submitting:
     ```bash
-    ./gradlew lint
+    # Run only the relevant Android component.
+    (cd mobile/android && ./gradlew :app:lintFossDebug)
+    (cd tv/android && ./gradlew :player:app:lintFossDebug)
     ```
 
 ## Questions?

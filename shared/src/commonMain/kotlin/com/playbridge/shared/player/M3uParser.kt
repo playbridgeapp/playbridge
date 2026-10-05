@@ -50,7 +50,7 @@ data class IptvChannel(
 object M3uParser {
     private val http: HttpClient = SharedHttpClient.client
     private val REGEX_RESOLUTION = Regex("""RESOLUTION=(\d+x\d+)""")
-    private val REGEX_BANDWIDTH = Regex("""BANDWIDTH=(\d+)""")
+    private val REGEX_BANDWIDTH = Regex("""(?:^|[:,])\s*BANDWIDTH=(\d+)""")
     private val REGEX_CODECS = Regex("""CODECS="([^"]+)"""")
     private val REGEX_TVG_ID = Regex("""tvg-id="([^"]*)"""")
     private val REGEX_TVG_LOGO = Regex("""tvg-logo="([^"]*)"""")
@@ -178,6 +178,9 @@ object M3uParser {
             }
         }
 
+    internal fun parseVariantBandwidth(line: String): Int? =
+        REGEX_BANDWIDTH.find(line)?.groupValues?.get(1)?.toIntOrNull()
+
     suspend fun parseMasterPlaylist(url: String, inputHeaders: Map<String, String>?): List<HlsVariant>? = withContext(Dispatchers.Default) {
         try {
             val response: HttpResponse = http.get(url) {
@@ -214,7 +217,7 @@ object M3uParser {
                 if (trimmed.startsWith("#EXT-X-STREAM-INF")) {
                     isMasterPlaylist = true
                     currentResolution = REGEX_RESOLUTION.find(trimmed)?.groupValues?.get(1)
-                    currentBandwidth = REGEX_BANDWIDTH.find(trimmed)?.groupValues?.get(1)?.toIntOrNull()
+                    currentBandwidth = parseVariantBandwidth(trimmed)
                     currentCodecs = REGEX_CODECS.find(trimmed)?.groupValues?.get(1)
                 } else if (!trimmed.startsWith("#") && currentBandwidth != null) {
                     val streamUrl = resolveUrl(url, trimmed)

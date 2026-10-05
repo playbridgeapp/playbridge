@@ -42,11 +42,11 @@ If `AGENTS.local.md` exists at the repository root, read and follow it for optio
 |---|---|---|
 | Android phone | `mobile/android/` | Kotlin, Compose, GeckoView; Gradle modules `:app` and `:shared` |
 | Android TV | `tv/android/` | Kotlin, TV UI, ExoPlayer/MPV; Gradle modules `:player:app`, `:geckoview-plugin:app`, and `:shared` |
-| Shared Kotlin | `shared/` | KMP protocol and shared playback/domain logic, included by both Android builds |
+| Shared Kotlin | `shared/` | Kotlin Multiplatform module currently targeting Android only; protocol and playback/domain logic included by both Android builds |
 | Apple phone | `mobile/apple/` | SwiftUI/Xcode sender, MPVKit-only local playback; optional Cast Core external transports |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver and sender for macOS, Windows, and Linux |
-| Stream proxy (Dart) | `stream-proxy-dart/` | Standalone Dart proxy implementation; separate from Desktop's current Rust-backed in-process proxy |
+| Stream proxy (Dart) | `stream-proxy-dart/` | Legacy standalone proxy; not the production Desktop/phone proxy integration (those use Rust sender services) |
 | Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption |
 | Rust Cast Core | `cast/core/` | Portable discovery, protocol clients, pairing primitives, and casting sessions |
 | Rust Receiver | `cast/receiver/` | Secure reusable PlayBridge WSS receiver runtime; consumers provide playback and platform lifecycle |
@@ -121,7 +121,9 @@ Changes to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.
 
 - `mobile/android/app/src/main/java/com/playbridge/sender/connection/ConnectionViewModel.kt`
 - `tv/android/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
-- `extension/src/background.ts`, which manually handles protocol JSON
+- `cast/receiver/` and `desktop/lib/receiver_server.dart`, which host Desktop receiver handling through the Rust runtime
+- Apple phone/TV Swift JSON consumers and Rust sender clients
+- `extension/src/background.ts`, for the extension-to-Desktop native messaging contract (the extension does not open receiver WSS directly)
 
 ### Native receiver runtime ripple
 
@@ -217,5 +219,5 @@ quotas when more evidence is needed.
 - Android compile SDK 37; target SDK 36; phone/TV min SDK 26
 - Gradle 9.5.1; AGP 9.2.1; Kotlin 2.4.0
 - CI bootstraps JDK 17; the phone Gradle daemon criteria resolve JetBrains JDK 21; Android source/target compatibility is Java 11
-- Rust stable 1.85+; Dart SDK `^3.6.0`; extension Node.js 20+ with pnpm 9.15.2; web CI uses Node.js 22
+- Rust stable 1.91+ (current workspace lockfile dependencies); Dart SDK `^3.6.0`; extension Node.js 20+ with pnpm 9.15.2; web CI uses Node.js 22
 - Root version catalog: `gradle/libs.versions.toml`

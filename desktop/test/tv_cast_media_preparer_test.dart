@@ -34,6 +34,30 @@ https://cdn.example/v1.m3u8?session=s
     expect(urls, contains('https://cdn.example/v1.m3u8?session=s'));
   });
 
+  test('HLS children rank by peak bandwidth with tolerated whitespace', () {
+    for (final attrs in [
+      'AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000',
+      'BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      'AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000',
+      'PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      '\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      'BANDWIDTH=9000000',
+    ]) {
+      final body = '''
+#EXTM3U
+#EXT-X-STREAM-INF:$attrs
+peak.m3u8
+#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000
+average.m3u8
+''';
+      expect(
+        TvCastMediaPreparer.hlsVariantUrlsForBody(
+            body, 'https://cdn.example/master.m3u8'),
+        ['https://cdn.example/peak.m3u8', 'https://cdn.example/average.m3u8'],
+      );
+    }
+  });
+
   test('rewritePlaylistUrls replaces longest matches first', () {
     const body = '''
 #EXTM3U

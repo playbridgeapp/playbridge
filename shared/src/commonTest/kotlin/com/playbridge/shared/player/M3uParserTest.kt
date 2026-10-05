@@ -8,6 +8,21 @@ import kotlin.test.assertTrue
 class M3uParserTest {
 
     @Test
+    fun parsesPeakBandwidthAtAttributeBoundaries() {
+        for (attrs in listOf(
+            "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
+            "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000",
+            "PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "BANDWIDTH=9000000",
+        )) {
+            assertEquals(9000000, M3uParser.parseVariantBandwidth("#EXT-X-STREAM-INF:$attrs"))
+        }
+        assertNull(M3uParser.parseVariantBandwidth("#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=4000000"))
+    }
+
+    @Test
     fun parsesChannelsWithAttributes() {
         val text = """
             #EXTM3U

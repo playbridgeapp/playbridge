@@ -78,7 +78,7 @@ object HlsParser {
     private val REGEX_DEFAULT_YES = Regex("DEFAULT=YES")
     private val REGEX_AUTOSELECT_YES = Regex("AUTOSELECT=YES")
     private val REGEX_CHANNELS = Regex("CHANNELS=\"([^\"]+)\"")
-    private val REGEX_BANDWIDTH = Regex("BANDWIDTH=(\\d+)")
+    private val REGEX_BANDWIDTH = Regex("(?:^|,)\\s*BANDWIDTH=(\\d+)")
     private val REGEX_AVERAGE_BANDWIDTH = Regex("AVERAGE-BANDWIDTH=(\\d+)")
     private val REGEX_RESOLUTION = Regex("RESOLUTION=(\\d+x\\d+)")
     private val REGEX_CODECS = Regex("CODECS=\"([^\"]+)\"")

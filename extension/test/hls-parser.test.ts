@@ -27,6 +27,31 @@ chunklist_1_video_99_llhls.m3u8
   assert.ok(parsed.videoQualities[0].url.includes("chunklist_1_video"));
 });
 
+test("peak bandwidth is independent of average bandwidth attribute order", () => {
+  for (const attrs of [
+    "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
+    "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+    "AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000",
+    "PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+    "\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+  ]) {
+    const parsed = HlsParser.parsePlaylistContent(
+      `#EXTM3U
+#EXT-X-STREAM-INF:${attrs},RESOLUTION=1920x1080
+peak.m3u8
+#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000,RESOLUTION=1280x720
+average.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1000000
+peak-only.m3u8
+`,
+      MASTER_URL,
+    );
+    assert.deepEqual(parsed.videoQualities.map(q => q.bandwidth), [9000000, 6000000, 1000000]);
+    assert.deepEqual(parsed.videoQualities.map(q => q.averageBandwidth), [4000000, 5000000, null]);
+    assert.ok(parsed.videoQualities[0].url.includes("peak.m3u8"));
+  }
+});
+
 test("parsePlaylistContent classifies media playlists with parts", () => {
   const videoUrl =
     "https://edge.example/streams/origin.user.id/chunklist_0_video_99_llhls.m3u8?session=s";
