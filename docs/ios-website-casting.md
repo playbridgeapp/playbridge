@@ -115,6 +115,14 @@ WebKit can suspend page JavaScript while iOS is backgrounded; on-demand resoluti
 needs a live page.
 Already-delivered items remain on the receiver.
 
+## Website progress callbacks
+
+Website requests must not contain `progressWebhook` at the envelope, payload,
+or item level, even with a null or false value. Linked requests fail with
+`invalid_request`; legacy fire-and-forget casts are discarded. Use linked
+session events for page progress. See the [page-API policy](../protocol/page-api/README.md);
+this restriction does not remove trusted-sender WSS webhook support.
+
 ## Verification
 
 ```sh

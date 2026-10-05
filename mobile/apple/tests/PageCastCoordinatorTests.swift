@@ -145,6 +145,31 @@ private final class FakeTransport: PageCastTransport {
 }
 
 @main struct PageCastCoordinatorChecks {
+    @MainActor static func rejectsWebsiteWebhooks() async {
+        let f = Fixture(approved: true)
+        let session = await f.open()
+        let sentCount = f.transport.sends.count
+        for operation in ["cast", "open", "play", "replace", "append", "supply", "choose_destination"] {
+            for payload: [String: Any] in [
+                ["items": [Fixture.item()], "progressWebhook": NSNull()],
+                ["items": [["id": "episode", "url": "https://media.example/video.mp4", "progressWebhook": NSNull()]]],
+            ] {
+                _ = await f.response(f.send(operation, session: session, payload: payload), error: "invalid_request")
+            }
+        }
+        f.coordinator.receive(["type": "pageCastRequest", "operation": "open", "requestId": "reserved-envelope",
+            "documentToken": "document-token", "progressWebhook": NSNull(), "payload": ["items": [Fixture.item()]]], from: f.page)
+        _ = await f.response("reserved-envelope", error: "invalid_request")
+        precondition(f.transport.sends.count == sentCount && f.transport.commands.isEmpty)
+        precondition(f.coordinator.isLinked, "Invalid payload must not supersede the existing session")
+        let wire = f.transport.sends[0].request.playlistCommand(allowedPrivateOrigins: [])
+        let envelope = try! JSONSerialization.jsonObject(with: Data(wire.utf8)) as! [String: Any]
+        let payload = envelope["payload"] as! [String: Any]
+        precondition(!payload.keys.contains("progressWebhook"))
+        precondition((payload["items"] as! [[String: Any]]).allSatisfy { !$0.keys.contains("progressWebhook") })
+        print("PASS website webhooks rejected before effects and excluded from outgoing playlists")
+    }
+
     @MainActor static func permissionFlow() async {
         var resolutions = 0
         let f = Fixture { _, _, _ in resolutions += 1; return [] }
@@ -505,6 +530,7 @@ private final class FakeTransport: PageCastTransport {
             if let previous { UserDefaults.standard.set(previous, forKey: "website_cast_prefetch") }
             else { UserDefaults.standard.removeObject(forKey: "website_cast_prefetch") }
         }
+        await rejectsWebsiteWebhooks()
         await unifiedPlayback()
         await permissionFlow()
         await privatePermissionsAndPayloads()

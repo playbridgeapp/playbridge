@@ -47,6 +47,14 @@ Phone hosts advertise `capabilities.localPlaybackOrientation === 1`. The optiona
 
 Local playback and native PlayBridge receivers support the website's lazy episode queue. The Android and iOS phone players expose a live **Queue** with next/previous controls; it updates when the website supplies items. Queued episodes advance automatically, and a late supply can continue after the current episode ends. Only resolved items appear in the queue, so Next stays disabled until another item is supplied. The owning page must remain loaded to resolve further episodes; already-delivered items remain playable after Unlink. External receivers retain their existing single-item capabilities; they do not request next episodes. Unsupported external queues or subtitle delivery fail explicitly. Unlinking releases website control and progress reporting while playback continues. Existing `cast()` and `linkCast()` remain available for compatibility. A website without the bridge uses its own web player.
 
+## Website progress callbacks
+
+Website requests must not contain `progressWebhook` at the envelope, payload,
+or item level, even with a null or false value. Linked requests fail with
+`invalid_request`; legacy fire-and-forget casts are discarded. Use linked
+session events for page progress. See the [page-API policy](../protocol/page-api/README.md);
+this restriction does not remove trusted-sender WSS webhook support.
+
 ## Device plugins on Android FOSS
 
 Library and installed Bridged Apps share the device's Nuvio plugin manager and resolver. The resolver is opt-in and initially disabled. The Play flavor does not include the QuickJS plugin runtime; iOS has no native plugin resolver. Library remains accessible during the transition to Streams. Device plugin installation, provider settings and approvals stay on the device and are not imported from a website or its Nuvio cloud profile.

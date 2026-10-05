@@ -151,6 +151,12 @@ final class PageCastCoordinator: ObservableObject {
               let data = try? JSONSerialization.data(withJSONObject: message), data.count <= 66 * 1024 else {
             reply(request, error: "resource_limit"); return
         }
+        do {
+            try PageCastRequest.rejectSenderOnlyFields(message)
+            try PageCastRequest.rejectSenderOnlyFields(request.payload)
+        } catch {
+            reply(request, error: "invalid_request"); return
+        }
         if ["destination", "choose_destination"].contains(request.operation) {
             guard request.isCurrent(requireActive: true), let transport else { reply(request, error: "not_allowed"); return }
             if request.operation == "choose_destination" {

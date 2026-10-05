@@ -32,7 +32,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import playbridge.PlayPayload
-import playbridge.PlaylistPayload
 import playbridge.SubtitleResource
 
 data class LinkedPageCastUiState(
@@ -205,49 +204,7 @@ class LinkedPageCastCoordinator(
         }
     }
 
-    fun parseOpen(message: JSONObject): LinkedPageCastOpenRequest? = runCatching {
-        val bridgeRequestId = message.requiredShortString("bridgeRequestId", 128)
-        val sessionId = message.requiredShortString("sessionId", 128)
-        val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin")) ?: return null
-        val tabId = message.getInt("tabId")
-        val navigationGeneration = message.getLong("navigationGeneration")
-        if (tabId < 0 || navigationGeneration < 0) return null
-        val payload = message.optJSONObject("payload") ?: return null
-        if (payload.toString().toByteArray().size > MAX_REQUEST_BYTES) return null
-        val destinationId = if (message.optString("type") == "linked_play") {
-            payload.requiredShortString("destinationId", 256)
-        } else null
-        val initialOrientation = if (payload.has("initialOrientation")) {
-            PhonePlayerOpeningOrientation.parse(payload.opt("initialOrientation")) ?: return null
-        } else null
-        val items = parseItems(payload.optJSONArray("items"), emptySet()) ?: return null
-        val startIndex = payload.optInt("startIndex", 0)
-        if (startIndex !in items.indices) return null
-        val metadata = payload.optJSONObject("metadata")?.let {
-            if (it.toString().toByteArray().size > MAX_METADATA_BYTES) return null
-            com.playbridge.shared.protocol.decodeVisualMetadataJson(it.toString())
-        }
-        val skipPreplayValue = payload.opt("skipPreplay")
-        val skipPreplay = if (skipPreplayValue == null || skipPreplayValue == JSONObject.NULL) {
-            false
-        } else {
-            skipPreplayValue as? Boolean ?: return null
-        }
-        LinkedPageCastOpenRequest(
-            bridgeRequestId,
-            sessionId,
-            origin,
-            tabId,
-            navigationGeneration,
-            items,
-            startIndex,
-            metadata,
-            skipPreplay,
-            parseRequestedPrivateOrigins(payload) ?: return null,
-            destinationId,
-            initialOrientation,
-        )
-    }.getOrNull()
+    fun parseOpen(message: JSONObject): LinkedPageCastOpenRequest? = parseOpenMessage(message)
 
     suspend fun requestedPrivateOrigins(request: LinkedPageCastOpenRequest): Set<String>? =
         withContext(Dispatchers.IO) {
@@ -315,11 +272,11 @@ class LinkedPageCastCoordinator(
                 connectionCoordinator.tvPlaylistState.value = null
                 val sent = webSocketClient.send(
                     createPlaylistCommandJson(
-                        PlaylistPayload(
+                        pageCastPlaylistPayload(
                             items = request.items.map { it.payload },
-                            start_index = request.startIndex,
-                            visual_metadata = request.playlistMetadata,
-                            skip_preplay = request.skipPreplay,
+                            startIndex = request.startIndex,
+                            metadata = request.playlistMetadata,
+                            skipPreplay = request.skipPreplay,
                         ),
                     ),
                 )
@@ -418,11 +375,11 @@ class LinkedPageCastCoordinator(
         connectionCoordinator.tvPlaylistState.value = null
         val sent = webSocketClient.send(
             createPlaylistCommandJson(
-                PlaylistPayload(
+                pageCastPlaylistPayload(
                     items = items.map { it.payload },
-                    start_index = startIndex,
-                    visual_metadata = metadata,
-                    skip_preplay = skipPreplay,
+                    startIndex = startIndex,
+                    metadata = metadata,
+                    skipPreplay = skipPreplay,
                 ),
             ),
         )
@@ -668,6 +625,52 @@ class LinkedPageCastCoordinator(
             "authorization", "cookie", "referer", "origin", "user-agent", "accept", "accept-language",
         )
 
+        // Pure request validation shared by the live coordinator and JVM rejection tests.
+        internal fun parseOpenMessage(message: JSONObject): LinkedPageCastOpenRequest? = runCatching {
+            val bridgeRequestId = message.requiredShortString("bridgeRequestId", 128)
+            val sessionId = message.requiredShortString("sessionId", 128)
+            val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin")) ?: return null
+            val tabId = message.getInt("tabId")
+            val navigationGeneration = message.getLong("navigationGeneration")
+            if (tabId < 0 || navigationGeneration < 0) return null
+            val payload = message.optJSONObject("payload") ?: return null
+            if (message.has("progressWebhook") || payload.has("progressWebhook")) return null
+            if (payload.toString().toByteArray().size > MAX_REQUEST_BYTES) return null
+            val destinationId = if (message.optString("type") == "linked_play") {
+                payload.requiredShortString("destinationId", 256)
+            } else null
+            val initialOrientation = if (payload.has("initialOrientation")) {
+                PhonePlayerOpeningOrientation.parse(payload.opt("initialOrientation")) ?: return null
+            } else null
+            val items = parseItems(payload.optJSONArray("items"), emptySet()) ?: return null
+            val startIndex = payload.optInt("startIndex", 0)
+            if (startIndex !in items.indices) return null
+            val metadata = payload.optJSONObject("metadata")?.let {
+                if (it.toString().toByteArray().size > MAX_METADATA_BYTES) return null
+                com.playbridge.shared.protocol.decodeVisualMetadataJson(it.toString())
+            }
+            val skipPreplayValue = payload.opt("skipPreplay")
+            val skipPreplay = if (skipPreplayValue == null || skipPreplayValue == JSONObject.NULL) {
+                false
+            } else {
+                skipPreplayValue as? Boolean ?: return null
+            }
+            LinkedPageCastOpenRequest(
+                bridgeRequestId,
+                sessionId,
+                origin,
+                tabId,
+                navigationGeneration,
+                items,
+                startIndex,
+                metadata,
+                skipPreplay,
+                parseRequestedPrivateOrigins(payload) ?: return null,
+                destinationId,
+                initialOrientation,
+            )
+        }.getOrNull()
+
         private fun parseRequestedPrivateOrigins(payload: JSONObject): Set<String>? {
             val values = payload.optJSONArray("privateNetworkOrigins") ?: return emptySet()
             if (values.length() > MediaNetworkPolicy.MAX_PRIVATE_ORIGINS) return null
@@ -688,6 +691,7 @@ class LinkedPageCastCoordinator(
             val items = buildList {
                 for (index in 0 until array.length()) {
                     val obj = array.optJSONObject(index) ?: return null
+                    if (obj.has("progressWebhook")) return null
                     val id = obj.optString("id")
                     val url = obj.optString("url")
                     if (id.isBlank() || id.length > 128 || !MediaNetworkPolicy.isHttpUrl(url)) return null

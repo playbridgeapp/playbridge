@@ -211,8 +211,17 @@ function validMetadataShape(value: unknown, depth: number, count: { keys: number
   return true;
 }
 
+/** Sender-only protocol fields are forbidden, even when null or otherwise ignored. */
+export function pageCastHasSenderOnlyFields(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(pageCastHasSenderOnlyFields);
+  if (!isRecord(value)) return false;
+  return Object.prototype.hasOwnProperty.call(value, "progressWebhook") ||
+    (Array.isArray(value.items) && value.items.some(item =>
+      isRecord(item) && Object.prototype.hasOwnProperty.call(item, "progressWebhook")));
+}
+
 function commonItem(value: Record<string, unknown>): PageCastItem | undefined {
-  if (!isHttpUrl(value.url)) return undefined;
+  if (pageCastHasSenderOnlyFields(value) || !isHttpUrl(value.url)) return undefined;
   const headers = replayHeaders(value.headers);
   if (
     value.headers !== undefined &&
@@ -252,7 +261,7 @@ function item(value: unknown): PageCastItem | undefined {
 /** Normalizes the documented object, playlist, and bare-array page APIs. */
 export function normalizePageCastPayload(payload: unknown): PageCastRequest | undefined {
   const source = Array.isArray(payload) ? { items: payload } : payload;
-  if (!isRecord(source)) return undefined;
+  if (!isRecord(source) || pageCastHasSenderOnlyFields(source)) return undefined;
 
   const values = Array.isArray(source.items) ? source.items : [source];
   if (values.length === 0 || values.length > MAX_ITEMS) return undefined;
@@ -299,7 +308,7 @@ function linkedItems(value: unknown, allowEmpty = false): LinkedPageCastItem[] |
 }
 
 export function normalizeLinkedPageCastPayload(payload: unknown): LinkedPageCastRequest | undefined {
-  if (!isRecord(payload)) return undefined;
+  if (!isRecord(payload) || pageCastHasSenderOnlyFields(payload)) return undefined;
   const items = linkedItems(payload.items);
   if (!items) return undefined;
   const requestedIndex = typeof payload.startIndex === "number" && Number.isInteger(payload.startIndex)
@@ -324,7 +333,7 @@ export function normalizeLinkedPageCastPayload(payload: unknown): LinkedPageCast
 }
 
 export function normalizeLinkedAppendPayload(payload: unknown): { items: LinkedPageCastItem[]; privateNetworkOrigins?: string[] } | undefined {
-  if (!isRecord(payload)) return undefined;
+  if (!isRecord(payload) || pageCastHasSenderOnlyFields(payload)) return undefined;
   const items = linkedItems(payload.items);
   const privateOrigins = privateNetworkOrigins(payload.privateNetworkOrigins);
   if (!items || (payload.privateNetworkOrigins !== undefined && !privateOrigins)) return undefined;
@@ -335,14 +344,14 @@ export function normalizeLinkedAppendPayload(payload: unknown): { items: LinkedP
 }
 
 export function normalizeLinkedJumpPayload(payload: unknown): { index: number } | undefined {
-  if (!isRecord(payload) || typeof payload.index !== "number" || !Number.isInteger(payload.index) || payload.index < 0) {
+  if (!isRecord(payload) || pageCastHasSenderOnlyFields(payload) || typeof payload.index !== "number" || !Number.isInteger(payload.index) || payload.index < 0) {
     return undefined;
   }
   return { index: payload.index };
 }
 
 export function normalizeLinkedSupplyPayload(payload: unknown): LinkedPageCastSupply | undefined {
-  if (!isRecord(payload)) return undefined;
+  if (!isRecord(payload) || pageCastHasSenderOnlyFields(payload)) return undefined;
   const requestId = shortString(payload.requestId, 128);
   const endOfList = payload.endOfList === true;
   const items = linkedItems(payload.items, endOfList);

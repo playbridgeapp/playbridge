@@ -8,6 +8,14 @@ import Foundation
 
     static func main() async throws {
         let media = "https://media.example/movie.m3u8"
+        for value in [NSNull(), false, ["url": "https://callback.example/progress", "bearerToken": "test-only"]] as [Any] {
+            rejects(["url": media, "progressWebhook": value])
+            rejects([["url": media, "progressWebhook": value]])
+            for linked in [false, true] {
+                rejects(["items": [["id": "episode", "url": media]], "progressWebhook": value], linked: linked)
+                rejects(["items": [["id": "episode", "url": media, "progressWebhook": value]]], linked: linked)
+            }
+        }
         let request = try PageCastRequest.parse([
             "items": [["url": media, "title": "Movie", "headers": ["Authorization": "test-token"],
                        "subtitleResources": [["url": "https://media.example/sub.vtt", "headers": ["Origin": "https://example.com"], "language": "en"]],
@@ -29,6 +37,13 @@ import Foundation
         let envelope = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         let payload = envelope["payload"] as! [String: Any]
         let item = (payload["items"] as! [[String: Any]])[0]
+        precondition(!payload.keys.contains("progressWebhook") && !item.keys.contains("progressWebhook"))
+        var mutated = request
+        mutated.items[0]["progressWebhook"] = NSNull()
+        let guarded = try JSONSerialization.jsonObject(with: Data(mutated.playlistCommand(allowedPrivateOrigins: []).utf8)) as! [String: Any]
+        let guardedPayload = guarded["payload"] as! [String: Any]
+        precondition(!guardedPayload.keys.contains("progressWebhook"))
+        precondition(!(guardedPayload["items"] as! [[String: Any]])[0].keys.contains("progressWebhook"))
         precondition(item["headers"] as? [String: String] == ["Authorization": "test-token"])
         precondition((item["visualMetadata"] as? [String: Any])?["title"] as? String == "Movie")
         precondition((payload["visualMetadata"] as? [String: Any])?["title"] as? String == "Series")
