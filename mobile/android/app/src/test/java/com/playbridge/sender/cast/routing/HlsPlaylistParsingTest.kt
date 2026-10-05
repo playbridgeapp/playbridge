@@ -28,6 +28,32 @@ class HlsPlaylistParsingTest {
     }
 
     @Test
+    fun peakBandwidthIsIndependentOfAverageAttributeOrder() {
+        for (attrs in listOf(
+            "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
+            "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+        )) {
+            val playlist = HlsParser.parsePlaylistContent(
+                "https://cdn.example/master.m3u8",
+                """
+                    #EXTM3U
+                    #EXT-X-STREAM-INF:$attrs,RESOLUTION=1920x1080
+                    peak.m3u8
+                    #EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000,RESOLUTION=1280x720
+                    average.m3u8
+                    #EXT-X-STREAM-INF:BANDWIDTH=1000000
+                    peak-only.m3u8
+                """.trimIndent(),
+            )
+            assertEquals(listOf(9000000L, 6000000L, 1000000L), playlist.videoQualities.map { it.bandwidth })
+            assertEquals(listOf(4000000L, 5000000L, null), playlist.videoQualities.map { it.averageBandwidth })
+            assertTrue(playlist.videoQualities.first().url.endsWith("/peak.m3u8"))
+            val filtered = HlsParser.generateFilteredPlaylist(playlist, playlist.videoQualities.first())
+            assertTrue(filtered.contains("#EXT-X-STREAM-INF:BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000"))
+        }
+    }
+
+    @Test
     fun invalidPlaylistRejected() {
         val playlist = HlsParser.parsePlaylistContent(
             "https://cdn.example/not-a-playlist",

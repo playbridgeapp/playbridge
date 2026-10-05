@@ -72,6 +72,30 @@ https://cdn.example/v1.m3u8
     );
   });
 
+  test('materializer selects peak bandwidth in either attribute order', () {
+    for (final attrs in [
+      'AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000',
+      'BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000',
+      'BANDWIDTH=9000000',
+    ]) {
+      final body = '''
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="Audio",DEFAULT=YES,URI="https://cdn.example/audio.m3u8"
+#EXT-X-STREAM-INF:$attrs,AUDIO="a"
+https://cdn.example/peak.m3u8
+#EXT-X-STREAM-INF:AVERAGE-BANDWIDTH=5000000,BANDWIDTH=6000000,AUDIO="a"
+https://cdn.example/average.m3u8
+''';
+      final collapsed = PlaylistMaterializer.collapseToSingleVariant(body)!;
+      expect(collapsed, contains('#EXT-X-STREAM-INF:$attrs'));
+      expect(collapsed, contains('https://cdn.example/peak.m3u8'));
+      expect(collapsed, isNot(contains('https://cdn.example/average.m3u8')));
+      final open = PlaylistMaterializer.extractDemuxedNetworkOpen(body)!;
+      expect(open.videoUrl, 'https://cdn.example/peak.m3u8');
+      expect(open.audioUrl, 'https://cdn.example/audio.m3u8');
+    }
+  });
+
   test('muxed body without separate audio materializes local file', () async {
     const body = '''
 #EXTM3U

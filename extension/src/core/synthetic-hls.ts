@@ -188,7 +188,7 @@ export function buildSyntheticFromMasterBody(
       }
     } else if (line.startsWith("#EXT-X-STREAM-INF:")) {
       const attrs = line.slice(line.indexOf(":") + 1);
-      bw = parseInt(attrs.match(/BANDWIDTH=(\d+)/)?.[1] ?? "", 10) || null;
+      bw = parseInt(attrs.match(/(?:^|,)BANDWIDTH=(\d+)/)?.[1] ?? "", 10) || null;
       avg = parseInt(attrs.match(/AVERAGE-BANDWIDTH=(\d+)/)?.[1] ?? "", 10) || null;
       res = attrs.match(/RESOLUTION=(\d+x\d+)/)?.[1] ?? null;
       codecs = attrs.match(/CODECS="([^"]+)"/)?.[1] ?? null;
