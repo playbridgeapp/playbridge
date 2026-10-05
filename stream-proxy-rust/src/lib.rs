@@ -6,6 +6,7 @@ pub mod dash;
 pub mod epg;
 pub mod hls;
 pub mod local_file;
+mod resource;
 pub mod server;
 pub mod service;
 pub mod session;

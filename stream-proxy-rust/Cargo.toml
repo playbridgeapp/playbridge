@@ -40,10 +40,13 @@ base64 = "0.22"
 rand = "0.8"
 mime_guess = "2"
 
-# MediaFlow AES-256 Encryption
+# Versioned authenticated proxy encryption
 aes = "0.8"
 cbc = { version = "0.1", features = ["alloc"] }
 cipher = { version = "0.4", features = ["block-padding"] }
+hmac = "0.12"
+hkdf = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 tokio-test = "0.4"

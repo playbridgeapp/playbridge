@@ -18,22 +18,24 @@ pub struct ReqwestUpstreamFetcher {
     client: Client,
     public_only_client: Option<Client>,
     local_network_client: Option<Client>,
+    trusted_origin_client: Option<Client>,
     ffmpeg_path: Option<String>,
 }
 
 #[derive(Debug)]
 struct PolicyDns {
     allow_private_network: bool,
+    allow_loopback: bool,
 }
 
 impl reqwest::dns::Resolve for PolicyDns {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         let host = name.as_str().to_owned();
         let allow_private_network = self.allow_private_network;
+        let allow_loopback = self.allow_loopback;
         Box::pin(async move {
             let lower = host.to_ascii_lowercase();
-            if lower == "localhost"
-                || lower.ends_with(".localhost")
+            if (!allow_loopback && (lower == "localhost" || lower.ends_with(".localhost")))
                 || (!allow_private_network && lower.ends_with(".local"))
             {
                 return Err(dns_policy_error());
@@ -43,9 +45,10 @@ impl reqwest::dns::Resolve for PolicyDns {
                 .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)?
                 .collect();
             if addresses.is_empty()
-                || addresses
-                    .iter()
-                    .any(|address| !super::is_allowed_address(address.ip(), allow_private_network))
+                || addresses.iter().any(|address| {
+                    !(super::is_allowed_address(address.ip(), allow_private_network)
+                        || allow_loopback && address.ip().is_loopback())
+                })
             {
                 return Err(dns_policy_error());
             }
@@ -69,14 +72,27 @@ impl ReqwestUpstreamFetcher {
             .build()
             .unwrap_or_else(|_| Client::new());
         let public_only_client = Self::client_builder()
+            .no_proxy()
             .dns_resolver(Arc::new(PolicyDns {
                 allow_private_network: false,
+                allow_loopback: false,
             }))
             .build()
             .ok();
         let local_network_client = Self::client_builder()
+            .no_proxy()
             .dns_resolver(Arc::new(PolicyDns {
                 allow_private_network: true,
+                allow_loopback: false,
+            }))
+            .build()
+            .ok();
+
+        let trusted_origin_client = Self::client_builder()
+            .no_proxy()
+            .dns_resolver(Arc::new(PolicyDns {
+                allow_private_network: true,
+                allow_loopback: true,
             }))
             .build()
             .ok();
@@ -85,6 +101,7 @@ impl ReqwestUpstreamFetcher {
             client,
             public_only_client,
             local_network_client,
+            trusted_origin_client,
             ffmpeg_path,
         }
     }
@@ -103,6 +120,10 @@ impl ReqwestUpstreamFetcher {
     ) -> Result<&Client, String> {
         match network_policy {
             None => Ok(&self.client),
+            Some(policy) if policy.allows_loopback(url) => self
+                .trusted_origin_client
+                .as_ref()
+                .ok_or_else(|| "registered-origin HTTP client is unavailable".to_string()),
             Some(policy) if policy.allows_private_url(url) => self
                 .local_network_client
                 .as_ref()
@@ -152,6 +173,13 @@ impl ReqwestUpstreamFetcher {
             }
         }
 
+        out_headers.insert(
+            super::EFFECTIVE_URL_HEADER,
+            resp.url()
+                .as_str()
+                .parse()
+                .map_err(|_| "invalid effective upstream URL")?,
+        );
         let stream = resp.bytes_stream();
         let body = Body::from_stream(stream);
 
@@ -370,7 +398,8 @@ mod tests {
     async fn public_only_dns_rejects_local_names() {
         let name = "localhost".parse().expect("valid DNS name");
         assert!(PolicyDns {
-            allow_private_network: false
+            allow_private_network: false,
+            allow_loopback: false,
         }
         .resolve(name)
         .await

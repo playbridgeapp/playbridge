@@ -8,6 +8,7 @@
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -26,9 +27,14 @@ pub mod segment_cache;
 pub use segment_cache::{hls_media_segment_urls, PrefetchTarget, SegmentCache};
 
 /// Presence marks untrusted page-controlled traffic; the set contains exact private origins.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NetworkPolicy {
-    allowed_private_origins: Arc<HashSet<String>>,
+    allowed_private_origins: HashSet<String>,
+    /// Only native/admin registration may authorize an exact loopback origin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trusted_origin: Option<String>,
+    #[serde(default)]
+    registered_media: bool,
 }
 
 impl NetworkPolicy {
@@ -58,13 +64,72 @@ impl NetworkPolicy {
             normalized.insert(normalized_origin(&url)?);
         }
         Ok(Self {
-            allowed_private_origins: Arc::new(normalized),
+            allowed_private_origins: normalized,
+            trusted_origin: None,
+            registered_media: false,
         })
+    }
+
+    pub(crate) fn for_registered_media(value: &str) -> Result<Self, String> {
+        let url = url::Url::parse(value).map_err(|_| "invalid media URL")?;
+        let host = url.host_str().ok_or("media URL has no host")?;
+        let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
+        let local = host
+            .parse::<IpAddr>()
+            .map(|ip| classify_address(ip) == AddressClass::PrivateLan || ip.is_loopback())
+            .unwrap_or_else(|_| {
+                host == "localhost"
+                    || host.ends_with(".localhost")
+                    || host.ends_with(".local")
+                    || host.ends_with(".lan")
+                    || !host.contains('.')
+            });
+        let origin = normalized_origin(&url)?;
+        Ok(Self {
+            allowed_private_origins: if local {
+                HashSet::from([origin.clone()])
+            } else {
+                HashSet::new()
+            },
+            trusted_origin: local.then_some(origin),
+            registered_media: true,
+        })
+    }
+
+    fn allows_trusted_origin(&self, url: &url::Url) -> bool {
+        self.trusted_origin
+            .as_ref()
+            .and_then(|origin| url::Url::parse(origin).ok())
+            .is_some_and(|original| original.host_str() == url.host_str())
+    }
+
+    fn allows_loopback(&self, url: &url::Url) -> bool {
+        self.allows_trusted_origin(url)
+            && self
+                .trusted_origin
+                .as_ref()
+                .and_then(|origin| url::Url::parse(origin).ok())
+                .and_then(|origin| origin.host_str().map(str::to_owned))
+                .is_some_and(|host| {
+                    host.trim_matches(['[', ']'])
+                        .parse::<IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+                        || host == "localhost"
+                        || host.ends_with(".localhost")
+                })
+    }
+
+    fn cache_scope(&self) -> String {
+        let mut origins: Vec<_> = self.allowed_private_origins.iter().collect();
+        origins.sort();
+        serde_json::to_string(&(origins, &self.trusted_origin)).expect("string serialization")
     }
 
     fn allows_private_url(&self, url: &url::Url) -> bool {
         normalized_origin(url)
-            .map(|origin| self.allowed_private_origins.contains(&origin))
+            .map(|origin| {
+                self.allowed_private_origins.contains(&origin) || self.allows_trusted_origin(url)
+            })
             .unwrap_or(false)
     }
 }
@@ -83,6 +148,59 @@ fn normalized_origin(url: &url::Url) -> Result<String, String> {
         port
     ))
 }
+
+#[cfg(test)]
+mod capability_policy_tests {
+    use super::*;
+    #[tokio::test]
+    async fn public_registration_cannot_rebind_or_redirect_to_internal_destinations() {
+        let policy = NetworkPolicy::for_registered_media("https://cdn.example/video.mp4").unwrap();
+        for target in [
+            "http://127.0.0.1/private",
+            "http://192.168.1.10/private",
+            "http://169.254.169.254/latest/meta-data",
+            "http://[::1]/private",
+        ] {
+            assert!(validate_http_destination(target, Some(&policy))
+                .await
+                .is_err());
+        }
+    }
+    #[tokio::test]
+    async fn native_selected_local_device_is_not_a_grant_to_every_device() {
+        let policy =
+            NetworkPolicy::for_registered_media("http://192.168.1.10:8080/video.mp4").unwrap();
+        assert!(
+            validate_http_destination("http://192.168.1.10:9000/segment", Some(&policy))
+                .await
+                .is_ok()
+        );
+        assert!(
+            validate_http_destination("http://192.168.1.11/segment", Some(&policy))
+                .await
+                .is_err()
+        );
+        assert!(
+            validate_http_destination("http://127.0.0.1/segment", Some(&policy))
+                .await
+                .is_err()
+        );
+    }
+    #[test]
+    fn policies_are_preserved_by_token_serialization_and_partition_cache() {
+        let policy = NetworkPolicy::for_registered_media("http://127.0.0.1/video.mp4").unwrap();
+        let restored: NetworkPolicy =
+            serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
+        assert_eq!(policy, restored);
+        assert_eq!(policy.cache_scope(), restored.cache_scope());
+        assert_ne!(
+            policy.cache_scope(),
+            NetworkPolicy::new(vec![]).unwrap().cache_scope()
+        );
+    }
+}
+
+pub(crate) const EFFECTIVE_URL_HEADER: &str = "x-playbridge-internal-effective-url";
 
 pub struct UpstreamResponse {
     pub status: StatusCode,
@@ -176,15 +294,26 @@ impl ConnectionEngine {
     ) -> Result<UpstreamResponse, String> {
         let headers = with_default_upstream_headers(headers);
         let fetcher = Arc::clone(&self.fetcher);
-        if network_policy.is_some() {
+        if network_policy
+            .as_ref()
+            .is_some_and(|policy| !policy.registered_media)
+        {
             return fetcher
                 .connect_with_policy(url, &headers, network_policy)
                 .await;
         }
+        validate_http_destination(url, network_policy.as_ref()).await?;
         let url_owned = url.to_owned();
         let headers_for_fetch = headers.clone();
+        let mut cache_headers = headers.clone();
+        if let Some(policy) = network_policy.as_ref() {
+            cache_headers.insert(
+                "x-playbridge-internal-cache-policy".into(),
+                policy.cache_scope(),
+            );
+        }
         self.cache
-            .get_or_fetch(url, &headers, move || {
+            .get_or_fetch(url, &cache_headers, move || {
                 let fetcher = fetcher;
                 let url_owned = url_owned;
                 let headers_for_fetch = headers_for_fetch;
@@ -221,6 +350,26 @@ impl ConnectionEngine {
         axum::body::to_bytes(resp.body, usize::MAX)
             .await
             .map_err(|e| format!("Failed reading bytes: {}", e))
+    }
+
+    pub(crate) async fn fetch_manifest_with_policy(
+        &self,
+        url: &str,
+        headers: &HashMap<String, String>,
+        policy: Option<NetworkPolicy>,
+    ) -> Result<(Bytes, String), String> {
+        let mut response = self
+            .connect_upstream_with_policy(url, headers, policy)
+            .await?;
+        let effective = response
+            .headers
+            .remove(EFFECTIVE_URL_HEADER)
+            .and_then(|value| value.to_str().ok().map(str::to_owned))
+            .unwrap_or_else(|| url.to_owned());
+        let bytes = axum::body::to_bytes(response.body, 4 * 1024 * 1024)
+            .await
+            .map_err(|_| "upstream manifest exceeds limit or could not be read")?;
+        Ok((bytes, effective))
     }
 
     /// Best-effort background prefetch of media segment targets into the cache.
@@ -300,7 +449,8 @@ pub async fn validate_http_destination(
         .host_str()
         .ok_or_else(|| "media URL has no host".to_string())?;
     let lower = host.to_ascii_lowercase();
-    if lower == "localhost" || lower.ends_with(".localhost") {
+    let allow_loopback = network_policy.is_some_and(|policy| policy.allows_loopback(&url));
+    if !allow_loopback && (lower == "localhost" || lower.ends_with(".localhost")) {
         return Err("media destination is forbidden".into());
     }
     if !allow_private_network && lower.ends_with(".local") {
@@ -314,9 +464,10 @@ pub async fn validate_http_destination(
         .map_err(|_| "media host could not be resolved".to_string())?
         .collect();
     if addresses.is_empty()
-        || addresses
-            .iter()
-            .any(|address| !is_allowed_address(address.ip(), allow_private_network))
+        || addresses.iter().any(|address| {
+            !(is_allowed_address(address.ip(), allow_private_network)
+                || allow_loopback && address.ip().is_loopback())
+        })
     {
         return Err("local-network media permission is required".into());
     }
@@ -431,7 +582,7 @@ pub fn filter_upstream_headers(
     incoming_headers: &HeaderMap,
     target_url: &str,
     credential_url: &str,
-    session_id: &str,
+    _session_id: &str,
 ) -> HashMap<String, String> {
     let mut out = HashMap::new();
 
@@ -465,14 +616,9 @@ pub fn filter_upstream_headers(
         // restricted to the original media origin.
     }
 
-    let lower_url = target_url.to_lowercase();
-    let is_hls_segment = lower_url.contains(".ts") || lower_url.contains(".m4s");
-    let should_forward_range = session_id == "play" || !is_hls_segment;
-
-    if should_forward_range {
-        if let Some(range_val) = incoming_headers.get("range").and_then(|v| v.to_str().ok()) {
-            out.insert("range".to_string(), range_val.to_string());
-        }
+    // Byte-range HLS segments and ordinary seeks are both legitimate scoped requests.
+    if let Some(range_val) = incoming_headers.get("range").and_then(|v| v.to_str().ok()) {
+        out.insert("range".to_string(), range_val.to_string());
     }
 
     with_default_upstream_headers(&out)

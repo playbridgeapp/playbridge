@@ -16,9 +16,10 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
   - `sender-services-android` → upstream-jni only (phone `build-android.sh`)
     - Phone installs callbacks via `SenderServicesNative.installUpstreamHttpClient()`
       → Kotlin `JniUpstreamHttpClient` (`HttpURLConnection`, Media3-like TLS)
-- 🔐 **MediaFlow Security Standard**:
+- 🔐 **Authenticated media capabilities**:
   - Stateful session registration via `POST /register`.
-  - MediaFlow AES-256-CBC token encryption for stateless proxying (`/proxy/hls/...`).
+  - Versioned AES-256-CBC encrypt-then-HMAC-SHA256 tokens with HKDF-derived keys.
+  - Destination-bound session resources and bounded DASH template expansion.
 - 🎬 **HLS & DASH Rewriting**: Dynamic manifest rewriter for `.m3u8` and `.mpd` playlists.
 - 🌐 **CDN Signature Compatible**: Preserves query parameter key ordering for Akamai and signed media CDN validation.
 - 📦 **Embeddable Service**: `ProxyServer` starts on an ephemeral port, registers
@@ -81,11 +82,42 @@ The returned scoped `/s/` URL carries a cryptographically random session ID, so
 the receiving player does not need the registration password. Registration
 itself remains authenticated.
 
-### 2. MediaFlow Stateless AES Encryption (`GET /proxy/hls/...`)
-Encodes destination URL and headers inside an AES-256-CBC encrypted token parameter:
+### 2. Authenticated Stateless Capabilities (`GET /proxy/hls/...`)
+The opaque `pb2` token encrypts the destination, headers, original credential
+origin, and destination policy. Its authentication tag is verified before
+any decryption. Token errors share a single rejection response.
 ```http
-GET /proxy/hls/manifest.m3u8?token=<AES_ENCRYPTED_PAYLOAD>
+GET /proxy/hls/manifest.m3u8?token=<AUTHENTICATED_PAYLOAD>
 ```
+
+Treat returned URLs as opaque. A root URL authorizes its registered resource,
+not a caller-provided `uri`. Manifest rewriting issues individual child
+capabilities. Stateful child URLs carry a session-bound `pr2` capability;
+DASH template links permit only bounded representation/segment substitutions,
+not arbitrary directory traversal or destinations.
+
+**Migration:** unsigned legacy MediaFlow-format CBC tokens are rejected, with
+no transparent fallback. Re-register media to obtain new URLs; external
+integrations generating tokens themselves must migrate. Endpoint shapes and
+registration response fields are unchanged. No new short playback expiry is
+introduced.
+
+Native/admin local-media registration authorizes the selected local host,
+including same-host port redirects, not every private-network host. Explicit
+page private-origin grants remain origin-specific. Headers containing cookies,
+authorization, or custom secrets stay on the original media origin; cross-CDN
+requests retain only safe browser context. Network policy also partitions
+segment-cache entries.
+
+Reqwest validates redirect hops and filters the actual DNS answers used for
+connections; policy-bound requests do not use environment HTTP proxies or AVIO
+fallback. Android/Apple host callbacks return redirects to Rust for validation
+and correct relative-manifest resolution. **Host callback ABI v1 still performs
+its own DNS resolution after Rust's preflight check: connection-address binding
+against DNS rebinding remains incomplete on these embedded transports.** Do not
+interpret the capability fix as complete native DNS-rebinding protection.
+Receiver playback, long/live sessions, seeking, and native DNS/TLS integration
+also need platform/receiver validation beyond unit tests.
 
 ### 3. Health Check (`GET /health`)
 Returns `200 OK` with the body `OK`.

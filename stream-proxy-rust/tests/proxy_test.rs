@@ -555,7 +555,7 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
             format!("{}{}", proxy.base_url("127.0.0.1"), rewritten_base)
         };
     let segment_response = client
-        .get(segment_url)
+        .get(segment_url.replace("&amp;", "&"))
         .header(header::RANGE, "bytes=0-3")
         .send()
         .await

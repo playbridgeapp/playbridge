@@ -225,23 +225,20 @@ impl UpstreamFetcher for JniUpstreamFetcher {
         let headers = headers.clone();
         Box::pin(async move {
             let initial = url::Url::parse(&url).map_err(|_| "invalid upstream URL".to_string())?;
-            let is_mp4 = initial
-                .path()
-                .trim_end_matches('/')
-                .to_ascii_lowercase()
-                .ends_with(".mp4");
             let mut current = initial;
             for hop in 0..=10 {
                 validate_http_destination(current.as_str(), network_policy.as_ref()).await?;
                 let scoped = super::redirect_headers(&headers, &url, current.as_str());
-                let response = connect_via_host(current.to_string(), scoped).await?;
+                let mut response = connect_via_host(current.to_string(), scoped).await?;
                 if !response.status.is_redirection() {
+                    response.headers.insert(
+                        super::EFFECTIVE_URL_HEADER,
+                        current
+                            .as_str()
+                            .parse()
+                            .map_err(|_| "invalid effective upstream URL")?,
+                    );
                     return Ok(response);
-                }
-                // ABI v1 cannot report the final playlist URL for relative HLS
-                // rewriting. Limit this addition to progressive MP4 resources.
-                if !is_mp4 {
-                    return Err("redirected playlists require effective-URL support".into());
                 }
                 if hop == 10 {
                     return Err("upstream redirect limit exceeded".into());

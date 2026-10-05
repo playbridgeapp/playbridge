@@ -163,7 +163,8 @@ internal object JniUpstreamHttpClient {
 
     private fun connectOnce(url: String, headers: Map<String, String>): ConnectOutcome {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
+            // Rust validates each redirect destination and strips cross-origin credentials.
+            instanceFollowRedirects = false
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             requestMethod = "GET"
@@ -197,7 +198,7 @@ internal object JniUpstreamHttpClient {
         }
 
         // Accept success and 206; still open body for odd HLS-ish 2xx already covered.
-        if (code !in 200..299 && code != 206) {
+        if (code !in 200..399) {
             // Drain/close error stream; caller may retry.
             runCatching { stream?.close() }
             conn.disconnect()
@@ -215,6 +216,7 @@ internal object JniUpstreamHttpClient {
         conn.contentType?.let { respHeaders.put("content-type", it) }
         val cl = conn.contentLengthLong
         if (cl >= 0) respHeaders.put("content-length", cl.toString())
+        conn.getHeaderField("Location")?.let { respHeaders.put("location", it) }
         conn.getHeaderField("Content-Range")?.let { respHeaders.put("content-range", it) }
         conn.getHeaderField("Accept-Ranges")?.let { respHeaders.put("accept-ranges", it) }
         // Cache policy for stream-proxy segment cache (no-store / max-age / Vary).
