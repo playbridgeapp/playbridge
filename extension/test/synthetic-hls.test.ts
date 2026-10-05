@@ -65,6 +65,9 @@ test("synthetic qualities and URLs rank by peak bandwidth in either attribute or
   for (const attrs of [
     "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
     "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+    "AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000",
+    "PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+    "\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
   ]) {
     const synth = buildSyntheticFromMasterBody(
       `#EXTM3U

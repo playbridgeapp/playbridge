@@ -32,6 +32,9 @@ class HlsPlaylistParsingTest {
         for (attrs in listOf(
             "AVERAGE-BANDWIDTH=4000000,BANDWIDTH=9000000",
             "BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "AVERAGE-BANDWIDTH=4000000, BANDWIDTH=9000000",
+            "PROGRAM-ID=1, BANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
+            "\tBANDWIDTH=9000000,AVERAGE-BANDWIDTH=4000000",
         )) {
             val playlist = HlsParser.parsePlaylistContent(
                 "https://cdn.example/master.m3u8",

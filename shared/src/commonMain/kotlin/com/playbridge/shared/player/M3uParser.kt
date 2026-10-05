@@ -50,7 +50,7 @@ data class IptvChannel(
 object M3uParser {
     private val http: HttpClient = SharedHttpClient.client
     private val REGEX_RESOLUTION = Regex("""RESOLUTION=(\d+x\d+)""")
-    private val REGEX_BANDWIDTH = Regex("""(?:^|[:,])BANDWIDTH=(\d+)""")
+    private val REGEX_BANDWIDTH = Regex("""(?:^|[:,])\s*BANDWIDTH=(\d+)""")
     private val REGEX_CODECS = Regex("""CODECS="([^"]+)"""")
     private val REGEX_TVG_ID = Regex("""tvg-id="([^"]*)"""")
     private val REGEX_TVG_LOGO = Regex("""tvg-logo="([^"]*)"""")

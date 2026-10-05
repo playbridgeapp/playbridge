@@ -415,7 +415,7 @@ $videoProxyUrl
       }
       if (!line.startsWith('#EXT-X-STREAM-INF:')) continue;
       final bandwidth = int.tryParse(
-            RegExp(r'(?:^|,)BANDWIDTH=(\d+)', caseSensitive: false)
+            RegExp(r'(?:^|,)\s*BANDWIDTH=(\d+)', caseSensitive: false)
                     .firstMatch(line.substring('#EXT-X-STREAM-INF:'.length))
                     ?.group(1) ??
                 '',

@@ -185,7 +185,7 @@ List<_Variant> _parseMaster(String body, Uri base) {
 /// Extracts a comma-separated attribute value, honouring quoted values that may
 /// themselves contain commas (e.g. `CODECS="avc1.64002A,mp4a.40.2"`).
 String? _attr(String attrs, String key) {
-  final match = RegExp('(?:^|,)${RegExp.escape(key)}=').firstMatch(attrs);
+  final match = RegExp('(?:^|,)\\s*${RegExp.escape(key)}=').firstMatch(attrs);
   if (match == null) return null;
   final i = match.end;
   if (i >= attrs.length) return null;

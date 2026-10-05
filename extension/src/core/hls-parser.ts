@@ -102,7 +102,7 @@ export class HlsParser {
         }
       } else if (line.startsWith("#EXT-X-STREAM-INF:")) {
         const attrs = line.substring(line.indexOf(":") + 1);
-        const bwMatch = attrs.match(/(?:^|,)BANDWIDTH=(\d+)/);
+        const bwMatch = attrs.match(/(?:^|,)\s*BANDWIDTH=(\d+)/);
         if (bwMatch) currentBandwidth = parseInt(bwMatch[1], 10);
         const avgBwMatch = attrs.match(/AVERAGE-BANDWIDTH=(\d+)/);
         if (avgBwMatch) currentAverageBandwidth = parseInt(avgBwMatch[1], 10);

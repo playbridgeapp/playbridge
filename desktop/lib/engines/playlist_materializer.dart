@@ -166,7 +166,7 @@ class PlaylistMaterializer {
       if (trimmed.startsWith('#EXT-X-STREAM-INF:')) {
         pendingInf = trimmed;
         pendingBw = int.tryParse(
-              RegExp(r'(?:^|[:,])BANDWIDTH=(\d+)', caseSensitive: false)
+              RegExp(r'(?:^|[:,])\s*BANDWIDTH=(\d+)', caseSensitive: false)
                       .firstMatch(trimmed)
                       ?.group(1) ??
                   '',
@@ -264,7 +264,7 @@ class PlaylistMaterializer {
       if (line.startsWith('#EXT-X-STREAM-INF:')) {
         pendingInf = line;
         pendingBw = int.tryParse(
-              RegExp(r'(?:^|[:,])BANDWIDTH=(\d+)', caseSensitive: false)
+              RegExp(r'(?:^|[:,])\s*BANDWIDTH=(\d+)', caseSensitive: false)
                       .firstMatch(line)
                       ?.group(1) ??
                   '',

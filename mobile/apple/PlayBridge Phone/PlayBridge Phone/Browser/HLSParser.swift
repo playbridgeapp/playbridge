@@ -4,7 +4,7 @@ import Foundation
 /// (the master-parsing path). Casting a chosen variant sends that variant's URL directly
 /// (the iOS app doesn't generate/serve a filtered master like the Android `HlsExportService`).
 enum HLSParser {
-    private static let bandwidthRE = try! NSRegularExpression(pattern: "BANDWIDTH=(\\d+)")
+    private static let bandwidthRE = try! NSRegularExpression(pattern: "(?:^|[:,])\\s*BANDWIDTH=(\\d+)")
     private static let resolutionRE = try! NSRegularExpression(pattern: "RESOLUTION=(\\d+x\\d+)")
     private static let codecsRE = try! NSRegularExpression(pattern: "CODECS=\"([^\"]+)\"")
 
