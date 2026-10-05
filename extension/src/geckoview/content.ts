@@ -5,7 +5,8 @@ import { PAGE_PLAYBACK_BRIDGE_SCRIPT } from "./page-bridge";
  */
 
 import browser from "./browser";
-import { detectionOptions, type DetectionOptions } from "./detection-policy";
+import { DETECTION_POLICY_PORT, detectionOptions, validDetectionPolicy } from "./detection-policy";
+import { normalizeLinkedPageRelay, validPageRequestId } from "./page-relay";
 import { isSupportedDomImage } from "./detected-media-kind";
 import { installPluginBridge } from "./plugin-bridge";
 
@@ -194,17 +195,43 @@ function startDocumentDetection(): void {
 
 // Native session ownership is authoritative even when an app and a browser tab
 // have identical URLs. No scanning starts before the native policy arrives.
+let policyRelayPort: any;
+let latestNativePolicyEnabled = false;
+
+function ensurePolicyRelayPort(): any {
+  if (policyRelayPort) return policyRelayPort;
+  const port = browser.runtime.connect({ name: DETECTION_POLICY_PORT });
+  policyRelayPort = port;
+  port.onMessage.addListener((message: { update?: number; ok?: boolean }) => {
+    if (policyRelayPort === port && message?.update === policyUpdate) {
+      setDetectionEnabled(message.ok === true && latestNativePolicyEnabled);
+    }
+  });
+  port.onDisconnect.addListener(() => {
+    if (policyRelayPort !== port) return;
+    policyRelayPort = undefined;
+    policyUpdate += 1;
+    setDetectionEnabled(false);
+  });
+  return port;
+}
+
 try {
   const policyPort = browser.runtime.connectNative("detectorPolicy");
-  policyPort.onMessage.addListener((policy: { type?: string; enabled?: boolean; options?: Partial<DetectionOptions> }) => {
-    if (policy?.type !== "detection_policy") return;
+  policyPort.onMessage.addListener((policy: unknown) => {
+    if (!validDetectionPolicy(policy)) return;
     const update = ++policyUpdate;
     const nextOptions = detectionOptions(policy.options);
     if (!policy.enabled || JSON.stringify(options) !== JSON.stringify(nextOptions)) setDetectionEnabled(false);
     options = nextOptions;
-    browser.runtime.sendMessage({ action: "detector_policy", policy }).then(() => {
-      if (update === policyUpdate) setDetectionEnabled(policy.enabled === true);
-    }).catch(() => { if (update === policyUpdate) setDetectionEnabled(false); });
+    latestNativePolicyEnabled = policy.enabled;
+    if (window.top !== window) {
+      setDetectionEnabled(policy.enabled);
+      return;
+    }
+    // Only the isolated content script owns this port. Page events never write it.
+    try { ensurePolicyRelayPort().postMessage({ update, policy }); }
+    catch { setDetectionEnabled(false); }
   });
   policyPort.onDisconnect.addListener(() => {
     policyUpdate += 1;
@@ -242,15 +269,24 @@ window.addEventListener("PlayBridgeCast", ((event: CustomEvent) => {
 
 window.addEventListener("PlayBridgeLinkedRequest", ((event: CustomEvent) => {
   if (window.top !== window) return;
-  const detail = event.detail;
-  if (detail?.operation === "choose_destination" && navigator.userActivation && !navigator.userActivation.isActive) {
+  const detail = normalizeLinkedPageRelay(event.detail);
+  if (!detail) {
+    const pageRequestId = event.detail?.pageRequestId;
+    if (validPageRequestId(pageRequestId)) {
+      window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
+        detail: JSON.stringify({ pageRequestId, response: { ok: false, error: "invalid_request" } }),
+      }));
+    }
+    return;
+  }
+  if (detail.operation === "choose_destination" && navigator.userActivation && !navigator.userActivation.isActive) {
     window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
       detail: JSON.stringify({ pageRequestId: detail.pageRequestId, response: { ok: false, error: "user_gesture_required" } }),
     }));
     return;
   }
   browser.runtime
-    .sendMessage({ action: "page_linked_cast", ...detail })
+    .sendMessage(detail)
     .then((response: unknown) => {
       window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
         detail: JSON.stringify({ pageRequestId: detail?.pageRequestId, response }),

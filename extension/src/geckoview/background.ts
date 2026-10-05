@@ -7,7 +7,7 @@
  */
 
 import browser from "./browser";
-import { TabDetectionPolicy, type DetectionPolicy } from "./detection-policy";
+import { DETECTION_POLICY_PORT, TabDetectionPolicy, validDetectionPolicy, type DetectionPolicy } from "./detection-policy";
 import {
   normalizeLinkedAppendPayload,
   normalizeLinkedJumpPayload,
@@ -196,7 +196,7 @@ function plog(...args: unknown[]): void {
 async function trySendToNative(message: Record<string, unknown>): Promise<boolean> {
   try {
     const response = await browser.runtime.sendNativeMessage(NATIVE_APP_ID, message);
-    if (response?.type === "detection_policy") applyDetectionPolicy(response as DetectionPolicy);
+    if (validDetectionPolicy(response)) applyDetectionPolicy(response);
     return true;
   } catch (e) {
     plog("sendNativeMessage failed:", (e as Error)?.message);
@@ -1618,6 +1618,25 @@ function pageOrigin(url: string | undefined): string | undefined {
   }
 }
 
+// Policy is native-owned and travels only through the isolated content port.
+// Runtime messages (including relayed DOM events) cannot supply policy updates.
+browser.runtime.onConnect.addListener((port: any) => {
+  if (port.name !== DETECTION_POLICY_PORT) return;
+  const sender = port.sender;
+  const tabId = sender?.tab?.id;
+  if (sender?.id !== browser.runtime.id || sender?.frameId !== 0 ||
+      !Number.isSafeInteger(tabId) || tabId < 0) {
+    port.disconnect();
+    return;
+  }
+  port.onMessage.addListener((message: { update?: number; policy?: unknown }) => {
+    if (!message || !Number.isSafeInteger(message.update) || Number(message.update) < 1 ||
+        !validDetectionPolicy(message.policy)) return;
+    applyDetectionPolicy(message.policy, tabId);
+    port.postMessage({ update: message.update, ok: true });
+  });
+});
+
 // DOM / player messages from content script
 browser.runtime.onMessage.addListener(
   (
@@ -1631,16 +1650,9 @@ browser.runtime.onMessage.addListener(
       payload?: unknown;
       operation?: string;
       sessionId?: string;
-      policy?: DetectionPolicy;
     },
     sender: { tab?: { id?: number; url?: string }; frameId?: number },
   ) => {
-    if (message?.action === "detector_policy") {
-      if (sender.frameId === 0 && sender.tab?.id != null && message.policy) {
-        applyDetectionPolicy(message.policy, sender.tab.id);
-      }
-      return Promise.resolve(true);
-    }
     if (message?.action === "page_linked_cast") {
       return handleLinkedPageRequest(message, sender);
     }

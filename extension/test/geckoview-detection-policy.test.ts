@@ -20,6 +20,38 @@ function harness() {
   const filters: any[] = [];
   const policyMessages = event();
   const onMessage = event();
+  const onConnect = event();
+  const policyRelays: any[] = [];
+  const policyRelay = (sender: any = { id: "detector@test", tab: { id: 7, url: "https://app.example" }, frameId: 0 }) => {
+    const content: any = { onMessage: event(), onDisconnect: event(), sent: [] };
+    const background: any = {
+      name: "playbridge-detection-policy", sender, onMessage: event(), onDisconnect: event(),
+      disconnected: false,
+      disconnect() {
+        this.disconnected = true;
+        for (const listener of content.onDisconnect.listeners) listener();
+      },
+      postMessage(message: any) {
+        for (const listener of content.onMessage.listeners) listener(message);
+      },
+    };
+    content.postMessage = (message: any) => {
+      content.sent.push(message);
+      void Promise.resolve().then(() => {
+        if (background.disconnected) return;
+        if (onConnect.listeners.length) {
+          for (const listener of background.onMessage.listeners) listener(message);
+        } else {
+          // Standalone content fixture: acknowledge like the private background port.
+          background.postMessage({ update: message.update, ok: true });
+        }
+      });
+    };
+    for (const listener of onConnect.listeners) listener(background);
+    const relay = { content, background };
+    policyRelays.push(relay);
+    return relay;
+  };
   const nativePort = {
     onMessage: event(), onDisconnect: event(),
     postMessage: (message: any) => {
@@ -31,10 +63,18 @@ function harness() {
   };
   const browser = {
     runtime: {
-      onMessage,
+      id: "detector@test", onMessage, onConnect,
+      connect: () => policyRelay().content,
       connectNative: (name: string) => name === "detectorPolicy"
         ? { onMessage: policyMessages, onDisconnect: event() } : nativePort,
-      sendMessage: async (message: any) => { messages.push(message); return true; },
+      sendMessage: async (message: any) => {
+        messages.push(message);
+        for (const listener of onMessage.listeners) {
+          const result = listener(message, { id: "detector@test", tab: { id: 7, url: "https://app.example" }, frameId: 0 });
+          if (result != null && result !== false) return result;
+        }
+        return true;
+      },
       sendNativeMessage: async (_app: string, message: any) => {
         nativeMessages.push(message);
         return policy(false);
@@ -63,12 +103,208 @@ function harness() {
     clearTimeout: (id: number) => timers.delete(id),
     setInterval: () => 1,
   };
-  return { sandbox, browser, messages, nativeMessages, filters, policyMessages, onMessage, timers };
+  const nativePolicy = async (policy: DetectionPolicy, sender: any) => {
+    policyRelay({ id: browser.runtime.id, ...sender }).content.postMessage({ update: 1, policy });
+    await flush();
+  };
+  return { sandbox, browser, messages, nativeMessages, filters, policyMessages, onMessage, timers,
+    nativePolicy, policyRelay, policyRelays };
 }
 
 function script(name: string): string {
   return readFileSync(new URL(`./geckoview-runtime/${name}.js`, import.meta.url), "utf8");
 }
+
+function contentHarness(h: ReturnType<typeof harness>, mainFrame = true, active = true) {
+  const listeners = new Map<string, Function[]>();
+  const responses: any[] = [];
+  let scans = 0;
+  const window: any = {
+    location: { href: "https://app.example" },
+    addEventListener(type: string, fn: Function) { listeners.set(type, [...(listeners.get(type) ?? []), fn]); },
+    removeEventListener() {},
+    dispatchEvent(event: any) {
+      if (event.type === "PlayBridgeLinkedResponseJson") responses.push(JSON.parse(event.detail));
+      for (const listener of listeners.get(event.type) ?? []) listener(event);
+    },
+  };
+  window.top = mainFrame ? window : {};
+  const context = createContext({ ...h.sandbox, window,
+    navigator: { userActivation: { isActive: active } },
+    EventTarget,
+    crypto: { randomUUID: () => "fixture-request" },
+    Event: class { constructor(public type: string) {} },
+    CustomEvent: class { constructor(public type: string, public detail?: any) { this.detail = detail?.detail; } },
+    MutationObserver: class { observe() {} disconnect() {} },
+  });
+  context.document = {
+    readyState: "complete", hidden: false, visibilityState: "visible",
+    querySelectorAll: () => { scans++; return []; },
+    addEventListener() {}, removeEventListener() {},
+    createElement: () => ({ textContent: "", remove() {} }),
+    documentElement: { appendChild: (element: any) => runInContext(element.textContent, context) },
+  };
+  runInContext(script("content"), context);
+  return { window, responses, scans: () => scans,
+    request: (detail: any) => window.dispatchEvent({ type: "PlayBridgeLinkedRequest", detail }) };
+}
+
+test("page relay rejects routing overrides before privileged code runs", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const page = contentHarness(h);
+  const clean = { pageRequestId: "request-1", operation: "open", sessionId: null,
+    payload: { items: [{ id: "one", url: "https://media.example/one.mp4" }] } };
+  for (const field of ["action", "policy", "tabId", "origin", "navigationGeneration", "bridgeRequestId", "type", "__proto__"]) {
+    for (const value of [null, false, "detector_policy", policy(true, 999999)]) {
+      const request = { ...clean };
+      Object.defineProperty(request, field, { value, enumerable: true });
+      page.request(request);
+    }
+  }
+  page.request({ ...clean, operation: "detector_policy" });
+  await flush();
+  assert.equal(h.messages.length, 0);
+  assert.equal(h.nativeMessages.length, 0);
+  assert.equal(h.policyRelays.length, 0);
+  assert.ok(page.responses.every(response => response.response.error === "invalid_request"));
+  assert.equal(page.responses.length, 33);
+});
+
+test("page relay preserves all supported operations and never copies inherited routing", async () => {
+  const h = harness();
+  const page = contentHarness(h);
+  for (const operation of ["open", "play", "replace", "append", "jump", "supply", "unlink", "ping", "destination", "choose_destination"]) {
+    const payload = { metadata: { action: "just metadata", policy: "not settings" } };
+    const request = Object.assign(Object.create({ action: "detector_policy", policy: policy(true, 999999) }),
+      { pageRequestId: operation, operation, sessionId: "session-1", payload });
+    page.request(request);
+    await flush();
+    const message = h.messages.at(-1);
+    assert.equal(message.action, "page_linked_cast");
+    assert.equal(message.operation, operation);
+    assert.equal(message.sessionId, "session-1");
+    assert.equal(message.payload, payload);
+    assert.deepEqual(Object.keys(message).sort(), ["action", "operation", "pageRequestId", "payload", "sessionId"]);
+  }
+  assert.equal(h.messages.length, 10);
+});
+
+test("real page API still casts and manages linked queues while detection is disabled", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const page = contentHarness(h);
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: "https://app.example" });
+  h.policyMessages.listeners[0](policy(false));
+  await flush();
+  page.window.playbridge.cast({ url: "https://media.example/legacy.mp4" });
+  const item = { id: "one", url: "https://media.example/one.mp4", headers: { Authorization: "fixture" } };
+  const session = await page.window.playbridge.linkCast({ items: [item], skipPreplay: true });
+  await session.append([{ id: "two", url: "https://media.example/two.mp4" }]);
+  await session.jump(1);
+  await session.replace([item], 0);
+  await session.unlink();
+  assert.equal(page.scans(), 0);
+  for (const type of ["cast", "linked_open", "linked_append", "linked_jump", "linked_replace", "linked_unlink"]) {
+    assert.ok(h.nativeMessages.some(message => message.type === type), type);
+  }
+  const open = h.nativeMessages.find(message => message.type === "linked_open");
+  assert.equal(open.payload.skipPreplay, true);
+  assert.equal(open.payload.items[0].headers.Authorization, "fixture");
+  assert.equal(open.tabId, 7);
+  assert.equal(open.origin, "https://app.example");
+  assert.equal(h.messages.some(message => message.action === "detector_policy"), false);
+});
+
+test("invalid relay envelopes, subframes and inactive destination gestures stay blocked", async () => {
+  const h = harness();
+  const page = contentHarness(h, true, false);
+  const clean = { pageRequestId: "request-1", operation: "open", payload: {} };
+  for (const request of [null, false, [], "request", { ...clean, pageRequestId: "" },
+    { ...clean, pageRequestId: "x".repeat(129) }, { ...clean, sessionId: false },
+    { ...clean, payload: null }, { ...clean, payload: [] }, { ...clean, operation: "unknown" }]) page.request(request);
+  page.request({ ...clean, operation: "choose_destination" });
+  const child = contentHarness(h, false);
+  child.request(clean);
+  await flush();
+  assert.equal(h.messages.length, 0);
+  assert.equal(page.responses.at(-1).response.error, "user_gesture_required");
+  assert.equal(child.responses.length, 0);
+});
+
+test("runtime messages cannot change policy or poison revisions across tabs", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const message = h.onMessage.listeners[0];
+  const sender = (id: number) => ({ tab: { id, url: "https://normal.example" }, frameId: 0 });
+  await h.nativePolicy(policy(false), sender(7));
+  await h.nativePolicy(policy(true), sender(8));
+  assert.equal(await message({ action: "detector_policy", policy: policy(true, 999999) }, sender(7)), false);
+  message({ action: "dom_video_found", url: "https://media.example/blocked.mp4" }, sender(7));
+  assert.equal(await message({ action: "detector_policy", policy: policy(false, 999999, false) }, sender(8)), false);
+  message({ action: "dom_video_found", url: "https://media.example/allowed.mp4" }, sender(8));
+  await flush();
+  assert.deepEqual([...new Set(h.nativeMessages.filter(item => item.type === "video_detected").map(item => item.url))],
+    ["https://media.example/allowed.mp4"]);
+  await h.nativePolicy(policy(true, 2), sender(7));
+  message({ action: "dom_video_found", url: "https://media.example/reenabled.mp4" }, sender(7));
+  await flush();
+  assert.ok(h.nativeMessages.some(item => item.url === "https://media.example/reenabled.mp4"));
+});
+
+test("private policy ports require extension identity and browser-assigned top-frame tab", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  for (const sender of [{ id: "other-extension", frameId: 0, tab: { id: 7 } },
+    { id: "detector@test", frameId: 1, tab: { id: 7 } },
+    { id: "detector@test", frameId: 0 }, { id: "detector@test", frameId: 0, tab: { id: -1 } }]) {
+    const relay = h.policyRelay(sender);
+    assert.equal(relay.background.disconnected, true);
+    relay.content.postMessage({ update: 1, policy: policy(true, 999999) });
+  }
+  const relay = h.policyRelay({ id: "detector@test", frameId: 0, tab: { id: 8 } });
+  for (const invalid of [{ ...policy(true, 999999), revision: -1 },
+    { ...policy(true, 999999), enabled: "true" }, { ...policy(true, 999999), options: { videos: "true" } }]) {
+    relay.content.postMessage({ update: 1, policy: invalid });
+  }
+  relay.content.postMessage({ update: 2, policy: policy(true), tabId: 7 });
+  await flush();
+  const message = h.onMessage.listeners[0];
+  message({ action: "dom_video_found", url: "https://media.example/wrong-tab.mp4" }, { frameId: 0, tab: { id: 7 } });
+  message({ action: "dom_video_found", url: "https://media.example/native-tab.mp4" }, { frameId: 0, tab: { id: 8 } });
+  await flush();
+  assert.deepEqual([...new Set(h.nativeMessages.filter(item => item.type === "video_detected").map(item => item.url))],
+    ["https://media.example/native-tab.mp4"]);
+});
+
+test("native policy acknowledgements are private, ordered and fail closed on disconnect", async () => {
+  const h = harness();
+  // Delay private acknowledgements to exercise stale replies and reconnect.
+  h.browser.runtime.onConnect.addListener(() => {});
+  const page = contentHarness(h);
+  const notify = h.policyMessages.listeners[0];
+  const noProbes = (enabled: boolean, revision: number) => ({ ...policy(enabled, revision), options: {
+    playerProbes: false, visibilityOverrides: false,
+  } });
+  notify(noProbes(true, 1));
+  notify(noProbes(false, 2));
+  await flush();
+  const relay = h.policyRelays[0];
+  relay.background.postMessage({ update: 1, ok: true });
+  assert.equal(page.scans(), 0);
+  relay.background.postMessage({ update: 2, ok: true });
+  assert.equal(page.scans(), 0);
+  notify(noProbes(true, 3));
+  relay.background.disconnect();
+  relay.background.postMessage({ update: 3, ok: true });
+  assert.equal(page.scans(), 0);
+  notify(noProbes(true, 4));
+  await flush();
+  const resumed = h.policyRelays[1];
+  resumed.background.postMessage({ update: resumed.content.sent[0].update, ok: true });
+  assert.equal(page.scans(), 1);
+  assert.equal(h.messages.some(item => item.action === "detector_policy" || item.policy), false);
+});
 
 test("unknown tabs and declared main frames never inspect responses; ordinary origins still can", () => {
   const state = new TabDetectionPolicy();
@@ -95,7 +331,7 @@ test("app response hooks and DOM messages stay idle while explicit casting still
   runInContext(script("background"), context);
   const runtimeMessage = h.onMessage.listeners[0];
   const sender = { tab: { id: 7, url: "https://app.example" }, frameId: 0 };
-  await runtimeMessage({ action: "detector_policy", policy: policy(false) }, sender);
+  await h.nativePolicy(policy(false), sender);
   h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: sender.tab.url });
   const headers = h.browser.webRequest.onHeadersReceived.listeners[0];
   for (const [type, url, contentType] of [
@@ -120,11 +356,11 @@ test("app response hooks and DOM messages stay idle while explicit casting still
   assert.equal(h.nativeMessages.some(message => message.type === "linked_open"), true);
   // A second, ordinary tab still gets body inspection.
   const normalSender = { ...sender, tab: { id: 8, url: "https://normal.example" } };
-  await runtimeMessage({ action: "detector_policy", policy: policy(true) }, normalSender);
+  await h.nativePolicy(policy(true), normalSender);
   headers({ tabId: 8, requestId: "normal", url: "https://cdn.example/config.json",
     type: "xmlhttprequest", statusCode: 200, responseHeaders: [{ name: "content-type", value: "application/json" }] });
   assert.equal(h.filters.length, 1);
-  await runtimeMessage({ action: "detector_policy", policy: policy(false, 2, false) }, normalSender);
+  await h.nativePolicy(policy(false, 2, false), normalSender);
   assert.equal(h.filters[0].disconnected, true);
   h.filters[0].onstop();
   assert.equal(h.nativeMessages.some(message => message.type === "video_detected"), false);
@@ -156,16 +392,16 @@ test("another tab's policy update preserves a first main-frame scan and its repl
   runInContext(script("background"), createContext(h.sandbox));
   const message = h.onMessage.listeners[0];
   const sender = (id: number) => ({ tab: { id, url: "https://normal.example" }, frameId: 0 });
-  await message({ action: "detector_policy", policy: policy(false) }, sender(7));
+  await h.nativePolicy(policy(false), sender(7));
   const request = { tabId: 9, requestId: "first-main", url: "https://normal.example",
     type: "main_frame", statusCode: 200 };
   h.browser.webRequest.onBeforeSendHeaders.listeners[0]({ ...request, method: "GET",
     requestHeaders: [{ name: "Referer", value: "https://normal.example/start" }] });
-  await message({ action: "detector_policy", policy: policy(true) }, sender(8));
+  await h.nativePolicy(policy(true), sender(8));
   h.browser.webRequest.onHeadersReceived.listeners[0]({ ...request,
     responseHeaders: [{ name: "content-type", value: "application/json" }] });
   assert.equal(h.filters.length, 1);
-  await message({ action: "detector_policy", policy: policy(true) }, sender(10));
+  await h.nativePolicy(policy(true), sender(10));
   assert.equal(h.filters[0].disconnected, false);
   h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 9, frameId: 0, url: request.url });
   h.filters[0].ondata({ data: new TextEncoder().encode("#EXTM3U\n#EXTINF:10,\nhttps://cdn.example/segment.ts\n#EXT-X-ENDLIST\n").buffer });
@@ -180,16 +416,16 @@ test("a cancelled scanner cannot report a late body after detection is reenabled
   runInContext(script("background"), createContext(h.sandbox));
   const message = h.onMessage.listeners[0];
   const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
-  await message({ action: "detector_policy", policy: policy(true) }, sender);
+  await h.nativePolicy(policy(true), sender);
   h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
   h.browser.webRequest.onHeadersReceived.listeners[0]({ tabId: 8, requestId: "late", type: "xmlhttprequest",
     url: "https://cdn.example/config.json", statusCode: 200,
     responseHeaders: [{ name: "content-type", value: "application/json" }] });
   const filter = h.filters[0];
   filter.ondata({ data: new TextEncoder().encode('{"file":"https://cdn.example/movie.mp4"}').buffer });
-  await message({ action: "detector_policy", policy: policy(false, 2, false) }, sender);
+  await h.nativePolicy(policy(false, 2, false), sender);
   assert.equal(filter.disconnected, true);
-  await message({ action: "detector_policy", policy: policy(true, 3) }, sender);
+  await h.nativePolicy(policy(true, 3), sender);
   filter.onstop();
   await flush();
   assert.equal(h.nativeMessages.some(item => item.type === "video_detected"), false);
@@ -402,9 +638,9 @@ test("media categories filter DOM and network reports and can be reenabled", asy
   runInContext(script("background"), createContext(h.sandbox));
   const message = h.onMessage.listeners[0];
   const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
-  await message({ action: "detector_policy", policy: { ...policy(true), options: {
+  await h.nativePolicy({ ...policy(true), options: {
     images: false, audio: false, subtitles: false,
-  } } }, sender);
+  } }, sender);
   h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
   const headers = h.browser.webRequest.onHeadersReceived.listeners[0];
   for (const [kind, url, contentType, action] of [
@@ -419,7 +655,7 @@ test("media categories filter DOM and network reports and can be reenabled", asy
   }
   await flush();
   assert.deepEqual(h.nativeMessages.filter(item => item.type === "video_detected").map(item => item.mediaKind), ["video", "video"]);
-  await message({ action: "detector_policy", policy: { ...policy(true, 2), options: { videos: false } } }, sender);
+  await h.nativePolicy({ ...policy(true, 2), options: { videos: false } }, sender);
   message({ action: "dom_image_found", url: "https://cdn.example/poster.jpg" }, sender);
   message({ action: "dom_audio_found", url: "https://cdn.example/music.mp3" }, sender);
   message({ action: "dom_subtitle_found", url: "https://cdn.example/captions.vtt" }, sender);
@@ -433,7 +669,7 @@ test("response scanning still reports embedded sources with network detection of
   runInContext(script("background"), createContext(h.sandbox));
   const message = h.onMessage.listeners[0];
   const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
-  await message({ action: "detector_policy", policy: { ...policy(true), options: { networkDetection: false } } }, sender);
+  await h.nativePolicy({ ...policy(true), options: { networkDetection: false } }, sender);
   h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
   h.browser.webRequest.onHeadersReceived.listeners[0]({ tabId: 8, requestId: "config", type: "xmlhttprequest",
     url: "https://cdn.example/config.json", statusCode: 200,
@@ -449,9 +685,9 @@ test("network detection and response scanning work independently and stop active
   runInContext(script("background"), createContext(h.sandbox));
   const message = h.onMessage.listeners[0];
   const sender = { tab: { id: 8, url: "https://normal.example" }, frameId: 0 };
-  await message({ action: "detector_policy", policy: { ...policy(true), options: {
+  await h.nativePolicy({ ...policy(true), options: {
     networkDetection: false, domScanning: false, playerProbes: false,
-  } } }, sender);
+  } }, sender);
   h.browser.webNavigation.onCommitted.listeners[0]({ tabId: 8, frameId: 0, url: sender.tab.url });
   const headers = h.browser.webRequest.onHeadersReceived.listeners[0];
   headers({ tabId: 8, requestId: "movie", type: "media", url: "https://cdn.example/movie.mp4", statusCode: 200,
@@ -463,7 +699,7 @@ test("network detection and response scanning work independently and stop active
     responseHeaders: [{ name: "content-type", value: "application/json" }] });
   assert.equal(h.filters.length, 1);
   h.filters[0].ondata({ data: new TextEncoder().encode('{"file":"https://cdn.example/movie.mp4"}').buffer });
-  await message({ action: "detector_policy", policy: { ...policy(true, 2), options: { responseScanning: false } } }, sender);
+  await h.nativePolicy({ ...policy(true, 2), options: { responseScanning: false } }, sender);
   assert.equal(h.filters[0].disconnected, true);
   h.filters[0].onstop();
   headers({ tabId: 8, requestId: "config2", type: "xmlhttprequest", url: "https://cdn.example/config.json", statusCode: 200,
