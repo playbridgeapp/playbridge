@@ -336,6 +336,8 @@ dependencies {
     implementation(libs.geckoview.omni)
 
     testImplementation(libs.junit)
+    // Execute the native page-message validators on the JVM, not Android JSON stubs.
+    testImplementation(libs.org.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

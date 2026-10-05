@@ -152,7 +152,6 @@ import com.playbridge.sender.connection.ConnectionViewModel
 import com.playbridge.shared.protocol.createSingleVideoCommandJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.network.MediaNetworkPolicy
-import playbridge.PlaylistPayload
 import playbridge.PlayPayload
 
 private data class PendingPageCast(
@@ -1090,12 +1089,14 @@ class BrowserActivity : ComponentActivity() {
                             }
                         }
 
-                        val cmd = createPlaylistCommandJson(PlaylistPayload(
+                        val cmd = createPlaylistCommandJson(
+                            pageCastPlaylistPayload(
                                 items = playPayloads,
-                                start_index = startIndex,
-                                visual_metadata = playlistMetadata,
-                                skip_preplay = skipPreplay,
-                            ))
+                                startIndex = startIndex,
+                                metadata = playlistMetadata,
+                                skipPreplay = skipPreplay,
+                            ),
+                        )
                         if (!Components.isCurrentPageNavigation(tabId, navigationGeneration)) {
                             return@launch
                         }

@@ -1,9 +1,67 @@
 package com.playbridge.sender.browser
 
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LinkedPageCastCoordinatorTest {
+    private fun validItem() = JSONObject()
+        .put("id", "episode-1")
+        .put("url", "https://media.example/one.mp4")
+
+    private fun validOpenMessage() = JSONObject()
+        .put("bridgeRequestId", "request-1")
+        .put("sessionId", "session-1")
+        .put("origin", "https://website.example")
+        .put("tabId", 1)
+        .put("navigationGeneration", 1L)
+        .put("payload", JSONObject().put("items", JSONArray().put(validItem())))
+
+    @Test
+    fun `valid website requests pass native validation`() {
+        val request = LinkedPageCastCoordinator.parseOpenMessage(validOpenMessage())
+        assertNotNull(request)
+        assertEquals("episode-1", request!!.items.single().id)
+        assertNotNull(LinkedPageCastCoordinator.parseItems(JSONArray().put(validItem()), emptySet()))
+    }
+
+    @Test
+    fun `rejects sender webhook fields at request and payload boundaries`() {
+        for (value in listOf(JSONObject.NULL, false, JSONObject().put("url", "https://callback.example"))) {
+            val envelope = validOpenMessage().put("progressWebhook", value)
+            assertNull(LinkedPageCastCoordinator.parseOpenMessage(envelope))
+
+            val message = validOpenMessage()
+            message.getJSONObject("payload").put("progressWebhook", value)
+            assertNull(LinkedPageCastCoordinator.parseOpenMessage(message))
+        }
+    }
+
+    @Test
+    fun `rejects sender webhook fields in native linked items`() {
+        for (value in listOf(JSONObject.NULL, false, JSONObject().put("url", "https://callback.example"))) {
+            val items = JSONArray().put(validItem().put("progressWebhook", value))
+            assertNull(LinkedPageCastCoordinator.parseItems(items, emptySet()))
+
+            val message = validOpenMessage()
+            message.getJSONObject("payload").put("items", items)
+            assertNull(LinkedPageCastCoordinator.parseOpenMessage(message))
+        }
+    }
+
+    @Test
+    fun `webhook metadata keys are not structural protocol fields`() {
+        val message = validOpenMessage()
+        val payload = message.getJSONObject("payload")
+        payload.put("metadata", JSONObject().put("progressWebhook", false))
+        payload.getJSONArray("items").getJSONObject(0)
+            .put("metadata", JSONObject().put("progressWebhook", JSONObject.NULL))
+        assertNotNull(LinkedPageCastCoordinator.parseOpenMessage(message))
+    }
+
     @Test
     fun `requests only the missing prefetch window`() {
         assertEquals(2, linkedQueueDemand(3, currentIndex = 1, totalCount = 3, false, false, false))
