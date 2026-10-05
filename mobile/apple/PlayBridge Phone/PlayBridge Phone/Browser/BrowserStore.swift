@@ -514,6 +514,10 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
                   BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)) == tab?.pageCastOrigin,
                   let payload = body["payload"] as? [String: Any],
                   let source = message.frameInfo.request.url else { return }
+            do {
+                try PageCastRequest.rejectSenderOnlyFields(body)
+                try PageCastRequest.rejectSenderOnlyFields(payload)
+            } catch { return }
             tab?.requestPageCast(payload, source: source)
         case "pickerState":
             if message.frameInfo.isMainFrame, body["active"] as? Bool == false { tab?.pickerDidFinish() }

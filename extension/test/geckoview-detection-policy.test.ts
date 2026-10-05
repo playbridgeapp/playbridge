@@ -130,6 +130,27 @@ test("app response hooks and DOM messages stay idle while explicit casting still
   assert.equal(h.nativeMessages.some(message => message.type === "video_detected"), false);
 });
 
+test("linked background rejects progressWebhook before any native operation", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const message = h.onMessage.listeners[0];
+  const sender = { tab: { id: 7, url: "https://app.example" }, frameId: 0 };
+  const item = { id: "episode", url: "https://media.example/video.mp4" };
+  for (const operation of ["open", "play", "replace", "append", "supply", "jump", "destination", "choose_destination"]) {
+    for (const payload of [{ items: [item], progressWebhook: null }, { items: [{ ...item, progressWebhook: null }] }]) {
+      const result = await message({ action: "page_linked_cast", operation, payload }, sender);
+      assert.equal(result.error, "invalid_request");
+      assert.match(result.message, /progressWebhook/);
+    }
+  }
+  const result = await message({ action: "page_linked_cast", operation: "open", progressWebhook: null,
+    payload: { items: [item] } }, sender);
+  assert.equal(result.error, "invalid_request");
+  message({ action: "page_cast_requested", payload: { items: [item], progressWebhook: null } }, sender);
+  await flush();
+  assert.equal(h.nativeMessages.length, 0);
+});
+
 test("another tab's policy update preserves a first main-frame scan and its replay headers", async () => {
   const h = harness();
   runInContext(script("background"), createContext(h.sandbox));

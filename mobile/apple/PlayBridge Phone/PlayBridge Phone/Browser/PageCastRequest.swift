@@ -16,8 +16,23 @@ struct PageCastRequest {
     var privateOrigins: Set<String>
     var initialOrientation: String? = nil
 
+    /// Check structural fields only, not arbitrary user metadata or header names.
+    static func rejectSenderOnlyFields(_ value: Any) throws {
+        if let array = value as? [[String: Any]] {
+            for item in array { try rejectSenderOnlyFields(item) }
+        } else if let source = value as? [String: Any] {
+            guard !source.keys.contains("progressWebhook") else { throw PageCastError(code: "invalid_request") }
+            if let items = source["items"] as? [[String: Any]] {
+                for item in items {
+                    guard !item.keys.contains("progressWebhook") else { throw PageCastError(code: "invalid_request") }
+                }
+            }
+        }
+    }
+
     static func parse(_ value: Any, linked: Bool = false) throws -> PageCastRequest {
         try checkSize(value)
+        try rejectSenderOnlyFields(value)
         let source: [String: Any]
         if let array = value as? [Any], !linked { source = ["items": array] }
         else if let object = value as? [String: Any] { source = object }
@@ -41,6 +56,7 @@ struct PageCastRequest {
 
     static func parseItems(_ value: Any, linked: Bool, allowEmpty: Bool = false) throws -> [[String: Any]] {
         try checkSize(value)
+        try rejectSenderOnlyFields(value)
         guard let values = value as? [[String: Any]], values.count <= 50,
               allowEmpty || !values.isEmpty else { throw PageCastError(code: "invalid_request") }
         var ids = Set<String>()
@@ -102,6 +118,8 @@ struct PageCastRequest {
         let wireItems = items.map { source -> [String: Any] in
             var item = source
             item.removeValue(forKey: "id")
+            // Defense in depth if a native caller constructs or mutates a request.
+            item.removeValue(forKey: "progressWebhook")
             if !allowedPrivateOrigins.isEmpty { item["allowedPrivateOrigins"] = allowedPrivateOrigins.sorted() }
             return item
         }

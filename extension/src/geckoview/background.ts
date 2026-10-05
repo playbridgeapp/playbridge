@@ -15,6 +15,7 @@ import {
   normalizeLinkedSupplyPayload,
   normalizePageCastPayload,
   pageCastRequestWithinLimit,
+  pageCastHasSenderOnlyFields,
 } from "./page-cast";
 import {
   advanceNavigationGeneration,
@@ -392,6 +393,9 @@ async function handleLinkedPageRequest(
   const origin = pageOrigin(sender.tab?.url);
   if (tabId == null || sender.frameId !== 0 || !origin) return linkedError("invalid_request");
   if (!pageCastRequestWithinLimit(message.payload ?? {})) return linkedError("resource_limit");
+  if (pageCastHasSenderOnlyFields(message) || pageCastHasSenderOnlyFields(message.payload)) {
+    return linkedError("invalid_request", "progressWebhook is not available to websites");
+  }
   const operation = message.operation;
   const generation = currentNavigationGeneration(tabNavigationGenerations, tabId);
   if (operation === "destination" || operation === "choose_destination") {

@@ -3,10 +3,37 @@ import test from "node:test";
 
 import {
   normalizeLinkedPageCastPayload,
+  normalizeLinkedAppendPayload,
+  normalizeLinkedJumpPayload,
+  pageCastHasSenderOnlyFields,
   normalizeLinkedSupplyPayload,
   normalizePageCastPayload,
   pageCastRequestWithinLimit,
 } from "../src/geckoview/page-cast";
+
+test("rejects sender-only progressWebhook at request and item boundaries", () => {
+  const item = { id: "episode", url: "https://media.example/video.mp4" };
+  for (const progressWebhook of [null, false, { url: "https://callback.example/progress", bearerToken: "test-only" }]) {
+    assert.equal(normalizePageCastPayload({ ...item, progressWebhook }), undefined);
+    assert.equal(normalizePageCastPayload([{ ...item, progressWebhook }]), undefined);
+    for (const payload of [
+      { items: [item], progressWebhook },
+      { items: [{ ...item, progressWebhook }] },
+    ]) {
+      assert.equal(normalizePageCastPayload(payload), undefined);
+      assert.equal(normalizeLinkedPageCastPayload(payload), undefined);
+      assert.equal(normalizeLinkedAppendPayload(payload), undefined);
+      assert.equal(normalizeLinkedSupplyPayload({ ...payload, requestId: "need-1" }), undefined);
+    }
+    assert.equal(normalizeLinkedSupplyPayload({ items: [], requestId: "need-1", endOfList: true, progressWebhook }), undefined);
+    assert.equal(normalizeLinkedJumpPayload({ index: 0, progressWebhook }), undefined);
+  }
+  const valid = normalizeLinkedPageCastPayload({ items: [item] })!;
+  assert.equal(pageCastHasSenderOnlyFields(valid), false);
+  assert.equal(Object.hasOwn(valid, "progressWebhook"), false);
+  assert.equal(Object.hasOwn(valid.items[0], "progressWebhook"), false);
+  assert.ok(normalizePageCastPayload({ ...item, metadata: { progressWebhook: "just metadata" } }));
+});
 
 test("normalizes a page bridge single-item request", () => {
   assert.deepEqual(

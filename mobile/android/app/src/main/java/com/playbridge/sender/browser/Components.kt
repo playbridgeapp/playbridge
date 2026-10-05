@@ -777,6 +777,19 @@ object Components {
             val jsonObject = Json.parseToJsonElement(jsonString) as? JsonObject
             if (jsonObject != null) {
                 val type = jsonObject["type"]?.jsonPrimitive?.content
+                if ((type == "cast" || type?.startsWith("linked_") == true) &&
+                    pageCastHasSenderOnlyFields(jsonObject)
+                ) {
+                    if (type.startsWith("linked_")) {
+                        postLinkedMessage(
+                            JSONObject().put("type", "linked_result")
+                                .put("bridgeRequestId", jsonObject["bridgeRequestId"]?.jsonPrimitive?.contentOrNull)
+                                .put("ok", false).put("error", "invalid_request")
+                                .put("message", "progressWebhook is not available to websites"),
+                        )
+                    }
+                    return
+                }
                 if (type?.startsWith("linked_") == true) {
                     if (jsonString.toByteArray().size > PAGE_CAST_REQUEST_BYTES) return
                     if (type in setOf("linked_open", "linked_play", "linked_destination", "linked_choose_destination")) {

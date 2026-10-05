@@ -32,7 +32,6 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import playbridge.PlayPayload
-import playbridge.PlaylistPayload
 import playbridge.SubtitleResource
 
 data class LinkedPageCastUiState(
@@ -213,6 +212,7 @@ class LinkedPageCastCoordinator(
         val navigationGeneration = message.getLong("navigationGeneration")
         if (tabId < 0 || navigationGeneration < 0) return null
         val payload = message.optJSONObject("payload") ?: return null
+        if (message.has("progressWebhook") || payload.has("progressWebhook")) return null
         if (payload.toString().toByteArray().size > MAX_REQUEST_BYTES) return null
         val destinationId = if (message.optString("type") == "linked_play") {
             payload.requiredShortString("destinationId", 256)
@@ -315,11 +315,11 @@ class LinkedPageCastCoordinator(
                 connectionCoordinator.tvPlaylistState.value = null
                 val sent = webSocketClient.send(
                     createPlaylistCommandJson(
-                        PlaylistPayload(
+                        pageCastPlaylistPayload(
                             items = request.items.map { it.payload },
-                            start_index = request.startIndex,
-                            visual_metadata = request.playlistMetadata,
-                            skip_preplay = request.skipPreplay,
+                            startIndex = request.startIndex,
+                            metadata = request.playlistMetadata,
+                            skipPreplay = request.skipPreplay,
                         ),
                     ),
                 )
@@ -418,11 +418,11 @@ class LinkedPageCastCoordinator(
         connectionCoordinator.tvPlaylistState.value = null
         val sent = webSocketClient.send(
             createPlaylistCommandJson(
-                PlaylistPayload(
+                pageCastPlaylistPayload(
                     items = items.map { it.payload },
-                    start_index = startIndex,
-                    visual_metadata = metadata,
-                    skip_preplay = skipPreplay,
+                    startIndex = startIndex,
+                    metadata = metadata,
+                    skipPreplay = skipPreplay,
                 ),
             ),
         )
@@ -688,6 +688,7 @@ class LinkedPageCastCoordinator(
             val items = buildList {
                 for (index in 0 until array.length()) {
                     val obj = array.optJSONObject(index) ?: return null
+                    if (obj.has("progressWebhook")) return null
                     val id = obj.optString("id")
                     val url = obj.optString("url")
                     if (id.isBlank() || id.length > 128 || !MediaNetworkPolicy.isHttpUrl(url)) return null
