@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -87,6 +88,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -95,6 +97,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.style.TextOverflow
 import com.playbridge.sender.R
 import com.playbridge.sender.browser.BridgedApp
+import com.playbridge.sender.browser.UblockSetupStatus
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 
@@ -117,6 +120,12 @@ fun DashboardScreen(
     onOpenBridgedApp: (BridgedApp) -> Unit = {},
     onRemoveBridgedApp: (BridgedApp) -> Unit = {},
     onEditBridgedApp: (BridgedApp, String, String) -> Boolean = { _, _, _ -> false },
+    ublockSetupStatus: UblockSetupStatus = UblockSetupStatus.CHECKING,
+    onCheckUblock: () -> Unit = {},
+    onInstallUblock: () -> Unit = {},
+    onCancelUblock: () -> Unit = {},
+    canFinishUblockSetup: () -> Boolean = { true },
+    onOnboardingVisible: () -> Unit = {},
 ) {
     // ── Entrance animations ─────────────────────────────────────────────────
     var visible by remember { mutableStateOf(false) }
@@ -135,7 +144,7 @@ fun DashboardScreen(
     val onboardingPrefs = remember {
         onboardingContext.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
     }
-    var showOnboarding by remember {
+    var showOnboarding by rememberSaveable {
         mutableStateOf(!onboardingPrefs.getBoolean("dashboard_onboarding_seen", false))
     }
 
@@ -587,6 +596,14 @@ fun DashboardScreen(
                         tint = MaterialTheme.colorScheme.error,
                     )
                 }
+                IconButton(
+                    onClick = { showOnboarding = true },
+                    modifier = Modifier.size(40.dp).clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = stringResource(R.string.onboarding_open_guide),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f))
+                }
                 // Single global Settings entry — not in Browser menu or Library bottom nav.
                 IconButton(
                     onClick = onSettings,
@@ -636,13 +653,22 @@ fun DashboardScreen(
             }
         }
 
-        // First-launch coach marks, drawn above everything on the Dashboard.
+        // First-launch full-window setup. Replay does not reset saved preferences or tile order.
         if (showOnboarding) {
             DashboardOnboardingOverlay(
                 onDone = {
-                    onboardingPrefs.edit().putBoolean("dashboard_onboarding_seen", true).apply()
-                    showOnboarding = false
-                }
+                    if (canFinishUblockSetup()) {
+                        onboardingPrefs.edit().putBoolean("dashboard_onboarding_seen", true).apply()
+                        showOnboarding = false
+                    } else {
+                        onCancelUblock()
+                    }
+                },
+                ublockStatus = ublockSetupStatus,
+                onCheckUblock = onCheckUblock,
+                onInstallUblock = onInstallUblock,
+                onCancelUblock = onCancelUblock,
+                onGuideShown = onOnboardingVisible,
             )
         }
 

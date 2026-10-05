@@ -1745,8 +1745,15 @@ fun AppNavHost(
                     } else {
                         connectionState is WebSocketClient.ConnectionState.Connected
                     }
+                    val ublockSetupStatus by Components.ublockOnboarding.status.collectAsStateWithLifecycle()
                     DashboardScreen(
                         pagerState = dashboardPagerState,
+                        ublockSetupStatus = ublockSetupStatus,
+                        onCheckUblock = { Components.ublockOnboarding.refresh() },
+                        onInstallUblock = { Components.ublockOnboarding.requestInstall() },
+                        onCancelUblock = { Components.ublockOnboarding.cancel() },
+                        canFinishUblockSetup = { Components.ublockOnboarding.canFinish() },
+                        onOnboardingVisible = { Components.extensionPrompts.reShowPendingPrompt() },
                         currentScreen = lastMainScreen,
                         isConnected = isConnected,
                         isSecure = !externalSelected &&

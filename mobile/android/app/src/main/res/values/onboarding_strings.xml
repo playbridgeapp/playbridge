@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="onboarding_open_guide">Setup guide</string>
+    <string name="onboarding_skip">Skip tour</string>
+    <string name="onboarding_back">Back</string>
+    <string name="onboarding_next">Next</string>
+    <string name="onboarding_not_now">Not now</string>
+    <string name="onboarding_done">Finish</string>
+    <string name="onboarding_progress">Step %1$d of %2$d</string>
+    <string name="onboarding_dashboard_title">This is your Dashboard</string>
+    <string name="onboarding_dashboard_body">Home base for everything: browse the web, open your Library, cast phone files, and more. Each card takes you to a section. Swipe across the cards for more. Tap Reorder to move any feature or Bridged App — the first two tiles on each page are larger.</string>
+    <string name="onboarding_cast_title">Cast to your TV</string>
+    <string name="onboarding_cast_body">Tap the status pill or the Connection card to pair with your TV. Once connected, any video you find can be sent to the big screen.</string>
+    <string name="onboarding_return_title">Getting back here</string>
+    <string name="onboarding_return_body">See this blocks icon in the top bar? Every screen has it. Tap it any time to return to the Dashboard.</string>
+    <string name="onboarding_ublock_title">Block ads with uBlock Origin</string>
+    <string name="onboarding_ublock_body">Optional protection for browsing in PlayBridge. Download the Mozilla-signed extension from Mozilla Add-ons, then review and approve its permissions in a native prompt. Private browsing and data collection are not granted automatically. You can skip this and install it later through Extensions.</string>
+    <string name="onboarding_ublock_install">Install uBlock Origin</string>
+    <string name="onboarding_ublock_retry_install">Retry installation</string>
+    <string name="onboarding_ublock_retry_check">Check again</string>
+    <string name="onboarding_ublock_cancel">Cancel installation</string>
+    <string name="onboarding_ublock_checking">Checking installed extensions…</string>
+    <string name="onboarding_ublock_installing">Preparing or downloading uBlock. Installation still requires your permission approval.</string>
+    <string name="onboarding_ublock_cancelling">Cancelling installation…</string>
+    <string name="onboarding_ublock_installed">uBlock is already installed. Its settings and enable/disable controls are in Extensions.</string>
+    <string name="onboarding_ublock_check_failed">Could not check installed extensions. Retry, or continue without changing anything.</string>
+    <string name="onboarding_ublock_install_failed">Installation did not complete. Retry, or continue without uBlock.</string>
+</resources>

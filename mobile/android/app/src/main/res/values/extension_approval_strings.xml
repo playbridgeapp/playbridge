@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="extension_allow_private_browsing">Allow in private browsing</string>
+    <string name="extension_allow_technical_data">Allow technical and interaction data collection</string>
+    <string name="extension_overlay_touch_warning">For your security, taps are blocked while another window overlaps this dialog. Close floating windows or overlays, then try again.</string>
+</resources>

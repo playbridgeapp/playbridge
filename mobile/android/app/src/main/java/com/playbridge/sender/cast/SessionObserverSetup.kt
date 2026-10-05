@@ -364,8 +364,8 @@ fun SessionObserverSetup(
             ) {
                 Log.d(TAG, "Download intercepted: $url, type: $contentType, file: $fileName")
 
-                if (url.endsWith(".xpi") || contentType == "application/x-xpinstall") {
-                    Log.d(TAG, "XPI detected, installing addon from: $url")
+                if (com.playbridge.sender.browser.isExtensionDownload(url, contentType, fileName)) {
+                    Log.d(TAG, "Extension download requires native approval")
                     onXpiDetected(url)
                 } else if (url.endsWith(".torrent") || contentType == "application/x-bittorrent") {
                     Log.d(TAG, ".torrent file detected: $url")
