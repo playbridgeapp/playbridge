@@ -28,6 +28,7 @@ import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
+import com.playbridge.sender.cast.proxy.NativePlaybackLeases
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -276,6 +277,28 @@ class CastSessionManager(
 
     private var externalStatusJob: Job? = null
     private var externalProxyLease: AutoCloseable? = null
+    private var externalLeaseIdleJob: Job? = null
+
+    private fun releaseExternalLease() {
+        externalLeaseIdleJob?.cancel()
+        externalLeaseIdleJob = null
+        externalProxyLease?.close()
+        externalProxyLease = null
+    }
+
+    private fun observeExternalLease(status: PlaybackStatus) {
+        if (status.state !in TERMINAL_EXTERNAL_STATES) {
+            externalLeaseIdleJob?.cancel()
+            externalLeaseIdleJob = null
+            return
+        }
+        val lease = externalProxyLease ?: return
+        if (externalLeaseIdleJob != null) return
+        externalLeaseIdleJob = scope.launch {
+            delay(NativePlaybackLeases.IDLE_GRACE_MS)
+            if (externalProxyLease === lease) releaseExternalLease()
+        }
+    }
     private var externalLoadJob: Job? = null
 
     /**
@@ -1031,6 +1054,7 @@ class CastSessionManager(
                     return@collect
                 }
                 _externalStatus.value = status
+                observeExternalLease(status)
                 castAttemptDiagnostics.markPlayback(activeExternalAttemptId, status.state, status.failure)
                 if (externalScreenMirrorCoordinator.state.value.isActive) {
                     when (status.state) {
@@ -1069,8 +1093,7 @@ class CastSessionManager(
         externalLoadJob = null
         externalStatusJob?.cancel()
         externalStatusJob = null
-        externalProxyLease?.close()
-        externalProxyLease = null
+        releaseExternalLease()
         val detached = externalTargetSlot.take()
         _externalTarget.value = null
         _activeExternalDevice.value = null
@@ -1209,8 +1232,9 @@ class CastSessionManager(
                 return@launch
             }
             primary.onSuccess {
-                externalProxyLease?.close()
+                releaseExternalLease()
                 externalProxyLease = incomingLease
+                _externalStatus.value?.let(::observeExternalLease)
                 if (loadTarget is BrowserCastTarget) {
                     loadTarget.lastEffectiveRoute?.let {
                         setActiveStreamRoute(it, loadTarget.lastProxyFallback)
@@ -1253,8 +1277,8 @@ class CastSessionManager(
     private fun maybeClearTerminalExternalMedia(status: PlaybackStatus) {
         if (!_externalMediaLoaded.value) return
         if (status.state !in TERMINAL_EXTERNAL_STATES) return
-        // Status can be transient (DLNA polling/playlist transitions). Only explicit
-        // stop, successful replacement, or detach releases playback ownership.
+        // Status can be transient (DLNA polling/playlist transitions). UI clears now;
+        // ownership gets a cancellable inactivity grace, not immediate revocation.
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
         _externalMediaTitle.value = null
@@ -1285,8 +1309,7 @@ class CastSessionManager(
     }
 
     fun stop() {
-        externalProxyLease?.close()
-        externalProxyLease = null
+        releaseExternalLease()
         castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
         JniUpstreamHttpClient.setDiagnosticAttempt(null, null)
         _externalInterrupts.tryEmit(Unit)

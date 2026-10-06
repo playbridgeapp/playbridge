@@ -12,11 +12,13 @@ import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.CastableMedia
 import com.playbridge.sender.cast.proxy.PackagedMedia
 import com.playbridge.sender.cast.proxy.PhoneSenderServices
+import com.playbridge.sender.cast.proxy.NativePlaybackLeases
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
 import com.playbridge.sender.cast.proxy.StreamRouteMode
 import com.playbridge.sender.cast.proxy.StreamRouteService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,6 +58,28 @@ class BrowserCastTarget(
     private val routeService = StreamRouteService(context)
     private var statusJob: Job? = null
     private var proxyLease: AutoCloseable? = null
+    private var leaseIdleJob: Job? = null
+
+    private fun releaseProxyLease() {
+        leaseIdleJob?.cancel()
+        leaseIdleJob = null
+        proxyLease?.close()
+        proxyLease = null
+    }
+
+    private fun observeLeaseState() {
+        if (_status.value.state !in setOf(PlaybackState.IDLE, PlaybackState.STOPPED, PlaybackState.ERROR)) {
+            leaseIdleJob?.cancel()
+            leaseIdleJob = null
+            return
+        }
+        val lease = proxyLease ?: return
+        if (leaseIdleJob != null) return
+        leaseIdleJob = scope.launch {
+            delay(NativePlaybackLeases.IDLE_GRACE_MS)
+            if (proxyLease === lease) releaseProxyLease()
+        }
+    }
     private var volumeFraction: Double = 1.0
     @Volatile private var activeLoadEpoch: Long? = null
 
@@ -90,7 +114,7 @@ class BrowserCastTarget(
                 subtitleUrl = media.subtitles.firstOrNull()?.url,
                 startPositionMs = media.startPositionMs.takeIf { it > 0L },
             )
-            proxyLease?.close()
+            releaseProxyLease()
             proxyLease = incomingLease
             incomingLease = null
             _status.value = PlaybackStatus(
@@ -110,16 +134,17 @@ class BrowserCastTarget(
     override suspend fun play() {
         control("play")
         _status.value = _status.value.copy(state = PlaybackState.PLAYING)
+        observeLeaseState()
     }
 
     override suspend fun pause() {
         control("pause")
         _status.value = _status.value.copy(state = PlaybackState.PAUSED)
+        observeLeaseState()
     }
 
     override suspend fun stop() {
-        proxyLease?.close()
-        proxyLease = null
+        releaseProxyLease()
         control("stop")
         _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
@@ -143,8 +168,7 @@ class BrowserCastTarget(
     override fun status(): Flow<PlaybackStatus> = _status.asStateFlow()
 
     override fun release() {
-        proxyLease?.close()
-        proxyLease = null
+        releaseProxyLease()
         statusJob?.cancel()
         statusJob = null
     }
@@ -201,8 +225,9 @@ class BrowserCastTarget(
                 )
             }
         }
-        // Receiver status is not a reliable lease boundary. Keep ownership until
-        // explicit stop, successful replacement, or release/detach.
+        // A transient terminal status only starts a grace; active/paused resets it.
+        // Explicit stop, replacement, and detach still release immediately.
+        observeLeaseState()
     }
 
     private fun mapBrowserState(raw: String): PlaybackState = when (raw.lowercase()) {

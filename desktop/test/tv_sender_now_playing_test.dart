@@ -219,6 +219,99 @@ void main() {
     expect(closed, ['http://phone/old', 'http://phone/queued']);
   });
 
+  testWidgets(
+      'sustained empty playlist releases without repeated idle extending grace',
+      (tester) async {
+    var closed = 0;
+    final (sender, _) = await makeSender(
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    sender.handleReceiverMessage('{"type":"playlist_status","items":[]}');
+    await tester.pump(const Duration(minutes: 4));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    expect(closed, 0);
+    await tester.pump(const Duration(minutes: 1));
+    expect(closed, 1);
+  });
+
+  testWidgets(
+      'same playback ID can resume and pause beyond the inactivity grace',
+      (tester) async {
+    var closed = 0;
+    final (sender, _) = await makeSender(
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    sender.handleReceiverMessage(
+        '{"type":"status","state":"playing","playbackId":"current"}');
+    sender.handleReceiverMessage(
+        '{"type":"status","state":"idle","playbackId":"current"}');
+    await tester.pump(const Duration(minutes: 1));
+    sender.handleReceiverMessage(
+        '{"type":"status","state":"paused","playbackId":"current"}');
+    await tester.pump(const Duration(days: 2));
+    expect(closed, 0);
+    await sender.stopCast();
+    expect(closed, 1);
+  });
+
+  testWidgets('legacy resumed playback also cancels idle grace',
+      (tester) async {
+    var closed = 0;
+    final (sender, _) = await makeSender(
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    await tester.pump(const Duration(minutes: 1));
+    sender.handleReceiverMessage('{"type":"status","state":"paused"}');
+    await tester.pump(const Duration(hours: 12));
+    expect(closed, 0);
+  });
+
+  testWidgets(
+      'successful replacement cancels old grace but failed replacement does not',
+      (tester) async {
+    final closed = <String>[];
+    final (sender, transport) = await makeSender(retainProxyUrls: (urls) async {
+      final values = urls.toList();
+      return StreamProxyLease(() {
+        closed.addAll(values);
+      });
+    });
+    await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    await sender.castVideo(PlayPayload(url: 'http://phone/new'));
+    await tester.pump(TvSenderController.proxyIdleGrace);
+    expect(closed, ['http://phone/old']);
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    transport.acceptsLoads = false;
+    await sender.castVideo(PlayPayload(url: 'http://phone/failed'));
+    await tester.pump(TvSenderController.proxyIdleGrace);
+    expect(closed,
+        ['http://phone/old', 'http://phone/failed', 'http://phone/new']);
+  });
+
+  testWidgets(
+      'stored nonempty playlist does not cancel receiver-terminal grace',
+      (tester) async {
+    var closed = 0;
+    final (sender, _) = await makeSender(
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    sender.handleReceiverMessage(
+        '{"type":"playlist_status","items":[{"title":"Old"}]}');
+    await tester.pump(TvSenderController.proxyIdleGrace);
+    expect(closed, 1);
+  });
+
   test('a legacy receiver without playback IDs resumes on a new context',
       () async {
     final (sender, _) = await makeSender();

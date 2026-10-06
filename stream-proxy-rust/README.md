@@ -105,10 +105,14 @@ stable for the active native playback owner, including pause and seek. Registrat
 alone keeps the initial ten-minute idle cutoff and two-hour maximum; first owner
 retain enables renewal with a six-hour abandonment grace. HTTP reads cannot renew
 the owner lease. Explicit stop, successful replacement, detach, and host teardown
-release ownership. Ambiguous receiver idle/error/end status only changes the UI,
-not authorization; this avoids revocation during playlist transitions. Transient
-Android renewal failures retry with capped backoff; expired/revoked grants are
-never revived.
+release ownership. Android and Desktop playback owners allow five minutes for
+receiver idle/error/end or empty-playlist reports to recover before releasing;
+playing, buffering, and paused reports cancel that grace. Repeated idle reports
+cannot extend it. Lost connections without retry get the same grace; definitive
+authentication/pinning/pairing failure, receiver switching, and exhausted Desktop
+retries release immediately. This is an abandonment backstop, not an absolute cap
+on active/live playback or pause duration. Transient Android renewal failures
+retry with capped backoff; expired/revoked grants are never revived.
 
 Native/admin local-media registration authorizes the selected local host,
 including same-host port redirects, not every private-network host. Explicit

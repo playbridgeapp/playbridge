@@ -1,11 +1,73 @@
 package com.playbridge.sender.cast.proxy
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 /** Owns the native-TV playback bundle at the common command dispatch boundary,
- * not in an Activity/ViewModel. Receiver status messages do not release it. */
-internal class NativePlaybackLeases(private val retain: (String) -> AutoCloseable?) {
+ * not in an Activity/ViewModel. Transient receiver states do not release it. */
+internal class NativePlaybackLeases(
+    private val scope: CoroutineScope,
+    private val retain: (String) -> AutoCloseable?,
+) {
     private val held = mutableListOf<AutoCloseable>()
+    private var idleJob: Job? = null
+    private var idleReason: String? = null
+    private var playbackId: String? = null
+
+    /** Five minutes of receiver inactivity or a lost connection, not a playback cap. */
+    @Synchronized
+    fun inactive(reason: String = "connection") {
+        if (held.isEmpty()) return
+        if (idleJob != null) {
+            if (reason == "receiver") idleReason = reason
+            return
+        }
+        idleReason = reason
+        idleJob = scope.launch {
+            delay(IDLE_GRACE_MS)
+            val context = currentCoroutineContext()
+            synchronized(this@NativePlaybackLeases) {
+                context.ensureActive()
+                clear()
+            }
+        }
+    }
+
+    @Synchronized
+    fun active(reason: String? = null) {
+        if (reason != null && idleReason != reason) return
+        idleJob?.cancel()
+        idleJob = null
+        idleReason = null
+    }
+
+    @Synchronized
+    fun observe(message: String) {
+        val obj = runCatching { JSONObject(message) }.getOrNull() ?: return
+        val id = obj.optString("playbackId").takeIf { it.isNotBlank() }
+        val state = obj.optString("state").lowercase()
+        val hasActivity = state in setOf("playing", "paused", "buffering")
+        if (!hasActivity && id != null && playbackId != null && id != playbackId) return
+        when (obj.optString("type")) {
+            "status" -> when (state) {
+                "playing", "paused", "buffering" -> { playbackId = id ?: playbackId; active() }
+                "idle", "stopped", "ended", "finished", "complete", "none", "error" -> inactive("receiver")
+            }
+            "context" -> when (obj.optString("active")) {
+                "idle" -> inactive("receiver")
+                "player" -> active()
+            }
+            "playlist_status" -> obj.optJSONArray("items")?.let {
+                if (it.length() == 0) inactive("playlist") else active("playlist")
+            }
+            "error" -> inactive("receiver")
+        }
+    }
 
     @Synchronized
     fun send(message: String, transport: () -> Boolean): Boolean {
@@ -31,6 +93,7 @@ internal class NativePlaybackLeases(private val retain: (String) -> AutoCloseabl
                 if (replace) clear()
                 held.addAll(incoming)
                 incoming.clear()
+                if (replace || action == "queue_add") active()
             }
             return sent
         } finally {
@@ -40,6 +103,8 @@ internal class NativePlaybackLeases(private val retain: (String) -> AutoCloseabl
 
     @Synchronized
     fun clear() {
+        active()
+        playbackId = null
         held.forEach { it.close() }
         held.clear()
     }
@@ -54,17 +119,27 @@ internal class NativePlaybackLeases(private val retain: (String) -> AutoCloseabl
             for (i in 0 until (subtitles?.length() ?: 0)) {
                 subtitles?.optString(i)?.takeIf { it.isNotBlank() }?.let(::add)
             }
-            val resources = value?.optJSONArray("subtitle_resources")
-            for (i in 0 until (resources?.length() ?: 0)) resource(resources?.optJSONObject(i))
-            val visual = value?.optJSONObject("visual_metadata")
-            for (key in listOf("artwork_url", "poster_url", "backdrop_url", "logo_url")) {
-                visual?.optString(key)?.takeIf { it.isNotBlank() }?.let(::add)
+            for (name in listOf("subtitleResources", "subtitle_resources")) {
+                val resources = value?.optJSONArray(name)
+                for (i in 0 until (resources?.length() ?: 0)) resource(resources?.optJSONObject(i))
+            }
+            for (name in listOf("visualMetadata", "visual_metadata")) {
+                val visual = value?.optJSONObject(name)
+                for (key in listOf("artworkUrl", "artwork_url", "posterUrl", "poster_url",
+                    "backdropUrl", "backdrop_url", "logoUrl", "logo_url")) {
+                    visual?.optString(key)?.takeIf { it.isNotBlank() }?.let(::add)
+                }
             }
         }
         val items = payload?.optJSONArray("items")
         for (i in 0 until (items?.length() ?: 0)) item(items?.optJSONObject(i))
         item(payload?.optJSONObject("item"))
         if (control?.startsWith("add_subtitle:") == true) add(control.substringAfter("add_subtitle:"))
+        resource(payload?.optJSONObject("subtitleResource"))
         resource(payload?.optJSONObject("subtitle_resource"))
+    }
+
+    companion object {
+        internal const val IDLE_GRACE_MS = 5 * 60_000L
     }
 }
