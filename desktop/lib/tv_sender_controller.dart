@@ -470,6 +470,7 @@ class TvSenderController extends ChangeNotifier {
   Future<bool> castVideo(PlayPayload video) async {
     final generation = ++_proxyLeaseGeneration;
     final lease = await _acquireProxyLease([video.url]);
+    if (lease == null) return false;
     if (generation != _proxyLeaseGeneration) {
       lease.close();
       return false;
@@ -518,6 +519,7 @@ class TvSenderController extends ChangeNotifier {
     final generation = ++_proxyLeaseGeneration;
     final lease =
         await _acquireProxyLease(outgoing.items.map((item) => item.url));
+    if (lease == null) return false;
     if (generation != _proxyLeaseGeneration) {
       lease.close();
       return false;
@@ -646,6 +648,7 @@ class TvSenderController extends ChangeNotifier {
     if (_transport case BrowserTransport browser) {
       final generation = ++_proxyLeaseGeneration;
       final lease = await _acquireProxyLease([targetUrl]);
+      if (lease == null) return false;
       if (generation != _proxyLeaseGeneration) {
         lease.close();
         return false;
@@ -679,6 +682,7 @@ class TvSenderController extends ChangeNotifier {
   Future<bool> queueAdd(PlayPayload item) async {
     final generation = _proxyLeaseGeneration;
     final lease = await _acquireProxyLease([item.url]);
+    if (lease == null) return false;
     if (generation != _proxyLeaseGeneration) {
       lease.close();
       return false;
@@ -772,7 +776,7 @@ class TvSenderController extends ChangeNotifier {
     }
   }
 
-  Future<StreamProxyLease> _acquireProxyLease(Iterable<String> urls) async {
+  Future<StreamProxyLease?> _acquireProxyLease(Iterable<String> urls) async {
     _proxyLeaseAcquisitions++;
     var abandoned = false;
     try {
@@ -783,6 +787,9 @@ class TvSenderController extends ChangeNotifier {
         return lease;
       });
       return await pending.timeout(proxyLeaseAcquisitionTimeout);
+    } on TimeoutException {
+      // Expected acquisition failure: callers must still report a cast result.
+      return null;
     } finally {
       // A late result after timeout must release its references.
       abandoned = true;

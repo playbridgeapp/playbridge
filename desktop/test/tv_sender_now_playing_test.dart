@@ -15,6 +15,7 @@ class _RecordingTransport implements TvTransport {
   Future<bool>? pendingQueue;
   Future<bool>? pendingLoad;
   int loads = 0;
+  int queueAdds = 0;
 
   @override
   TvProtocol get protocol => TvProtocol.playBridge;
@@ -32,8 +33,10 @@ class _RecordingTransport implements TvTransport {
   }
 
   @override
-  Future<bool> queueAdd(PlayPayload item) async =>
-      await (pendingQueue ?? Future.value(acceptsLoads));
+  Future<bool> queueAdd(PlayPayload item) async {
+    queueAdds++;
+    return await (pendingQueue ?? Future.value(acceptsLoads));
+  }
 
   @override
   Future<bool> sendControl(String command) async => acceptsControls;
@@ -45,13 +48,33 @@ class _RecordingTransport implements TvTransport {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _RecordingBrowserTransport extends _RecordingTransport
+    implements BrowserTransport {
+  @override
+  TvProtocol get protocol => TvProtocol.webBrowser;
+
+  @override
+  Future<bool> castBrowserMedia(
+      {required String url,
+      String? title,
+      String? contentType,
+      String? posterUrl,
+      String? subtitleUrl,
+      Duration? startPosition}) async {
+    loads++;
+    return acceptsLoads;
+  }
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   Future<(TvSenderController, _RecordingTransport)> makeSender({
     Future<StreamProxyLease> Function(Iterable<String>)? retainProxyUrls,
+    bool browser = false,
   }) async {
-    final transport = _RecordingTransport();
+    final transport =
+        browser ? _RecordingBrowserTransport() : _RecordingTransport();
     final sender = TvSenderController(
       identity: await PairingStore.load(),
       store: await TvConnectionStore.load(),
@@ -447,7 +470,7 @@ void main() {
         .pump(TvSenderController.proxyIdleGrace - const Duration(seconds: 1));
     scan = Completer<StreamProxyLease>();
     final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
-    final failure = expectLater(loading, throwsA(isA<TimeoutException>()));
+    final failure = expectLater(loading, completion(isFalse));
     await tester.pump();
     await tester.pump(const Duration(seconds: 1));
     expect(closed, 0);
@@ -461,6 +484,46 @@ void main() {
     expect(closed, 2);
     expect(transport.loads, 1);
   });
+
+  for (final operation in ['video', 'playlist', 'url', 'browser', 'queue']) {
+    testWidgets(
+        '$operation acquisition timeout returns false without disturbing held playback',
+        (tester) async {
+      var closed = 0;
+      Completer<StreamProxyLease>? scan;
+      final (sender, transport) = await makeSender(
+          browser: operation == 'browser',
+          retainProxyUrls: (_) async => scan != null
+              ? await scan.future
+              : StreamProxyLease(() {
+                  closed++;
+                }));
+      await sender
+          .castVideo(PlayPayload(url: 'https://example.invalid/old.mp4'));
+      scan = Completer<StreamProxyLease>();
+      final payload = PlayPayload(url: 'https://example.invalid/new.mp4');
+      final loading = switch (operation) {
+        'video' => sender.castVideo(payload),
+        'playlist' => sender.castPlaylist(PlaylistPayload(items: [payload])),
+        'queue' => sender.queueAdd(payload),
+        _ => sender.castUrl(payload.url),
+      };
+      final failure = expectLater(loading, completion(isFalse));
+      await tester.pump();
+      await tester.pump(TvSenderController.proxyLeaseAcquisitionTimeout);
+      await failure;
+      expect(closed, 0);
+      expect(transport.loads, 1);
+      expect(transport.queueAdds, 0);
+      scan.complete(StreamProxyLease(() {
+        closed++;
+      }));
+      await tester.pump();
+      expect(closed, 1);
+      await sender.stopCast();
+      expect(closed, 2);
+    });
+  }
 
   for (final detach in [false, true]) {
     testWidgets(
