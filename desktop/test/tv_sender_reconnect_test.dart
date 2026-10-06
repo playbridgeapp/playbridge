@@ -56,6 +56,41 @@ void main() {
     return (sender: sender, transport: transport, saved: saved, store: store);
   }
 
+  for (final playlist in [false, true]) {
+    testWidgets(
+        'Google Cast relaunch during ${playlist ? 'playlist' : 'video'} keeps incoming lease',
+        (tester) async {
+      final closed = <String>[];
+      final h = await make(
+          protocol: TvProtocol.googleCast,
+          retainProxyUrls: (urls) async {
+            final values = urls.toList();
+            return StreamProxyLease(() {
+              closed.addAll(values);
+            });
+          });
+      await h.sender.reconnect(h.saved);
+      await tester.pump();
+      h.transport.acceptsLoads = true;
+      await h.sender.castVideo(PlayPayload(url: 'http://phone/old'));
+      h.transport.duringLoad = () async {
+        h.transport.emit(SenderConnectionState.selected);
+        await Future<void>.value();
+        h.transport.emit(SenderConnectionState.connecting);
+        h.transport.emit(SenderConnectionState.connected);
+        await Future<void>.value();
+      };
+      final payload = PlayPayload(url: 'http://phone/new');
+      final ok = playlist
+          ? await h.sender.castPlaylist(PlaylistPayload(items: [payload]))
+          : await h.sender.castVideo(payload);
+      expect(ok, isTrue);
+      expect(closed, ['http://phone/old']);
+      await h.sender.disconnect();
+      expect(closed, ['http://phone/old', 'http://phone/new']);
+    });
+  }
+
   testWidgets('retry recovery keeps ownership but final give-up releases it',
       (tester) async {
     var closed = 0;
@@ -452,6 +487,7 @@ class _FakeTransport implements TvTransport {
   SenderConnectionState _current = SenderConnectionState.disconnected;
   bool failConnect = false;
   bool acceptsLoads = false;
+  Future<void> Function()? duringLoad;
   Completer<void>? connectGate;
   SenderConnectionState? failureState;
   String? lastPin;
@@ -532,10 +568,16 @@ class _FakeTransport implements TvTransport {
   }
 
   @override
-  Future<bool> castVideo(PlayPayload video) async => acceptsLoads;
+  Future<bool> castVideo(PlayPayload video) async {
+    await duringLoad?.call();
+    return acceptsLoads;
+  }
 
   @override
-  Future<bool> castPlaylist(PlaylistPayload playlist) async => false;
+  Future<bool> castPlaylist(PlaylistPayload playlist) async {
+    await duringLoad?.call();
+    return acceptsLoads;
+  }
 
   @override
   Future<bool> sendControl(String command) async => false;

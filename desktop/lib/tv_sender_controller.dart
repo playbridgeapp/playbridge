@@ -104,6 +104,9 @@ class TvSenderController extends ChangeNotifier {
   StreamProxyLease? _proxyLease;
   final List<StreamProxyLease> _queuedProxyLeases = [];
   int _proxyLeaseGeneration = 0;
+  int _proxyLeaseAcquisitions = 0;
+  String? _heldProxyRetirement;
+  static const proxyLeaseAcquisitionTimeout = Duration(seconds: 15);
   Timer? _proxyIdleTimer;
   String? _proxyIdleReason;
   String? _proxyPlaybackId;
@@ -466,7 +469,11 @@ class TvSenderController extends ChangeNotifier {
 
   Future<bool> castVideo(PlayPayload video) async {
     final generation = ++_proxyLeaseGeneration;
-    final lease = await _retainProxyUrls([video.url]);
+    final lease = await _acquireProxyLease([video.url]);
+    if (generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
     bool ok;
     try {
       ok = await _transport.castVideo(_withHistoryPreference(video));
@@ -476,7 +483,7 @@ class TvSenderController extends ChangeNotifier {
     }
     if (!ok || generation != _proxyLeaseGeneration) {
       lease.close();
-      return ok;
+      return false;
     }
     _releaseProxyLeases();
     _proxyLease = lease;
@@ -510,7 +517,11 @@ class TvSenderController extends ChangeNotifier {
       ..addAll(items);
     final generation = ++_proxyLeaseGeneration;
     final lease =
-        await _retainProxyUrls(outgoing.items.map((item) => item.url));
+        await _acquireProxyLease(outgoing.items.map((item) => item.url));
+    if (generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
     bool ok;
     try {
       ok = await _transport.castPlaylist(outgoing);
@@ -520,7 +531,7 @@ class TvSenderController extends ChangeNotifier {
     }
     if (!ok || generation != _proxyLeaseGeneration) {
       lease.close();
-      return ok;
+      return false;
     }
     _releaseProxyLeases();
     _proxyLease = lease;
@@ -634,7 +645,11 @@ class TvSenderController extends ChangeNotifier {
     }
     if (_transport case BrowserTransport browser) {
       final generation = ++_proxyLeaseGeneration;
-      final lease = await _retainProxyUrls([targetUrl]);
+      final lease = await _acquireProxyLease([targetUrl]);
+      if (generation != _proxyLeaseGeneration) {
+        lease.close();
+        return false;
+      }
       bool ok;
       try {
         ok = await browser.castBrowserMedia(
@@ -648,7 +663,7 @@ class TvSenderController extends ChangeNotifier {
       }
       if (!ok || generation != _proxyLeaseGeneration) {
         lease.close();
-        return ok;
+        return false;
       }
       _releaseProxyLeases();
       _proxyLease = lease;
@@ -663,7 +678,11 @@ class TvSenderController extends ChangeNotifier {
 
   Future<bool> queueAdd(PlayPayload item) async {
     final generation = _proxyLeaseGeneration;
-    final lease = await _retainProxyUrls([item.url]);
+    final lease = await _acquireProxyLease([item.url]);
+    if (generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
     try {
       final ok = await _transport.queueAdd(_withHistoryPreference(item));
       if (ok && generation == _proxyLeaseGeneration) {
@@ -731,6 +750,7 @@ class TvSenderController extends ChangeNotifier {
     _proxyIdleTimer?.cancel();
     _proxyIdleTimer = null;
     _proxyIdleReason = null;
+    if (_heldProxyRetirement == 'idle') _heldProxyRetirement = null;
   }
 
   void _startProxyIdleGrace({String reason = 'receiver'}) {
@@ -740,7 +760,8 @@ class TvSenderController extends ChangeNotifier {
       return;
     }
     _proxyIdleReason = reason;
-    _proxyIdleTimer = Timer(proxyIdleGrace, _releaseProxyLeases);
+    _proxyIdleTimer =
+        Timer(proxyIdleGrace, () => _retireHeldProxyLeases(idle: true));
   }
 
   void _observeProxyState(String? state) {
@@ -751,10 +772,48 @@ class TvSenderController extends ChangeNotifier {
     }
   }
 
+  Future<StreamProxyLease> _acquireProxyLease(Iterable<String> urls) async {
+    _proxyLeaseAcquisitions++;
+    var abandoned = false;
+    try {
+      // A local-manifest scan can await I/O before references are acquired.
+      // Keep the held bundle until acquisition completes, not for the full load.
+      final pending = _retainProxyUrls(urls).then((lease) {
+        if (abandoned) lease.close();
+        return lease;
+      });
+      return await pending.timeout(proxyLeaseAcquisitionTimeout);
+    } finally {
+      // A late result after timeout must release its references.
+      abandoned = true;
+      _proxyLeaseAcquisitions--;
+      if (_proxyLeaseAcquisitions == 0 && _heldProxyRetirement != null) {
+        _releaseHeldProxyLeases();
+      }
+    }
+  }
+
+  void _retireHeldProxyLeases({bool idle = false}) {
+    if (_proxyLeaseAcquisitions > 0) {
+      if (!idle || _heldProxyRetirement == null) {
+        _heldProxyRetirement = idle ? 'idle' : 'receiver';
+      }
+      return;
+    }
+    _releaseHeldProxyLeases();
+  }
+
+  /// Explicit user/session boundaries invalidate pending work immediately.
   void _releaseProxyLeases() {
+    _proxyLeaseGeneration++;
+    _releaseHeldProxyLeases();
+  }
+
+  /// Receiver state and idle expiry retire held leases, not a pending cast intent.
+  void _releaseHeldProxyLeases() {
+    _heldProxyRetirement = null;
     _cancelProxyIdleGrace();
     _proxyPlaybackId = null;
-    _proxyLeaseGeneration++;
     _proxyLease?.close();
     _proxyLease = null;
     for (final lease in _queuedProxyLeases) {
@@ -960,9 +1019,10 @@ class TvSenderController extends ChangeNotifier {
         }
         break;
       case SenderConnectionState.selected:
-        _releaseProxyLeases();
+        _retireHeldProxyLeases();
         // Google Cast receiver exited on the TV. Keep the destination so the
-        // next explicit cast can launch a clean receiver session.
+        // next explicit cast can launch a clean receiver session. This state can
+        // also occur inside a stale-session relaunch, so preserve pending intent.
         break;
       case SenderConnectionState.disconnected:
       case SenderConnectionState.error:

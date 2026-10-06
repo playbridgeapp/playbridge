@@ -13,15 +13,23 @@ class _RecordingTransport implements TvTransport {
   bool acceptsControls = true;
   bool acceptsLoads = true;
   Future<bool>? pendingQueue;
+  Future<bool>? pendingLoad;
+  int loads = 0;
 
   @override
   TvProtocol get protocol => TvProtocol.playBridge;
 
   @override
-  Future<bool> castVideo(PlayPayload video) async => acceptsLoads;
+  Future<bool> castVideo(PlayPayload video) async {
+    loads++;
+    return await (pendingLoad ?? Future.value(acceptsLoads));
+  }
 
   @override
-  Future<bool> castPlaylist(PlaylistPayload playlist) async => acceptsLoads;
+  Future<bool> castPlaylist(PlaylistPayload playlist) async {
+    loads++;
+    return await (pendingLoad ?? Future.value(acceptsLoads));
+  }
 
   @override
   Future<bool> queueAdd(PlayPayload item) async =>
@@ -310,6 +318,197 @@ void main() {
         '{"type":"playlist_status","items":[{"title":"Old"}]}');
     await tester.pump(TvSenderController.proxyIdleGrace);
     expect(closed, 1);
+  });
+
+  testWidgets('idle expiry during transport loading retires only held leases',
+      (tester) async {
+    final closed = <String>[];
+    final (sender, transport) = await makeSender(retainProxyUrls: (urls) async {
+      final values = urls.toList();
+      return StreamProxyLease(() {
+        closed.addAll(values);
+      });
+    });
+    await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    final pending = Completer<bool>();
+    transport.pendingLoad = pending.future;
+    final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
+    await tester.pump();
+    await tester.pump(TvSenderController.proxyIdleGrace);
+    expect(closed, ['http://phone/old']);
+    pending.complete(true);
+    expect(await loading, isTrue);
+    expect(closed, ['http://phone/old']);
+    await sender.stopCast();
+    expect(closed, ['http://phone/old', 'http://phone/new']);
+  });
+
+  testWidgets(
+      'timer defers only acquisition so a shared registration cannot be revoked',
+      (tester) async {
+    var references = 0;
+    var revoked = false;
+    Completer<void>? scan;
+    final (sender, _) = await makeSender(retainProxyUrls: (_) async {
+      if (scan != null) await scan.future;
+      if (revoked) throw StateError('registration already revoked');
+      references++;
+      return StreamProxyLease(() {
+        if (--references == 0) revoked = true;
+      });
+    });
+    await sender.castVideo(PlayPayload(url: 'http://phone/shared'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    await tester
+        .pump(TvSenderController.proxyIdleGrace - const Duration(seconds: 1));
+    scan = Completer<void>();
+    final loading = sender.castPlaylist(
+        PlaylistPayload(items: [PlayPayload(url: 'http://phone/shared')]));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(references, 1);
+    expect(revoked, isFalse);
+    scan.complete();
+    expect(await loading, isTrue);
+    expect(references, 1);
+    await sender.stopCast();
+    expect(revoked, isTrue);
+  });
+
+  testWidgets('failed acquisition releases a deferred retired bundle',
+      (tester) async {
+    var closed = 0;
+    Completer<StreamProxyLease>? scan;
+    final (sender, transport) = await makeSender(
+        retainProxyUrls: (_) async => scan != null
+            ? await scan.future
+            : StreamProxyLease(() {
+                closed++;
+              }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    await tester
+        .pump(TvSenderController.proxyIdleGrace - const Duration(seconds: 1));
+    scan = Completer<StreamProxyLease>();
+    final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
+    final failure = expectLater(loading, throwsStateError);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(closed, 0);
+    scan.completeError(StateError('scan failed'));
+    await failure;
+    expect(closed, 1);
+    expect(transport.loads, 1);
+  });
+
+  testWidgets(
+      'pause recovery cancels deferred idle retirement even when acquisition fails',
+      (tester) async {
+    var closed = 0;
+    Completer<StreamProxyLease>? scan;
+    final (sender, _) = await makeSender(
+        retainProxyUrls: (_) async => scan != null
+            ? await scan.future
+            : StreamProxyLease(() {
+                closed++;
+              }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    await tester
+        .pump(TvSenderController.proxyIdleGrace - const Duration(seconds: 1));
+    scan = Completer<StreamProxyLease>();
+    final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
+    final failure = expectLater(loading, throwsStateError);
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    sender.handleReceiverMessage('{"type":"status","state":"paused"}');
+    scan.completeError(StateError('scan failed'));
+    await failure;
+    await tester.pump(TvSenderController.proxyIdleGrace);
+    expect(closed, 0);
+    await sender.stopCast();
+    expect(closed, 1);
+  });
+
+  testWidgets('acquisition timeout is bounded and closes a late result',
+      (tester) async {
+    var closed = 0;
+    Completer<StreamProxyLease>? scan;
+    final (sender, transport) = await makeSender(
+        retainProxyUrls: (_) async => scan != null
+            ? await scan.future
+            : StreamProxyLease(() {
+                closed++;
+              }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+    sender.handleReceiverMessage('{"type":"context","active":"idle"}');
+    await tester
+        .pump(TvSenderController.proxyIdleGrace - const Duration(seconds: 1));
+    scan = Completer<StreamProxyLease>();
+    final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
+    final failure = expectLater(loading, throwsA(isA<TimeoutException>()));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(closed, 0);
+    await tester.pump(TvSenderController.proxyLeaseAcquisitionTimeout);
+    await failure;
+    expect(closed, 1);
+    scan.complete(StreamProxyLease(() {
+      closed++;
+    }));
+    await tester.pump();
+    expect(closed, 2);
+    expect(transport.loads, 1);
+  });
+
+  for (final detach in [false, true]) {
+    testWidgets(
+        '${detach ? 'dispose' : 'stop'} during acquisition prevents a stale send',
+        (tester) async {
+      var closed = 0;
+      Completer<StreamProxyLease>? scan;
+      final (sender, transport) = await makeSender(
+          retainProxyUrls: (_) async => scan != null
+              ? await scan.future
+              : StreamProxyLease(() {
+                  closed++;
+                }));
+      await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+      scan = Completer<StreamProxyLease>();
+      final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
+      await tester.pump();
+      if (detach) {
+        sender.dispose();
+      } else {
+        await sender.stopCast();
+      }
+      expect(closed, 1);
+      scan.complete(StreamProxyLease(() {
+        closed++;
+      }));
+      expect(await loading, isFalse);
+      expect(closed, 2);
+      expect(transport.loads, 1);
+    });
+  }
+
+  testWidgets('explicit stop during load still invalidates pending ownership',
+      (tester) async {
+    var closed = 0;
+    final (sender, transport) = await makeSender(
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await sender.castVideo(PlayPayload(url: 'http://phone/old'));
+    final pending = Completer<bool>();
+    transport.pendingLoad = pending.future;
+    final loading = sender.castVideo(PlayPayload(url: 'http://phone/new'));
+    await tester.pump();
+    await sender.stopCast();
+    pending.complete(true);
+    expect(await loading, isFalse);
+    expect(closed, 2);
   });
 
   test('a legacy receiver without playback IDs resumes on a new context',
