@@ -593,17 +593,7 @@ async fn stateful_proxy_handler(
             session.network_policy,
         )
         .await
-    } else if is_hls {
-        handle_stateful_hls_playlist(
-            &state,
-            session_id,
-            &target_url,
-            &forward_headers,
-            &public_base_url,
-            session.network_policy,
-        )
-        .await
-    } else if is_dash {
+    } else if is_dash && !is_hls {
         handle_stateful_dash_manifest(
             &state,
             session_id,
@@ -674,43 +664,11 @@ async fn encrypted_proxy_handler(
         url_looks_like_hls(&target_url) || req.uri().path().to_lowercase().contains(".m3u8");
     let is_dash = is_dash_manifest(&target_url, req.uri().path());
 
-    if is_hls {
-        handle_encrypted_hls_playlist(&state, &target_url, &forward_headers, &proxy_data).await
-    } else if is_dash {
+    if is_dash && !is_hls {
         handle_encrypted_dash_manifest(&state, &target_url, &forward_headers, &proxy_data).await
     } else {
-        // Detect extensionless manifests; ordinary segments remain streamed.
+        // URL hints only trigger body inspection; non-manifests stay streamed.
         handle_encrypted_hls_playlist(&state, &target_url, &forward_headers, &proxy_data).await
-    }
-}
-
-async fn handle_stateful_hls_playlist(
-    state: &AppState,
-    session_id: &str,
-    target_url: &str,
-    headers: &HashMap<String, String>,
-    public_base_url: &str,
-    network_policy: Option<NetworkPolicy>,
-) -> Result<Response, (StatusCode, String)> {
-    match state
-        .engine
-        .fetch_manifest_with_policy(target_url, headers, network_policy.clone())
-        .await
-    {
-        Ok((bytes, effective)) => rewrite_stateful_hls(
-            state,
-            session_id,
-            &effective,
-            headers,
-            public_base_url,
-            &bytes,
-            network_policy,
-        ),
-        Err(e) => Err((
-            // 502 = origin fetch failed (common on Via phone without FFmpeg AVIO).
-            StatusCode::BAD_GATEWAY,
-            format!("Failed to fetch/rewrite HLS playlist: {}", e),
-        )),
     }
 }
 
@@ -723,7 +681,7 @@ fn rewrite_stateful_hls(
     bytes: &[u8],
     network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
-    let content = String::from_utf8_lossy(bytes);
+    let content = String::from_utf8_lossy(strip_utf8_bom(bytes));
     // Guard against serving HTML/error pages as playlists (Brave demuxer parse errors).
     if !content.trim_start().starts_with("#EXTM3U") {
         return Err((
@@ -845,10 +803,8 @@ async fn handle_stateful_unknown_or_segment(
         })?;
     let effective = take_effective_url(&mut upstream.headers, target_url);
 
-    let manifest_hint = response_is_hls(&upstream.headers)
-        || url_looks_like_hls(target_url)
-        || url_looks_like_hls(&effective);
-    let (is_hls, upstream) = sniff_hls(upstream, manifest_hint).await?;
+    // URL / content-type hints never decide: the body prefix does.
+    let (is_hls, upstream) = sniff_hls(upstream).await?;
     if is_hls {
         let bytes = axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
             .await
@@ -876,25 +832,19 @@ async fn handle_stateful_unknown_or_segment(
     ))
 }
 
-fn response_is_hls(headers: &HeaderMap) -> bool {
-    headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(|value| {
-            let lower = value.to_ascii_lowercase();
-            lower.contains("mpegurl") || lower.contains("m3u8")
-        })
-        .unwrap_or(false)
+fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
+    bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
 }
 
 /// Inspect only a bounded prefix, then replay every consumed chunk. Progressive
-/// media/segments stay streamed; only confirmed/hinted manifests are buffered.
+/// media/segments stay streamed. A response is HLS only when the upstream status
+/// is successful and the body (after an optional UTF-8 BOM and whitespace)
+/// starts with `#EXTM3U`; URL and content-type hints never replace this check.
 async fn sniff_hls(
     mut upstream: UpstreamResponse,
-    manifest_hint: bool,
 ) -> Result<(bool, UpstreamResponse), (StatusCode, String)> {
-    if manifest_hint {
-        return Ok((true, upstream));
+    if !upstream.status.is_success() {
+        return Ok((false, upstream));
     }
     let mut stream = upstream.body.into_data_stream();
     let mut chunks = Vec::new();
@@ -909,10 +859,11 @@ async fn sniff_hls(
         let count = chunk.len().min(4096usize.saturating_sub(probe.len()));
         probe.extend_from_slice(&chunk[..count]);
         chunks.push(chunk);
-        let prefix = probe
+        let prefix = strip_utf8_bom(&probe);
+        let prefix = prefix
             .iter()
             .position(|byte| !byte.is_ascii_whitespace())
-            .map(|offset| &probe[offset..])
+            .map(|offset| &prefix[offset..])
             .unwrap_or_default();
         if prefix.len() >= 7 || probe.len() >= 4096 {
             is_hls = prefix.starts_with(b"#EXTM3U");
@@ -1136,17 +1087,15 @@ async fn handle_encrypted_hls_playlist(
         .await
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Upstream media unavailable".into()))?;
     let effective = take_effective_url(&mut upstream.headers, target_url);
-    let manifest_hint = response_is_hls(&upstream.headers)
-        || url_looks_like_hls(target_url)
-        || url_looks_like_hls(&effective);
-    let (is_hls, upstream) = sniff_hls(upstream, manifest_hint).await?;
+    // URL / content-type hints never decide: the body prefix does.
+    let (is_hls, upstream) = sniff_hls(upstream).await?;
     if !is_hls {
         return Ok(upstream_into_response(target_url, upstream));
     }
     let bytes = axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
         .await
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid upstream manifest".into()))?;
-    let content = String::from_utf8_lossy(&bytes);
+    let content = String::from_utf8_lossy(strip_utf8_bom(&bytes));
     if !content.trim_start().starts_with("#EXTM3U") {
         return Err((StatusCode::BAD_GATEWAY, "Invalid upstream manifest".into()));
     }
@@ -1454,7 +1403,7 @@ mod manifest_sniff_tests {
                 .into_iter()
                 .map(|part| Ok::<_, axum::Error>(Bytes::from(part))),
         ));
-        let (is_hls, upstream) = sniff_hls(response(body), false).await.unwrap();
+        let (is_hls, upstream) = sniff_hls(response(body)).await.unwrap();
         assert!(is_hls);
         assert_eq!(
             axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
@@ -1468,9 +1417,7 @@ mod manifest_sniff_tests {
     async fn non_manifest_larger_than_manifest_limit_is_not_buffered_or_truncated() {
         let mut data = vec![b'v'; MAX_MANIFEST_BYTES + 32];
         data[0..7].copy_from_slice(b"not hls");
-        let (is_hls, upstream) = sniff_hls(response(Body::from(data.clone())), false)
-            .await
-            .unwrap();
+        let (is_hls, upstream) = sniff_hls(response(Body::from(data.clone()))).await.unwrap();
         assert!(!is_hls);
         assert_eq!(
             axum::body::to_bytes(upstream.body, data.len())
@@ -1479,13 +1426,40 @@ mod manifest_sniff_tests {
                 .as_ref(),
             data.as_slice()
         );
-        let (is_hls, upstream) = sniff_hls(response(Body::from("small")), false)
+        let (is_hls, upstream) = sniff_hls(response(Body::from("small"))).await.unwrap();
+        assert!(!is_hls);
+        assert_eq!(
+            axum::body::to_bytes(upstream.body, 100).await.unwrap(),
+            "small"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_success_status_is_never_treated_as_hls_and_is_untouched() {
+        let mut upstream = response(Body::from("#EXTM3U\n#EXTINF:1,\nsegment.ts\n"));
+        upstream.status = StatusCode::NOT_FOUND;
+        let (is_hls, upstream) = sniff_hls(upstream).await.unwrap();
+        assert!(!is_hls);
+        assert_eq!(upstream.status, StatusCode::NOT_FOUND);
+        assert_eq!(
+            axum::body::to_bytes(upstream.body, 1000).await.unwrap(),
+            "#EXTM3U\n#EXTINF:1,\nsegment.ts\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn bom_prefixed_manifest_is_detected_and_url_lists_are_not() {
+        let (is_hls, _) = sniff_hls(response(Body::from("\u{feff}\n#EXTM3U\n")))
+            .await
+            .unwrap();
+        assert!(is_hls);
+        let (is_hls, upstream) = sniff_hls(response(Body::from("http://a/x\nhttp://a/y\n")))
             .await
             .unwrap();
         assert!(!is_hls);
         assert_eq!(
             axum::body::to_bytes(upstream.body, 100).await.unwrap(),
-            "small"
+            "http://a/x\nhttp://a/y\n"
         );
     }
 }
