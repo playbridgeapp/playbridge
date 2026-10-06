@@ -441,13 +441,7 @@ impl ConnectionEngine {
         validate_http_destination(url, network_policy.as_ref()).await?;
         let url_owned = url.to_owned();
         let headers_for_fetch = headers.clone();
-        let mut cache_headers = headers.clone();
-        if let Some(policy) = network_policy.as_ref() {
-            cache_headers.insert(
-                "x-playbridge-internal-cache-policy".into(),
-                policy.cache_scope(),
-            );
-        }
+        let cache_headers = cache_key_headers(&headers, network_policy.as_ref());
         self.cache
             .get_or_fetch(url, &cache_headers, move || {
                 let fetcher = fetcher;
@@ -510,20 +504,17 @@ impl ConnectionEngine {
 
     /// Best-effort background prefetch of media segment targets into the cache.
     /// Never logs URLs (may be authenticated). Caps work so playback stays first.
-    pub fn prefetch_segment_urls(
-        &self,
-        targets: Vec<PrefetchTarget>,
-        headers: &HashMap<String, String>,
-    ) {
-        self.prefetch_segment_urls_with_policy(targets, headers, None, "")
-    }
-
+    ///
+    /// `session_headers` are the session's original (unfiltered) headers and
+    /// `credential_url` is the original media URL: each target's headers come
+    /// from the same per-destination filter the foreground segment request
+    /// uses, so prefetch and playback share upstream headers and cache keys.
     pub fn prefetch_segment_urls_with_policy(
         &self,
         targets: Vec<PrefetchTarget>,
-        headers: &HashMap<String, String>,
+        session_headers: &HashMap<String, String>,
         network_policy: Option<NetworkPolicy>,
-        origin_url: &str,
+        credential_url: &str,
     ) {
         if targets.is_empty() {
             return;
@@ -537,28 +528,30 @@ impl ConnectionEngine {
         }
         let engine =
             Self::with_fetcher_and_cache(Arc::clone(&self.fetcher), Arc::clone(&self.cache));
-        let base_headers = headers.clone();
-        let origin_url = origin_url.to_owned();
+        let session_headers = session_headers.clone();
+        let credential_url = credential_url.to_owned();
         tokio::spawn(async move {
             // Prefetch a few segments sequentially to avoid stampeding the phone radio.
             for target in targets.into_iter().take(HLS_PREFETCH_SEGMENTS) {
                 if !SegmentCache::is_cacheable_url(&target.url) {
                     continue;
                 }
-                if validate_http_destination(&target.url, network_policy.as_ref())
-                    .await
-                    .is_err()
-                {
+                let mut incoming = HeaderMap::new();
+                if let Some(value) = target.range.as_deref().and_then(|r| r.parse().ok()) {
+                    incoming.insert("range", value);
+                }
+                let headers = filter_upstream_headers(
+                    &session_headers,
+                    &incoming,
+                    &target.url,
+                    &credential_url,
+                    "prefetch",
+                );
+                let cache_headers = cache_key_headers(&headers, network_policy.as_ref());
+                if engine.cache.contains(&target.url, &cache_headers).await {
                     continue;
                 }
-                let mut headers = if origin_url.is_empty() {
-                    base_headers.clone()
-                } else {
-                    redirect_headers(&base_headers, &origin_url, &target.url)
-                };
-                if let Some(range) = target.range.as_ref() {
-                    headers.insert("Range".to_string(), range.clone());
-                }
+                // Validation (policy + DNS) happens once, inside the connect path.
                 if let Ok(response) = engine
                     .connect_upstream_with_policy(&target.url, &headers, network_policy.clone())
                     .await
@@ -577,6 +570,21 @@ impl ConnectionEngine {
             }
         });
     }
+}
+
+/// Headers that identify a cache entry: forwarded headers plus the policy scope.
+fn cache_key_headers(
+    headers: &HashMap<String, String>,
+    network_policy: Option<&NetworkPolicy>,
+) -> HashMap<String, String> {
+    let mut cache_headers = with_default_upstream_headers(headers);
+    if let Some(policy) = network_policy {
+        cache_headers.insert(
+            "x-playbridge-internal-cache-policy".into(),
+            policy.cache_scope(),
+        );
+    }
+    cache_headers
 }
 
 pub async fn validate_http_destination(

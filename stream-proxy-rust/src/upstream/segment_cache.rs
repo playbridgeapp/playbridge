@@ -457,22 +457,15 @@ impl SegmentCache {
         }
     }
 
-    /// Fully buffer a response into the cache (background prefetch path).
-    /// Prefer this when the caller will not stream to a player.
-    pub async fn fetch_and_store<F, Fut>(
-        self: &Arc<Self>,
-        url: &str,
-        headers: &HashMap<String, String>,
-        fetch: F,
-    ) -> Result<(), String>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<UpstreamResponse, String>>,
-    {
-        let resp = self.get_or_fetch(url, headers, fetch).await?;
-        // Drain the tee so the producer finishes and may store.
-        let _ = axum::body::to_bytes(resp.body, self.max_entry_bytes.saturating_add(1)).await;
-        Ok(())
+    /// Whether a fresh entry exists for this URL + headers (no stats, no LRU bump).
+    pub async fn contains(&self, url: &str, headers: &HashMap<String, String>) -> bool {
+        let key = Self::cache_key(url, headers);
+        self.inner
+            .lock()
+            .await
+            .map
+            .get(&key)
+            .is_some_and(|entry| entry.is_fresh())
     }
 
     async fn lookup(&self, key: u64) -> Option<CachedBody> {
