@@ -572,9 +572,9 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
 async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
     async fn media(headers: HeaderMap) -> axum::response::Response {
         assert_eq!(headers["user-agent"], "AppleFixture");
-        assert_eq!(headers["referer"], "https://page.test/");
-        assert!(!headers.contains_key("authorization"));
-        assert!(!headers.contains_key("cookie"));
+        assert_eq!(headers["authorization"], "fixture-secret");
+        assert_eq!(headers["cookie"], "session=private");
+        assert_eq!(headers["referer"], "https://page.test/watch?token=private");
         let (range, body) = match headers["range"].to_str().unwrap() {
             "bytes=0-1" => ("bytes 0-1/10", "01"),
             "bytes=4-7" => ("bytes 4-7/10", "4567"),
@@ -591,26 +591,23 @@ async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
         )
             .into_response()
     }
-    let cdn = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let cdn_address = cdn.local_addr().unwrap();
-    let cdn_task = tokio::spawn(async move {
-        axum::serve(cdn, Router::new().route("/video.mp4", get(media)))
-            .await
-            .unwrap()
-    });
     let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin_address = origin.local_addr().unwrap();
     let origin_task = tokio::spawn(async move {
         axum::serve(
             origin,
-            Router::new().route(
-                "/download.mp4/",
-                get(move |headers: HeaderMap| async move {
-                    assert_eq!(headers["authorization"], "fixture-secret");
-                    assert_eq!(headers["referer"], "https://page.test/watch?token=private");
-                    axum::response::Redirect::temporary(&format!("http://{cdn_address}/video.mp4"))
-                }),
-            ),
+            Router::new()
+                .route(
+                    "/download.mp4/",
+                    get(move |headers: HeaderMap| async move {
+                        assert_eq!(headers["authorization"], "fixture-secret");
+                        assert_eq!(headers["referer"], "https://page.test/watch?token=private");
+                        axum::response::Redirect::temporary(&format!(
+                            "http://{origin_address}/video.mp4"
+                        ))
+                    }),
+                )
+                .route("/video.mp4", get(media)),
         )
         .await
         .unwrap()
@@ -652,5 +649,4 @@ async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
         assert_eq!(response.text().await.unwrap(), body);
     }
     origin_task.abort();
-    cdn_task.abort();
 }

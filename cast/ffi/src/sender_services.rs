@@ -284,23 +284,33 @@ async fn process_command(
             ..
         } => match proxy.expose_interface(&host).await {
             Err(error) => Err(error),
-            Ok(()) => validate_page_headers(headers, allowed_private_origins.is_some())
-                .and_then(|headers| match allowed_private_origins {
-                    Some(origins) => proxy.register_remote_with_policy(
-                        &host,
-                        url,
-                        headers,
-                        content_type.as_deref(),
-                        origins,
-                    ),
-                    None => proxy.register_remote_with_content_type(
-                        &host,
-                        url,
-                        headers,
-                        content_type.as_deref(),
-                    ),
-                })
-                .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
+            Ok(()) => match validate_page_headers(headers, allowed_private_origins.is_some()) {
+                Err(error) => Err(error),
+                Ok(headers) => {
+                    let media = match allowed_private_origins {
+                        Some(origins) => proxy.register_remote_with_policy(
+                            &host,
+                            url,
+                            headers,
+                            content_type.as_deref(),
+                            origins,
+                        ),
+                        None => {
+                            proxy
+                                .register_native_remote_with_content_type(
+                                    &host,
+                                    url,
+                                    headers,
+                                    content_type.as_deref(),
+                                )
+                                .await
+                        }
+                    };
+                    media.and_then(|media| {
+                        serde_json::to_value(media).map_err(|error| error.to_string())
+                    })
+                }
+            },
         },
         ServicesCommand::ProxyRegisterFile {
             host,

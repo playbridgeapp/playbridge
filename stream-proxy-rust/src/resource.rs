@@ -39,7 +39,7 @@ pub(crate) fn authorized_target(template: &str, requested: &str) -> bool {
         return false;
     }
     if template == requested {
-        return !template.contains('$');
+        return true;
     }
     let mut pattern = String::from("^");
     let mut tail = template;
@@ -59,7 +59,11 @@ pub(crate) fn authorized_target(template: &str, requested: &str) -> bool {
         }
         match name {
             "Number" | "Time" | "Bandwidth" => pattern.push_str("[0-9]{1,20}"),
-            "RepresentationID" if format.is_none() => pattern.push_str("[A-Za-z0-9_.-]{1,128}"),
+            "RepresentationID" if format.is_none() => {
+                // Conservative: include `=` for real DASH IDs, but never `&`, `%`,
+                // or path/query delimiters that could rewrite the URL structure.
+                pattern.push_str(r"[A-Za-z0-9._~=-]{1,128}")
+            }
             _ => return false,
         }
         placeholders += 1;
@@ -103,6 +107,8 @@ mod tests {
         ] {
             assert!(!authorized_target(original, value));
         }
+        let dollar = "https://cdn.example/price$1.ts";
+        assert!(authorized_target(dollar, dollar));
     }
     #[test]
     fn dash_templates_allow_only_bounded_segment_values() {
@@ -111,13 +117,42 @@ mod tests {
             template,
             "https://cdn.example/chunks/video_1/00012-3456.m4s"
         ));
+        assert!(authorized_target(
+            template,
+            "https://cdn.example/chunks/audio_eng=64008/00012-3456.m4s"
+        ));
         for value in [
             "https://evil.example/chunks/video_1/00012-3456.m4s",
             "https://cdn.example/chunks/../00012-3456.m4s",
             "https://cdn.example/chunks/%2e%2e/00012-3456.m4s",
+            "https://cdn.example/chunks/%2F/00012-3456.m4s",
             "https://cdn.example/chunks/video/secret-3456.m4s",
+            "https://cdn.example/chunks/audio&x=1/00012-3456.m4s",
         ] {
             assert!(!authorized_target(template, value));
+        }
+        let query = "https://cdn.example/seg.m4s?id=$RepresentationID$";
+        assert!(authorized_target(
+            query,
+            "https://cdn.example/seg.m4s?id=audio_eng=64008"
+        ));
+        assert!(!authorized_target(
+            query,
+            "https://cdn.example/seg.m4s?id=a&foo=bar"
+        ));
+        for value in [
+            "a%2F..",
+            "%2e%2e",
+            "a?more",
+            "a#fragment",
+            "a&foo=bar",
+            "a/b",
+            "a%252F..",
+        ] {
+            assert!(!authorized_target(
+                query,
+                &format!("https://cdn.example/seg.m4s?id={value}")
+            ));
         }
         assert!(!authorized_target(
             "https://$RepresentationID$.example/file",

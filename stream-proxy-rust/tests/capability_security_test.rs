@@ -283,7 +283,7 @@ async fn dash_directory_and_numeric_templates_work_without_prefix_authority() {
 }
 
 #[tokio::test]
-async fn child_credentials_are_not_rebound_to_a_different_origin() {
+async fn loopback_playlist_cannot_access_another_local_port() {
     let child = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let child_address = child.local_addr().unwrap();
     let child_task = tokio::spawn(async move {
@@ -357,18 +357,13 @@ async fn child_credentials_are_not_rebound_to_a_different_origin() {
         } else {
             child.into()
         };
-        assert_eq!(
-            client
-                .get(child)
-                .send()
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap()
-                .text()
-                .await
-                .unwrap(),
-            "segment"
+        let reply = client.get(child).send().await.unwrap();
+        // Loopback grants are exact-origin. A playlist on :root must not fetch
+        // another local port; public cross-CDN children remain allowed.
+        assert!(
+            reply.status() == StatusCode::FORBIDDEN || reply.status() == StatusCode::BAD_GATEWAY,
+            "loopback cross-port child: {}",
+            reply.status()
         );
     }
     proxy.shutdown().await.unwrap();
@@ -562,4 +557,401 @@ async fn embedded_listener_and_management_surface_are_not_broadcast_or_cors_enab
         .await
         .is_err());
     proxy.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn extensionless_redirected_hls_uses_the_final_manifest_base() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/start",
+                    get(|| async { (StatusCode::FOUND, [(header::LOCATION, "/final/list")]) }),
+                )
+                .route(
+                    "/final/list",
+                    get(|| async {
+                        (
+                            [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+                            "#EXTM3U\n#EXTINF:1,\nsegment.ts\n",
+                        )
+                    }),
+                )
+                .route("/final/segment.ts", get(|| async { "segment" })),
+        )
+        .await
+        .unwrap();
+    });
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    let media = proxy
+        .register_remote(
+            "127.0.0.1",
+            format!("http://{address}/start"),
+            HashMap::new(),
+        )
+        .unwrap();
+    let body = reqwest::get(&media.url)
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let child = body
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty())
+        .unwrap();
+    let child = Url::parse(&media.url).unwrap().join(child).unwrap();
+    assert_eq!(
+        reqwest::get(child)
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "segment"
+    );
+    proxy.shutdown().await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+async fn extensionless_and_query_hls_are_rewritten_without_mpegurl_content_type() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/get.php",
+                get(|| async {
+                    (
+                        [(header::CONTENT_TYPE, "text/plain")],
+                        "#EXTM3U\n#EXTINF:1,\nsegment.ts\n",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    for suffix in ["get.php?type=m3u8", "get.php"] {
+        let media = proxy
+            .register_remote(
+                "127.0.0.1",
+                format!("http://{address}/{suffix}"),
+                HashMap::new(),
+            )
+            .unwrap();
+        for root in [&media.url, media.encrypted_url.as_ref().unwrap()] {
+            let text = reqwest::get(root)
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            assert!(
+                text.contains("#EXTM3U"),
+                "expected rewritten playlist, got {text}"
+            );
+            assert!(
+                !text.lines().any(|line| line == "segment.ts"),
+                "unrewritten body: {text}"
+            );
+        }
+    }
+    proxy.shutdown().await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+async fn encrypted_root_with_literal_dollar_can_play() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route("/price$1.mp4", get(|| async { "media" })),
+        )
+        .await
+        .unwrap();
+    });
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    let media = proxy
+        .register_remote(
+            "127.0.0.1",
+            format!("http://{address}/price$1.mp4"),
+            HashMap::new(),
+        )
+        .unwrap();
+    let client = reqwest::Client::new();
+    assert_eq!(
+        client
+            .get(&media.url)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "media"
+    );
+    assert_eq!(
+        client
+            .get(media.encrypted_url.as_ref().unwrap())
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "media"
+    );
+    proxy.shutdown().await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+async fn dash_representation_ids_may_contain_equals() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/manifest.mpd",
+                    get(|| async {
+                        (
+                            [(header::CONTENT_TYPE, "application/dash+xml")],
+                            r#"<MPD><Period><AdaptationSet><Representation id="audio_eng=64008"><SegmentTemplate media="$RepresentationID$/seg-$Number$.m4s" initialization="$RepresentationID$/init.mp4"/></Representation></AdaptationSet></Period></MPD>"#,
+                        )
+                    }),
+                )
+                .route(
+                    "/audio_eng=64008/seg-1.m4s",
+                    get(|| async { "segment" }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    let media = proxy
+        .register_remote(
+            "127.0.0.1",
+            format!("http://{address}/manifest.mpd"),
+            HashMap::new(),
+        )
+        .unwrap();
+    for root in [&media.url, media.encrypted_url.as_ref().unwrap()] {
+        let text = reqwest::get(root)
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let template = text
+            .split("media=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        let resolved = xml_url(template)
+            .replace("$RepresentationID$", "audio_eng=64008")
+            .replace("$Number$", "1");
+        let resolved = if resolved.starts_with('/') {
+            format!("{}{resolved}", proxy.base_url("127.0.0.1"))
+        } else {
+            resolved
+        };
+        assert_eq!(
+            reqwest::get(&resolved)
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "segment"
+        );
+    }
+    proxy.shutdown().await.unwrap();
+    task.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_interface_exposure_is_idempotent() {
+    let mut failures = 0;
+    for _ in 0..20 {
+        let proxy = Arc::new(
+            ProxyServer::start(ProxyServerConfig::default())
+                .await
+                .unwrap(),
+        );
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let mut jobs = Vec::new();
+        for _ in 0..2 {
+            let proxy = proxy.clone();
+            let barrier = barrier.clone();
+            jobs.push(tokio::spawn(async move {
+                barrier.wait().await;
+                proxy.expose_interface("::1").await
+            }));
+        }
+        barrier.wait().await;
+        for job in jobs {
+            if job.await.unwrap().is_err() {
+                failures += 1;
+            }
+        }
+        Arc::try_unwrap(proxy)
+            .unwrap_or_else(|_| panic!("proxy still shared"))
+            .shutdown()
+            .await
+            .unwrap();
+    }
+    assert_eq!(failures, 0, "simultaneous interface exposure failures");
+}
+
+struct CrossCdnFetcher {
+    segment_reads: AtomicUsize,
+    redirected: bool,
+}
+impl stream_proxy_rust::UpstreamFetcher for CrossCdnFetcher {
+    fn connect_with_policy<'a>(
+        &'a self,
+        url: &'a str,
+        headers: &'a HashMap<String, String>,
+        policy: Option<stream_proxy_rust::upstream::NetworkPolicy>,
+    ) -> stream_proxy_rust::upstream::UpstreamConnectFuture<'a> {
+        Box::pin(async move {
+            assert!(policy.is_some());
+            let mut response_headers = HeaderMap::new();
+            let body = if url == "http://8.8.8.8/master.m3u8" {
+                assert_eq!(headers.get("Authorization").unwrap(), "secret");
+                response_headers.insert(
+                    header::CONTENT_TYPE,
+                    "application/vnd.apple.mpegurl".parse().unwrap(),
+                );
+                if self.redirected {
+                    response_headers.insert(
+                        "x-playbridge-internal-effective-url",
+                        "http://1.1.1.1/final/list".parse().unwrap(),
+                    );
+                    "#EXTM3U\n#EXTINF:1,\nsegment.ts\n"
+                } else {
+                    "#EXTM3U\n#EXTINF:1,\nhttp://1.1.1.1/segment.ts\n"
+                }
+            } else {
+                assert_eq!(
+                    url,
+                    if self.redirected {
+                        "http://1.1.1.1/final/segment.ts"
+                    } else {
+                        "http://1.1.1.1/segment.ts"
+                    }
+                );
+                assert!(headers.keys().all(|name| !matches!(
+                    name.to_ascii_lowercase().as_str(),
+                    "authorization" | "cookie" | "x-custom-secret"
+                )));
+                assert_eq!(headers.get("User-Agent").unwrap(), "Fixture");
+                self.segment_reads.fetch_add(1, Ordering::SeqCst);
+                "segment"
+            };
+            Ok(stream_proxy_rust::UpstreamResponse {
+                status: StatusCode::OK,
+                headers: response_headers,
+                body: axum::body::Body::from(body),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn cross_cdn_children_and_prefetch_do_not_receive_original_credentials() {
+    // Literal public addresses with a fake fetcher: no external server contacted.
+    for redirected in [false, true] {
+        let fetcher = Arc::new(CrossCdnFetcher {
+            segment_reads: AtomicUsize::new(0),
+            redirected,
+        });
+        let proxy = ProxyServer::start_with_fetcher(ProxyServerConfig::default(), fetcher.clone())
+            .await
+            .unwrap();
+        let media = proxy
+            .register_remote(
+                "127.0.0.1",
+                "http://8.8.8.8/master.m3u8",
+                HashMap::from([
+                    ("Authorization".into(), "secret".into()),
+                    ("Cookie".into(), "secret".into()),
+                    ("X-Custom-Secret".into(), "secret".into()),
+                    ("User-Agent".into(), "Fixture".into()),
+                ]),
+            )
+            .unwrap();
+        for root in [&media.url, media.encrypted_url.as_ref().unwrap()] {
+            let text = reqwest::get(root)
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
+            let child = text
+                .lines()
+                .find(|line| !line.starts_with('#') && !line.is_empty())
+                .unwrap();
+            let child = Url::parse(root).unwrap().join(child).unwrap();
+            // Wait for background prefetch before foreground loading to exercise its
+            // credential scope, not merely the foreground request's header filter.
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while fetcher.segment_reads.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(
+                reqwest::get(child)
+                    .await
+                    .unwrap()
+                    .error_for_status()
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                "segment"
+            );
+        }
+        proxy.shutdown().await.unwrap();
+    }
 }

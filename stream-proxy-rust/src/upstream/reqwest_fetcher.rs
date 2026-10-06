@@ -340,6 +340,11 @@ impl UpstreamFetcher for ReqwestUpstreamFetcher {
 }
 
 fn avio_allowed(network_policy: Option<&NetworkPolicy>) -> bool {
+    // Policy-bound fetches cannot use FFmpeg AVIO. FFmpeg resolves DNS and
+    // follows redirects itself, so a public-looking hostname checked here could
+    // be rebound to a private address on FFmpeg's later lookup. Keep AVIO only
+    // for the trusted, policy-free path until connections can go through the
+    // checked gateway.
     network_policy.is_none()
 }
 

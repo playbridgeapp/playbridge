@@ -114,9 +114,16 @@ retries release immediately. This is an abandonment backstop, not an absolute ca
 on active/live playback or pause duration. Transient Android renewal failures
 retry with capped backoff; expired/revoked grants are never revived.
 
-Native/admin local-media registration authorizes the selected local host,
-including same-host port redirects, not every private-network host. Explicit
-page private-origin grants remain origin-specific. Headers containing cookies,
+Native/admin local-media registration authorizes the selected local host.
+LAN hosts include same-host port redirects; loopback and localhost grants are
+the exact origin (scheme, host, and port) only, not every local service.
+Registration classifies literal private/loopback addresses and local name
+suffixes from the URL text. Native sender registration may also resolve the
+host once and, if every answer is private LAN, CGNAT (`100.64/10`), or
+loopback, trust that origin — HTTP `/register` and EPG do not. Explicit page
+private-origin grants remain origin-specific. Policy-bound requests never use
+FFmpeg AVIO fallback, because FFmpeg would resolve and redirect outside the
+checked path. Headers containing cookies,
 authorization, or custom secrets stay on the original media origin; cross-CDN
 requests retain only safe browser context. Network policy also partitions
 segment-cache entries.

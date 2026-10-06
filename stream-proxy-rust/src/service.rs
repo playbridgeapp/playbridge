@@ -61,6 +61,7 @@ pub struct ProxyServer {
     shutdown: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<Result<(), std::io::Error>>>,
     interfaces: std::sync::Mutex<std::collections::HashMap<IpAddr, JoinHandle<()>>>,
+    expose: tokio::sync::Mutex<()>,
 }
 
 impl ProxyServer {
@@ -120,6 +121,7 @@ impl ProxyServer {
             shutdown: Some(shutdown),
             task: Some(task),
             interfaces: std::sync::Mutex::new(std::collections::HashMap::new()),
+            expose: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -136,6 +138,7 @@ impl ProxyServer {
         if address == self.local_addr.ip() || self.local_addr.ip().is_unspecified() {
             return Ok(());
         }
+        let _expose = self.expose.lock().await;
         if self
             .interfaces
             .lock()
@@ -201,6 +204,24 @@ impl ProxyServer {
             headers,
             content_type,
         )
+    }
+
+    /// Native-approved registration with bounded async DNS classification.
+    pub async fn register_native_remote_with_content_type(
+        &self,
+        host: &str,
+        url: impl Into<String>,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+    ) -> Result<RegisteredMedia, String> {
+        self.service
+            .register_native_remote_with_content_type(
+                &self.base_url(host),
+                url.into(),
+                headers,
+                content_type,
+            )
+            .await
     }
 
     pub fn register_remote_with_policy(

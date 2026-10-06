@@ -2212,7 +2212,13 @@ pub(crate) async fn run_dashboard_browser_cast(
             .url
     } else {
         proxy
-            .register_remote(&proxy_host, &media_target, HashMap::new())?
+            .register_native_remote_with_content_type(
+                &proxy_host,
+                &media_target,
+                HashMap::new(),
+                None,
+            )
+            .await?
             .url
     };
     let mut browser_events = service.subscribe();

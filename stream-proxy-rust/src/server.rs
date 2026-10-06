@@ -16,6 +16,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -159,6 +160,32 @@ impl ProxyService {
         )
     }
 
+    /// DNS-informed approval is available only to native callers, not HTTP routes.
+    pub async fn register_native_remote_with_content_type(
+        &self,
+        base_url: &str,
+        original_url: String,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+    ) -> Result<RegisteredMedia, String> {
+        let parsed = Url::parse(&original_url).map_err(|_| "invalid media URL")?;
+        if original_url.len() > 8192
+            || !matches!(parsed.scheme(), "http" | "https")
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+        {
+            return Err("only bounded HTTP(S) media URLs without userinfo can be proxied".into());
+        }
+        let policy = NetworkPolicy::for_native_registered_media(&original_url).await?;
+        self.register_remote_with_network_policy(
+            base_url,
+            original_url,
+            headers,
+            content_type,
+            Some(policy),
+        )
+    }
+
     pub fn register_remote_with_policy(
         &self,
         base_url: &str,
@@ -192,8 +219,10 @@ impl ProxyService {
         {
             return Err("only bounded HTTP(S) media URLs without userinfo can be proxied".into());
         }
-        let network_policy =
-            network_policy.unwrap_or(NetworkPolicy::for_registered_media(&original_url)?);
+        let network_policy = match network_policy {
+            Some(policy) => policy,
+            None => NetworkPolicy::for_registered_media(&original_url)?,
+        };
         let session = self.state.session_manager.register(
             original_url.clone(),
             headers.clone(),
@@ -542,8 +571,8 @@ async fn stateful_proxy_handler(
     );
     let public_base_url = request_public_base_url(&incoming_headers);
     let wants_mpv_edl = req.uri().path().to_ascii_lowercase().ends_with(".edl");
-    let is_hls = target_url.to_lowercase().contains(".m3u8")
-        || req.uri().path().to_lowercase().contains(".m3u8");
+    let is_hls =
+        url_looks_like_hls(&target_url) || req.uri().path().to_lowercase().contains(".m3u8");
     let is_dash = is_dash_manifest(&target_url, req.uri().path());
     let hls_segment_mime = query_params
         .iter()
@@ -626,7 +655,9 @@ async fn encrypted_proxy_handler(
     let target_url = match single_query(&query_params, "target")? {
         Some(target) if authorized_target(&proxy_data.destination, target) => target.to_string(),
         Some(_) => return Err(invalid_capability()),
-        None if !proxy_data.destination.contains('$') => proxy_data.destination.clone(),
+        None if authorized_target(&proxy_data.destination, &proxy_data.destination) => {
+            proxy_data.destination.clone()
+        }
         None => return Err(invalid_capability()),
     };
 
@@ -639,8 +670,8 @@ async fn encrypted_proxy_handler(
         "encrypted",
     );
 
-    let is_hls = target_url.to_lowercase().contains(".m3u8")
-        || req.uri().path().to_lowercase().contains(".m3u8");
+    let is_hls =
+        url_looks_like_hls(&target_url) || req.uri().path().to_lowercase().contains(".m3u8");
     let is_dash = is_dash_manifest(&target_url, req.uri().path());
 
     if is_hls {
@@ -746,9 +777,14 @@ fn rewrite_stateful_hls(
 
     let prefetch_urls = crate::upstream::hls_media_segment_urls(&content, &base_uri, 3);
     if !prefetch_urls.is_empty() {
-        state
-            .engine
-            .prefetch_segment_urls_with_policy(prefetch_urls, headers, network_policy);
+        if let Some(session) = state.session_manager.get(session_id) {
+            state.engine.prefetch_segment_urls_with_policy(
+                prefetch_urls,
+                headers,
+                network_policy,
+                &session.original_url,
+            );
+        }
     }
 
     Ok((
@@ -797,7 +833,7 @@ async fn handle_stateful_unknown_or_segment(
     hls_segment_mime: Option<&'static str>,
     network_policy: Option<NetworkPolicy>,
 ) -> Result<Response, (StatusCode, String)> {
-    let upstream = state
+    let mut upstream = state
         .engine
         .connect_upstream_with_policy(target_url, headers, network_policy.clone())
         .await
@@ -807,8 +843,13 @@ async fn handle_stateful_unknown_or_segment(
                 format!("Failed to fetch upstream media: {error}"),
             )
         })?;
+    let effective = take_effective_url(&mut upstream.headers, target_url);
 
-    if response_is_hls(&upstream.headers) {
+    let manifest_hint = response_is_hls(&upstream.headers)
+        || url_looks_like_hls(target_url)
+        || url_looks_like_hls(&effective);
+    let (is_hls, upstream) = sniff_hls(upstream, manifest_hint).await?;
+    if is_hls {
         let bytes = axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
             .await
             .map_err(|error| {
@@ -820,7 +861,7 @@ async fn handle_stateful_unknown_or_segment(
         return rewrite_stateful_hls(
             state,
             session_id,
-            target_url,
+            &effective,
             headers,
             public_base_url,
             &bytes,
@@ -844,6 +885,67 @@ fn response_is_hls(headers: &HeaderMap) -> bool {
             lower.contains("mpegurl") || lower.contains("m3u8")
         })
         .unwrap_or(false)
+}
+
+/// Inspect only a bounded prefix, then replay every consumed chunk. Progressive
+/// media/segments stay streamed; only confirmed/hinted manifests are buffered.
+async fn sniff_hls(
+    mut upstream: UpstreamResponse,
+    manifest_hint: bool,
+) -> Result<(bool, UpstreamResponse), (StatusCode, String)> {
+    if manifest_hint {
+        return Ok((true, upstream));
+    }
+    let mut stream = upstream.body.into_data_stream();
+    let mut chunks = Vec::new();
+    let mut probe = Vec::new();
+    let mut is_hls = false;
+    while let Some(chunk) = stream.next().await {
+        let chunk =
+            chunk.map_err(|_| (StatusCode::BAD_GATEWAY, "Upstream media unavailable".into()))?;
+        if chunk.is_empty() {
+            continue;
+        }
+        let count = chunk.len().min(4096usize.saturating_sub(probe.len()));
+        probe.extend_from_slice(&chunk[..count]);
+        chunks.push(chunk);
+        let prefix = probe
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .map(|offset| &probe[offset..])
+            .unwrap_or_default();
+        if prefix.len() >= 7 || probe.len() >= 4096 {
+            is_hls = prefix.starts_with(b"#EXTM3U");
+            break;
+        }
+    }
+    upstream.body = Body::from_stream(
+        futures::stream::iter(chunks.into_iter().map(Ok::<_, axum::Error>)).chain(stream),
+    );
+    Ok((is_hls, upstream))
+}
+
+fn take_effective_url(headers: &mut HeaderMap, fallback: &str) -> String {
+    headers
+        .remove(crate::upstream::EFFECTIVE_URL_HEADER)
+        .and_then(|value| value.to_str().ok().map(str::to_owned))
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn url_looks_like_hls(value: &str) -> bool {
+    let Ok(url) = Url::parse(value) else {
+        return value.to_ascii_lowercase().contains(".m3u8");
+    };
+    let path = url.path().to_ascii_lowercase();
+    if path.ends_with(".m3u8") || path.ends_with(".m3u") {
+        return true;
+    }
+    url.query_pairs().any(|(name, value)| {
+        let name = name.to_ascii_lowercase();
+        let value = value.to_ascii_lowercase();
+        matches!(name.as_str(), "type" | "format" | "ext")
+            && (value == "m3u8" || value == "m3u" || value.contains("mpegurl"))
+    })
 }
 
 async fn handle_stateful_dash_manifest(
@@ -1033,16 +1135,14 @@ async fn handle_encrypted_hls_playlist(
         .connect_upstream_with_policy(target_url, headers, Some(proxy_data.network_policy.clone()))
         .await
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Upstream media unavailable".into()))?;
-    if !response_is_hls(&upstream.headers)
-        && !Url::parse(target_url).is_ok_and(|url| url.path().ends_with(".m3u8"))
-    {
+    let effective = take_effective_url(&mut upstream.headers, target_url);
+    let manifest_hint = response_is_hls(&upstream.headers)
+        || url_looks_like_hls(target_url)
+        || url_looks_like_hls(&effective);
+    let (is_hls, upstream) = sniff_hls(upstream, manifest_hint).await?;
+    if !is_hls {
         return Ok(upstream_into_response(target_url, upstream));
     }
-    let effective = upstream
-        .headers
-        .remove(crate::upstream::EFFECTIVE_URL_HEADER)
-        .and_then(|value| value.to_str().ok().map(str::to_owned))
-        .unwrap_or_else(|| target_url.to_owned());
     let bytes = axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
         .await
         .map_err(|_| (StatusCode::BAD_GATEWAY, "Invalid upstream manifest".into()))?;
@@ -1079,6 +1179,7 @@ async fn handle_encrypted_hls_playlist(
             prefetch_urls,
             headers,
             Some(proxy_data.network_policy.clone()),
+            &proxy_data.credential_url,
         );
     }
 
@@ -1329,5 +1430,62 @@ fn mime_for(path: &str) -> &'static str {
         "video/mp4"
     } else {
         "application/octet-stream"
+    }
+}
+
+#[cfg(test)]
+mod manifest_sniff_tests {
+    use super::*;
+    use bytes::Bytes;
+
+    fn response(body: Body) -> UpstreamResponse {
+        UpstreamResponse {
+            status: StatusCode::OK,
+            headers: HeaderMap::new(),
+            body,
+        }
+    }
+
+    #[tokio::test]
+    async fn hls_prefix_split_across_chunks_is_detected_and_replayed() {
+        let parts = [" \n#EX", "TM", "3U\n#EXTINF:1,\nsegment.ts\n"];
+        let body = Body::from_stream(futures::stream::iter(
+            parts
+                .into_iter()
+                .map(|part| Ok::<_, axum::Error>(Bytes::from(part))),
+        ));
+        let (is_hls, upstream) = sniff_hls(response(body), false).await.unwrap();
+        assert!(is_hls);
+        assert_eq!(
+            axum::body::to_bytes(upstream.body, MAX_MANIFEST_BYTES)
+                .await
+                .unwrap(),
+            parts.concat()
+        );
+    }
+
+    #[tokio::test]
+    async fn non_manifest_larger_than_manifest_limit_is_not_buffered_or_truncated() {
+        let mut data = vec![b'v'; MAX_MANIFEST_BYTES + 32];
+        data[0..7].copy_from_slice(b"not hls");
+        let (is_hls, upstream) = sniff_hls(response(Body::from(data.clone())), false)
+            .await
+            .unwrap();
+        assert!(!is_hls);
+        assert_eq!(
+            axum::body::to_bytes(upstream.body, data.len())
+                .await
+                .unwrap()
+                .as_ref(),
+            data.as_slice()
+        );
+        let (is_hls, upstream) = sniff_hls(response(Body::from("small")), false)
+            .await
+            .unwrap();
+        assert!(!is_hls);
+        assert_eq!(
+            axum::body::to_bytes(upstream.body, 100).await.unwrap(),
+            "small"
+        );
     }
 }
