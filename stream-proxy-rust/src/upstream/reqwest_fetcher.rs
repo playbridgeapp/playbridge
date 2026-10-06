@@ -1,8 +1,7 @@
 //! Reqwest (+ optional FFmpeg AVIO) origin fetch — Docker / Desktop / CLI default.
 
 use super::{
-    validate_http_destination, NetworkPolicy, UpstreamConnectFuture, UpstreamFetcher,
-    UpstreamResponse,
+    resolve_destination, NetworkPolicy, UpstreamConnectFuture, UpstreamFetcher, UpstreamResponse,
 };
 use axum::body::Body;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -200,12 +199,26 @@ impl ReqwestUpstreamFetcher {
         let credential_url = initial.to_string();
         let mut current = initial;
         for redirect_count in 0..=10 {
-            validate_http_destination(current.as_str(), network_policy.as_ref()).await?;
+            let checked = resolve_destination(current.as_str(), network_policy.as_ref()).await?;
             // The constrained client validates the same DNS answer that its connector uses,
             // preventing a hostname from rebinding to a local address after this preflight.
-            let mut req = self
-                .client_for_policy(network_policy.as_ref(), &current)?
-                .get(current.clone());
+            // A DNS-approved trusted origin instead connects to the exact addresses just
+            // checked against its registration-time pin, with no second lookup.
+            let pinned_client = match (network_policy.as_ref(), current.host_str()) {
+                (Some(policy), Some(host)) if policy.pinned_ips_for(&current).is_some() => Some(
+                    Self::client_builder()
+                        .no_proxy()
+                        .resolve_to_addrs(host, &checked)
+                        .build()
+                        .map_err(|_| "pinned HTTP client is unavailable".to_string())?,
+                ),
+                _ => None,
+            };
+            let client = match pinned_client.as_ref() {
+                Some(client) => client,
+                None => self.client_for_policy(network_policy.as_ref(), &current)?,
+            };
+            let mut req = client.get(current.clone());
             let request_headers =
                 super::redirect_headers(headers, &credential_url, current.as_str());
             for (k, v) in &request_headers {

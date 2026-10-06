@@ -165,6 +165,7 @@ class StreamProxyServer {
     String host = '127.0.0.1',
     String? contentType,
     List<String>? allowedPrivateOrigins,
+    bool remoteOrigin = false,
   }) async {
     final registration = await services.registerUrl(
       host: host,
@@ -172,6 +173,7 @@ class StreamProxyServer {
       headers: headers,
       contentType: contentType,
       allowedPrivateOrigins: allowedPrivateOrigins,
+      remoteOrigin: remoteOrigin,
     );
     _ownedIds.add(registration.id);
     return registration;
@@ -183,12 +185,14 @@ class StreamProxyServer {
     Map<String, String> headers, {
     String? contentType,
     List<String>? allowedPrivateOrigins,
+    bool remoteOrigin = false,
   }) async =>
       (await registerRemote(
         originalUrl,
         headers,
         contentType: contentType,
         allowedPrivateOrigins: allowedPrivateOrigins,
+        remoteOrigin: remoteOrigin,
       ))
           .url;
 

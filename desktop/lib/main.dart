@@ -462,6 +462,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       file.uri.toString(),
       title: name,
       isRemote: true,
+      localUserInitiated: true,
     ));
   }
 
@@ -803,12 +804,17 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     // Local play: URLs + files as a playlist.
     final items = <QueueItem>[
       for (final u in urls)
-        QueueItem(url: u, title: u.split('/').last.split('?').first),
+        QueueItem(
+          url: u,
+          title: u.split('/').last.split('?').first,
+          localUserInitiated: true,
+        ),
       for (final f in files)
         QueueItem(
           url: f.uri.toString(),
           title:
               f.uri.pathSegments.isNotEmpty ? f.uri.pathSegments.last : f.path,
+          localUserInitiated: true,
         ),
     ];
     if (items.isEmpty) return;
@@ -2074,8 +2080,12 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
       if (!sourceUrl.contains('127.0.0.1') &&
           !sourceUrl.contains('localhost')) {
         try {
-          proxiedUrl = await StreamProxyServer.instance
-              .registerSession(sourceUrl, headers);
+          proxiedUrl = await StreamProxyServer.instance.registerSession(
+            sourceUrl,
+            headers,
+            allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
+            remoteOrigin: item.proxyRemoteOrigin,
+          );
         } catch (e2) {
           stdout.writeln(
               '[external-player] Failed to register proxy session: $e2');

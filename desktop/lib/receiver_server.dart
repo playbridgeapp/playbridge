@@ -517,9 +517,8 @@ class ReceiverServer extends ChangeNotifier {
             try {
               file = await downloadLateSubtitle(
                 resource,
-                allowedPrivateOrigins: item.enforcePageNetworkPolicy
-                    ? item.allowedPrivateOrigins
-                    : null,
+                allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
+                remoteOrigin: item.proxyRemoteOrigin,
               );
               if (player.playbackId != playbackId ||
                   player.currentItemId != itemId ||

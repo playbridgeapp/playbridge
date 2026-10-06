@@ -41,6 +41,7 @@ class QueueItem {
     this.skipHistory = false,
     this.enforcePageNetworkPolicy = false,
     this.allowedPrivateOrigins = const [],
+    this.localUserInitiated = false,
   });
 
   /// Public title/episode identifiers only; no webhook URL or credentials.
@@ -85,6 +86,20 @@ class QueueItem {
   /// every manifest, segment, subtitle, and redirect uses its network policy.
   final bool enforcePageNetworkPolicy;
   final List<String> allowedPrivateOrigins;
+
+  /// True only for playback the user started on this device (file/URL open,
+  /// history, favorites). Never derive it from a network payload field: it is
+  /// the only signal that may unlock DNS-derived LAN trust in the proxy.
+  final bool localUserInitiated;
+
+  /// Origins to hand to the proxy when registering this item (page grants only).
+  List<String>? get proxyAllowedPrivateOrigins =>
+      enforcePageNetworkPolicy ? allowedPrivateOrigins : null;
+
+  /// True for non-page items that did not originate locally. The proxy must not
+  /// derive DNS-based LAN trust for them.
+  bool get proxyRemoteOrigin =>
+      !enforcePageNetworkPolicy && !localUserInitiated;
 
   /// Resume point (ms) seeded from the phone's resume store. Mutable because
   /// it is consumed (nulled) after the first seek, so re-playing this item

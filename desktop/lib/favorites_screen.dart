@@ -112,6 +112,7 @@ class FavoritesScreen extends StatelessWidget {
       contentType: item.contentType,
       declaredMediaKind: item.mediaKind,
       displayDurationMs: item.displayDurationMs,
+      localUserInitiated: true,
     );
   }
 }
