@@ -1047,7 +1047,17 @@ async fn byterange_prefetch_sends_a_single_range_and_serves_the_foreground_from_
             .register_remote("127.0.0.1", "http://8.8.8.8/master.m3u8", session_headers)
             .unwrap();
         let root = root_url(&media, encrypted);
-        let child = first_uri(&get_text(&root).await, &root);
+        // A Range on the playlist request itself must not leak into prefetch either.
+        let playlist = reqwest::Client::new()
+            .get(&root)
+            .header("Range", "bytes=0-")
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        let child = first_uri(&playlist, &root);
         fetcher.wait_for_segments(1).await;
         let (_, headers) = fetcher.segment_log().remove(0);
         assert_eq!(
