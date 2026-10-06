@@ -676,7 +676,6 @@ fn rewrite_stateful_hls(
     state: &AppState,
     session_id: &str,
     target_url: &str,
-    headers: &HashMap<String, String>,
     public_base_url: &str,
     bytes: &[u8],
     network_policy: Option<NetworkPolicy>,
@@ -738,7 +737,7 @@ fn rewrite_stateful_hls(
         if let Some(session) = state.session_manager.get(session_id) {
             state.engine.prefetch_segment_urls_with_policy(
                 prefetch_urls,
-                headers,
+                &session.headers,
                 network_policy,
                 &session.original_url,
             );
@@ -818,7 +817,6 @@ async fn handle_stateful_unknown_or_segment(
             state,
             session_id,
             &effective,
-            headers,
             public_base_url,
             &bytes,
             network_policy,
@@ -1124,9 +1122,10 @@ async fn handle_encrypted_hls_playlist(
 
     let prefetch_urls = crate::upstream::hls_media_segment_urls(&content, &base_uri, 3);
     if !prefetch_urls.is_empty() {
+        let session_headers = proxy_data.request_headers.clone().unwrap_or_default();
         state.engine.prefetch_segment_urls_with_policy(
             prefetch_urls,
-            headers,
+            &session_headers,
             Some(proxy_data.network_policy.clone()),
             &proxy_data.credential_url,
         );

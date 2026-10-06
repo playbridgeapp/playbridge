@@ -839,11 +839,49 @@ async fn concurrent_interface_exposure_is_idempotent() {
     assert_eq!(failures, 0, "simultaneous interface exposure failures");
 }
 
-struct CrossCdnFetcher {
-    segment_reads: AtomicUsize,
-    redirected: bool,
+type Headers = HashMap<String, String>;
+
+/// Fake origin: known playlist URLs return scripted bodies (optionally with an
+/// effective URL after a redirect); every other URL is a segment. Segment
+/// requests are recorded so tests assert on them from the test task instead of
+/// panicking inside spawned fetch tasks.
+struct RecordingFetcher {
+    playlists: HashMap<String, (String, Option<String>)>,
+    segments: std::sync::Mutex<Vec<(String, Headers)>>,
 }
-impl stream_proxy_rust::UpstreamFetcher for CrossCdnFetcher {
+
+impl RecordingFetcher {
+    fn new(playlists: &[(&str, &str, Option<&str>)]) -> Arc<Self> {
+        Arc::new(Self {
+            playlists: playlists
+                .iter()
+                .map(|(url, body, effective)| {
+                    (
+                        url.to_string(),
+                        (body.to_string(), effective.map(str::to_string)),
+                    )
+                })
+                .collect(),
+            segments: Default::default(),
+        })
+    }
+
+    fn segment_log(&self) -> Vec<(String, Headers)> {
+        self.segments.lock().unwrap().clone()
+    }
+
+    async fn wait_for_segments(&self, count: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while self.segment_log().len() < count {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("prefetch did not reach the upstream segment");
+    }
+}
+
+impl stream_proxy_rust::UpstreamFetcher for RecordingFetcher {
     fn connect_with_policy<'a>(
         &'a self,
         url: &'a str,
@@ -853,37 +891,24 @@ impl stream_proxy_rust::UpstreamFetcher for CrossCdnFetcher {
         Box::pin(async move {
             assert!(policy.is_some());
             let mut response_headers = HeaderMap::new();
-            let body = if url == "http://8.8.8.8/master.m3u8" {
-                assert_eq!(headers.get("Authorization").unwrap(), "secret");
+            let body = if let Some((body, effective)) = self.playlists.get(url) {
                 response_headers.insert(
                     header::CONTENT_TYPE,
                     "application/vnd.apple.mpegurl".parse().unwrap(),
                 );
-                if self.redirected {
+                if let Some(effective) = effective {
                     response_headers.insert(
                         "x-playbridge-internal-effective-url",
-                        "http://1.1.1.1/final/list".parse().unwrap(),
+                        effective.parse().unwrap(),
                     );
-                    "#EXTM3U\n#EXTINF:1,\nsegment.ts\n"
-                } else {
-                    "#EXTM3U\n#EXTINF:1,\nhttp://1.1.1.1/segment.ts\n"
                 }
+                body.clone()
             } else {
-                assert_eq!(
-                    url,
-                    if self.redirected {
-                        "http://1.1.1.1/final/segment.ts"
-                    } else {
-                        "http://1.1.1.1/segment.ts"
-                    }
-                );
-                assert!(headers.keys().all(|name| !matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "authorization" | "cookie" | "x-custom-secret"
-                )));
-                assert_eq!(headers.get("User-Agent").unwrap(), "Fixture");
-                self.segment_reads.fetch_add(1, Ordering::SeqCst);
-                "segment"
+                self.segments
+                    .lock()
+                    .unwrap()
+                    .push((url.to_string(), headers.clone()));
+                "segment".to_string()
             };
             Ok(stream_proxy_rust::UpstreamResponse {
                 status: StatusCode::OK,
@@ -894,64 +919,202 @@ impl stream_proxy_rust::UpstreamFetcher for CrossCdnFetcher {
     }
 }
 
+fn has_header(headers: &Headers, name: &str) -> bool {
+    headers.keys().any(|key| key.eq_ignore_ascii_case(name))
+}
+
+fn header_values<'a>(headers: &'a Headers, name: &str) -> Vec<&'a str> {
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+        .collect()
+}
+
+async fn get_text(url: impl reqwest::IntoUrl) -> String {
+    reqwest::get(url)
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap()
+}
+
+fn first_uri(playlist: &str, root: &str) -> Url {
+    let line = playlist
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty())
+        .unwrap();
+    Url::parse(root).unwrap().join(line).unwrap()
+}
+
+fn credential_headers() -> Headers {
+    HashMap::from([
+        ("Authorization".into(), "secret".into()),
+        ("Cookie".into(), "secret".into()),
+        ("X-Custom-Secret".into(), "secret".into()),
+        ("User-Agent".into(), "Fixture".into()),
+    ])
+}
+
+fn root_url(media: &stream_proxy_rust::RegisteredMedia, encrypted: bool) -> String {
+    if encrypted {
+        media.encrypted_url.clone().unwrap()
+    } else {
+        media.url.clone()
+    }
+}
+
 #[tokio::test]
 async fn cross_cdn_children_and_prefetch_do_not_receive_original_credentials() {
     // Literal public addresses with a fake fetcher: no external server contacted.
     for redirected in [false, true] {
-        let fetcher = Arc::new(CrossCdnFetcher {
-            segment_reads: AtomicUsize::new(0),
-            redirected,
-        });
+        for encrypted in [false, true] {
+            // A fresh proxy, cache and log per root so each root's prefetch is
+            // observed on its own.
+            let fetcher = if redirected {
+                RecordingFetcher::new(&[(
+                    "http://8.8.8.8/master.m3u8",
+                    "#EXTM3U\n#EXTINF:1,\nsegment.ts\n",
+                    Some("http://1.1.1.1/final/list"),
+                )])
+            } else {
+                RecordingFetcher::new(&[(
+                    "http://8.8.8.8/master.m3u8",
+                    "#EXTM3U\n#EXTINF:1,\nhttp://1.1.1.1/segment.ts\n",
+                    None,
+                )])
+            };
+            let expected = if redirected {
+                "http://1.1.1.1/final/segment.ts"
+            } else {
+                "http://1.1.1.1/segment.ts"
+            };
+            let proxy =
+                ProxyServer::start_with_fetcher(ProxyServerConfig::default(), fetcher.clone())
+                    .await
+                    .unwrap();
+            let media = proxy
+                .register_remote(
+                    "127.0.0.1",
+                    "http://8.8.8.8/master.m3u8",
+                    credential_headers(),
+                )
+                .unwrap();
+            let root = root_url(&media, encrypted);
+            let child = first_uri(&get_text(&root).await, &root);
+            // Wait for the background prefetch before foreground loading.
+            fetcher.wait_for_segments(1).await;
+            assert_eq!(get_text(child).await, "segment");
+            let log = fetcher.segment_log();
+            assert_eq!(
+                log.len(),
+                1,
+                "foreground must be served from the prefetch cache"
+            );
+            for (url, headers) in &log {
+                assert_eq!(url, expected);
+                for name in ["authorization", "cookie", "x-custom-secret"] {
+                    assert!(!has_header(headers, name), "{name} leaked cross-origin");
+                }
+                assert_eq!(
+                    headers.get("User-Agent").map(String::as_str),
+                    Some("Fixture")
+                );
+            }
+            proxy.shutdown().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn byterange_prefetch_sends_a_single_range_and_serves_the_foreground_from_cache() {
+    for encrypted in [false, true] {
+        let fetcher = RecordingFetcher::new(&[(
+            "http://8.8.8.8/master.m3u8",
+            "#EXTM3U\n#EXTINF:1,\n#EXT-X-BYTERANGE:10@0\nseg.ts\n",
+            None,
+        )]);
         let proxy = ProxyServer::start_with_fetcher(ProxyServerConfig::default(), fetcher.clone())
             .await
             .unwrap();
+        // A session-level Range must never be forwarded alongside the playlist range.
+        let mut session_headers = credential_headers();
+        session_headers.insert("range".into(), "bytes=500-600".into());
         let media = proxy
-            .register_remote(
-                "127.0.0.1",
-                "http://8.8.8.8/master.m3u8",
-                HashMap::from([
-                    ("Authorization".into(), "secret".into()),
-                    ("Cookie".into(), "secret".into()),
-                    ("X-Custom-Secret".into(), "secret".into()),
-                    ("User-Agent".into(), "Fixture".into()),
-                ]),
-            )
+            .register_remote("127.0.0.1", "http://8.8.8.8/master.m3u8", session_headers)
             .unwrap();
-        for root in [&media.url, media.encrypted_url.as_ref().unwrap()] {
-            let text = reqwest::get(root)
-                .await
-                .unwrap()
-                .error_for_status()
-                .unwrap()
-                .text()
-                .await
-                .unwrap();
-            let child = text
-                .lines()
-                .find(|line| !line.starts_with('#') && !line.is_empty())
-                .unwrap();
-            let child = Url::parse(root).unwrap().join(child).unwrap();
-            // Wait for background prefetch before foreground loading to exercise its
-            // credential scope, not merely the foreground request's header filter.
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                while fetcher.segment_reads.load(Ordering::SeqCst) == 0 {
-                    tokio::task::yield_now().await;
-                }
-            })
+        let root = root_url(&media, encrypted);
+        let child = first_uri(&get_text(&root).await, &root);
+        fetcher.wait_for_segments(1).await;
+        let (_, headers) = fetcher.segment_log().remove(0);
+        assert_eq!(
+            header_values(&headers, "range"),
+            vec!["bytes=0-9"],
+            "exactly one Range header expected"
+        );
+        let response = reqwest::Client::new()
+            .get(child)
+            .header("Range", "bytes=0-9")
+            .send()
             .await
             .unwrap();
-            assert_eq!(
-                reqwest::get(child)
-                    .await
-                    .unwrap()
-                    .error_for_status()
-                    .unwrap()
-                    .text()
-                    .await
-                    .unwrap(),
-                "segment"
-            );
-        }
+        assert!(response.status().is_success());
+        response.bytes().await.unwrap();
+        assert_eq!(fetcher.segment_log().len(), 1, "foreground refetched");
+        proxy.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn origin_a_to_cdn_b_to_origin_a_prefetch_keeps_origin_credentials() {
+    for encrypted in [false, true] {
+        let fetcher = RecordingFetcher::new(&[
+            (
+                "http://8.8.8.8/master.m3u8",
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nhttp://1.1.1.1/media.m3u8\n",
+                None,
+            ),
+            (
+                "http://1.1.1.1/media.m3u8",
+                "#EXTM3U\n#EXTINF:1,\nhttp://8.8.8.8/seg0.ts\n",
+                None,
+            ),
+        ]);
+        let proxy = ProxyServer::start_with_fetcher(ProxyServerConfig::default(), fetcher.clone())
+            .await
+            .unwrap();
+        let mut session_headers = credential_headers();
+        session_headers.insert("Referer".into(), "http://8.8.8.8/page?token=1".into());
+        let media = proxy
+            .register_remote("127.0.0.1", "http://8.8.8.8/master.m3u8", session_headers)
+            .unwrap();
+        let root = root_url(&media, encrypted);
+        let media_playlist_url = first_uri(&get_text(&root).await, &root);
+        let segment_url = first_uri(
+            &get_text(media_playlist_url.clone()).await,
+            media_playlist_url.as_str(),
+        );
+        fetcher.wait_for_segments(1).await;
+        let (url, headers) = fetcher.segment_log().remove(0);
+        assert_eq!(url, "http://8.8.8.8/seg0.ts");
+        assert_eq!(
+            headers.get("Authorization").map(String::as_str),
+            Some("secret")
+        );
+        assert_eq!(headers.get("Cookie").map(String::as_str), Some("secret"));
+        assert_eq!(
+            headers.get("Referer").map(String::as_str),
+            Some("http://8.8.8.8/page?token=1")
+        );
+        assert_eq!(get_text(segment_url).await, "segment");
+        assert_eq!(
+            fetcher.segment_log().len(),
+            1,
+            "foreground segment must hit the prefetch cache"
+        );
         proxy.shutdown().await.unwrap();
     }
 }
