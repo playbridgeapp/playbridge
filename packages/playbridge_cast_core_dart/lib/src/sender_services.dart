@@ -140,6 +140,10 @@ final class SenderServices implements Finalizable {
         }),
       );
 
+  /// Renew a native-owned playback lease without changing the receiver URL.
+  Future<bool> renew(String id) async =>
+      (await _submitData('proxy_renew', {'id': id}))['renewed']! as bool;
+
   Future<bool> revoke(String id) async =>
       (await _submitData('proxy_revoke', {'id': id}))['revoked']! as bool;
 

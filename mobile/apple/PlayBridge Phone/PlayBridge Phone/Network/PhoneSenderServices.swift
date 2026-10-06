@@ -10,15 +10,25 @@ final class PhoneProxyRegistration {
     private let id: String
     private let services: PhoneSenderServices
     private let generation: UUID
+    private let renewal = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
 
     fileprivate init(url: URL, id: String, services: PhoneSenderServices, generation: UUID) {
         self.url = url
         self.id = id
         self.services = services
         self.generation = generation
+        renewal.schedule(deadline: .now(), repeating: 60)
+        renewal.setEventHandler { [weak self] in
+            guard let self else { return }
+            services.renew(id, generation: generation)
+        }
+        renewal.resume()
     }
 
-    deinit { services.revoke(id, generation: generation) }
+    deinit {
+        renewal.cancel()
+        services.revoke(id, generation: generation)
+    }
 }
 
 /// Shared Rust proxy host. All C calls and event polling run on this serial
@@ -117,6 +127,13 @@ final class PhoneSenderServices: @unchecked Sendable {
         }
 #endif
         generation = UUID()
+    }
+
+    fileprivate func renew(_ id: String, generation expected: UUID) {
+        worker.async { [self] in
+            guard generation == expected else { return }
+            _ = try? execute(["command": "proxy_renew", "id": id])
+        }
     }
 
     fileprivate func revoke(_ id: String, generation expected: UUID) {

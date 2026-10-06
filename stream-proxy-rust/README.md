@@ -8,9 +8,10 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
 - 🛡️ **Pluggable origin fetch** (Cargo features):
   - `upstream-reqwest` (default): `reqwest` HTTP client
   - `upstream-avio` (default): FFmpeg `libavformat` AVIO fallback after reqwest failure
-  - `upstream-jni`: host C callbacks (`pb_proxy_upstream_set_callbacks`) for Android
-    `HttpURLConnection` (≈ Media3) — open/read/close/free_string; streaming body via
-    `spawn_blocking` (no full-segment buffering)
+  - `upstream-jni`: host C callbacks for Android/Apple. Policy-bound fetches use
+    `pb_proxy_upstream_set_checked_callbacks` so the native stack keeps hostname
+    TLS while Rust dials only pre-checked addresses. Legacy ABI v1 callbacks are
+    not sufficient for policy-bound media.
 - 🔌 **Embed features (cast/ffi)**:
   - `sender-services` → reqwest + AVIO (Desktop)
   - `sender-services-android` → upstream-jni only (phone `build-android.sh`)
@@ -33,7 +34,7 @@ High-performance, lightweight Rust media stream proxy engine for PlayBridge. Bui
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `8888` | Port for the proxy server to listen on. |
-| `ADDRESS` | `0.0.0.0` | Bind IP address (`0.0.0.0` for all interfaces). |
+| `ADDRESS` | `0.0.0.0` | Standalone/Docker bind address. Embedded `ProxyServer` defaults to loopback and exposes a selected LAN interface only when casting. |
 | `PB_PROXY_PASSWORD` | *(None)* | Required for `/register` and `/epg`. |
 | `FFMPEG_PATH` | *(Auto-detected)* | Optional FFmpeg path for AVIO library discovery. |
 
@@ -99,8 +100,9 @@ not arbitrary directory traversal or destinations.
 **Migration:** unsigned legacy MediaFlow-format CBC tokens are rejected, with
 no transparent fallback. Re-register media to obtain new URLs; external
 integrations generating tokens themselves must migrate. Endpoint shapes and
-registration response fields are unchanged. No new short playback expiry is
-introduced.
+registration response fields are unchanged. Encrypted and stateful URLs stay
+stable for the active native playback owner, including pause and seek; they are
+revoked when that owner releases them. HTTP reads cannot renew the lease.
 
 Native/admin local-media registration authorizes the selected local host,
 including same-host port redirects, not every private-network host. Explicit
@@ -111,13 +113,14 @@ segment-cache entries.
 
 Reqwest validates redirect hops and filters the actual DNS answers used for
 connections; policy-bound requests do not use environment HTTP proxies or AVIO
-fallback. Android/Apple host callbacks return redirects to Rust for validation
-and correct relative-manifest resolution. **Host callback ABI v1 still performs
-its own DNS resolution after Rust's preflight check: connection-address binding
-against DNS rebinding remains incomplete on these embedded transports.** Do not
-interpret the capability fix as complete native DNS-rebinding protection.
-Receiver playback, long/live sessions, seeking, and native DNS/TLS integration
-also need platform/receiver validation beyond unit tests.
+fallback. Embedded Android/Apple fetches open an authenticated loopback gateway:
+Rust resolves and connects only to checked addresses, then the native stack uses
+HTTP proxy or HTTPS CONNECT while keeping ordinary hostname/SNI/certificate
+checks. Legacy callbacks without that gateway fail closed for policy-bound
+origins. Receiver playback, LAN/VPN paths, and physical Cast/DLNA still need
+manual validation beyond unit tests. An active compatible HTTP media URL remains
+a bearer capability for that authorized resource until the playback owner
+releases it.
 
 ### 3. Health Check (`GET /health`)
 Returns `200 OK` with the body `OK`.

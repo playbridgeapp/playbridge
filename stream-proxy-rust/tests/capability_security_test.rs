@@ -453,3 +453,113 @@ async fn redirected_hls_children_use_final_manifest_base_and_reserved_headers_st
     proxy.shutdown().await.unwrap();
     task.abort();
 }
+
+#[tokio::test]
+async fn encrypted_roots_and_manifest_children_are_revoked_with_their_playback_owner() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/master.m3u8",
+                    get(|| async {
+                        (
+                            [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
+                            "#EXTM3U\n#EXTINF:2,\nsegment.ts\n",
+                        )
+                    }),
+                )
+                .route("/segment.ts", get(|| async { "segment" })),
+        )
+        .await
+        .unwrap();
+    });
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    let media = proxy
+        .register_remote(
+            "127.0.0.1",
+            format!("http://{address}/master.m3u8"),
+            HashMap::new(),
+        )
+        .unwrap();
+    assert!(proxy.service().renew(&media.id));
+    let encrypted = media.encrypted_url.as_ref().unwrap();
+    let client = reqwest::Client::new();
+    let playlist = client
+        .get(encrypted)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let child = playlist
+        .lines()
+        .find(|line| !line.starts_with('#') && !line.is_empty())
+        .unwrap();
+    let child = format!("{}{child}", proxy.base_url("127.0.0.1"));
+    assert_eq!(
+        client
+            .get(&child)
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "segment"
+    );
+    assert!(proxy.service().revoke(&media.id));
+    assert!(!proxy.service().renew(&media.id));
+    for url in [encrypted, &child] {
+        let rejected = client.get(url).send().await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        assert_eq!(rejected.text().await.unwrap(), "Invalid proxy capability");
+    }
+    proxy.shutdown().await.unwrap();
+    task.abort();
+}
+
+#[tokio::test]
+async fn embedded_listener_and_management_surface_are_not_broadcast_or_cors_enabled() {
+    let proxy = ProxyServer::start(ProxyServerConfig::default())
+        .await
+        .unwrap();
+    assert!(proxy.local_addr().ip().is_loopback());
+    let client = reqwest::Client::new();
+    for path in ["/", "/demo.html"] {
+        assert_eq!(
+            client
+                .get(format!("{}{path}", proxy.base_url("127.0.0.1")))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let result = client
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("{}/register", proxy.base_url("127.0.0.1")),
+        )
+        .header("Origin", "https://unrelated.example")
+        .header("Access-Control-Request-Method", "POST")
+        .send()
+        .await
+        .unwrap();
+    assert!(!result.headers().contains_key("access-control-allow-origin"));
+    assert!(proxy.expose_interface("0.0.0.0").await.is_err());
+    assert!(proxy.expose_interface("224.0.0.1").await.is_err());
+    assert!(proxy
+        .expose_interface("not-a-local-interface.invalid")
+        .await
+        .is_err());
+    proxy.shutdown().await.unwrap();
+}

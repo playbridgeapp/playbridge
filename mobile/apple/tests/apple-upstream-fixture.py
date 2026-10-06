@@ -1,6 +1,17 @@
-import http.server, sys, time, json, urllib.parse
+import http.server, sys, time, json, urllib.parse, base64
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args): pass
+    def do_CONNECT(self):
+        expected = 'Basic ' + base64.b64encode(('playbridge:' + 'A'*43).encode()).decode()
+        if self.headers.get('Proxy-Authorization') != expected:
+            self.send_response(407); self.send_header('Proxy-Authenticate', 'Basic realm="PlayBridge origin"')
+            self.send_header('Content-Length', '0'); self.end_headers(); return
+        assert self.path == 'checked-origin.invalid:443'
+        with open(sys.argv[1] + '.connect', 'w') as marker: marker.write('authenticated')
+        self.send_response(200); self.end_headers()
+        # Deliberately no TLS peer: native verification/handshake must fail closed.
+        self.close_connection = True
+
     def do_POST(self):
         parsed = urllib.parse.urlsplit(self.path)
         token = urllib.parse.parse_qs(parsed.query).get('token', [''])[0]
@@ -15,6 +26,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(result)
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path
+        if self.path.startswith('http://checked-origin.invalid:'):
+            expected = 'Basic ' + base64.b64encode(('playbridge:' + 'A'*43).encode()).decode()
+            if self.headers.get('Proxy-Authorization') != expected:
+                self.send_response(407)
+                self.send_header('Proxy-Authenticate', 'Basic realm="PlayBridge origin"')
+                self.send_header('Content-Length', '0'); self.end_headers(); return
+            assert path == '/checked' and self.headers.get('Authorization') == 'Bearer original-origin'
+            body = b'checked-native-routing'
+            self.send_response(200); self.send_header('Content-Length', str(len(body))); self.end_headers()
+            self.wfile.write(body); return
         if path == '/download.mp4/':
             assert self.headers.get('Referer') == 'https://example.test/player'
             assert self.headers.get('Authorization') == 'Bearer fixture-secret'

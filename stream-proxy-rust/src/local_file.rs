@@ -16,6 +16,7 @@ pub struct FileGrant {
     pub content_type: String,
     pub created_at: Instant,
     pub expires_at: Instant,
+    renewal_ttl: Duration,
 }
 
 #[derive(Clone, Default)]
@@ -62,6 +63,7 @@ impl FileGrantManager {
             content_type,
             created_at: now,
             expires_at: now + ttl,
+            renewal_ttl: ttl,
         };
         self.grants.insert(grant.id.clone(), grant.clone());
         Ok(grant)
@@ -74,6 +76,18 @@ impl FileGrantManager {
             return None;
         }
         Some(grant)
+    }
+
+    pub fn renew(&self, id: &str) -> bool {
+        let Some(mut grant) = self.grants.get_mut(id) else {
+            return false;
+        };
+        let now = Instant::now();
+        if now >= grant.expires_at {
+            return false;
+        }
+        grant.expires_at = now + grant.renewal_ttl;
+        true
     }
 
     pub fn revoke(&self, id: &str) -> bool {
@@ -139,5 +153,24 @@ mod tests {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
         assert!(grants.get(&grant.id).is_none());
+        assert!(
+            !grants.renew(&grant.id),
+            "renewal cannot revive an expired file grant"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_file_grants_can_be_renewed_until_revoked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("video.bin");
+        fs::write(&path, b"media").unwrap();
+        let grants = FileGrantManager::new();
+        let grant = grants
+            .register(&path, None, Duration::from_secs(60))
+            .unwrap();
+        assert!(grants.renew(&grant.id));
+        assert!(grants.get(&grant.id).is_some());
+        assert!(grants.revoke(&grant.id));
+        assert!(!grants.renew(&grant.id));
     }
 }

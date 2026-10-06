@@ -275,6 +275,7 @@ class CastSessionManager(
         _externalNowPlayingMeta.asStateFlow()
 
     private var externalStatusJob: Job? = null
+    private var externalProxyLease: AutoCloseable? = null
     private var externalLoadJob: Job? = null
 
     /**
@@ -1068,6 +1069,8 @@ class CastSessionManager(
         externalLoadJob = null
         externalStatusJob?.cancel()
         externalStatusJob = null
+        externalProxyLease?.close()
+        externalProxyLease = null
         val detached = externalTargetSlot.take()
         _externalTarget.value = null
         _activeExternalDevice.value = null
@@ -1199,11 +1202,15 @@ class CastSessionManager(
         )
         val loadTarget = target
         externalLoadJob = scope.launch {
+            val incomingLease = com.playbridge.sender.cast.proxy.PhoneSenderServices.get()?.retainMedia(media.url)
             val primary = runCatching { loadTarget.load(epochMedia) }
             if (generation != externalLoadGeneration || _externalTarget.value !== loadTarget) {
+                incomingLease?.close()
                 return@launch
             }
             primary.onSuccess {
+                externalProxyLease?.close()
+                externalProxyLease = incomingLease
                 if (loadTarget is BrowserCastTarget) {
                     loadTarget.lastEffectiveRoute?.let {
                         setActiveStreamRoute(it, loadTarget.lastProxyFallback)
@@ -1217,6 +1224,7 @@ class CastSessionManager(
                 }
             }
             primary.onFailure { error ->
+                incomingLease?.close()
                 if (error is CancellationException) return@onFailure
                 if (generation == externalLoadGeneration && _externalTarget.value === loadTarget) {
                     castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.FAILED, error)
@@ -1245,6 +1253,8 @@ class CastSessionManager(
     private fun maybeClearTerminalExternalMedia(status: PlaybackStatus) {
         if (!_externalMediaLoaded.value) return
         if (status.state !in TERMINAL_EXTERNAL_STATES) return
+        externalProxyLease?.close()
+        externalProxyLease = null
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
         _externalMediaTitle.value = null
@@ -1275,6 +1285,8 @@ class CastSessionManager(
     }
 
     fun stop() {
+        externalProxyLease?.close()
+        externalProxyLease = null
         castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
         JniUpstreamHttpClient.setDiagnosticAttempt(null, null)
         _externalInterrupts.tryEmit(Unit)

@@ -97,6 +97,8 @@ class TvSenderController extends ChangeNotifier {
   StreamSubscription<List<DiscoveredTv>>? _devSub;
   StreamSubscription<bool>? _scanSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
+  StreamProxyLease? _proxyLease;
+  int _proxyLeaseGeneration = 0;
   StreamSubscription<TvCredentials>? _credSub;
   StreamSubscription<String>? _msgSub;
   StreamSubscription<String>? _sasSub;
@@ -453,7 +455,21 @@ class TvSenderController extends ChangeNotifier {
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
   Future<bool> castVideo(PlayPayload video) async {
-    final ok = await _transport.castVideo(_withHistoryPreference(video));
+    final generation = ++_proxyLeaseGeneration;
+    final lease = await StreamProxyServer.instance.retainUrls([video.url]);
+    bool ok;
+    try {
+      ok = await _transport.castVideo(_withHistoryPreference(video));
+    } catch (_) {
+      lease.close();
+      rethrow;
+    }
+    if (!ok || generation != _proxyLeaseGeneration) {
+      lease.close();
+      return ok;
+    }
+    _proxyLease?.close();
+    _proxyLease = lease;
     if (ok) {
       if (_transport.protocol != TvProtocol.playBridge) {
         _awaitingFreshPlayback = false;
@@ -482,7 +498,22 @@ class TvSenderController extends ChangeNotifier {
     outgoing.items
       ..clear()
       ..addAll(items);
-    final ok = await _transport.castPlaylist(outgoing);
+    final generation = ++_proxyLeaseGeneration;
+    final lease = await StreamProxyServer.instance
+        .retainUrls(outgoing.items.map((item) => item.url));
+    bool ok;
+    try {
+      ok = await _transport.castPlaylist(outgoing);
+    } catch (_) {
+      lease.close();
+      rethrow;
+    }
+    if (!ok || generation != _proxyLeaseGeneration) {
+      lease.close();
+      return ok;
+    }
+    _proxyLease?.close();
+    _proxyLease = lease;
     if (ok && _transport.protocol != TvProtocol.playBridge) {
       _awaitingFreshPlayback = false;
       _stoppedPlaybackId = null;
@@ -592,11 +623,25 @@ class TvSenderController extends ChangeNotifier {
       payload.title = title;
     }
     if (_transport case BrowserTransport browser) {
-      final ok = await browser.castBrowserMedia(
-        url: targetUrl,
-        title: title,
-        contentType: targetContentType,
-      );
+      final generation = ++_proxyLeaseGeneration;
+      final lease = await StreamProxyServer.instance.retainUrls([targetUrl]);
+      bool ok;
+      try {
+        ok = await browser.castBrowserMedia(
+          url: targetUrl,
+          title: title,
+          contentType: targetContentType,
+        );
+      } catch (_) {
+        lease.close();
+        rethrow;
+      }
+      if (!ok || generation != _proxyLeaseGeneration) {
+        lease.close();
+        return ok;
+      }
+      _proxyLease?.close();
+      _proxyLease = lease;
       if (ok) {
         _awaitingFreshPlayback = false;
         _stoppedPlaybackId = null;
@@ -655,6 +700,9 @@ class TvSenderController extends ChangeNotifier {
 
   /// Resets the now-casting snapshot and notifies (hides the card).
   void _clearNowCasting() {
+    _proxyLeaseGeneration++;
+    _proxyLease?.close();
+    _proxyLease = null;
     if (_castingTitle == null &&
         _remoteState.isEmpty &&
         _remotePositionMs == 0 &&
@@ -926,6 +974,9 @@ class TvSenderController extends ChangeNotifier {
   }
 
   void _beginUserClose() {
+    _proxyLeaseGeneration++;
+    _proxyLease?.close();
+    _proxyLease = null;
     _sessionGeneration++;
     _userClosed = true;
     _retryInFlight = false;
@@ -1293,6 +1344,9 @@ class TvSenderController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _proxyLeaseGeneration++;
+    _proxyLease?.close();
+    _proxyLease = null;
     if (_disposed) return;
     _disposed = true;
     _beginUserClose();

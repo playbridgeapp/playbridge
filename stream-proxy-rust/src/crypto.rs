@@ -12,6 +12,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::upstream::NetworkPolicy;
 
+pub(crate) fn same_secret(candidate: &[u8], expected: &[u8]) -> bool {
+    let mut supplied =
+        Hmac::<Sha256>::new_from_slice(b"PlayBridge constant-time comparison").expect("fixed key");
+    supplied.update(candidate);
+    let tag = supplied.finalize().into_bytes();
+    let mut reference =
+        Hmac::<Sha256>::new_from_slice(b"PlayBridge constant-time comparison").expect("fixed key");
+    reference.update(expected);
+    reference.verify_slice(&tag).is_ok()
+}
+
 type Aes256CbcEnc = Encryptor<Aes256>;
 type Aes256CbcDec = Decryptor<Aes256>;
 const INVALID_TOKEN: &str = "Invalid proxy capability";
@@ -19,6 +30,8 @@ const MAX_TOKEN_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProxyData {
+    /// Every encrypted root/child belongs to a revocable server-side playback lease.
+    pub session_id: String,
     pub destination: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_headers: Option<HashMap<String, String>>,
@@ -137,6 +150,7 @@ mod tests {
 
     fn data() -> ProxyData {
         ProxyData {
+            session_id: "fixture-session".into(),
             destination: "https://cdn.example/video.m3u8".into(),
             credential_url: "https://cdn.example/video.m3u8".into(),
             network_policy: NetworkPolicy::new(vec![]).unwrap(),

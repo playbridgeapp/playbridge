@@ -92,6 +92,11 @@ impl ProxyService {
     }
 
     pub fn router(&self) -> Router {
+        self.router_with_demo(true)
+    }
+
+    pub fn router_with_demo(&self, enable_demo: bool) -> Router {
+        // Browser receivers need CORS on bearer-scoped media, not management APIs.
         let cors = CorsLayer::new()
             .allow_origin(Any)
             .allow_methods(Any)
@@ -102,20 +107,26 @@ impl ProxyService {
                 header::ACCEPT_RANGES,
             ]);
 
-        Router::new()
-            .route("/", get(demo_html_handler))
-            .route("/demo.html", get(demo_html_handler))
-            .route("/health", get(health_handler))
-            .route("/ping", get(health_handler))
-            .route("/register", post(register_handler))
-            .route("/epg", get(epg_handler))
+        let mut management = Router::new();
+        if enable_demo {
+            management = management
+                .route("/", get(demo_html_handler))
+                .route("/demo.html", get(demo_html_handler));
+        }
+        let media = Router::new()
             .route("/s/*path", get(stateful_proxy_handler))
             .route("/proxy/*path", get(encrypted_proxy_handler))
             .route(
                 "/media/*path",
                 get(local_file_handler).head(local_file_handler),
             )
-            .layer(cors)
+            .layer(cors);
+        management
+            .route("/health", get(health_handler))
+            .route("/ping", get(health_handler))
+            .route("/register", post(register_handler))
+            .route("/epg", get(epg_handler))
+            .merge(media)
             .layer(middleware::from_fn_with_state(
                 self.state.clone(),
                 auth_middleware,
@@ -196,6 +207,7 @@ impl ProxyService {
             urlencoding::encode(&filename)
         );
         let proxy_data = ProxyData {
+            session_id: session.id.clone(),
             credential_url: original_url.clone(),
             network_policy,
             destination: original_url,
@@ -237,6 +249,11 @@ impl ProxyService {
             ),
             encrypted_url: None,
         })
+    }
+
+    /// Native owner renewal, never performed by media requests.
+    pub fn renew(&self, id: &str) -> bool {
+        self.state.session_manager.renew(id) || self.state.file_grants.renew(id)
     }
 
     pub fn revoke(&self, id: &str) -> bool {
@@ -335,7 +352,9 @@ async fn auth_middleware(
     }
 
     match token {
-        Some(t) if t == state.password => Ok(next.run(req).await),
+        Some(t) if crate::crypto::same_secret(t.as_bytes(), state.password.as_bytes()) => {
+            Ok(next.run(req).await)
+        }
         _ => Err(StatusCode::FORBIDDEN),
     }
 }
@@ -379,6 +398,7 @@ async fn register_handler(
 
     // Versioned authenticated playback capability; no unsigned-token fallback.
     let proxy_data = ProxyData {
+        session_id: session.id.clone(),
         credential_url: payload.url.clone(),
         network_policy: policy,
         destination: payload.url,
@@ -429,6 +449,11 @@ async fn epg_handler(
         }
     };
 
+    let policy = NetworkPolicy::for_registered_media(&uri_str)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid EPG destination".into()))?;
+    crate::upstream::validate_http_destination(&uri_str, Some(&policy))
+        .await
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid EPG destination".into()))?;
     if let Some(cached) = state.epg_cache.get(&uri_str) {
         return Ok((
             [
@@ -442,7 +467,7 @@ async fn epg_handler(
 
     match state
         .engine
-        .fetch_url_bytes(&uri_str, &HashMap::new())
+        .fetch_url_bytes_with_policy(&uri_str, &HashMap::new(), Some(policy))
         .await
     {
         Ok(bytes) => {
@@ -595,6 +620,9 @@ async fn encrypted_proxy_handler(
         Ok(pd) => pd,
         Err(_) => return Err(invalid_capability()),
     };
+    if state.session_manager.get(&proxy_data.session_id).is_none() {
+        return Err(invalid_capability());
+    }
     let target_url = match single_query(&query_params, "target")? {
         Some(target) if authorized_target(&proxy_data.destination, target) => target.to_string(),
         Some(_) => return Err(invalid_capability()),

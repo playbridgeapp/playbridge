@@ -163,32 +163,12 @@ class StreamRouteService(
         throw StreamRouteException("Unsupported media URL for Via phone")
     }
 
-    /**
-     * Remote streams: primary path is embedded Rust `registerUrl` → `/s/...` with
-     * JNI HttpURLConnection upstream. Falls back to LocalProxy if JNI callbacks
-     * are missing or register fails (one-release safety net).
-     */
+    /** No silent transport downgrade: policy-bound origins require checked native callbacks. */
     private suspend fun packageViaPhoneRemote(media: CastableMedia): PackagedMedia {
-        val jniReady = SenderServicesNative.jniUpstreamReady &&
+        val ready = SenderServicesNative.jniUpstreamReady &&
             runCatching { SenderServicesNative.upstreamCallbacksRegistered() }.getOrDefault(false)
-
-        if (jniReady) {
-            try {
-                return packageViaPhoneRemoteRust(media)
-            } catch (e: Exception) {
-                Log.w(
-                    TAG,
-                    "Rust Via phone registerUrl failed; LocalProxy fallback: ${e.message}",
-                )
-            }
-        } else {
-            Log.e(
-                TAG,
-                "Rust proxy JNI upstream not ready (libraryLoaded=" +
-                    "${SenderServicesNative.libraryLoaded}); Via phone remote uses LocalProxy fallback",
-            )
-        }
-        return packageViaPhoneRemoteLocalProxy(media)
+        if (!ready) throw StreamRouteException("Checked Via phone networking is unavailable; rebuild the native library")
+        return packageViaPhoneRemoteRust(media)
     }
 
     private suspend fun packageViaPhoneRemoteRust(media: CastableMedia): PackagedMedia {
@@ -223,7 +203,7 @@ class StreamRouteService(
         )
     }
 
-    /** Legacy / fallback remote packaging through LocalProxyServer. */
+
     private fun packageViaPhoneRemoteLocalProxy(media: CastableMedia): PackagedMedia {
         val headers = ensureProxyUpstreamHeaders(media.headers.orEmpty())
         val mime = media.contentType ?: guessRemoteMime(media.url)

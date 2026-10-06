@@ -46,6 +46,10 @@ enum ServicesCommand {
         request_id: Value,
         id: String,
     },
+    ProxyRenew {
+        request_id: Value,
+        id: String,
+    },
     BrowserStart {
         request_id: Value,
         preferred_port: Option<u16>,
@@ -88,6 +92,7 @@ impl ServicesCommand {
             Self::ProxyRegisterUrl { request_id, .. }
             | Self::ProxyRegisterFile { request_id, .. }
             | Self::ProxyRevoke { request_id, .. }
+            | Self::ProxyRenew { request_id, .. }
             | Self::BrowserStart { request_id, .. }
             | Self::BrowserStop { request_id }
             | Self::BrowserApprove { request_id, .. }
@@ -104,6 +109,7 @@ impl ServicesCommand {
             Self::ProxyRegisterUrl { .. } => "proxy_register_url",
             Self::ProxyRegisterFile { .. } => "proxy_register_file",
             Self::ProxyRevoke { .. } => "proxy_revoke",
+            Self::ProxyRenew { .. } => "proxy_renew",
             Self::BrowserStart { .. } => "browser_start",
             Self::BrowserStop { .. } => "browser_stop",
             Self::BrowserApprove { .. } => "browser_approve",
@@ -276,37 +282,51 @@ async fn process_command(
             content_type,
             allowed_private_origins,
             ..
-        } => validate_page_headers(headers, allowed_private_origins.is_some())
-            .and_then(|headers| match allowed_private_origins {
-                Some(origins) => proxy.register_remote_with_policy(
-                    &host,
-                    url,
-                    headers,
-                    content_type.as_deref(),
-                    origins,
-                ),
-                None => proxy.register_remote_with_content_type(
-                    &host,
-                    url,
-                    headers,
-                    content_type.as_deref(),
-                ),
-            })
-            .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
+        } => match proxy.expose_interface(&host).await {
+            Err(error) => Err(error),
+            Ok(()) => validate_page_headers(headers, allowed_private_origins.is_some())
+                .and_then(|headers| match allowed_private_origins {
+                    Some(origins) => proxy.register_remote_with_policy(
+                        &host,
+                        url,
+                        headers,
+                        content_type.as_deref(),
+                        origins,
+                    ),
+                    None => proxy.register_remote_with_content_type(
+                        &host,
+                        url,
+                        headers,
+                        content_type.as_deref(),
+                    ),
+                })
+                .and_then(|media| {
+                    if !proxy.service().renew(&media.id) {
+                        return Err("Playback lease could not be activated".into());
+                    }
+                    serde_json::to_value(media).map_err(|error| error.to_string())
+                }),
+        },
         ServicesCommand::ProxyRegisterFile {
             host,
             path,
             content_type,
             ttl_ms,
             ..
-        } => proxy
-            .register_file(
-                &host,
-                path,
-                content_type,
-                Duration::from_millis(ttl_ms.unwrap_or(6 * 60 * 60 * 1_000)),
-            )
-            .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
+        } => match proxy.expose_interface(&host).await {
+            Err(error) => Err(error),
+            Ok(()) => proxy
+                .register_file(
+                    &host,
+                    path,
+                    content_type,
+                    Duration::from_millis(ttl_ms.unwrap_or(6 * 60 * 60 * 1_000)),
+                )
+                .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
+        },
+        ServicesCommand::ProxyRenew { id, .. } => {
+            Ok(json!({"renewed": proxy.service().renew(&id)}))
+        }
         ServicesCommand::ProxyRevoke { id, .. } => {
             Ok(json!({"revoked": proxy.service().revoke(&id)}))
         }

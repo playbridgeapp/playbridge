@@ -55,6 +55,7 @@ class BrowserCastTarget(
     private val _status = MutableStateFlow(PlaybackStatus(PlaybackState.IDLE))
     private val routeService = StreamRouteService(context)
     private var statusJob: Job? = null
+    private var proxyLease: AutoCloseable? = null
     private var volumeFraction: Double = 1.0
     @Volatile private var activeLoadEpoch: Long? = null
 
@@ -76,8 +77,10 @@ class BrowserCastTarget(
             ?: error("Browser host unavailable")
         activeLoadEpoch = media.loadEpoch
         _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
+        var incomingLease: AutoCloseable? = null
         try {
             val packaged = packageMedia(media)
+            incomingLease = services.retainMedia(packaged.url)
             services.loadBrowser(
                 sessionId = sessionId,
                 url = packaged.url,
@@ -87,6 +90,9 @@ class BrowserCastTarget(
                 subtitleUrl = media.subtitles.firstOrNull()?.url,
                 startPositionMs = media.startPositionMs.takeIf { it > 0L },
             )
+            proxyLease?.close()
+            proxyLease = incomingLease
+            incomingLease = null
             _status.value = PlaybackStatus(
                 state = PlaybackState.PLAYING,
                 positionMs = media.startPositionMs,
@@ -94,6 +100,7 @@ class BrowserCastTarget(
                 loadEpoch = media.loadEpoch,
             )
         } catch (e: Exception) {
+            incomingLease?.close()
             Log.w(TAG, "browser load failed: ${e.message}")
             _status.value = PlaybackStatus(PlaybackState.ERROR, loadEpoch = media.loadEpoch)
             throw e
@@ -111,6 +118,8 @@ class BrowserCastTarget(
     }
 
     override suspend fun stop() {
+        proxyLease?.close()
+        proxyLease = null
         control("stop")
         _status.value = PlaybackStatus(PlaybackState.STOPPED, loadEpoch = activeLoadEpoch)
     }
@@ -134,6 +143,8 @@ class BrowserCastTarget(
     override fun status(): Flow<PlaybackStatus> = _status.asStateFlow()
 
     override fun release() {
+        proxyLease?.close()
+        proxyLease = null
         statusJob?.cancel()
         statusJob = null
     }
@@ -189,6 +200,10 @@ class BrowserCastTarget(
                     loadEpoch = activeLoadEpoch,
                 )
             }
+        }
+        if (_status.value.state == PlaybackState.STOPPED) {
+            proxyLease?.close()
+            proxyLease = null
         }
     }
 

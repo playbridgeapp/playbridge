@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import '../stream_proxy_server.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
 import 'hls_master_resolver.dart';
@@ -44,6 +45,8 @@ Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
 }
 
 class MpvEngine extends PlayerEngine {
+  StreamProxyLease? _proxyLease;
+  int _proxyLeaseGeneration = 0;
   MpvEngine({this.preselectHlsQuality = false}) {
     _subs.addAll([
       player.stream.playing.listen((playing) {
@@ -365,7 +368,26 @@ class MpvEngine extends PlayerEngine {
     }));
     final medias = plans.map((p) => p.media).toList();
     final playlist = Playlist(medias, index: startIndex);
-    await player.open(playlist, play: play);
+    final leaseGeneration = ++_proxyLeaseGeneration;
+    final incomingLease = await StreamProxyServer.instance.retainUrls([
+      ...medias.map((media) => media.uri),
+      ...items.map((item) => item.url),
+      ...plans.map((p) => p.plan.companionAudioUrl).whereType<String>(),
+      ...items.map((item) => item.audioUrl).whereType<String>(),
+      ...items.expand((item) => item.subtitles ?? const <String>[]),
+    ]);
+    try {
+      await player.open(playlist, play: play);
+    } catch (_) {
+      incomingLease.close();
+      rethrow;
+    }
+    if (leaseGeneration != _proxyLeaseGeneration) {
+      incomingLease.close();
+      return;
+    }
+    _proxyLease?.close();
+    _proxyLease = incomingLease;
     _clearLateSubtitleFiles();
 
     // Companion demuxed audio (same live session). Prefer the open-plan audio
@@ -427,12 +449,18 @@ class MpvEngine extends PlayerEngine {
   Future<void> setVolume(double volume) => player.setVolume(volume * 100.0);
   @override
   Future<void> stop() async {
+    _proxyLeaseGeneration++;
+    _proxyLease?.close();
+    _proxyLease = null;
     await player.stop();
     _clearLateSubtitleFiles();
   }
 
   @override
   Future<void> dispose() async {
+    _proxyLeaseGeneration++;
+    _proxyLease?.close();
+    _proxyLease = null;
     _clearLateSubtitleFiles();
     _statsTimer?.cancel();
     stats.dispose();

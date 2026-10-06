@@ -22,6 +22,8 @@ mod reqwest_fetcher;
 #[cfg(feature = "upstream-jni")]
 pub mod jni_fetcher;
 
+#[cfg(feature = "upstream-jni")]
+mod pinned_proxy;
 pub mod segment_cache;
 
 pub use segment_cache::{hls_media_segment_urls, PrefetchTarget, SegmentCache};
@@ -433,6 +435,21 @@ pub async fn validate_http_destination(
     value: &str,
     network_policy: Option<&NetworkPolicy>,
 ) -> Result<(), String> {
+    resolve_destination(value, network_policy).await.map(|_| ())
+}
+
+#[cfg(feature = "upstream-jni")]
+async fn resolve_checked_destination(
+    value: &str,
+    policy: &NetworkPolicy,
+) -> Result<Vec<std::net::SocketAddr>, String> {
+    resolve_destination(value, Some(policy)).await
+}
+
+async fn resolve_destination(
+    value: &str,
+    network_policy: Option<&NetworkPolicy>,
+) -> Result<Vec<std::net::SocketAddr>, String> {
     let url = url::Url::parse(value).map_err(|_| "invalid media URL".to_string())?;
     if !matches!(url.scheme(), "http" | "https")
         || !url.username().is_empty()
@@ -441,7 +458,7 @@ pub async fn validate_http_destination(
         return Err("only HTTP(S) media URLs without userinfo are allowed".into());
     }
     if network_policy.is_none() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let allow_private_network =
         network_policy.is_some_and(|policy| policy.allows_private_url(&url));
@@ -459,7 +476,7 @@ pub async fn validate_http_destination(
     let port = url
         .port_or_known_default()
         .ok_or_else(|| "media URL has no port".to_string())?;
-    let addresses: Vec<_> = tokio::net::lookup_host((host, port))
+    let addresses: Vec<_> = tokio::net::lookup_host((host.trim_matches(['[', ']']), port))
         .await
         .map_err(|_| "media host could not be resolved".to_string())?
         .collect();
@@ -471,7 +488,7 @@ pub async fn validate_http_destination(
     {
         return Err("local-network media permission is required".into());
     }
-    Ok(())
+    Ok(addresses)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
