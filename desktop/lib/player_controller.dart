@@ -251,6 +251,7 @@ class PlayerController extends ChangeNotifier {
     String? playlistBody,
     String? audioUrl,
     bool isRemote = false,
+    bool localUserInitiated = false,
   }) async {
     await playPlaylist(
       [
@@ -264,6 +265,7 @@ class PlayerController extends ChangeNotifier {
           displayDurationMs: displayDurationMs,
           playlistBody: playlistBody,
           audioUrl: audioUrl,
+          localUserInitiated: localUserInitiated,
         ),
       ],
       0,
@@ -928,6 +930,7 @@ class PlayerController extends ChangeNotifier {
         audioUrl: item.audioUrl,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
         allowedPrivateOrigins: item.allowedPrivateOrigins,
+        localUserInitiated: item.localUserInitiated,
       );
       debugPrint('[player] toggling to direct playback at ${currentPos}ms');
     } else {
@@ -935,8 +938,12 @@ class PlayerController extends ChangeNotifier {
       final headers = item.headers ?? {};
       late final String loopbackUrl;
       try {
-        loopbackUrl =
-            await StreamProxyServer.instance.registerSession(item.url, headers);
+        loopbackUrl = await StreamProxyServer.instance.registerSession(
+          item.url,
+          headers,
+          allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
+          remoteOrigin: item.proxyRemoteOrigin,
+        );
       } catch (error) {
         debugPrint(
             '[player] proxy toggle unavailable (${error.runtimeType}); keeping direct playback');
@@ -947,8 +954,12 @@ class PlayerController extends ChangeNotifier {
       String? proxiedAudio = item.audioUrl;
       if (proxiedAudio != null && proxiedAudio.isNotEmpty) {
         try {
-          proxiedAudio = await StreamProxyServer.instance
-              .registerSession(proxiedAudio, headers);
+          proxiedAudio = await StreamProxyServer.instance.registerSession(
+            proxiedAudio,
+            headers,
+            allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
+            remoteOrigin: item.proxyRemoteOrigin,
+          );
         } catch (_) {
           // Keep direct audio URL; session= often works without proxy.
         }
@@ -988,6 +999,7 @@ class PlayerController extends ChangeNotifier {
         audioUrl: proxiedAudio,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
         allowedPrivateOrigins: item.allowedPrivateOrigins,
+        localUserInitiated: item.localUserInitiated,
       );
       debugPrint('[player] toggling to proxied playback at ${currentPos}ms');
     }

@@ -113,6 +113,10 @@ final class SenderServices implements Finalizable {
     Map<String, String> headers = const {},
     String? contentType,
     List<String>? allowedPrivateOrigins,
+
+    /// The URL came from a network peer, not a local user action: the proxy
+    /// must not derive DNS-based LAN trust for it.
+    bool remoteOrigin = false,
   }) async =>
       RegisteredMedia.fromJson(
         await _submitData('proxy_register_url', {
@@ -122,6 +126,7 @@ final class SenderServices implements Finalizable {
           if (contentType != null) 'content_type': contentType,
           if (allowedPrivateOrigins != null)
             'allowed_private_origins': allowedPrivateOrigins,
+          if (remoteOrigin) 'remote_origin': true,
         }),
       );
 

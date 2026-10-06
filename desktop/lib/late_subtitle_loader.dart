@@ -38,6 +38,7 @@ bool validLateSubtitleResource(SubtitleRequest resource) {
 Future<File> downloadLateSubtitle(
   SubtitleRequest resource, {
   List<String>? allowedPrivateOrigins,
+  bool remoteOrigin = false,
 }) async {
   if (!validLateSubtitleResource(resource)) {
     throw const FormatException('Invalid subtitle resource');
@@ -48,6 +49,7 @@ Future<File> downloadLateSubtitle(
     resource.url,
     resource.headers,
     allowedPrivateOrigins: allowedPrivateOrigins,
+    remoteOrigin: remoteOrigin,
   );
   final localUri = Uri.parse(localUrl);
   if (!proxy.ownsUrl(localUrl) ||

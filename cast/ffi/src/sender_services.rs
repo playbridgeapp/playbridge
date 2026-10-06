@@ -34,6 +34,10 @@ enum ServicesCommand {
         headers: HashMap<String, String>,
         content_type: Option<String>,
         allowed_private_origins: Option<Vec<String>>,
+        /// Set by the host for URLs received from a network peer. Such URLs never
+        /// get DNS-derived LAN trust. Defaults to a local user action.
+        #[serde(default)]
+        remote_origin: bool,
     },
     ProxyRegisterFile {
         request_id: Value,
@@ -281,21 +285,22 @@ async fn process_command(
             headers,
             content_type,
             allowed_private_origins,
+            remote_origin,
             ..
         } => match proxy.expose_interface(&host).await {
             Err(error) => Err(error),
             Ok(()) => match validate_page_headers(headers, allowed_private_origins.is_some()) {
                 Err(error) => Err(error),
                 Ok(headers) => {
-                    let media = match allowed_private_origins {
-                        Some(origins) => proxy.register_remote_with_policy(
+                    let media = match registration_trust(allowed_private_origins, remote_origin) {
+                        RegistrationTrust::Explicit(origins) => proxy.register_remote_with_policy(
                             &host,
                             url,
                             headers,
                             content_type.as_deref(),
                             origins,
                         ),
-                        None => {
+                        RegistrationTrust::NativeLocal => {
                             proxy
                                 .register_native_remote_with_content_type(
                                     &host,
@@ -435,6 +440,28 @@ async fn process_command(
     false
 }
 
+/// Which network authority a `proxy_register_url` command may receive.
+#[derive(Debug, PartialEq, Eq)]
+enum RegistrationTrust {
+    /// Exact page-style origins only (possibly none): no DNS-derived trust.
+    Explicit(Vec<String>),
+    /// Registration the local user started on this device: DNS-informed trust.
+    NativeLocal,
+}
+
+/// DNS-derived LAN trust is reachable only for local, non-page registrations.
+/// Remote-origin registrations without explicit origins get a public-only policy.
+fn registration_trust(
+    allowed_private_origins: Option<Vec<String>>,
+    remote_origin: bool,
+) -> RegistrationTrust {
+    match allowed_private_origins {
+        Some(origins) => RegistrationTrust::Explicit(origins),
+        None if remote_origin => RegistrationTrust::Explicit(Vec::new()),
+        None => RegistrationTrust::NativeLocal,
+    }
+}
+
 fn validate_page_headers(
     headers: HashMap<String, String>,
     page_controlled: bool,
@@ -568,9 +595,51 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        SENDER_SERVICES_ABI_VERSION, ServicesCommand, pb_sender_services_abi_version,
-        validate_page_headers,
+        RegistrationTrust, SENDER_SERVICES_ABI_VERSION, ServicesCommand,
+        pb_sender_services_abi_version, registration_trust, validate_page_headers,
     };
+
+    #[test]
+    fn dns_lan_trust_is_unreachable_for_remote_origin_registrations() {
+        assert_eq!(
+            registration_trust(None, false),
+            RegistrationTrust::NativeLocal
+        );
+        assert_eq!(
+            registration_trust(None, true),
+            RegistrationTrust::Explicit(Vec::new())
+        );
+        let origins = vec!["http://192.168.1.20:8080".to_string()];
+        for remote in [false, true] {
+            assert_eq!(
+                registration_trust(Some(origins.clone()), remote),
+                RegistrationTrust::Explicit(origins.clone())
+            );
+        }
+        let remote: ServicesCommand = serde_json::from_str(
+            r#"{"command":"proxy_register_url","request_id":"1","host":"127.0.0.1","url":"https://nas.example.com/v","remote_origin":true}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            remote,
+            ServicesCommand::ProxyRegisterUrl {
+                remote_origin: true,
+                allowed_private_origins: None,
+                ..
+            }
+        ));
+        let local: ServicesCommand = serde_json::from_str(
+            r#"{"command":"proxy_register_url","request_id":"1","host":"127.0.0.1","url":"https://nas.example.com/v"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            local,
+            ServicesCommand::ProxyRegisterUrl {
+                remote_origin: false,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn sender_services_abi_is_stable() {

@@ -114,13 +114,18 @@ retries release immediately. This is an abandonment backstop, not an absolute ca
 on active/live playback or pause duration. Transient Android renewal failures
 retry with capped backoff; expired/revoked grants are never revived.
 
-Native/admin local-media registration authorizes the selected local host.
-LAN hosts include same-host port redirects; loopback and localhost grants are
-the exact origin (scheme, host, and port) only, not every local service.
-Registration classifies literal private/loopback addresses and local name
-suffixes from the URL text. Native sender registration may also resolve the
-host once and, if every answer is private LAN, CGNAT (`100.64/10`), or
-loopback, trust that origin — HTTP `/register` and EPG do not. Explicit page
+Native/admin local-media registration trusts one origin, with scope by kind:
+a LAN IP-literal host the user chose (RFC1918, CGNAT `100.64/10`, ULA) is
+trusted host-level, so same-host port redirects work; a DNS-approved name is
+trusted for the exact origin (scheme, host, port) only, with every connection
+pinned to the IPs checked at registration (a later answer pointing elsewhere is
+refused); loopback and `localhost` are the exact origin only. Registration
+classifies literal private/loopback addresses and local name suffixes from the
+URL text. A native registration the local user started on this device may also
+resolve the host once (1.5 s budget, otherwise no LAN trust) and, if every
+answer is private LAN or CGNAT, or every answer is loopback, trust that origin;
+mixed answers get no trust. Remote-sender payloads (`remote_origin`), HTTP
+`/register` and EPG never get DNS-derived trust. Explicit page
 private-origin grants remain origin-specific. Policy-bound requests never use
 FFmpeg AVIO fallback, because FFmpeg would resolve and redirect outside the
 checked path. Headers containing cookies,

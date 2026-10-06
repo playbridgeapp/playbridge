@@ -47,8 +47,8 @@ class PlaybackRequestPreparer {
           url,
           headers,
           contentType: item.contentType,
-          allowedPrivateOrigins:
-              item.enforcePageNetworkPolicy ? item.allowedPrivateOrigins : null,
+          allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
+          remoteOrigin: item.proxyRemoteOrigin,
         );
       }
       final edlUrl = proxy.mpvDashUrl(manifestUrl);
@@ -78,8 +78,8 @@ class PlaybackRequestPreparer {
         url,
         headers,
         contentType: item.contentType,
-        allowedPrivateOrigins:
-            item.enforcePageNetworkPolicy ? item.allowedPrivateOrigins : null,
+        allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
+        remoteOrigin: item.proxyRemoteOrigin,
       );
       final subtitles = await _preparePageSubtitles(item, headers);
 
@@ -138,6 +138,7 @@ class PlaybackRequestPreparer {
         skipHistory: item.skipHistory,
         enforcePageNetworkPolicy: item.enforcePageNetworkPolicy,
         allowedPrivateOrigins: item.allowedPrivateOrigins,
+        localUserInitiated: item.localUserInitiated,
         bingeGroup: item.bingeGroup,
         season: item.season,
         episode: item.episode,

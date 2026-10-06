@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
 use bytes::Bytes;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
@@ -28,13 +28,19 @@ pub mod segment_cache;
 
 pub use segment_cache::{hls_media_segment_urls, PrefetchTarget, SegmentCache};
 
-/// Request-scoped network authority. Page grants are exact origins; native/admin
-/// local registrations may trust one LAN host, but loopback is exact-origin.
+/// Request-scoped network authority. Page grants are exact origins. Native/admin
+/// local registrations get one `trusted_origin`:
+/// - LAN IP-literal host the user chose: host-level (any port on that IP);
+/// - DNS-approved name (native local registration only): exact origin
+///   (scheme, host, port) with every connection pinned to the IPs checked at
+///   registration (`pinned_ips`);
+/// - loopback (literal, `localhost`, or DNS resolving only to loopback): exact origin.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct NetworkPolicy {
     allowed_private_origins: HashSet<String>,
-    /// Native/admin registration of a local server. LAN grants are host-level
-    /// (same-host port redirects). Loopback grants are the exact origin only.
+    /// Native/admin registration of a local server. Only a LAN IP-literal host is
+    /// trusted host-level (same-host port redirects); every other trusted origin,
+    /// DNS-approved or loopback, matches scheme, host and port exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     trusted_origin: Option<String>,
     #[serde(default)]
@@ -42,7 +48,15 @@ pub struct NetworkPolicy {
     /// Set when the trusted origin is loopback, or native DNS resolved only loopback.
     #[serde(default)]
     trusted_allows_loopback: bool,
+    /// IPs a DNS-approved `trusted_origin` resolved to at registration. When
+    /// non-empty, every later connection to that origin must resolve only to
+    /// these addresses, so DNS rebinding cannot retarget the trust.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pinned_ips: BTreeSet<IpAddr>,
 }
+
+/// Upper bound on the registration-time DNS lookup for native LAN approval.
+const NATIVE_DNS_APPROVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 impl NetworkPolicy {
     pub const MAX_PRIVATE_ORIGINS: usize = 16;
@@ -75,6 +89,7 @@ impl NetworkPolicy {
             trusted_origin: None,
             registered_media: false,
             trusted_allows_loopback: false,
+            pinned_ips: BTreeSet::new(),
         })
     }
 
@@ -93,11 +108,13 @@ impl NetworkPolicy {
             trusted_origin: local.then_some(origin),
             registered_media: true,
             trusted_allows_loopback: local && origin_host_is_loopback(&url),
+            pinned_ips: BTreeSet::new(),
         })
     }
 
-    /// Native async registration only: never HTTP `/register`, EPG or page grants.
-    /// Classify the first DNS answer set once; connection-time checks still apply.
+    /// Native async registration for registrations the local user started on this
+    /// device only: never HTTP `/register`, EPG, page grants or remote payloads.
+    /// Classifies the DNS answer set once and pins the trust to those IPs.
     pub(crate) async fn for_native_registered_media(value: &str) -> Result<Self, String> {
         let mut policy = Self::for_registered_media(value)?;
         let url = url::Url::parse(value).map_err(|_| "invalid media URL")?;
@@ -106,10 +123,11 @@ impl NetworkPolicy {
             return Ok(policy);
         }
         let port = url.port_or_known_default().ok_or("media URL has no port")?;
-        // No blocking resolver on Tokio executor threads. Slow/missing DNS leaves
-        // the restrictive text policy intact rather than granting LAN access.
+        // No blocking resolver on Tokio executor threads, and the caller is the
+        // serial FFI command loop, so wait briefly. Slow/missing DNS leaves the
+        // restrictive text policy intact rather than granting LAN access.
         if let Ok(Ok(addresses)) = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            NATIVE_DNS_APPROVAL_TIMEOUT,
             tokio::net::lookup_host((host, port)),
         )
         .await
@@ -119,22 +137,24 @@ impl NetworkPolicy {
         Ok(policy)
     }
 
+    /// Trust the exact origin only if every answer is loopback or every answer is
+    /// private LAN/CGNAT. Mixed answers are refused, and the checked IPs are pinned.
     fn approve_native_addresses(
         &mut self,
         url: &url::Url,
         addresses: &[SocketAddr],
     ) -> Result<(), String> {
-        if !addresses.is_empty()
-            && addresses.iter().all(|address| {
-                address.ip().is_loopback()
-                    || classify_address(address.ip()) == AddressClass::PrivateLan
-            })
-        {
-            let origin = normalized_origin(url)?;
-            self.allowed_private_origins.insert(origin.clone());
-            self.trusted_origin = Some(origin);
-            self.trusted_allows_loopback =
-                addresses.iter().any(|address| address.ip().is_loopback());
+        if addresses.is_empty() {
+            return Ok(());
+        }
+        let all_loopback = addresses.iter().all(|address| address.ip().is_loopback());
+        let all_lan = addresses
+            .iter()
+            .all(|address| classify_address(address.ip()) == AddressClass::PrivateLan);
+        if all_loopback || all_lan {
+            self.trusted_origin = Some(normalized_origin(url)?);
+            self.trusted_allows_loopback = all_loopback;
+            self.pinned_ips = addresses.iter().map(|address| address.ip()).collect();
         }
         Ok(())
     }
@@ -146,14 +166,23 @@ impl NetworkPolicy {
         let Ok(original) = url::Url::parse(origin) else {
             return false;
         };
-        if self.trusted_allows_loopback || origin_host_is_loopback(&original) {
-            normalized_origin(url).is_ok_and(|value| value == origin)
-        } else {
+        if original_host_is_lan_literal(&original) {
+            // LAN IP literal the user chose: any port on the same host.
             original.host_str().is_some_and(|host| {
                 url.host_str()
                     .is_some_and(|other| host.eq_ignore_ascii_case(other))
             })
+        } else {
+            normalized_origin(url).is_ok_and(|value| value == origin)
         }
+    }
+
+    /// Registration-time IPs that connections to `url` must stay within, if it
+    /// is the DNS-approved trusted origin.
+    pub(crate) fn pinned_ips_for(&self, url: &url::Url) -> Option<&BTreeSet<IpAddr>> {
+        let origin = self.trusted_origin.as_deref()?;
+        (!self.pinned_ips.is_empty() && normalized_origin(url).is_ok_and(|value| value == origin))
+            .then_some(&self.pinned_ips)
     }
 
     fn allows_loopback(&self, url: &url::Url) -> bool {
@@ -163,8 +192,13 @@ impl NetworkPolicy {
     fn cache_scope(&self) -> String {
         let mut origins: Vec<_> = self.allowed_private_origins.iter().collect();
         origins.sort();
-        serde_json::to_string(&(origins, &self.trusted_origin, self.trusted_allows_loopback))
-            .expect("string serialization")
+        serde_json::to_string(&(
+            origins,
+            &self.trusted_origin,
+            self.trusted_allows_loopback,
+            &self.pinned_ips,
+        ))
+        .expect("string serialization")
     }
 
     fn allows_private_url(&self, url: &url::Url) -> bool {
@@ -267,7 +301,7 @@ mod capability_policy_tests {
         assert!(policy.allowed_private_origins.is_empty());
     }
     #[test]
-    fn native_dns_classification_is_explicit_bounded_and_origin_scoped() {
+    fn native_dns_classification_is_explicit_bounded_and_exact_origin() {
         // Exercise the production classification without relying on external DNS.
         for name in ["nas.example.com", "media.plex.direct", "tail.example.com"] {
             let url = url::Url::parse(&format!("https://{name}/video.mp4")).unwrap();
@@ -284,12 +318,16 @@ mod capability_policy_tests {
                 )
                 .unwrap();
             assert!(native.allows_private_url(&url));
-            assert!(native.allows_private_url(
+            // DNS-approved trust is the exact origin, not the whole host.
+            assert!(!native.allows_private_url(
                 &url::Url::parse(&format!("http://{name}:9000/segment")).unwrap()
             ));
             assert!(!native
+                .allows_private_url(&url::Url::parse(&format!("http://{name}/segment")).unwrap()));
+            assert!(!native
                 .allows_private_url(&url::Url::parse("http://other.example.com/media").unwrap()));
             assert!(!native.allows_loopback(&url));
+            assert_eq!(native.pinned_ips_for(&url).map(|ips| ips.len()), Some(2));
             for addresses in [
                 vec![],
                 vec!["8.8.8.8:443".parse().unwrap()],
@@ -298,10 +336,16 @@ mod capability_policy_tests {
                     "8.8.8.8:443".parse().unwrap(),
                 ],
                 vec!["169.254.169.254:443".parse().unwrap()],
+                // Mixed loopback + LAN answers are refused outright.
+                vec![
+                    "127.0.0.1:443".parse().unwrap(),
+                    "192.168.1.20:443".parse().unwrap(),
+                ],
             ] {
                 let mut denied = restricted.clone();
                 denied.approve_native_addresses(&url, &addresses).unwrap();
                 assert!(denied.trusted_origin.is_none());
+                assert!(denied.pinned_ips.is_empty());
             }
             let mut loopback = restricted;
             loopback
@@ -311,6 +355,82 @@ mod capability_policy_tests {
             assert!(!loopback
                 .allows_loopback(&url::Url::parse(&format!("https://{name}:6379/media")).unwrap()));
         }
+    }
+
+    #[test]
+    fn lan_ip_literal_is_host_level_while_dns_and_loopback_are_exact() {
+        let literal =
+            NetworkPolicy::for_registered_media("http://192.168.1.10:8080/video.mp4").unwrap();
+        assert!(literal.pinned_ips.is_empty());
+        assert!(literal.allows_private_url(&url::Url::parse("http://192.168.1.10:9000/s").unwrap()));
+        assert!(
+            !literal.allows_private_url(&url::Url::parse("http://192.168.1.11:8080/s").unwrap())
+        );
+        let loopback =
+            NetworkPolicy::for_registered_media("http://127.0.0.1:8080/video.mp4").unwrap();
+        assert!(loopback.allows_loopback(&url::Url::parse("http://127.0.0.1:8080/s").unwrap()));
+        assert!(!loopback.allows_loopback(&url::Url::parse("http://127.0.0.1:6379/s").unwrap()));
+        // Local-looking names have no registration-time pin, so they stay exact-origin.
+        let named = NetworkPolicy::for_registered_media("http://nas.lan:8080/video.mp4").unwrap();
+        assert!(!named.allows_private_url(&url::Url::parse("http://nas.lan:9000/s").unwrap()));
+    }
+
+    #[tokio::test]
+    async fn dns_rebinding_to_an_unapproved_ip_is_rejected() {
+        let url = url::Url::parse("http://localhost:8080/video.mp4").unwrap();
+        let mut policy = NetworkPolicy::for_registered_media("http://example.test/").unwrap();
+        // Registration approved only 127.0.0.2; `localhost` now answers 127.0.0.1.
+        policy
+            .approve_native_addresses(&url, &["127.0.0.2:8080".parse().unwrap()])
+            .unwrap();
+        assert!(policy.allows_loopback(&url));
+        assert!(validate_http_destination(url.as_str(), Some(&policy))
+            .await
+            .is_err());
+        // Same hostname on another port is outside the exact-origin grant.
+        assert!(
+            validate_http_destination("http://localhost:6379/x", Some(&policy))
+                .await
+                .is_err()
+        );
+        // The pin accepts the addresses that were actually approved.
+        let mut approved = NetworkPolicy::for_registered_media("http://example.test/").unwrap();
+        approved
+            .approve_native_addresses(
+                &url,
+                &[
+                    "127.0.0.1:8080".parse().unwrap(),
+                    "[::1]:8080".parse().unwrap(),
+                ],
+            )
+            .unwrap();
+        assert!(validate_http_destination(url.as_str(), Some(&approved))
+            .await
+            .is_ok());
+    }
+
+    #[test]
+    fn pinned_ips_survive_token_serialization_and_partition_the_cache() {
+        let url = url::Url::parse("https://nas.example.com/v").unwrap();
+        let base = NetworkPolicy::for_registered_media(url.as_str()).unwrap();
+        let mut first = base.clone();
+        first
+            .approve_native_addresses(&url, &["192.168.1.20:443".parse().unwrap()])
+            .unwrap();
+        let mut second = base.clone();
+        second
+            .approve_native_addresses(&url, &["192.168.1.21:443".parse().unwrap()])
+            .unwrap();
+        assert_ne!(first.cache_scope(), second.cache_scope());
+        let restored: NetworkPolicy =
+            serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap();
+        assert_eq!(first, restored);
+        // Tokens minted before `pinned_ips` existed still deserialize.
+        let legacy: NetworkPolicy = serde_json::from_str(
+            r#"{"allowed_private_origins":[],"trusted_origin":"http://127.0.0.1:80","registered_media":true,"trusted_allows_loopback":true}"#,
+        )
+        .unwrap();
+        assert!(legacy.pinned_ips.is_empty());
     }
 
     #[tokio::test]
@@ -644,6 +764,14 @@ async fn resolve_destination(
     {
         return Err("local-network media permission is required".into());
     }
+    if let Some(pinned) = network_policy.and_then(|policy| policy.pinned_ips_for(&url)) {
+        if addresses
+            .iter()
+            .any(|address| !pinned.contains(&address.ip()))
+        {
+            return Err("media host resolved outside the approved addresses".into());
+        }
+    }
     Ok(addresses)
 }
 
@@ -737,6 +865,14 @@ fn host_text_looks_local(host: &str) -> bool {
                 || host.ends_with(".lan")
                 || !host.contains('.')
         })
+}
+
+fn original_host_is_lan_literal(url: &url::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.trim_matches(['[', ']'])
+            .parse::<IpAddr>()
+            .is_ok_and(|ip| classify_address(ip) == AddressClass::PrivateLan)
+    })
 }
 
 fn origin_host_is_loopback(url: &url::Url) -> bool {
