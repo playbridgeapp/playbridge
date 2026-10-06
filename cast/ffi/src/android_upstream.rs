@@ -14,7 +14,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::os::raw::c_int;
 use std::ptr;
 use std::sync::{Arc, Mutex};
-use stream_proxy_rust::{PbUpstreamCallbacks, set_upstream_callbacks};
+use stream_proxy_rust::{PbUpstreamCheckedCallbacks, set_checked_upstream_callbacks};
 
 struct HostBridge {
     jvm: JavaVM,
@@ -44,7 +44,7 @@ pub fn install_from_env(env: &mut Env) -> Result<(), String> {
         *guard = Some(Arc::new(HostBridge { jvm, class: global }));
     }
 
-    set_upstream_callbacks(PbUpstreamCallbacks {
+    set_checked_upstream_callbacks(PbUpstreamCheckedCallbacks {
         open: trampoline_open,
         read: trampoline_read,
         close: trampoline_close,
@@ -77,6 +77,7 @@ fn c_string_raw(s: impl Into<Vec<u8>>) -> *mut c_char {
 unsafe extern "C" fn trampoline_open(
     url: *const c_char,
     request_headers_json: *const c_char,
+    proxy_json: *const c_char,
     out_status: *mut c_int,
     out_response_headers_json: *mut *mut c_char,
     out_error: *mut *mut c_char,
@@ -95,18 +96,33 @@ unsafe extern "C" fn trampoline_open(
                 .to_owned()
         };
 
+        let proxy = if proxy_json.is_null() {
+            String::new()
+        } else {
+            unsafe { CStr::from_ptr(proxy_json) }
+                .to_str()
+                .map_err(|_| "invalid gateway metadata")?
+                .to_owned()
+        };
         let host = host_bridge()?;
         let json = host
             .jvm
             .attach_current_thread(|env| -> Result<String, jni::errors::Error> {
                 let j_url = env.new_string(&url)?;
                 let j_headers = env.new_string(&headers)?;
+                let j_proxy = env.new_string(&proxy)?;
                 // Pass Global class directly (Desc impl); avoid as_ref ambiguity.
                 let ret = env.call_static_method(
                     &host.class,
-                    jni_str!("open"),
-                    jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"),
-                    &[JValue::Object(&j_url), JValue::Object(&j_headers)],
+                    jni_str!("openChecked"),
+                    jni_sig!(
+                        "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"
+                    ),
+                    &[
+                        JValue::Object(&j_url),
+                        JValue::Object(&j_headers),
+                        JValue::Object(&j_proxy),
+                    ],
                 )?;
                 let jobj: JObject = ret.l()?;
                 if jobj.is_null() {

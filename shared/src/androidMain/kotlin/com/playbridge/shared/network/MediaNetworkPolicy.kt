@@ -164,9 +164,10 @@ object MediaNetworkPolicy {
                 when {
                     first == 10 ||
                         (first == 172 && second in 16..31) ||
-                        (first == 192 && second == 168) -> AddressClass.PRIVATE_LAN
+                        (first == 192 && second == 168) ||
+                        // CGNAT / Tailscale 100.64.0.0/10: same as Rust classify_address.
+                        (first == 100 && second in 64..127) -> AddressClass.PRIVATE_LAN
                     first == 0 || first >= 224 ||
-                        (first == 100 && second in 64..127) ||
                         (first == 192 && second == 0) ||
                         (first == 198 && second in 18..19) ||
                         (first == 198 && second == 51 && third == 100) ||

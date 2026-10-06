@@ -83,7 +83,69 @@ pub struct PbUpstreamCallbacks {
 unsafe impl Send for PbUpstreamCallbacks {}
 unsafe impl Sync for PbUpstreamCallbacks {}
 
-static CALLBACKS: Mutex<Option<PbUpstreamCallbacks>> = Mutex::new(None);
+/// Additive checked transport contract; legacy ABI v1 is unchanged.
+/// proxy_json is null for explicitly trusted calls, otherwise an authenticated
+/// loopback gateway that the native stack MUST use for HTTP and HTTPS.
+pub type UpstreamCheckedOpenFn = unsafe extern "C" fn(
+    url: *const c_char,
+    request_headers_json: *const c_char,
+    proxy_json: *const c_char,
+    out_status: *mut c_int,
+    out_response_headers_json: *mut *mut c_char,
+    out_error: *mut *mut c_char,
+) -> i64;
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PbUpstreamCheckedCallbacks {
+    pub open: UpstreamCheckedOpenFn,
+    pub read: UpstreamReadFn,
+    pub close: UpstreamCloseFn,
+    pub free_string: UpstreamFreeStringFn,
+}
+#[derive(Clone, Copy)]
+struct CallbackRegistration {
+    base: PbUpstreamCallbacks,
+    checked: Option<UpstreamCheckedOpenFn>,
+}
+static CALLBACKS: Mutex<Option<CallbackRegistration>> = Mutex::new(None);
+
+unsafe extern "C" fn legacy_disabled(
+    _: *const c_char,
+    _: *const c_char,
+    _: *mut c_int,
+    _: *mut *mut c_char,
+    _: *mut *mut c_char,
+) -> i64 {
+    0
+}
+
+pub fn set_checked_upstream_callbacks(cb: PbUpstreamCheckedCallbacks) {
+    *CALLBACKS.lock().expect("upstream callbacks mutex") = Some(CallbackRegistration {
+        base: PbUpstreamCallbacks {
+            open: legacy_disabled,
+            read: cb.read,
+            close: cb.close,
+            free_string: cb.free_string,
+        },
+        checked: Some(cb.open),
+    });
+}
+/// Install the additive checked API. Function pointers must remain valid for the process lifetime.
+/// # Safety
+/// Callbacks must honor the supplied gateway; directly resolving the URL violates this contract.
+#[no_mangle]
+pub unsafe extern "C" fn pb_proxy_upstream_set_checked_callbacks(cb: PbUpstreamCheckedCallbacks) {
+    set_checked_upstream_callbacks(cb);
+}
+#[no_mangle]
+pub extern "C" fn pb_proxy_upstream_checked_callbacks_registered() -> c_int {
+    i32::from(
+        CALLBACKS
+            .lock()
+            .expect("upstream callbacks mutex")
+            .is_some_and(|cb| cb.checked.is_some()),
+    )
+}
 
 fn upstream_semaphore() -> Arc<Semaphore> {
     static SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
@@ -92,7 +154,10 @@ fn upstream_semaphore() -> Arc<Semaphore> {
 
 /// Register host upstream I/O callbacks (replaces any previous registration).
 pub fn set_upstream_callbacks(callbacks: PbUpstreamCallbacks) {
-    *CALLBACKS.lock().expect("upstream callbacks mutex") = Some(callbacks);
+    *CALLBACKS.lock().expect("upstream callbacks mutex") = Some(CallbackRegistration {
+        base: callbacks,
+        checked: None,
+    });
 }
 
 /// Clear host callbacks (tests / shutdown).
@@ -109,7 +174,7 @@ pub fn upstream_callbacks_registered() -> bool {
 }
 
 /// Copy callbacks under the registration lock, then release it before any I/O.
-fn callbacks() -> Result<PbUpstreamCallbacks, String> {
+fn callbacks() -> Result<CallbackRegistration, String> {
     let guard = CALLBACKS.lock().expect("upstream callbacks mutex");
     guard.as_ref().copied().ok_or_else(|| {
         "JNI upstream callbacks are not registered (host must call \
@@ -212,6 +277,7 @@ struct OpenedUpstream {
     headers: HeaderMap,
     /// Held until the body is fully read / cancelled so concurrency stays bounded.
     _permit: OwnedSemaphorePermit,
+    _proxy: Option<super::pinned_proxy::PinnedProxy>,
 }
 
 impl UpstreamFetcher for JniUpstreamFetcher {
@@ -225,23 +291,34 @@ impl UpstreamFetcher for JniUpstreamFetcher {
         let headers = headers.clone();
         Box::pin(async move {
             let initial = url::Url::parse(&url).map_err(|_| "invalid upstream URL".to_string())?;
-            let is_mp4 = initial
-                .path()
-                .trim_end_matches('/')
-                .to_ascii_lowercase()
-                .ends_with(".mp4");
             let mut current = initial;
             for hop in 0..=10 {
                 validate_http_destination(current.as_str(), network_policy.as_ref()).await?;
                 let scoped = super::redirect_headers(&headers, &url, current.as_str());
-                let response = connect_via_host(current.to_string(), scoped).await?;
+                let gateway = match network_policy.as_ref() {
+                    Some(policy) => {
+                        if callbacks()?.checked.is_none() {
+                            return Err(
+                                "policy-bound origins require checked native callbacks".into()
+                            );
+                        }
+                        Some(
+                            super::pinned_proxy::PinnedProxy::start(current.as_str(), policy)
+                                .await?,
+                        )
+                    }
+                    None => None,
+                };
+                let mut response = connect_via_host(current.to_string(), scoped, gateway).await?;
                 if !response.status.is_redirection() {
+                    response.headers.insert(
+                        super::EFFECTIVE_URL_HEADER,
+                        current
+                            .as_str()
+                            .parse()
+                            .map_err(|_| "invalid effective upstream URL")?,
+                    );
                     return Ok(response);
-                }
-                // ABI v1 cannot report the final playlist URL for relative HLS
-                // rewriting. Limit this addition to progressive MP4 resources.
-                if !is_mp4 {
-                    return Err("redirected playlists require effective-URL support".into());
                 }
                 if hop == 10 {
                     return Err("upstream redirect limit exceeded".into());
@@ -264,6 +341,7 @@ impl UpstreamFetcher for JniUpstreamFetcher {
 async fn connect_via_host(
     url: String,
     headers: HashMap<String, String>,
+    gateway: Option<super::pinned_proxy::PinnedProxy>,
 ) -> Result<UpstreamResponse, String> {
     let headers_json = serde_json::to_string(&headers).map_err(|e| format!("headers json: {e}"))?;
 
@@ -276,19 +354,24 @@ async fn connect_via_host(
     // If this future is cancelled while open is in-flight, the JoinHandle is
     // dropped; when the blocking task finishes, `OpenedUpstream` is dropped and
     // `HandleGuard` closes the host handle.
-    let opened = tokio::task::spawn_blocking(move || open_blocking(&url, &headers_json, permit))
-        .await
-        .map_err(|e| format!("upstream open join: {e}"))??;
+    let proxy_json = gateway.as_ref().map(|proxy| proxy.json()).transpose()?;
+    let opened = tokio::task::spawn_blocking(move || {
+        open_blocking(&url, &headers_json, proxy_json.as_deref(), permit, gateway)
+    })
+    .await
+    .map_err(|e| format!("upstream open join: {e}"))??;
 
     let (tx, rx) = mpsc::channel::<Result<Bytes, std::io::Error>>(READ_QUEUE_CHUNKS);
     let guard = opened.guard;
     let permit = opened._permit;
     let status = opened.status;
     let headers = opened.headers;
+    let gateway = opened._proxy;
 
     tokio::task::spawn_blocking(move || {
         read_loop(guard, tx);
         // Release concurrency slot after close (HandleGuard Drop / close_now).
+        drop(gateway);
         drop(permit);
     });
 
@@ -305,10 +388,17 @@ async fn connect_via_host(
 fn open_blocking(
     url: &str,
     headers_json: &str,
+    proxy_json: Option<&str>,
     permit: OwnedSemaphorePermit,
+    gateway: Option<super::pinned_proxy::PinnedProxy>,
 ) -> Result<OpenedUpstream, String> {
     // Copy callbacks, then release the registration mutex before any network I/O.
-    let cb = callbacks()?;
+    let registration = callbacks()?;
+    let cb = registration.base;
+    let c_proxy = proxy_json
+        .map(CString::new)
+        .transpose()
+        .map_err(|_| "invalid gateway metadata")?;
 
     let c_url = CString::new(url).map_err(|_| "url contains NUL".to_string())?;
     let c_headers =
@@ -319,13 +409,27 @@ fn open_blocking(
     let mut error_ptr: *mut c_char = ptr::null_mut();
 
     let handle = unsafe {
-        (cb.open)(
-            c_url.as_ptr(),
-            c_headers.as_ptr(),
-            &mut status,
-            &mut headers_ptr,
-            &mut error_ptr,
-        )
+        if let Some(open) = registration.checked {
+            open(
+                c_url.as_ptr(),
+                c_headers.as_ptr(),
+                c_proxy.as_ref().map_or(ptr::null(), |s| s.as_ptr()),
+                &mut status,
+                &mut headers_ptr,
+                &mut error_ptr,
+            )
+        } else {
+            if proxy_json.is_some() {
+                return Err("native transport cannot bind checked addresses".into());
+            }
+            (cb.open)(
+                c_url.as_ptr(),
+                c_headers.as_ptr(),
+                &mut status,
+                &mut headers_ptr,
+                &mut error_ptr,
+            )
+        }
     };
 
     if handle <= 0 {
@@ -347,6 +451,7 @@ fn open_blocking(
         status,
         headers,
         _permit: permit,
+        _proxy: gateway,
     })
 }
 
@@ -559,9 +664,26 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn test_checked_open(
+        url: *const c_char,
+        headers: *const c_char,
+        proxy: *const c_char,
+        status: *mut c_int,
+        returned: *mut *mut c_char,
+        error: *mut *mut c_char,
+    ) -> i64 {
+        if !proxy.is_null() {
+            let metadata: serde_json::Value =
+                serde_json::from_str(unsafe { CStr::from_ptr(proxy) }.to_str().unwrap()).unwrap();
+            assert_eq!(metadata["host"], "127.0.0.1");
+            assert!(metadata["password"].as_str().unwrap().len() >= 32);
+        }
+        unsafe { test_open(url, headers, status, returned, error) }
+    }
+
     fn install_test_callbacks() {
-        set_upstream_callbacks(PbUpstreamCallbacks {
-            open: test_open,
+        set_checked_upstream_callbacks(PbUpstreamCheckedCallbacks {
+            open: test_checked_open,
             read: test_read,
             close: test_close,
             free_string: test_free_string,

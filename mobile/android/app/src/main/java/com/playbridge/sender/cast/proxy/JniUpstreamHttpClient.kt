@@ -3,6 +3,15 @@ package com.playbridge.sender.cast.proxy
 import android.util.Log
 import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import org.json.JSONObject
+import okhttp3.Call
+import okhttp3.ConnectionPool
+import okhttp3.Credentials
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.util.concurrent.TimeUnit
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
@@ -39,8 +48,10 @@ internal object JniUpstreamHttpClient {
     }
 
     private data class OpenHandle(
-        val connection: HttpURLConnection,
+        val connection: HttpURLConnection? = null,
         val input: InputStream?,
+        val response: Response? = null,
+        val call: Call? = null,
     )
 
     /**
@@ -58,6 +69,38 @@ internal object JniUpstreamHttpClient {
             warn("open failed: ${e.message}")
             errorJson(e.message ?: "open failed")
         }
+    }
+
+    /** Checked origins use a Rust-owned authenticated gateway; TLS still verifies the URL hostname. */
+    @JvmStatic
+    fun openChecked(url: String, requestHeadersJson: String, proxyJson: String): String = try {
+        val gateway = proxyJson.takeIf { it.isNotBlank() }?.let(::checkedClient)
+        openWithRetry(url, parseHeadersJson(requestHeadersJson), gateway)
+    } catch (_: Exception) {
+        errorJson("Checked native origin unavailable")
+    }
+
+    private fun checkedClient(json: String): OkHttpClient {
+        val metadata = JSONObject(json)
+        require(metadata.getString("host") == "127.0.0.1")
+        val port = metadata.getInt("port")
+        require(port in 1..65535)
+        val username = metadata.getString("username")
+        val password = metadata.getString("password")
+        require(username == "playbridge" && password.length in 32..128)
+        val credential = Credentials.basic(username, password)
+        return OkHttpClient.Builder()
+            .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port)))
+            .proxyAuthenticator { _, response ->
+                if (response.request.header("Proxy-Authorization") != null) null
+                else response.request.newBuilder().header("Proxy-Authorization", credential).build()
+            }
+            .connectionPool(ConnectionPool(0, 1, TimeUnit.SECONDS))
+            .followRedirects(false).followSslRedirects(false)
+            .retryOnConnectionFailure(false)
+            .connectTimeout(CONNECT_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .readTimeout(READ_TIMEOUT_MS.toLong(), TimeUnit.MILLISECONDS)
+            .build()
     }
 
     /**
@@ -88,10 +131,12 @@ internal object JniUpstreamHttpClient {
     fun close(handle: Long) {
         val open = openHandles.remove(handle) ?: return
         runCatching { open.input?.close() }
-        runCatching { open.connection.disconnect() }
+        runCatching { open.response?.close() }
+        runCatching { open.call?.cancel() }
+        runCatching { open.connection?.disconnect() }
     }
 
-    private fun openWithRetry(url: String, headers: Map<String, String>): String {
+    private fun openWithRetry(url: String, headers: Map<String, String>, gateway: OkHttpClient? = null): String {
         val filtered = filterHeaders(headers)
         val requestId = nextRequestId.getAndIncrement()
         val resourceType = resourceTypeForLog(url)
@@ -113,7 +158,7 @@ internal object JniUpstreamHttpClient {
             return if (outcome.ok) outcome.json else errorJson(outcome.error ?: "HTTP ${outcome.status}")
         }
 
-        val first = connectOnce(url, filtered)
+        val first = connectOnce(url, filtered, gateway)
         if (first.ok || first.status !in RETRYABLE_STATUSES) return result("captured", first)
 
         // A captured Origin with no Referer may be insufficient for a guarded
@@ -121,13 +166,13 @@ internal object JniUpstreamHttpClient {
         if (first.status == 403) {
             originRefererHeaders(filtered)?.let { withReferer ->
                 warn("request=$requestId resource=$resourceType strategy=captured status=403; retrying=origin_referer")
-                val retried = connectOnce(url, withReferer)
+                val retried = connectOnce(url, withReferer, gateway)
                 if (retried.ok) return result("origin_referer", retried)
                 warn("request=$requestId resource=$resourceType strategy=origin_referer status=${retried.status}; retrying=minimal")
             }
         }
 
-        val minimal = connectOnce(url, minimalHeaders(filtered))
+        val minimal = connectOnce(url, minimalHeaders(filtered), gateway)
         return result("minimal", minimal)
     }
 
@@ -161,9 +206,11 @@ internal object JniUpstreamHttpClient {
         val error: String? = null,
     )
 
-    private fun connectOnce(url: String, headers: Map<String, String>): ConnectOutcome {
+    private fun connectOnce(url: String, headers: Map<String, String>, gateway: OkHttpClient? = null): ConnectOutcome {
+        if (gateway != null) return connectChecked(url, headers, gateway)
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
+            // Rust validates each redirect destination and strips cross-origin credentials.
+            instanceFollowRedirects = false
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             requestMethod = "GET"
@@ -197,7 +244,7 @@ internal object JniUpstreamHttpClient {
         }
 
         // Accept success and 206; still open body for odd HLS-ish 2xx already covered.
-        if (code !in 200..299 && code != 206) {
+        if (code !in 200..399) {
             // Drain/close error stream; caller may retry.
             runCatching { stream?.close() }
             conn.disconnect()
@@ -215,6 +262,7 @@ internal object JniUpstreamHttpClient {
         conn.contentType?.let { respHeaders.put("content-type", it) }
         val cl = conn.contentLengthLong
         if (cl >= 0) respHeaders.put("content-length", cl.toString())
+        conn.getHeaderField("Location")?.let { respHeaders.put("location", it) }
         conn.getHeaderField("Content-Range")?.let { respHeaders.put("content-range", it) }
         conn.getHeaderField("Accept-Ranges")?.let { respHeaders.put("accept-ranges", it) }
         // Cache policy for stream-proxy segment cache (no-store / max-age / Vary).
@@ -232,6 +280,32 @@ internal object JniUpstreamHttpClient {
         return ConnectOutcome(ok = true, json = out.toString(), status = code)
     }
 
+    private fun connectChecked(url: String, headers: Map<String, String>, client: OkHttpClient): ConnectOutcome {
+        val builder = Request.Builder().url(url).get()
+        headers.forEach { (name, value) -> builder.header(name, value) }
+        if (headers.keys.none { it.equals("User-Agent", true) }) builder.header("User-Agent", DEFAULT_UA)
+        if (headers.keys.none { it.equals("Accept", true) }) builder.header("Accept", "*/*")
+        builder.header("Accept-Encoding", "identity")
+        val call = client.newCall(builder.build())
+        val response = try { call.execute() } catch (_: Exception) {
+            call.cancel()
+            return ConnectOutcome(false, error = "Native origin connection failed")
+        }
+        val status = response.code
+        if (status !in 200..399) {
+            response.close()
+            return ConnectOutcome(false, status = status, error = "HTTP $status")
+        }
+        val handle = nextHandle.getAndIncrement()
+        openHandles[handle] = OpenHandle(input = response.body?.byteStream(), response = response, call = call)
+        val returnedHeaders = JSONObject()
+        for (name in listOf("content-type", "content-length", "content-range", "accept-ranges", "location", "content-encoding", "cache-control", "vary", "expires", "age", "date")) {
+            response.header(name)?.let { returnedHeaders.put(name, it) }
+        }
+        return ConnectOutcome(true, JSONObject().put("ok", true).put("handle", handle)
+            .put("status", status).put("headers", returnedHeaders).toString(), status)
+    }
+
     /** Drop hop-by-hop / browser-context headers (same policy as LocalProxyServer). */
     internal fun filterHeaders(headers: Map<String, String>): Map<String, String> =
         headers.filterKeys { k ->
@@ -239,6 +313,8 @@ internal object JniUpstreamHttpClient {
             !lk.startsWith("sec-fetch") &&
                 !lk.startsWith("sec-ch") &&
                 lk != "host" &&
+                lk != "proxy-authorization" &&
+                lk != "proxy-connection" &&
                 lk != "accept-encoding" &&
                 lk != "connection" &&
                 lk != "content-length" &&

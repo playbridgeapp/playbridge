@@ -1,4 +1,5 @@
 import Foundation
+import CFNetwork
 
 #if canImport(PlayBridgeCastCore)
 import PlayBridgeCastCore
@@ -27,9 +28,9 @@ enum AppleProxyUpstream {
     static func install() throws {
         let version = pb_proxy_upstream_abi_version()
         guard version == 1 else { throw SetupError.unsupportedABI(version) }
-        pb_proxy_upstream_set_callbacks(PbUpstreamCallbacks(
-            open: { url, headers, status, responseHeaders, error in
-                AppleProxyUpstream.open(url, headers, status, responseHeaders, error)
+        pb_proxy_upstream_set_checked_callbacks(PbUpstreamCheckedCallbacks(
+            open: { url, headers, proxy, status, responseHeaders, error in
+                AppleProxyUpstream.open(url, headers, proxy, status, responseHeaders, error)
             },
             read: { handle, bytes, count, error in
                 error?.pointee = nil
@@ -51,7 +52,7 @@ enum AppleProxyUpstream {
             },
             free_string: { pointer in free(pointer) }
         ))
-        guard pb_proxy_upstream_callbacks_registered() == 1 else {
+        guard pb_proxy_upstream_checked_callbacks_registered() == 1 else {
             throw SetupError.registrationFailed
         }
     }
@@ -59,6 +60,7 @@ enum AppleProxyUpstream {
     private static func open(
         _ urlPointer: UnsafePointer<CChar>?,
         _ headersPointer: UnsafePointer<CChar>?,
+        _ proxyPointer: UnsafePointer<CChar>?,
         _ status: UnsafeMutablePointer<Int32>?,
         _ responseHeaders: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
         _ error: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
@@ -70,6 +72,16 @@ enum AppleProxyUpstream {
               url.host != nil else {
             error?.pointee = strdup("Invalid upstream HTTP URL")
             return 0
+        }
+        var gateway: Gateway?
+        if let proxyPointer {
+            guard let decoded = try? JSONDecoder().decode(Gateway.self, from: Data(String(cString: proxyPointer).utf8)),
+                  decoded.host == "127.0.0.1", (1...65535).contains(decoded.port),
+                  decoded.username == "playbridge", (32...128).contains(decoded.password.count) else {
+                error?.pointee = strdup("Invalid checked origin gateway")
+                return 0
+            }
+            gateway = decoded
         }
         var headers: [String: String] = [:]
         if let headersPointer {
@@ -83,12 +95,16 @@ enum AppleProxyUpstream {
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         for (name, value) in headers {
             // URLSession owns transport framing and the authority for redirects.
-            guard !["host", "connection", "content-length", "transfer-encoding"].contains(name.lowercased()) else { continue }
+            guard !["host", "connection", "content-length", "transfer-encoding", "proxy-authorization", "proxy-connection"].contains(name.lowercased()) else { continue }
             request.setValue(value, forHTTPHeaderField: name)
         }
         // Avoid compressed-length versus decompressed-body mismatches.
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-        let response = Response(request: request)
+        if let gateway, url.scheme == "http" {
+            let credentials = Data("\(gateway.username):\(gateway.password)".utf8).base64EncodedString()
+            request.setValue("Basic \(credentials)", forHTTPHeaderField: "Proxy-Authorization")
+        }
+        let response = Response(request: request, gateway: gateway)
         guard let metadata = response.waitForResponse() else {
             error?.pointee = strdup(response.failureMessage)
             response.close()
@@ -114,6 +130,13 @@ enum AppleProxyUpstream {
         return handle
     }
 
+    private struct Gateway: Decodable {
+        let host: String
+        let port: Int
+        let username: String
+        let password: String
+    }
+
     private final class Response: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         struct Metadata {
             let statusCode: Int
@@ -130,9 +153,22 @@ enum AppleProxyUpstream {
         private var session: URLSession!
         private var task: URLSessionDataTask!
 
-        init(request: URLRequest) {
+        private let gateway: Gateway?
+
+        init(request: URLRequest, gateway: Gateway?) {
+            self.gateway = gateway
             super.init()
             let configuration = URLSessionConfiguration.ephemeral
+            // URLSession retains original-host TLS/SNI; only TCP routing changes.
+            if let gateway {
+                configuration.connectionProxyDictionary = [
+                    "HTTPEnable": 1, "HTTPProxy": gateway.host, "HTTPPort": gateway.port,
+                    "HTTPSEnable": 1, "HTTPSProxy": gateway.host, "HTTPSPort": gateway.port,
+                    "ExceptionsList": [String](), "ExcludeSimpleHostnames": 0,
+                    kCFProxyUsernameKey as String: gateway.username,
+                    kCFProxyPasswordKey as String: gateway.password,
+                ]
+            } else { configuration.connectionProxyDictionary = [:] }
             configuration.urlCache = nil
             configuration.httpCookieStorage = nil
             configuration.urlCredentialStorage = nil
@@ -256,6 +292,19 @@ enum AppleProxyUpstream {
                 buffer.append(data.subdata(in: offset..<(offset + length)))
                 offset += length
                 condition.broadcast()
+            }
+        }
+
+        func urlSession(_ session: URLSession, task: URLSessionTask,
+                        didReceive challenge: URLAuthenticationChallenge,
+                        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+            let space = challenge.protectionSpace
+            if let gateway, space.isProxy(), space.host == gateway.host, space.port == gateway.port,
+               space.authenticationMethod == NSURLAuthenticationMethodHTTPBasic,
+               challenge.previousFailureCount == 0 {
+                completionHandler(.useCredential, URLCredential(user: gateway.username, password: gateway.password, persistence: .none))
+            } else {
+                completionHandler(.performDefaultHandling, nil)
             }
         }
 

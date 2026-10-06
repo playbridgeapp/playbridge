@@ -97,6 +97,21 @@ typedef struct PbUpstreamCallbacks {
 
 uint32_t pb_proxy_upstream_abi_version(void);
 void pb_proxy_upstream_set_callbacks(PbUpstreamCallbacks callbacks);
+
+/* Additive policy-bound API. Native HTTP/TLS MUST use the supplied authenticated
+ * loopback HTTP proxy (including CONNECT for HTTPS), not re-resolve the URL.
+ * proxy_json: {host:"127.0.0.1",port:N,username,password}; NULL only for trusted calls.
+ * Strings/handles retain the same ownership rules as ABI v1. No v1 layout change. */
+typedef int64_t (*PbUpstreamCheckedOpenFn)(const char *url, const char *request_headers_json,
+    const char *proxy_json, int32_t *out_status, char **out_response_headers_json, char **out_error);
+typedef struct PbUpstreamCheckedCallbacks {
+    PbUpstreamCheckedOpenFn open;
+    pb_proxy_upstream_read_fn read;
+    pb_proxy_upstream_close_fn close;
+    pb_proxy_upstream_free_string_fn free_string;
+} PbUpstreamCheckedCallbacks;
+void pb_proxy_upstream_set_checked_callbacks(PbUpstreamCheckedCallbacks callbacks);
+int32_t pb_proxy_upstream_checked_callbacks_registered(void);
 void pb_proxy_upstream_clear_callbacks(void);
 int32_t pb_proxy_upstream_callbacks_registered(void);
 

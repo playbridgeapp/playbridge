@@ -270,6 +270,9 @@ async fn prepare_json_playlist(
         Some(server) => Some(primary_lan_host(server.local_addr().port())?),
         None => None,
     };
+    if let (Some(server), Some(host)) = (server.as_ref(), host.as_ref()) {
+        server.expose_interface(host).await?;
+    }
     for item in items {
         let url = item["url"]
             .as_str()
@@ -389,6 +392,7 @@ async fn prepare_queue_item_value(
     }
     let server = proxy_server.as_ref().expect("queue proxy exists");
     let host = primary_lan_host(server.local_addr().port())?;
+    server.expose_interface(&host).await?;
     let content_type = item
         .get("contentType")
         .and_then(Value::as_str)
@@ -2053,6 +2057,7 @@ pub(crate) async fn run_dashboard_cast(
     let (media_url, proxy_server) = if resolved_path.is_file() {
         let server = ProxyServer::start(ProxyServerConfig::default()).await?;
         let host = primary_lan_host(server.local_addr().port())?;
+        server.expose_interface(&host).await?;
         let media =
             server.register_file(&host, resolved_path, None, Duration::from_secs(6 * 60 * 60))?;
         (media.url, Some(server))
@@ -2199,6 +2204,7 @@ pub(crate) async fn run_dashboard_browser_cast(
 
     let proxy = ProxyServer::start(ProxyServerConfig::default()).await?;
     let proxy_host = primary_lan_host(proxy.local_addr().port())?;
+    proxy.expose_interface(&proxy_host).await?;
     let path = resolve_media_path(&media_target);
     let media_url = if path.is_file() {
         proxy
@@ -2206,7 +2212,13 @@ pub(crate) async fn run_dashboard_browser_cast(
             .url
     } else {
         proxy
-            .register_remote(&proxy_host, &media_target, HashMap::new())?
+            .register_native_remote_with_content_type(
+                &proxy_host,
+                &media_target,
+                HashMap::new(),
+                None,
+            )
+            .await?
             .url
     };
     let mut browser_events = service.subscribe();

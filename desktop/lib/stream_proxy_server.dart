@@ -1,6 +1,17 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:playbridge_cast_core/playbridge_cast_core.dart';
+
+class StreamProxyLease {
+  StreamProxyLease(this._release);
+  void Function()? _release;
+  void close() {
+    final release = _release;
+    _release = null;
+    release?.call();
+  }
+}
 
 class StreamProxyServer {
   static final StreamProxyServer instance = StreamProxyServer._();
@@ -10,6 +21,93 @@ class StreamProxyServer {
   SenderServices? _services;
   StreamSubscription<Map<String, Object?>>? _eventSubscription;
   int? _port;
+  final Set<String> _ownedIds = {};
+  final Map<String, String> _filePaths = {};
+  final Map<String, int> _leaseReferences = {};
+  Timer? _leaseTimer;
+
+  String? _idFor(String value) {
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        uri.port != _port ||
+        uri.pathSegments.length != 3 ||
+        !const {'s', 'media'}.contains(uri.pathSegments.first)) {
+      return null;
+    }
+    final id = uri.pathSegments[1];
+    return _ownedIds.contains(id) ? id : null;
+  }
+
+  /// Retain whole playback bundles (video/audio/subtitles and local manifests).
+  /// Only native registrations created by this host can be renewed.
+  Future<StreamProxyLease> retainUrls(Iterable<String> values) async {
+    final owner = _services;
+    final ids = <String>{};
+    for (final value in values) {
+      final id = _idFor(value);
+      if (id != null) ids.add(id);
+      final uri = Uri.tryParse(value);
+      final path = _filePaths[id] ??
+          (uri?.scheme == 'file'
+              ? uri!.toFilePath()
+              : value.startsWith('/')
+                  ? value
+                  : null);
+      if (path == null) continue;
+      try {
+        final file = File(path);
+        if (await file.length() > 4 * 1024 * 1024) continue;
+        final text = await file.readAsString();
+        for (final match
+            in RegExp(r'''https?://[^\s"'<>]+''').allMatches(text)) {
+          final child = _idFor(match.group(0)!);
+          if (child != null) ids.add(child);
+        }
+      } on Object {
+        /* Not every local file is a manifest. Never fetch arbitrary URLs. */
+      }
+    }
+    if (owner == null || owner != _services) {
+      return StreamProxyLease(() {});
+    }
+    ids.removeWhere((id) => !_ownedIds.contains(id));
+    if (ids.isEmpty) {
+      return StreamProxyLease(() {});
+    }
+    for (final id in ids) {
+      _leaseReferences.update(id, (n) => n + 1, ifAbsent: () => 1);
+      unawaited(owner.renew(id).catchError((Object _) => false));
+    }
+    _leaseTimer ??= Timer.periodic(const Duration(minutes: 1), (_) {
+      final active = _services;
+      if (active == null) return;
+      for (final id in _leaseReferences.keys.toList()) {
+        unawaited(active.renew(id).catchError((Object _) => false));
+      }
+    });
+    return StreamProxyLease(() {
+      if (owner != _services) return;
+      for (final id in ids) {
+        final count = _leaseReferences[id];
+        if (count == null) continue;
+        if (count > 1) {
+          _leaseReferences[id] = count - 1;
+        } else {
+          _leaseReferences.remove(id);
+          _ownedIds.remove(id);
+          _filePaths.remove(id);
+          final active = _services;
+          if (active != null) {
+            unawaited(active.revoke(id).catchError((Object _) => false));
+          }
+        }
+      }
+      if (_leaseReferences.isEmpty) {
+        _leaseTimer?.cancel();
+        _leaseTimer = null;
+      }
+    });
+  }
 
   int? get port => _port;
   bool get isRunning => _services != null;
@@ -51,6 +149,11 @@ class StreamProxyServer {
     final services = _services;
     _services = null;
     _port = null;
+    _leaseTimer?.cancel();
+    _leaseTimer = null;
+    _ownedIds.clear();
+    _filePaths.clear();
+    _leaseReferences.clear();
     await _eventSubscription?.cancel();
     _eventSubscription = null;
     services?.dispose();
@@ -62,14 +165,19 @@ class StreamProxyServer {
     String host = '127.0.0.1',
     String? contentType,
     List<String>? allowedPrivateOrigins,
-  }) =>
-      services.registerUrl(
-        host: host,
-        url: originalUrl,
-        headers: headers,
-        contentType: contentType,
-        allowedPrivateOrigins: allowedPrivateOrigins,
-      );
+    bool remoteOrigin = false,
+  }) async {
+    final registration = await services.registerUrl(
+      host: host,
+      url: originalUrl,
+      headers: headers,
+      contentType: contentType,
+      allowedPrivateOrigins: allowedPrivateOrigins,
+      remoteOrigin: remoteOrigin,
+    );
+    _ownedIds.add(registration.id);
+    return registration;
+  }
 
   /// Compatibility helper for local playback callers.
   Future<String> registerSession(
@@ -77,12 +185,14 @@ class StreamProxyServer {
     Map<String, String> headers, {
     String? contentType,
     List<String>? allowedPrivateOrigins,
+    bool remoteOrigin = false,
   }) async =>
       (await registerRemote(
         originalUrl,
         headers,
         contentType: contentType,
         allowedPrivateOrigins: allowedPrivateOrigins,
+        remoteOrigin: remoteOrigin,
       ))
           .url;
 
@@ -112,10 +222,11 @@ class StreamProxyServer {
     String path, {
     required String host,
     String? contentType,
-  }) =>
-      services.registerFile(
-        host: host,
-        path: path,
-        contentType: contentType,
-      );
+  }) async {
+    final registration = await services.registerFile(
+        host: host, path: path, contentType: contentType);
+    _ownedIds.add(registration.id);
+    _filePaths[registration.id] = path;
+    return registration;
+  }
 }

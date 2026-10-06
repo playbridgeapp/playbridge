@@ -3,6 +3,8 @@ package com.playbridge.sender.connection
 import android.util.Log
 import com.playbridge.sender.cast.CastHistorySettings
 import com.playbridge.sender.cast.applyCastHistoryPreference
+import com.playbridge.sender.cast.proxy.NativePlaybackLeases
+import com.playbridge.sender.cast.proxy.PhoneSenderServices
 import com.playbridge.sender.diagnostics.CastAttemptDiagnostics
 import com.playbridge.sender.diagnostics.isNativePlaybackStartCommand
 import com.playbridge.sender.history.CastReplayStore
@@ -58,6 +60,11 @@ class WebSocketClient(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
     
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val playbackLeases = NativePlaybackLeases(scope) { url ->
+        PhoneSenderServices.retainMediaIfRunning(url)
+    }
+
     @Volatile
     private var webSocket: WebSocket? = null
 
@@ -68,10 +75,20 @@ class WebSocketClient(
     // Whether the active connection is wss (true) vs plaintext ws (false).
     @Volatile private var isSecure: Boolean = false
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
+
+    @Synchronized
+    private fun updateConnectionState(state: ConnectionState) {
+        when (state) {
+            is ConnectionState.AuthFailed, is ConnectionState.PinMismatch,
+            is ConnectionState.PairingDenied -> playbackLeases.clear()
+            is ConnectionState.Error, is ConnectionState.Disconnected -> playbackLeases.inactive()
+            is ConnectionState.Connected -> playbackLeases.active("connection")
+            else -> Unit
+        }
+        _connectionState.value = state
+    }
     
     private val messageBus = WebSocketMessageBus()
     val messages = messageBus.messages
@@ -180,6 +197,7 @@ class WebSocketClient(
         data class PinMismatch(val serverName: String) : ConnectionState()
     }
     
+    @Synchronized
     fun connect(
         ip: String,
         port: Int,
@@ -191,6 +209,13 @@ class WebSocketClient(
         certFingerprint: String? = null,
         tvUuid: String = "",
     ) {
+        val previous = targetConnection
+        val sameReceiver = previous == null || if (previous.tvUuid.isNotBlank() && tvUuid.isNotBlank()) {
+            previous.tvUuid == tvUuid
+        } else {
+            previous.ip == ip && (previous.wssPort ?: previous.port) == (wssPort ?: port)
+        }
+        if (!sameReceiver) playbackLeases.clear()
         isUserDisconnect = false
         targetConnection = TvConnectionInfo(
             ip, port, token, serverName, deviceName, deviceUUID, wssPort, certFingerprint, tvUuid
@@ -225,7 +250,7 @@ class WebSocketClient(
         } catch (e: Exception) {
             // A malformed host (e.g. an un-bracketed IPv6 literal) must never crash the app.
             Log.e(TAG, "Invalid connection URL '$url'", e)
-            _connectionState.value = ConnectionState.Error("Invalid address: ${e.message}")
+            updateConnectionState(ConnectionState.Error("Invalid address: ${e.message}"))
             return
         }
 
@@ -368,7 +393,7 @@ class WebSocketClient(
                                 Log.e(TAG, "pairing_approved pin ($certFp) != served cert ($served) — refusing")
                                 pinMismatch = true
                                 isUserDisconnect = true
-                                _connectionState.value = ConnectionState.PinMismatch(serverName)
+                                updateConnectionState(ConnectionState.PinMismatch(serverName))
                                 webSocket.close(1000, "pin mismatch")
                                 return
                             }
@@ -381,7 +406,7 @@ class WebSocketClient(
                             }
                             emitCapabilities(credentialsJson)
                             clearPairingSecrets() // handshake done — drop key material
-                            _connectionState.value = ConnectionState.Connected(serverName, isSecure)
+                            updateConnectionState(ConnectionState.Connected(serverName, isSecure))
                             // Resync: the TV only broadcasts context on its own activity
                             // transitions, so a client (re)connecting mid-playback would
                             // otherwise show "idle" until the next transition.
@@ -391,7 +416,7 @@ class WebSocketClient(
                     } catch (e: Exception) {
                         Log.e(TAG, "Invalid or unauthenticated pairing credentials", e)
                         isUserDisconnect = true
-                        _connectionState.value = ConnectionState.Error("Pairing security verification failed")
+                        updateConnectionState(ConnectionState.Error("Pairing security verification failed"))
                         webSocket.close(1008, "Invalid pairing credentials")
                         return
                     }
@@ -403,7 +428,7 @@ class WebSocketClient(
                         if (json is JsonObject && json["type"]?.toString()?.replace("\"", "") == "pairing_denied") {
                             Log.i(TAG, "Pairing denied by $serverName")
                             isUserDisconnect = true
-                            _connectionState.value = ConnectionState.PairingDenied(serverName)
+                            updateConnectionState(ConnectionState.PairingDenied(serverName))
                             webSocket.close(1000, "Pairing denied")
                             return
                         }
@@ -422,7 +447,7 @@ class WebSocketClient(
                                 if (success) {
                                     Log.i(TAG, "Authentication successful")
                                     emitCapabilities(json)
-                                    _connectionState.value = ConnectionState.Connected(serverName, isSecure)
+                                    updateConnectionState(ConnectionState.Connected(serverName, isSecure))
                                     // Resync context after every (re)connect — see the
                                     // pairing_approved path for rationale.
                                     webSocket.send(createContextQueryJson())
@@ -432,7 +457,7 @@ class WebSocketClient(
                                     // Set flag before close so onClosed doesn't overwrite AuthFailed
                                     // with Disconnected, and so onFailure won't schedule retries.
                                     isUserDisconnect = true
-                                    _connectionState.value = ConnectionState.AuthFailed
+                                    updateConnectionState(ConnectionState.AuthFailed)
                                     webSocket.close(1000, "Auth failed")
                                 }
                                 return
@@ -443,6 +468,7 @@ class WebSocketClient(
                     }
                 }
 
+                playbackLeases.observe(text)
                 messageBus.publish(text)
             }
             
@@ -457,7 +483,7 @@ class WebSocketClient(
                     this@WebSocketClient.webSocket = null
                     // Don't overwrite AuthFailed — the UI needs that state to show a re-pair prompt.
                     if (_connectionState.value !is ConnectionState.AuthFailed) {
-                        _connectionState.value = ConnectionState.Disconnected
+                        updateConnectionState(ConnectionState.Disconnected)
                     }
                 } else {
                      Log.d(TAG, "Ignoring onClosed for stale socket")
@@ -473,7 +499,7 @@ class WebSocketClient(
                     if (pinMismatch) {
                         Log.e(TAG, "TLS pin mismatch — refusing to connect (possible MITM)")
                         isUserDisconnect = true
-                        _connectionState.value = ConnectionState.PinMismatch(serverName)
+                        updateConnectionState(ConnectionState.PinMismatch(serverName))
                         return
                     }
 
@@ -481,7 +507,7 @@ class WebSocketClient(
                     // Error. Reconnects happen on demand: the "ensure connected before
                     // sending" paths and the startup auto-connect cover recovery, without
                     // a background retry loop flapping the connection UI.
-                    _connectionState.value = ConnectionState.Error(t.message ?: "Unknown error")
+                    updateConnectionState(ConnectionState.Error(t.message ?: "Unknown error"))
                 } else {
                     Log.d(TAG, "Ignoring onFailure for stale socket")
                 }
@@ -511,7 +537,7 @@ class WebSocketClient(
             if (pairingAttemptsLeft <= 0) {
                 Log.w(TAG, "SAS retries exhausted — tearing down handshake")
                 ws.close(1000, "Incorrect code")
-                _connectionState.value = ConnectionState.PairingDenied(serverName)
+                updateConnectionState(ConnectionState.PairingDenied(serverName))
                 return false
             }
             // Keep the socket + handshake alive and re-prompt; the TV is still awaiting our
@@ -600,19 +626,22 @@ class WebSocketClient(
             .build()
     }
 
+    @Synchronized
     fun send(message: String): Boolean {
         val startsPlayback = isNativePlaybackStartCommand(message)
         val ws = webSocket
         if (ws == null) {
             Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
             if (startsPlayback) recordPlaybackAttempt(message, false)
-            return false
+            return playbackLeases.send(message) { false }
         }
         val outgoing = applyCastHistoryPreference(
             message, castHistorySettings.preventHistory.value,
         )
         DebugNetworkLogger.command(TAG, outgoing)
-        val sent = ws.send(outgoing)
+        val sent = playbackLeases.send(outgoing) {
+            ws === webSocket && ws.send(outgoing)
+        }
         if (startsPlayback) recordPlaybackAttempt(message, sent)
         return sent
     }
@@ -804,6 +833,7 @@ class WebSocketClient(
         attemptConnection(conn.ip, conn.port, conn.serverName)
     }
 
+    @Synchronized
     fun disconnect() {
         // Stack trace helps attribute unexpected "User disconnect" (DevicePicker, notif
         // action, pairing dialog, etc.) without guessing from close reason alone.
@@ -811,9 +841,11 @@ class WebSocketClient(
         clearPendingMouseCommands()
         isUserDisconnect = true
         clearPairingSecrets()
-        webSocket?.close(1000, "User disconnect")
+        val oldSocket = webSocket
         webSocket = null
-        _connectionState.value = ConnectionState.Disconnected
+        playbackLeases.clear()
+        oldSocket?.close(1000, "User disconnect")
+        updateConnectionState(ConnectionState.Disconnected)
     }
 
     /**
@@ -834,7 +866,7 @@ class WebSocketClient(
         if (_connectionState.value !is ConnectionState.Disconnected &&
             _connectionState.value !is ConnectionState.Error
         ) {
-            _connectionState.value = ConnectionState.Disconnected
+            updateConnectionState(ConnectionState.Disconnected)
         }
     }
     

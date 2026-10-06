@@ -54,6 +54,21 @@ class MediaNetworkPolicyTest {
     }
 
     @Test
+    fun cgnatTailscaleRangeIsPrivateLanRequiringAnExactGrant() {
+        // Matches Rust classify_address: 100.64.0.0/10 is PrivateLan, not forbidden.
+        assertFalse(MediaNetworkPolicy.isAllowedDestination("http://100.64.0.5/video", emptySet()))
+        assertTrue(MediaNetworkPolicy.isAllowedDestination("http://100.64.0.5/video", setOf("http://100.64.0.5")))
+        assertTrue(MediaNetworkPolicy.isAllowedDestination("http://100.127.255.254/v", setOf("http://100.127.255.254")))
+        assertFalse(MediaNetworkPolicy.isAllowedDestination("http://100.64.0.6/video", setOf("http://100.64.0.5")))
+        assertEquals("http://100.64.0.5:80", MediaNetworkPolicy.privateOrigin("http://100.64.0.5/video"))
+        assertTrue(MediaNetworkPolicy.targetsPrivateNetwork("http://100.100.1.1/video"))
+        // Range edges are public.
+        assertTrue(MediaNetworkPolicy.isAllowedDestination("http://100.63.255.255/video", emptySet()))
+        assertTrue(MediaNetworkPolicy.isAllowedDestination("http://100.128.0.1/video", emptySet()))
+        assertNull(MediaNetworkPolicy.privateOrigin("http://100.128.0.1/video"))
+    }
+
+    @Test
     fun rejectsMixedDnsAnswersBeforeTheHttpClientUsesThem() {
         val addresses = listOf(
             InetAddress.getByName("93.184.216.34"),

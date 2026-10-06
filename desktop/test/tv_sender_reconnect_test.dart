@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:playbridge_desktop/pairing_store.dart';
 import 'package:playbridge_desktop/protocol.dart';
+import 'package:playbridge_desktop/stream_proxy_server.dart';
 import 'package:playbridge_desktop/tv_connection_store.dart';
 import 'package:playbridge_desktop/tv_discovery.dart';
 import 'package:playbridge_desktop/tv_sender_controller.dart';
@@ -26,6 +27,7 @@ void main() {
     TvProtocol protocol = TvProtocol.playBridge,
     String token = 'saved-token',
     int giveUp = 30,
+    Future<StreamProxyLease> Function(Iterable<String>)? retainProxyUrls,
   }) async {
     final transport = _FakeTransport(protocol);
     final store = await TvConnectionStore.load();
@@ -47,11 +49,145 @@ void main() {
       transport: transport,
       reconnectDelay: delay,
       reconnectGiveUp: giveUp,
+      retainProxyUrls: retainProxyUrls,
     );
     addTearDown(sender.dispose);
     sender.bindTransportForTest();
     return (sender: sender, transport: transport, saved: saved, store: store);
   }
+
+  for (final playlist in [false, true]) {
+    testWidgets(
+        'Google Cast relaunch during ${playlist ? 'playlist' : 'video'} keeps incoming lease',
+        (tester) async {
+      final closed = <String>[];
+      final h = await make(
+          protocol: TvProtocol.googleCast,
+          retainProxyUrls: (urls) async {
+            final values = urls.toList();
+            return StreamProxyLease(() {
+              closed.addAll(values);
+            });
+          });
+      await h.sender.reconnect(h.saved);
+      await tester.pump();
+      h.transport.acceptsLoads = true;
+      await h.sender.castVideo(PlayPayload(url: 'http://phone/old'));
+      h.transport.duringLoad = () async {
+        h.transport.emit(SenderConnectionState.selected);
+        await Future<void>.value();
+        h.transport.emit(SenderConnectionState.connecting);
+        h.transport.emit(SenderConnectionState.connected);
+        await Future<void>.value();
+      };
+      final payload = PlayPayload(url: 'http://phone/new');
+      final ok = playlist
+          ? await h.sender.castPlaylist(PlaylistPayload(items: [payload]))
+          : await h.sender.castVideo(payload);
+      expect(ok, isTrue);
+      expect(closed, ['http://phone/old']);
+      await h.sender.disconnect();
+      expect(closed, ['http://phone/old', 'http://phone/new']);
+    });
+  }
+
+  testWidgets('retry recovery keeps ownership but final give-up releases it',
+      (tester) async {
+    var closed = 0;
+    final h = await make(
+        giveUp: 1,
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await h.sender.reconnect(h.saved);
+    await tester.pump();
+    h.transport.acceptsLoads = true;
+    await h.sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    h.transport.emit(SenderConnectionState.error);
+    await tester.pump();
+    expect(closed, 0);
+    await tester.pump(delay);
+    await tester.pump();
+    expect(closed, 0);
+    h.transport.failConnect = true;
+    h.transport.emit(SenderConnectionState.error);
+    await tester.pump();
+    await tester.pump(delay);
+    await tester.pump();
+    expect(closed, 1);
+    h.sender.dispose();
+    expect(closed, 1);
+  });
+
+  testWidgets('auth pin and pairing failures release immediately',
+      (tester) async {
+    for (final state in [
+      SenderConnectionState.authFailed,
+      SenderConnectionState.pinMismatch,
+      SenderConnectionState.pairingDenied
+    ]) {
+      var closed = 0;
+      final h = await make(
+          retainProxyUrls: (_) async => StreamProxyLease(() {
+                closed++;
+              }));
+      await h.sender.reconnect(h.saved);
+      await tester.pump();
+      h.transport.acceptsLoads = true;
+      await h.sender.castVideo(PlayPayload(url: 'http://phone/video'));
+      h.transport.emit(state);
+      await tester.pump();
+      expect(closed, 1);
+    }
+  });
+
+  testWidgets(
+      'same receiver reconnect retains but switching without a cast releases',
+      (tester) async {
+    var closed = 0;
+    final h = await make(
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await h.sender.reconnect(h.saved);
+    await tester.pump();
+    h.transport.acceptsLoads = true;
+    await h.sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    await h.sender.reconnect(h.saved);
+    await tester.pump();
+    expect(closed, 0);
+    final other = TvRecord(
+        uuid: 'another-tv',
+        protocol: TvProtocol.playBridge,
+        name: 'Other',
+        host: '192.0.2.21',
+        port: 8765,
+        token: 'other-token',
+        certFingerprint: 'other-pin',
+        lastConnected: DateTime(2026));
+    await h.sender.reconnect(other);
+    await tester.pump();
+    expect(closed, 1);
+  });
+
+  testWidgets('a transport without retry gets a bounded lost-connection grace',
+      (tester) async {
+    var closed = 0;
+    final h = await make(
+        protocol: TvProtocol.dlna,
+        retainProxyUrls: (_) async => StreamProxyLease(() {
+              closed++;
+            }));
+    await h.sender.reconnect(h.saved);
+    await tester.pump();
+    h.transport.acceptsLoads = true;
+    await h.sender.castVideo(PlayPayload(url: 'http://phone/video'));
+    h.transport.emit(SenderConnectionState.error);
+    await tester.pump();
+    expect(closed, 0);
+    await tester.pump(TvSenderController.proxyIdleGrace);
+    expect(closed, 1);
+  });
 
   testWidgets('an unexpected drop retries with the saved token and resyncs',
       (tester) async {
@@ -350,6 +486,8 @@ class _FakeTransport implements TvTransport {
 
   SenderConnectionState _current = SenderConnectionState.disconnected;
   bool failConnect = false;
+  bool acceptsLoads = false;
+  Future<void> Function()? duringLoad;
   Completer<void>? connectGate;
   SenderConnectionState? failureState;
   String? lastPin;
@@ -430,10 +568,16 @@ class _FakeTransport implements TvTransport {
   }
 
   @override
-  Future<bool> castVideo(PlayPayload video) async => false;
+  Future<bool> castVideo(PlayPayload video) async {
+    await duringLoad?.call();
+    return acceptsLoads;
+  }
 
   @override
-  Future<bool> castPlaylist(PlaylistPayload playlist) async => false;
+  Future<bool> castPlaylist(PlaylistPayload playlist) async {
+    await duringLoad?.call();
+    return acceptsLoads;
+  }
 
   @override
   Future<bool> sendControl(String command) async => false;

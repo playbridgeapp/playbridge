@@ -28,6 +28,7 @@ import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.util.ProcessUtil
 import kotlinx.coroutines.CoroutineScope
+import com.playbridge.sender.cast.proxy.NativePlaybackLeases
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -275,6 +276,29 @@ class CastSessionManager(
         _externalNowPlayingMeta.asStateFlow()
 
     private var externalStatusJob: Job? = null
+    private var externalProxyLease: AutoCloseable? = null
+    private var externalLeaseIdleJob: Job? = null
+
+    private fun releaseExternalLease() {
+        externalLeaseIdleJob?.cancel()
+        externalLeaseIdleJob = null
+        externalProxyLease?.close()
+        externalProxyLease = null
+    }
+
+    private fun observeExternalLease(status: PlaybackStatus) {
+        if (status.state !in TERMINAL_EXTERNAL_STATES) {
+            externalLeaseIdleJob?.cancel()
+            externalLeaseIdleJob = null
+            return
+        }
+        val lease = externalProxyLease ?: return
+        if (externalLeaseIdleJob != null) return
+        externalLeaseIdleJob = scope.launch {
+            delay(NativePlaybackLeases.IDLE_GRACE_MS)
+            if (externalProxyLease === lease) releaseExternalLease()
+        }
+    }
     private var externalLoadJob: Job? = null
 
     /**
@@ -1030,6 +1054,7 @@ class CastSessionManager(
                     return@collect
                 }
                 _externalStatus.value = status
+                observeExternalLease(status)
                 castAttemptDiagnostics.markPlayback(activeExternalAttemptId, status.state, status.failure)
                 if (externalScreenMirrorCoordinator.state.value.isActive) {
                     when (status.state) {
@@ -1068,6 +1093,7 @@ class CastSessionManager(
         externalLoadJob = null
         externalStatusJob?.cancel()
         externalStatusJob = null
+        releaseExternalLease()
         val detached = externalTargetSlot.take()
         _externalTarget.value = null
         _activeExternalDevice.value = null
@@ -1199,11 +1225,16 @@ class CastSessionManager(
         )
         val loadTarget = target
         externalLoadJob = scope.launch {
+            val incomingLease = com.playbridge.sender.cast.proxy.PhoneSenderServices.get()?.retainMedia(media.url)
             val primary = runCatching { loadTarget.load(epochMedia) }
             if (generation != externalLoadGeneration || _externalTarget.value !== loadTarget) {
+                incomingLease?.close()
                 return@launch
             }
             primary.onSuccess {
+                releaseExternalLease()
+                externalProxyLease = incomingLease
+                _externalStatus.value?.let(::observeExternalLease)
                 if (loadTarget is BrowserCastTarget) {
                     loadTarget.lastEffectiveRoute?.let {
                         setActiveStreamRoute(it, loadTarget.lastProxyFallback)
@@ -1217,6 +1248,7 @@ class CastSessionManager(
                 }
             }
             primary.onFailure { error ->
+                incomingLease?.close()
                 if (error is CancellationException) return@onFailure
                 if (generation == externalLoadGeneration && _externalTarget.value === loadTarget) {
                     castAttemptDiagnostics.mark(attemptId, CastAttempt.AttemptOutcome.FAILED, error)
@@ -1245,6 +1277,8 @@ class CastSessionManager(
     private fun maybeClearTerminalExternalMedia(status: PlaybackStatus) {
         if (!_externalMediaLoaded.value) return
         if (status.state !in TERMINAL_EXTERNAL_STATES) return
+        // Status can be transient (DLNA polling/playlist transitions). UI clears now;
+        // ownership gets a cancellable inactivity grace, not immediate revocation.
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
         _externalMediaTitle.value = null
@@ -1275,6 +1309,7 @@ class CastSessionManager(
     }
 
     fun stop() {
+        releaseExternalLease()
         castAttemptDiagnostics.mark(activeExternalAttemptId, CastAttempt.AttemptOutcome.STOPPED)
         JniUpstreamHttpClient.setDiagnosticAttempt(null, null)
         _externalInterrupts.tryEmit(Unit)

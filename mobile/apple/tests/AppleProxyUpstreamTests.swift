@@ -12,7 +12,7 @@ struct AppleProxyUpstreamTests {
             var metadata: UnsafeMutablePointer<CChar>?
             var error: UnsafeMutablePointer<CChar>?
             let handle = (origin + path).withCString { url in
-                headers.withCString { headers in callbacks.open(url, headers, &status, &metadata, &error) }
+                headers.withCString { headers in callbacks.open(url, headers, nil, &status, &metadata, &error) }
             }
             let text = metadata.map { String(cString: $0) } ?? error.map { String(cString: $0) } ?? ""
             if let metadata { callbacks.free_string(metadata) }
@@ -69,6 +69,36 @@ struct AppleProxyUpstreamTests {
         let redirectHeaders = try JSONDecoder().decode([String: String].self, from: Data(redirectMetadata.utf8))
         precondition(redirectHeaders["location"] == "/body")
         callbacks.close(redirect)
-        print("Apple proxy upstream fixtures passed")
+        // The URL hostname cannot resolve: success proves the configured native
+        // proxy, rather than an independent origin DNS lookup, carried this request.
+        let proxyPort = URL(string: origin)!.port!
+        let gateway = "{\"host\":\"127.0.0.1\",\"port\":\(proxyPort),\"username\":\"playbridge\",\"password\":\"\(String(repeating: "A", count: 43))\"}"
+        var checkedStatus: Int32 = 0
+        var checkedHeaders: UnsafeMutablePointer<CChar>?
+        var checkedError: UnsafeMutablePointer<CChar>?
+        let checked = "http://checked-origin.invalid:\(proxyPort)/checked".withCString { url in
+            "{\"Authorization\":\"Bearer original-origin\"}".withCString { headers in
+                gateway.withCString { proxy in callbacks.open(url, headers, proxy, &checkedStatus, &checkedHeaders, &checkedError) }
+            }
+        }
+        if let checkedError { print(String(cString: checkedError)); callbacks.free_string(checkedError) }
+        if let checkedHeaders { callbacks.free_string(checkedHeaders) }
+        precondition(checked > 0 && checkedStatus == 200, "checked handle=\(checked) status=\(checkedStatus)")
+        precondition(read(checked).1 == Array("checked-native-routing".utf8))
+        callbacks.close(checked)
+        var tlsStatus: Int32 = 0
+        var tlsHeaders: UnsafeMutablePointer<CChar>?
+        var tlsError: UnsafeMutablePointer<CChar>?
+        let tls = "https://checked-origin.invalid/checked".withCString { url in
+            "{}".withCString { headers in
+                gateway.withCString { proxy in callbacks.open(url, headers, proxy, &tlsStatus, &tlsHeaders, &tlsError) }
+            }
+        }
+        if let tlsHeaders { callbacks.free_string(tlsHeaders) }
+        if let tlsError { callbacks.free_string(tlsError) }
+        precondition(tls == 0, "missing TLS peer must not be accepted")
+        let marker = ProcessInfo.processInfo.environment["UPSTREAM_PROXY_CONNECT_MARKER"]!
+        precondition((try? String(contentsOfFile: marker, encoding: .utf8)) == "authenticated", "HTTPS must use authenticated CONNECT instead of independent DNS")
+        print("Apple proxy upstream fixtures passed, including checked native proxy routing")
     }
 }

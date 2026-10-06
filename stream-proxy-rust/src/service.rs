@@ -22,15 +22,18 @@ pub struct ProxyServerConfig {
     pub port: u16,
     pub password: String,
     pub ffmpeg_path: Option<String>,
+    /// Standalone opt-in diagnostic surface; embedded instances leave it off.
+    pub enable_demo: bool,
 }
 
 impl Default for ProxyServerConfig {
     fn default() -> Self {
         Self {
-            address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            address: IpAddr::V4(Ipv4Addr::LOCALHOST),
             port: 0,
             password: random_secret(),
             ffmpeg_path: None,
+            enable_demo: false,
         }
     }
 }
@@ -47,6 +50,7 @@ impl TryFrom<Config> for ProxyServerConfig {
             port: config.port,
             password: config.get_validated_password()?,
             ffmpeg_path: config.ffmpeg_path,
+            enable_demo: true,
         })
     }
 }
@@ -56,6 +60,8 @@ pub struct ProxyServer {
     local_addr: SocketAddr,
     shutdown: Option<oneshot::Sender<()>>,
     task: Option<JoinHandle<Result<(), std::io::Error>>>,
+    interfaces: std::sync::Mutex<std::collections::HashMap<IpAddr, JoinHandle<()>>>,
+    expose: tokio::sync::Mutex<()>,
 }
 
 impl ProxyServer {
@@ -100,7 +106,7 @@ impl ProxyServer {
             .local_addr()
             .map_err(|error| format!("failed to inspect proxy listener: {error}"))?;
         let service = ProxyService::with_engine(config.password, engine);
-        let app = service.router();
+        let app = service.router_with_demo(config.enable_demo);
         let (shutdown, shutdown_rx) = oneshot::channel();
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -114,7 +120,48 @@ impl ProxyServer {
             local_addr,
             shutdown: Some(shutdown),
             task: Some(task),
+            interfaces: std::sync::Mutex::new(std::collections::HashMap::new()),
+            expose: tokio::sync::Mutex::new(()),
         })
+    }
+
+    /// Open only the exact local interface selected for the receiver, on the same
+    /// port as loopback. The OS rejects non-local addresses; never bind a wildcard.
+    pub async fn expose_interface(&self, host: &str) -> Result<(), String> {
+        let address: IpAddr = host
+            .trim_matches(['[', ']'])
+            .parse()
+            .map_err(|_| "receiver interface must be a local IP address")?;
+        if address.is_unspecified() || address.is_multicast() {
+            return Err("invalid receiver interface".into());
+        }
+        if address == self.local_addr.ip() || self.local_addr.ip().is_unspecified() {
+            return Ok(());
+        }
+        let _expose = self.expose.lock().await;
+        if self
+            .interfaces
+            .lock()
+            .map_err(|_| "interface registry unavailable")?
+            .contains_key(&address)
+        {
+            return Ok(());
+        }
+        let listener = TcpListener::bind(SocketAddr::new(address, self.local_addr.port()))
+            .await
+            .map_err(|_| "selected receiver interface is unavailable")?;
+        let router = self.service.router_with_demo(false);
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let mut interfaces = self
+            .interfaces
+            .lock()
+            .map_err(|_| "interface registry unavailable")?;
+        if let Some(old) = interfaces.insert(address, task) {
+            old.abort();
+        }
+        Ok(())
     }
 
     pub fn service(&self) -> &ProxyService {
@@ -159,6 +206,24 @@ impl ProxyServer {
         )
     }
 
+    /// Native-approved registration with bounded async DNS classification.
+    pub async fn register_native_remote_with_content_type(
+        &self,
+        host: &str,
+        url: impl Into<String>,
+        headers: HashMap<String, String>,
+        content_type: Option<&str>,
+    ) -> Result<RegisteredMedia, String> {
+        self.service
+            .register_native_remote_with_content_type(
+                &self.base_url(host),
+                url.into(),
+                headers,
+                content_type,
+            )
+            .await
+    }
+
     pub fn register_remote_with_policy(
         &self,
         host: &str,
@@ -189,6 +254,14 @@ impl ProxyServer {
 
     pub async fn shutdown(mut self) -> Result<(), String> {
         self.service.clear();
+        for (_, task) in self
+            .interfaces
+            .lock()
+            .map_err(|_| "interface registry unavailable")?
+            .drain()
+        {
+            task.abort();
+        }
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -204,6 +277,11 @@ impl ProxyServer {
 impl Drop for ProxyServer {
     fn drop(&mut self) {
         self.service.clear();
+        if let Ok(mut interfaces) = self.interfaces.lock() {
+            for (_, task) in interfaces.drain() {
+                task.abort();
+            }
+        }
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }

@@ -2,6 +2,10 @@ package com.playbridge.sender.cast.proxy
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import java.net.URI
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -41,6 +45,20 @@ class PhoneSenderServices private constructor(
     private val nextRequestId = AtomicInteger(1)
     private val pending = ConcurrentHashMap<String, Continuation<JSONObject>>()
     private val closed = AtomicLong(0)
+    private val leaseScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val leases = PlaybackLeaseRegistry(leaseScope, ::renew) { id -> revoke(id); Unit }
+
+    /** Native playback ownership only: a bearer HTTP request can never renew itself. */
+    fun retainMedia(url: String): AutoCloseable? {
+        val uri = runCatching { URI(url) }.getOrNull() ?: return null
+        val segments = uri.path.split('/').filter { it.isNotBlank() }
+        if (!isAvailable || uri.port != proxyPort || segments.size != 3 || segments[0] !in setOf("s", "media")) return null
+        return leases.retain(segments[1])
+    }
+
+    private suspend fun renew(id: String): Boolean = withContext(Dispatchers.IO) {
+        submit("proxy_renew", mapOf("id" to id)).optBoolean("renewed", false)
+    }
 
     @Volatile
     var proxyPort: Int = 0
@@ -73,6 +91,7 @@ class PhoneSenderServices private constructor(
             command = "proxy_register_url",
             fields = fields,
         )
+        leases.register(data.getString("id"))
         RegisteredMedia(
             id = data.getString("id"),
             url = data.getString("url"),
@@ -93,6 +112,7 @@ class PhoneSenderServices private constructor(
         )
         if (contentType != null) fields["content_type"] = contentType
         val data = submit(command = "proxy_register_file", fields = fields)
+        leases.register(data.getString("id"))
         RegisteredMedia(
             id = data.getString("id"),
             url = data.getString("url"),
@@ -101,6 +121,7 @@ class PhoneSenderServices private constructor(
     }
 
     suspend fun revoke(id: String): Boolean = withContext(Dispatchers.IO) {
+        leases.forget(id)
         val data = submit(command = "proxy_revoke", fields = mapOf("id" to id))
         data.optBoolean("revoked", false)
     }
@@ -196,6 +217,8 @@ class PhoneSenderServices private constructor(
 
     fun shutdown() {
         if (!closed.compareAndSet(0, 1)) return
+        leaseScope.cancel()
+        leases.clear()
         pending.forEach { (_, cont) ->
             runCatching {
                 cont.resumeWithException(IllegalStateException("Sender services shut down"))
@@ -314,6 +337,9 @@ class PhoneSenderServices private constructor(
             instance = services
             services
         }
+
+        /** Native command dispatch must not start/block a host for a Direct URL. */
+        internal fun retainMediaIfRunning(url: String): AutoCloseable? = instance?.retainMedia(url)
 
         fun shutdownIfRunning() {
             instance?.shutdown()

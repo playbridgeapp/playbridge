@@ -74,12 +74,15 @@ class TvSenderController extends ChangeNotifier {
     required PairingStore identity,
     required TvConnectionStore store,
     TvTransport? transport,
+    Future<StreamProxyLease> Function(Iterable<String>)? retainProxyUrls,
     this.reconnectDelay = defaultReconnectDelay,
     this.reconnectGiveUp = defaultReconnectGiveUp,
   })  : _identity = identity,
         _store = store,
         _discovery = TvDiscoveryBrowser(),
-        _transport = transport ?? PlayBridgeTransport();
+        _transport = transport ?? PlayBridgeTransport(),
+        _retainProxyUrls =
+            retainProxyUrls ?? StreamProxyServer.instance.retainUrls;
 
   /// Matches the phone's retry count/delay. Connection and authentication time
   /// is additional, so 30 retries are not a 90-second wall-clock deadline.
@@ -93,10 +96,21 @@ class TvSenderController extends ChangeNotifier {
   final TvConnectionStore _store;
   final TvDiscoveryBrowser _discovery;
   TvTransport _transport;
+  final Future<StreamProxyLease> Function(Iterable<String>) _retainProxyUrls;
 
   StreamSubscription<List<DiscoveredTv>>? _devSub;
   StreamSubscription<bool>? _scanSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
+  StreamProxyLease? _proxyLease;
+  final List<StreamProxyLease> _queuedProxyLeases = [];
+  int _proxyLeaseGeneration = 0;
+  int _proxyLeaseAcquisitions = 0;
+  String? _heldProxyRetirement;
+  static const proxyLeaseAcquisitionTimeout = Duration(seconds: 15);
+  Timer? _proxyIdleTimer;
+  String? _proxyIdleReason;
+  String? _proxyPlaybackId;
+  static const proxyIdleGrace = Duration(minutes: 5);
   StreamSubscription<TvCredentials>? _credSub;
   StreamSubscription<String>? _msgSub;
   StreamSubscription<String>? _sasSub;
@@ -348,6 +362,7 @@ class TvSenderController extends ChangeNotifier {
     if (!_isCurrentSession(generation) || _transport.protocol == protocol) {
       return;
     }
+    _releaseProxyLeases();
     await _transport.dispose();
     if (!_isCurrentSession(generation)) return;
     _transport = TvTransportFactory.create(protocol);
@@ -453,7 +468,26 @@ class TvSenderController extends ChangeNotifier {
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
   Future<bool> castVideo(PlayPayload video) async {
-    final ok = await _transport.castVideo(_withHistoryPreference(video));
+    final generation = ++_proxyLeaseGeneration;
+    final lease = await _acquireProxyLease([video.url]);
+    if (lease == null) return false;
+    if (generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
+    bool ok;
+    try {
+      ok = await _transport.castVideo(_withHistoryPreference(video));
+    } catch (_) {
+      lease.close();
+      rethrow;
+    }
+    if (!ok || generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
+    _releaseProxyLeases();
+    _proxyLease = lease;
     if (ok) {
       if (_transport.protocol != TvProtocol.playBridge) {
         _awaitingFreshPlayback = false;
@@ -482,7 +516,27 @@ class TvSenderController extends ChangeNotifier {
     outgoing.items
       ..clear()
       ..addAll(items);
-    final ok = await _transport.castPlaylist(outgoing);
+    final generation = ++_proxyLeaseGeneration;
+    final lease =
+        await _acquireProxyLease(outgoing.items.map((item) => item.url));
+    if (lease == null) return false;
+    if (generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
+    bool ok;
+    try {
+      ok = await _transport.castPlaylist(outgoing);
+    } catch (_) {
+      lease.close();
+      rethrow;
+    }
+    if (!ok || generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
+    _releaseProxyLeases();
+    _proxyLease = lease;
     if (ok && _transport.protocol != TvProtocol.playBridge) {
       _awaitingFreshPlayback = false;
       _stoppedPlaybackId = null;
@@ -592,11 +646,30 @@ class TvSenderController extends ChangeNotifier {
       payload.title = title;
     }
     if (_transport case BrowserTransport browser) {
-      final ok = await browser.castBrowserMedia(
-        url: targetUrl,
-        title: title,
-        contentType: targetContentType,
-      );
+      final generation = ++_proxyLeaseGeneration;
+      final lease = await _acquireProxyLease([targetUrl]);
+      if (lease == null) return false;
+      if (generation != _proxyLeaseGeneration) {
+        lease.close();
+        return false;
+      }
+      bool ok;
+      try {
+        ok = await browser.castBrowserMedia(
+          url: targetUrl,
+          title: title,
+          contentType: targetContentType,
+        );
+      } catch (_) {
+        lease.close();
+        rethrow;
+      }
+      if (!ok || generation != _proxyLeaseGeneration) {
+        lease.close();
+        return false;
+      }
+      _releaseProxyLeases();
+      _proxyLease = lease;
       if (ok) {
         _awaitingFreshPlayback = false;
         _stoppedPlaybackId = null;
@@ -606,12 +679,35 @@ class TvSenderController extends ChangeNotifier {
     return await castVideo(payload);
   }
 
-  Future<bool> queueAdd(PlayPayload item) =>
-      _transport.queueAdd(_withHistoryPreference(item));
+  Future<bool> queueAdd(PlayPayload item) async {
+    final generation = _proxyLeaseGeneration;
+    final lease = await _acquireProxyLease([item.url]);
+    if (lease == null) return false;
+    if (generation != _proxyLeaseGeneration) {
+      lease.close();
+      return false;
+    }
+    try {
+      final ok = await _transport.queueAdd(_withHistoryPreference(item));
+      if (ok && generation == _proxyLeaseGeneration) {
+        _queuedProxyLeases.add(lease);
+        _cancelProxyIdleGrace();
+      } else {
+        lease.close();
+      }
+      return ok;
+    } catch (_) {
+      lease.close();
+      rethrow;
+    }
+  }
 
   Future<bool> playlistJump(int index) => _transport.playlistJump(index);
 
-  Future<bool> sendControl(String command) => _transport.sendControl(command);
+  Future<bool> sendControl(String command) {
+    if (command == 'stop') _releaseProxyLeases();
+    return _transport.sendControl(command);
+  }
 
   Future<bool> sendContextQuery() => _transport.sendContextQuery();
 
@@ -653,7 +749,88 @@ class TvSenderController extends ChangeNotifier {
     return true;
   }
 
-  /// Resets the now-casting snapshot and notifies (hides the card).
+  void _cancelProxyIdleGrace({String? reason}) {
+    if (reason != null && _proxyIdleReason != reason) return;
+    _proxyIdleTimer?.cancel();
+    _proxyIdleTimer = null;
+    _proxyIdleReason = null;
+    if (_heldProxyRetirement == 'idle') _heldProxyRetirement = null;
+  }
+
+  void _startProxyIdleGrace({String reason = 'receiver'}) {
+    if (_proxyLease == null && _queuedProxyLeases.isEmpty) return;
+    if (_proxyIdleTimer != null) {
+      if (reason == 'receiver') _proxyIdleReason = reason;
+      return;
+    }
+    _proxyIdleReason = reason;
+    _proxyIdleTimer =
+        Timer(proxyIdleGrace, () => _retireHeldProxyLeases(idle: true));
+  }
+
+  void _observeProxyState(String? state) {
+    if (state == 'playing' || state == 'paused' || state == 'buffering') {
+      _cancelProxyIdleGrace();
+    } else if (_terminalStates.contains(state)) {
+      _startProxyIdleGrace();
+    }
+  }
+
+  Future<StreamProxyLease?> _acquireProxyLease(Iterable<String> urls) async {
+    _proxyLeaseAcquisitions++;
+    var abandoned = false;
+    try {
+      // A local-manifest scan can await I/O before references are acquired.
+      // Keep the held bundle until acquisition completes, not for the full load.
+      final pending = _retainProxyUrls(urls).then((lease) {
+        if (abandoned) lease.close();
+        return lease;
+      });
+      return await pending.timeout(proxyLeaseAcquisitionTimeout);
+    } on TimeoutException {
+      // Expected acquisition failure: callers must still report a cast result.
+      return null;
+    } finally {
+      // A late result after timeout must release its references.
+      abandoned = true;
+      _proxyLeaseAcquisitions--;
+      if (_proxyLeaseAcquisitions == 0 && _heldProxyRetirement != null) {
+        _releaseHeldProxyLeases();
+      }
+    }
+  }
+
+  void _retireHeldProxyLeases({bool idle = false}) {
+    if (_proxyLeaseAcquisitions > 0) {
+      if (!idle || _heldProxyRetirement == null) {
+        _heldProxyRetirement = idle ? 'idle' : 'receiver';
+      }
+      return;
+    }
+    _releaseHeldProxyLeases();
+  }
+
+  /// Explicit user/session boundaries invalidate pending work immediately.
+  void _releaseProxyLeases() {
+    _proxyLeaseGeneration++;
+    _releaseHeldProxyLeases();
+  }
+
+  /// Receiver state and idle expiry retire held leases, not a pending cast intent.
+  void _releaseHeldProxyLeases() {
+    _heldProxyRetirement = null;
+    _cancelProxyIdleGrace();
+    _proxyPlaybackId = null;
+    _proxyLease?.close();
+    _proxyLease = null;
+    for (final lease in _queuedProxyLeases) {
+      lease.close();
+    }
+    _queuedProxyLeases.clear();
+  }
+
+  /// Receiver status only updates UI: idle/error can be a playlist transition.
+  /// Sustained inactivity gets a grace; stop, replacement, and detach release now.
   void _clearNowCasting() {
     if (_castingTitle == null &&
         _remoteState.isEmpty &&
@@ -797,6 +974,7 @@ class TvSenderController extends ChangeNotifier {
     }
     switch (s) {
       case SenderConnectionState.connected:
+        _cancelProxyIdleGrace(reason: 'connection');
         final p = _pending;
         if (p != null) {
           final existing = _store.byIdentity(p.protocol, p.uuid);
@@ -848,12 +1026,15 @@ class TvSenderController extends ChangeNotifier {
         }
         break;
       case SenderConnectionState.selected:
+        _retireHeldProxyLeases();
         // Google Cast receiver exited on the TV. Keep the destination so the
-        // next explicit cast can launch a clean receiver session.
+        // next explicit cast can launch a clean receiver session. This state can
+        // also occur inside a stale-session relaunch, so preserve pending intent.
         break;
       case SenderConnectionState.disconnected:
       case SenderConnectionState.error:
         final keepDestination = _considerReconnect();
+        if (!keepDestination) _startProxyIdleGrace(reason: 'connection');
         if (!keepDestination && s == SenderConnectionState.disconnected) {
           _activeTv = null;
         }
@@ -920,12 +1101,16 @@ class TvSenderController extends ChangeNotifier {
         target.token.isNotEmpty;
     _userClosed = false;
     _cancelReconnect(clearEstablished: !preserve);
-    if (!preserve) return;
+    if (!preserve) {
+      _releaseProxyLeases();
+      return;
+    }
     _hasConnectedThisSession = true;
     _retryTarget = target;
   }
 
   void _beginUserClose() {
+    _releaseProxyLeases();
     _sessionGeneration++;
     _userClosed = true;
     _retryInFlight = false;
@@ -1016,6 +1201,7 @@ class TvSenderController extends ChangeNotifier {
     final tv = _recordForRetry();
     if (tv == null || tv.token.isEmpty) {
       debugPrint('[tv-sender] reconnect stopped: no saved token');
+      _releaseProxyLeases();
       _cancelReconnect(clearEstablished: true);
       _activeTv = null;
       notifyListeners();
@@ -1050,6 +1236,7 @@ class TvSenderController extends ChangeNotifier {
     debugPrint(
       '[tv-sender] reconnect gave up after $reconnectGiveUp attempts',
     );
+    _releaseProxyLeases();
     _cancelReconnect(clearEstablished: true);
     _activeTv = null;
   }
@@ -1106,8 +1293,14 @@ class TvSenderController extends ChangeNotifier {
       final type = obj['type'];
       if (type == 'status') {
         final playbackId = obj['playbackId'] as String?;
-        if (!_acceptPlaybackFrame(playbackId)) return;
         final state = (obj['state'] as String?)?.toLowerCase();
+        // UI suppresses ended IDs, but that same owner may resume after a blip.
+        if (playbackId == null || playbackId == _proxyPlaybackId) {
+          _observeProxyState(state);
+        }
+        if (!_acceptPlaybackFrame(playbackId)) return;
+        _proxyPlaybackId = playbackId ?? _proxyPlaybackId;
+        _observeProxyState(state);
         if (state != null && _terminalStates.contains(state)) {
           if (state == 'error') {
             _lastBrowserError ??= 'Browser playback failed';
@@ -1132,6 +1325,7 @@ class TvSenderController extends ChangeNotifier {
         _lastBrowserError = (message == null || message.isEmpty)
             ? 'Browser playback failed'
             : message;
+        _startProxyIdleGrace();
         _suppressStoppedPlayback();
         _clearNowCasting();
         notifyListeners();
@@ -1139,9 +1333,11 @@ class TvSenderController extends ChangeNotifier {
         // The TV broadcasts context 'idle' when its player activity goes away
         // (playback ended or stopped on the TV) — mirror that here.
         if ((obj['active'] as String?) == 'idle') {
+          _startProxyIdleGrace();
           _suppressStoppedPlayback();
           _clearNowCasting();
         } else if ((obj['active'] as String?) == 'player') {
+          _cancelProxyIdleGrace();
           // A context event has no session ID and may have been queued before
           // Stop. For receivers with IDs, wait for a different ID instead.
           if (_stoppedPlaybackId == null) _awaitingFreshPlayback = false;
@@ -1151,12 +1347,14 @@ class TvSenderController extends ChangeNotifier {
         if (playbackId != null && playbackId == _stoppedPlaybackId) return;
         final items = obj['items'];
         if (items is List && items.isEmpty) {
+          _startProxyIdleGrace(reason: 'playlist');
           _suppressStoppedPlayback();
           _clearNowCasting();
           return;
         }
         if (!_acceptPlaybackFrame(playbackId)) return;
         if (items is List) {
+          _cancelProxyIdleGrace(reason: 'playlist');
           _castPlaylist = [
             for (final it in items)
               if (it is Map)
@@ -1243,6 +1441,7 @@ class TvSenderController extends ChangeNotifier {
         _lastBrowserError = (message == null || message.isEmpty)
             ? 'Browser playback failed'
             : message;
+        _startProxyIdleGrace();
         _clearNowCasting();
       }
       notifyListeners();
@@ -1293,6 +1492,7 @@ class TvSenderController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _releaseProxyLeases();
     if (_disposed) return;
     _disposed = true;
     _beginUserClose();

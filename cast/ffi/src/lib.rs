@@ -1534,7 +1534,7 @@ mod android_jni {
         _class: JClass,
     ) -> jboolean {
         let ready = std::panic::catch_unwind(|| {
-            stream_proxy_rust::pb_proxy_upstream_callbacks_registered() != 0
+            stream_proxy_rust::upstream::jni_fetcher::pb_proxy_upstream_checked_callbacks_registered() != 0
         })
         .unwrap_or(false);
         ready as jboolean

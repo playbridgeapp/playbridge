@@ -16,6 +16,32 @@ void main() {
     await StreamProxyServer.instance.stop();
   });
 
+  test('DNS LAN trust is reachable only for locally initiated items', () {
+    QueueItem item({
+      bool local = false,
+      bool page = false,
+    }) =>
+        QueueItem(
+          url: 'https://nas.example.com/video.mp4',
+          title: 'x',
+          enforcePageNetworkPolicy: page,
+          allowedPrivateOrigins:
+              page ? const ['http://192.168.1.20:8080'] : const [],
+          localUserInitiated: local,
+        );
+
+    // Network-received payloads (any detectedBy) default to non-local.
+    expect(item().proxyRemoteOrigin, isTrue);
+    expect(item().proxyAllowedPrivateOrigins, isNull);
+    // Page grants use explicit origins and never the remote-origin flag.
+    expect(item(page: true).proxyRemoteOrigin, isFalse);
+    expect(item(page: true).proxyAllowedPrivateOrigins,
+        const ['http://192.168.1.20:8080']);
+    // Only a local user action unlocks the native DNS-approved path.
+    expect(item(local: true).proxyRemoteOrigin, isFalse);
+    expect(item(local: true).proxyAllowedPrivateOrigins, isNull);
+  });
+
   test('Off mode returns original item unchanged', () async {
     final item = QueueItem(
       url: 'https://example.com/stream.m3u8',

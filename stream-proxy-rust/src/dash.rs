@@ -1,4 +1,3 @@
-use regex::Regex;
 use roxmltree::{Document, Node};
 use url::Url;
 
@@ -20,58 +19,64 @@ impl DashManifestRewriter {
     where
         F: Fn(&str) -> String,
     {
-        let rewrite_reference = |raw: &str| -> String {
-            let decoded = decode_xml_url(raw.trim());
-            let resolved = match Url::parse(&decoded).or_else(|_| base_uri.join(&decoded)) {
-                Ok(url) if matches!(url.scheme(), "http" | "https") => url,
-                _ => return raw.to_string(),
-            };
-            encode_xml_url(&rewrite_url(resolved.as_str()))
+        let Ok(document) = Document::parse(content) else {
+            return String::new();
         };
-
-        let base_url_re =
-            Regex::new(r"(?i)<BaseURL([^>]*)>([^<]+)</BaseURL>").expect("valid regex");
-        let mut result = base_url_re
-            .replace_all(content, |captures: &regex::Captures| {
-                format!(
-                    "<BaseURL{}>{}</BaseURL>",
-                    &captures[1],
-                    rewrite_reference(&captures[2])
+        let mut edits = Vec::new();
+        for node in document.descendants().filter(|node| node.is_element()) {
+            if node.has_tag_name("BaseURL") || node.has_tag_name("Location") {
+                let Some(raw) = node.text() else {
+                    continue;
+                };
+                let parent = node.parent_element().unwrap_or(node);
+                let base = effective_base(parent, base_uri, false);
+                let Ok(resolved) = base.join(raw.trim()) else {
+                    continue;
+                };
+                if !matches!(resolved.scheme(), "http" | "https") {
+                    continue;
+                }
+                if node.has_tag_name("BaseURL")
+                    && resolved.path().ends_with('/')
+                    && resolved.query().is_none()
+                {
+                    // Resolve child references against this directory, but never grant
+                    // the client an unrestricted directory/prefix capability.
+                    edits.push((node.range(), String::new()));
+                } else if let Some(text) = node.children().find(|child| child.is_text()) {
+                    edits.push((
+                        text.range(),
+                        encode_xml_url(&rewrite_url(resolved.as_str())),
+                    ));
+                }
+            }
+            let base = effective_base(node, base_uri, true);
+            for attribute in node.attributes().filter(|attribute| {
+                matches!(
+                    attribute.name(),
+                    "media" | "initialization" | "sourceURL" | "location" | "baseUrl"
                 )
-            })
-            .into_owned();
-
-        let location_re =
-            Regex::new(r"(?i)<Location([^>]*)>([^<]+)</Location>").expect("valid regex");
-        result = location_re
-            .replace_all(&result, |captures: &regex::Captures| {
-                format!(
-                    "<Location{}>{}</Location>",
-                    &captures[1],
-                    rewrite_reference(&captures[2])
-                )
-            })
-            .into_owned();
-
-        let double_quoted_re = Regex::new(
-            r#"(?i)\b(media|initialization|sourceURL|location|baseUrl)\s*=\s*"([^"]+)""#,
-        )
-        .expect("valid regex");
-        result = double_quoted_re
-            .replace_all(&result, |captures: &regex::Captures| {
-                format!(r#"{}="{}""#, &captures[1], rewrite_reference(&captures[2]))
-            })
-            .into_owned();
-
-        let single_quoted_re = Regex::new(
-            r#"(?i)\b(media|initialization|sourceURL|location|baseUrl)\s*=\s*'([^']+)'"#,
-        )
-        .expect("valid regex");
-        single_quoted_re
-            .replace_all(&result, |captures: &regex::Captures| {
-                format!("{}='{}'", &captures[1], rewrite_reference(&captures[2]))
-            })
-            .into_owned()
+            }) {
+                if let Ok(resolved) = base.join(attribute.value()) {
+                    if matches!(resolved.scheme(), "http" | "https") {
+                        edits.push((
+                            attribute.range_value(),
+                            encode_xml_url(&rewrite_url(resolved.as_str())),
+                        ));
+                    }
+                }
+            }
+        }
+        edits.sort_by_key(|(range, _)| std::cmp::Reverse(range.start));
+        let mut result = content.to_string();
+        let mut boundary = content.len();
+        for (range, replacement) in edits {
+            if range.end <= boundary {
+                result.replace_range(range.clone(), &replacement);
+                boundary = range.start;
+            }
+        }
+        result
     }
 
     /// Converts a progressive/BaseURL DASH manifest into an mpv EDL containing
@@ -157,6 +162,29 @@ impl DashManifestRewriter {
         }
         Ok(edl)
     }
+}
+
+fn effective_base(node: Node<'_, '_>, base_uri: &Url, include_self: bool) -> Url {
+    let mut ancestors: Vec<_> = node
+        .ancestors()
+        .filter(|ancestor| ancestor.is_element())
+        .collect();
+    if !include_self {
+        ancestors.remove(0);
+    }
+    let mut base = base_uri.clone();
+    for ancestor in ancestors.into_iter().rev() {
+        if let Some(raw) = ancestor
+            .children()
+            .find(|child| child.has_tag_name("BaseURL"))
+            .and_then(|child| child.text())
+        {
+            if let Ok(resolved) = base.join(raw.trim()) {
+                base = resolved;
+            }
+        }
+    }
+    base
 }
 
 fn inherited_attribute<'a>(node: Node<'a, 'a>, attribute: &str) -> Option<&'a str> {

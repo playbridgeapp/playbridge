@@ -555,7 +555,7 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
             format!("{}{}", proxy.base_url("127.0.0.1"), rewritten_base)
         };
     let segment_response = client
-        .get(segment_url)
+        .get(segment_url.replace("&amp;", "&"))
         .header(header::RANGE, "bytes=0-3")
         .send()
         .await
@@ -569,12 +569,12 @@ async fn dash_manifest_and_segments_stay_on_the_header_preserving_proxy() {
 
 #[cfg(feature = "upstream-reqwest")]
 #[tokio::test]
-async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
+async fn redirected_mp4_same_origin_preserves_credentials_and_exact_ranges() {
     async fn media(headers: HeaderMap) -> axum::response::Response {
         assert_eq!(headers["user-agent"], "AppleFixture");
-        assert_eq!(headers["referer"], "https://page.test/");
-        assert!(!headers.contains_key("authorization"));
-        assert!(!headers.contains_key("cookie"));
+        assert_eq!(headers["authorization"], "fixture-secret");
+        assert_eq!(headers["cookie"], "session=private");
+        assert_eq!(headers["referer"], "https://page.test/watch?token=private");
         let (range, body) = match headers["range"].to_str().unwrap() {
             "bytes=0-1" => ("bytes 0-1/10", "01"),
             "bytes=4-7" => ("bytes 4-7/10", "4567"),
@@ -591,26 +591,23 @@ async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
         )
             .into_response()
     }
-    let cdn = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let cdn_address = cdn.local_addr().unwrap();
-    let cdn_task = tokio::spawn(async move {
-        axum::serve(cdn, Router::new().route("/video.mp4", get(media)))
-            .await
-            .unwrap()
-    });
     let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin_address = origin.local_addr().unwrap();
     let origin_task = tokio::spawn(async move {
         axum::serve(
             origin,
-            Router::new().route(
-                "/download.mp4/",
-                get(move |headers: HeaderMap| async move {
-                    assert_eq!(headers["authorization"], "fixture-secret");
-                    assert_eq!(headers["referer"], "https://page.test/watch?token=private");
-                    axum::response::Redirect::temporary(&format!("http://{cdn_address}/video.mp4"))
-                }),
-            ),
+            Router::new()
+                .route(
+                    "/download.mp4/",
+                    get(move |headers: HeaderMap| async move {
+                        assert_eq!(headers["authorization"], "fixture-secret");
+                        assert_eq!(headers["referer"], "https://page.test/watch?token=private");
+                        axum::response::Redirect::temporary(&format!(
+                            "http://{origin_address}/video.mp4"
+                        ))
+                    }),
+                )
+                .route("/video.mp4", get(media)),
         )
         .await
         .unwrap()
@@ -651,6 +648,100 @@ async fn redirected_mp4_preserves_browser_context_and_exact_ranges() {
         assert_eq!(response.content_length(), Some(body.len() as u64));
         assert_eq!(response.text().await.unwrap(), body);
     }
+    origin_task.abort();
+}
+
+/// Drives the real reqwest fetcher (policy-free path) through an origin -> CDN redirect.
+/// Going through `ProxyServer::register_remote` cannot exercise this against loopback
+/// fixtures: registered-media policy intentionally trusts only the exact registered
+/// loopback origin, so a redirect to a second loopback port is (correctly) refused.
+#[cfg(feature = "upstream-reqwest")]
+#[tokio::test]
+async fn redirected_mp4_cross_origin_drops_credentials_and_trims_referer() {
+    use axum::body::to_bytes;
+    use std::sync::{Arc, Mutex};
+    use stream_proxy_rust::default_upstream_fetcher;
+
+    let cdn_seen: Arc<Mutex<Vec<HeaderMap>>> = Arc::default();
+    let seen = cdn_seen.clone();
+    let cdn = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let cdn_address = cdn.local_addr().unwrap();
+    let cdn_task = tokio::spawn(async move {
+        axum::serve(
+            cdn,
+            Router::new().route(
+                "/video.mp4",
+                get(move |headers: HeaderMap| async move {
+                    seen.lock().unwrap().push(headers);
+                    (
+                        StatusCode::PARTIAL_CONTENT,
+                        [
+                            ("content-type", "video/mp4"),
+                            ("content-range", "bytes 4-7/10"),
+                        ],
+                        "4567",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap()
+    });
+    let origin_seen: Arc<Mutex<Vec<HeaderMap>>> = Arc::default();
+    let seen = origin_seen.clone();
+    let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin_address = origin.local_addr().unwrap();
+    assert_ne!(origin_address, cdn_address);
+    let origin_task = tokio::spawn(async move {
+        axum::serve(
+            origin,
+            Router::new().route(
+                "/download.mp4",
+                get(move |headers: HeaderMap| async move {
+                    seen.lock().unwrap().push(headers);
+                    axum::response::Redirect::temporary(&format!("http://{cdn_address}/video.mp4"))
+                }),
+            ),
+        )
+        .await
+        .unwrap()
+    });
+
+    let headers = HashMap::from([
+        ("User-Agent".to_string(), "AppleFixture".to_string()),
+        (
+            "Referer".to_string(),
+            "https://page.test/watch?token=private".to_string(),
+        ),
+        ("Authorization".to_string(), "fixture-secret".to_string()),
+        ("Cookie".to_string(), "session=private".to_string()),
+        ("Range".to_string(), "bytes=4-7".to_string()),
+    ]);
+    let fetcher = default_upstream_fetcher(None);
+    let url = format!("http://{origin_address}/download.mp4");
+    let response = fetcher.connect(&url, &headers).await.unwrap();
+    assert_eq!(response.status, StatusCode::PARTIAL_CONTENT);
+    let body = to_bytes(response.body, 1024).await.unwrap();
+    assert_eq!(&body[..], b"4567");
+
+    // Origin hop keeps credentials and the full Referer.
+    let origin_hops = origin_seen.lock().unwrap();
+    assert_eq!(origin_hops.len(), 1);
+    assert_eq!(origin_hops[0]["authorization"], "fixture-secret");
+    assert_eq!(origin_hops[0]["cookie"], "session=private");
+    assert_eq!(
+        origin_hops[0]["referer"],
+        "https://page.test/watch?token=private"
+    );
+    // CDN hop (different origin): no credentials, Referer trimmed, UA preserved.
+    let cdn_hops = cdn_seen.lock().unwrap();
+    assert_eq!(cdn_hops.len(), 1);
+    let hop = &cdn_hops[0];
+    assert!(!hop.contains_key("authorization"));
+    assert!(!hop.contains_key("cookie"));
+    assert_eq!(hop["referer"], "https://page.test/");
+    assert_eq!(hop["user-agent"], "AppleFixture");
+    assert_eq!(hop["range"], "bytes=4-7");
     origin_task.abort();
     cdn_task.abort();
 }
