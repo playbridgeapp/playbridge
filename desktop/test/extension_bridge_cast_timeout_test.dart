@@ -16,7 +16,7 @@ import 'package:playbridge_desktop/tv_transport.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // Redirect only the handshake file/directory, never overwrite the user's bridge.
-class _BridgeFiles extends IOOverrides {
+final class _BridgeFiles extends IOOverrides {
   _BridgeFiles(this.directory);
   final Directory directory;
 
@@ -99,14 +99,15 @@ void main() {
               jsonDecode(await File(bridgeFilePath()).readAsString()) as Map;
           socket = await Socket.connect(
               InternetAddress.loopbackIPv4, info['port'] as int);
-          frames = StreamIterator(socket
+          final it = StreamIterator(socket
               .cast<List<int>>()
               .transform(utf8.decoder)
               .transform(const LineSplitter()));
+          frames = it;
           Future<Map> nextFrame() async {
-            expect(await frames!.moveNext().timeout(const Duration(seconds: 5)),
+            expect(await it.moveNext().timeout(const Duration(seconds: 5)),
                 isTrue);
-            return jsonDecode(frames.current) as Map;
+            return jsonDecode(it.current) as Map;
           }
 
           socket.writeln(jsonEncode({'token': info['token']}));
