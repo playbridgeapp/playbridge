@@ -35,10 +35,11 @@ bool validLateSubtitleResource(SubtitleRequest resource) {
 
 /// The Desktop receiver fetches through its header-aware proxy, then gives mpv a local file.
 /// The proxy owns redirect policy; the mpv process never sees subtitle credentials.
+/// Late subtitles always arrive from a paired sender, so they are registered as
+/// remote-origin regardless of how the playing item was opened.
 Future<File> downloadLateSubtitle(
   SubtitleRequest resource, {
   List<String>? allowedPrivateOrigins,
-  bool remoteOrigin = false,
 }) async {
   if (!validLateSubtitleResource(resource)) {
     throw const FormatException('Invalid subtitle resource');
@@ -49,7 +50,7 @@ Future<File> downloadLateSubtitle(
     resource.url,
     resource.headers,
     allowedPrivateOrigins: allowedPrivateOrigins,
-    remoteOrigin: remoteOrigin,
+    remoteOrigin: true,
   );
   final localUri = Uri.parse(localUrl);
   if (!proxy.ownsUrl(localUrl) ||

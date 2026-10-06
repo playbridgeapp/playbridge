@@ -17,8 +17,8 @@ pub use crypto::{EncryptionHandler, ProxyData};
 pub use server::{create_router, ProxyService, RegisteredMedia};
 pub use service::{ProxyServer, ProxyServerConfig};
 pub use upstream::{
-    default_upstream_fetcher, ConnectionEngine, PrefetchTarget, SegmentCache, UpstreamFetcher,
-    UpstreamResponse,
+    default_upstream_fetcher, lan_literal_origin, ConnectionEngine, PrefetchTarget, SegmentCache,
+    UpstreamFetcher, UpstreamResponse,
 };
 
 #[cfg(feature = "upstream-jni")]

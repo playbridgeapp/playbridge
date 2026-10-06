@@ -518,7 +518,6 @@ class ReceiverServer extends ChangeNotifier {
               file = await downloadLateSubtitle(
                 resource,
                 allowedPrivateOrigins: item.proxyAllowedPrivateOrigins,
-                remoteOrigin: item.proxyRemoteOrigin,
               );
               if (player.playbackId != playbackId ||
                   player.currentItemId != itemId ||

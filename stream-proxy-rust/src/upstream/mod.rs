@@ -867,6 +867,17 @@ fn host_text_looks_local(host: &str) -> bool {
         })
 }
 
+/// Exact origin of a media URL whose host is a private-LAN/CGNAT IP literal.
+/// Remote-sender registrations may be granted this origin without any DNS-derived
+/// trust; hostnames, loopback and public addresses return `None`.
+pub fn lan_literal_origin(value: &str) -> Option<String> {
+    let url = url::Url::parse(value).ok()?;
+    if !matches!(url.scheme(), "http" | "https") || !original_host_is_lan_literal(&url) {
+        return None;
+    }
+    normalized_origin(&url).ok()
+}
+
 fn original_host_is_lan_literal(url: &url::Url) -> bool {
     url.host_str().is_some_and(|host| {
         host.trim_matches(['[', ']'])

@@ -16,8 +16,8 @@ use playbridge_browser_receiver::{
 use playbridge_cast_core::browser::{BrowserCommand, BrowserMedia};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use stream_proxy_rust::{ProxyServer, ProxyServerConfig};
-use tokio::sync::mpsc as tokio_mpsc;
+use stream_proxy_rust::{ProxyServer, ProxyServerConfig, lan_literal_origin};
+use tokio::{sync::mpsc as tokio_mpsc, task::JoinSet};
 
 const SENDER_SERVICES_ABI_VERSION: u32 = 2;
 const COMMAND_CAPACITY: usize = 32;
@@ -200,7 +200,7 @@ async fn worker(
     cancelled: Arc<AtomicBool>,
 ) {
     let proxy = match ProxyServer::start(ProxyServerConfig::default()).await {
-        Ok(proxy) => proxy,
+        Ok(proxy) => Arc::new(proxy),
         Err(error) => {
             send_event(
                 &events,
@@ -219,8 +219,12 @@ async fn worker(
     let mut browser_host: Option<BrowserReceiverHost> = None;
     let mut browser_service: Option<BrowserReceiverService> = None;
     let mut browser_events: Option<tokio::sync::broadcast::Receiver<BrowserReceiverEvent>> = None;
+    // URL registrations may wait on DNS; they run beside the loop so renew, revoke
+    // and stop are never queued behind them.
+    let mut registrations = JoinSet::new();
 
     while !cancelled.load(Ordering::Acquire) {
+        while registrations.try_join_next().is_some() {}
         if let Some(receiver) = browser_events.as_mut() {
             tokio::select! {
                 command = commands.recv() => {
@@ -228,6 +232,7 @@ async fn worker(
                     if process_command(
                         command,
                         &proxy,
+                        &mut registrations,
                         &mut browser_host,
                         &mut browser_service,
                         &mut browser_events,
@@ -249,6 +254,7 @@ async fn worker(
             if process_command(
                 command,
                 &proxy,
+                &mut registrations,
                 &mut browser_host,
                 &mut browser_service,
                 &mut browser_events,
@@ -264,13 +270,17 @@ async fn worker(
     if let Some(host) = browser_host {
         let _ = host.shutdown().await;
     }
-    let _ = proxy.shutdown().await;
+    registrations.shutdown().await;
+    if let Ok(proxy) = Arc::try_unwrap(proxy) {
+        let _ = proxy.shutdown().await;
+    }
     send_event(&events, json!({"event":"finished"}));
 }
 
 async fn process_command(
     command: ServicesCommand,
-    proxy: &ProxyServer,
+    proxy: &Arc<ProxyServer>,
+    registrations: &mut JoinSet<()>,
     browser_host: &mut Option<BrowserReceiverHost>,
     browser_service: &mut Option<BrowserReceiverService>,
     browser_events: &mut Option<tokio::sync::broadcast::Receiver<BrowserReceiverEvent>>,
@@ -287,36 +297,24 @@ async fn process_command(
             allowed_private_origins,
             remote_origin,
             ..
-        } => match proxy.expose_interface(&host).await {
-            Err(error) => Err(error),
-            Ok(()) => match validate_page_headers(headers, allowed_private_origins.is_some()) {
-                Err(error) => Err(error),
-                Ok(headers) => {
-                    let media = match registration_trust(allowed_private_origins, remote_origin) {
-                        RegistrationTrust::Explicit(origins) => proxy.register_remote_with_policy(
-                            &host,
-                            url,
-                            headers,
-                            content_type.as_deref(),
-                            origins,
-                        ),
-                        RegistrationTrust::NativeLocal => {
-                            proxy
-                                .register_native_remote_with_content_type(
-                                    &host,
-                                    url,
-                                    headers,
-                                    content_type.as_deref(),
-                                )
-                                .await
-                        }
-                    };
-                    media.and_then(|media| {
-                        serde_json::to_value(media).map_err(|error| error.to_string())
-                    })
-                }
-            },
-        },
+        } => {
+            let proxy = Arc::clone(proxy);
+            let events = events.clone();
+            registrations.spawn(async move {
+                let result = register_url(
+                    &proxy,
+                    &host,
+                    url,
+                    headers,
+                    content_type.as_deref(),
+                    allowed_private_origins,
+                    remote_origin,
+                )
+                .await;
+                send_result(&events, request_id, operation, result);
+            });
+            return false;
+        }
         ServicesCommand::ProxyRegisterFile {
             host,
             path,
@@ -417,6 +415,40 @@ async fn process_command(
         },
         ServicesCommand::Shutdown { .. } => return true,
     };
+    send_result(events, request_id, operation, result);
+    false
+}
+
+async fn register_url(
+    proxy: &ProxyServer,
+    host: &str,
+    url: String,
+    headers: HashMap<String, String>,
+    content_type: Option<&str>,
+    allowed_private_origins: Option<Vec<String>>,
+    remote_origin: bool,
+) -> Result<Value, String> {
+    proxy.expose_interface(host).await?;
+    let headers = validate_page_headers(headers, allowed_private_origins.is_some())?;
+    let media = match registration_trust(&url, allowed_private_origins, remote_origin) {
+        RegistrationTrust::Explicit(origins) => {
+            proxy.register_remote_with_policy(host, url, headers, content_type, origins)?
+        }
+        RegistrationTrust::NativeLocal => {
+            proxy
+                .register_native_remote_with_content_type(host, url, headers, content_type)
+                .await?
+        }
+    };
+    serde_json::to_value(media).map_err(|error| error.to_string())
+}
+
+fn send_result(
+    events: &SyncSender<Value>,
+    request_id: Value,
+    operation: &'static str,
+    result: Result<Value, String>,
+) {
     match result {
         Ok(data) => send_event(
             events,
@@ -437,7 +469,6 @@ async fn process_command(
             }),
         ),
     }
-    false
 }
 
 /// Which network authority a `proxy_register_url` command may receive.
@@ -450,14 +481,18 @@ enum RegistrationTrust {
 }
 
 /// DNS-derived LAN trust is reachable only for local, non-page registrations.
-/// Remote-origin registrations without explicit origins get a public-only policy.
+/// Remote-origin registrations without explicit origins may reach only the exact
+/// origin of a private-LAN/CGNAT IP literal they named; hostnames get public-only.
 fn registration_trust(
+    url: &str,
     allowed_private_origins: Option<Vec<String>>,
     remote_origin: bool,
 ) -> RegistrationTrust {
     match allowed_private_origins {
         Some(origins) => RegistrationTrust::Explicit(origins),
-        None if remote_origin => RegistrationTrust::Explicit(Vec::new()),
+        None if remote_origin => {
+            RegistrationTrust::Explicit(lan_literal_origin(url).into_iter().collect())
+        }
         None => RegistrationTrust::NativeLocal,
     }
 }
@@ -601,21 +636,56 @@ mod tests {
 
     #[test]
     fn dns_lan_trust_is_unreachable_for_remote_origin_registrations() {
+        let named = "https://nas.example.com/v.mp4";
         assert_eq!(
-            registration_trust(None, false),
+            registration_trust(named, None, false),
             RegistrationTrust::NativeLocal
         );
         assert_eq!(
-            registration_trust(None, true),
+            registration_trust(named, None, true),
             RegistrationTrust::Explicit(Vec::new())
         );
         let origins = vec!["http://192.168.1.20:8080".to_string()];
         for remote in [false, true] {
             assert_eq!(
-                registration_trust(Some(origins.clone()), remote),
+                registration_trust(named, Some(origins.clone()), remote),
                 RegistrationTrust::Explicit(origins.clone())
             );
         }
+    }
+
+    #[test]
+    fn remote_registrations_keep_only_the_exact_lan_literal_origin() {
+        for (url, expected) in [
+            (
+                "http://192.168.1.20:8080/v.m3u8",
+                vec!["http://192.168.1.20:8080".to_string()],
+            ),
+            (
+                "http://100.101.2.3:8096/v.mp4",
+                vec!["http://100.101.2.3:8096".to_string()],
+            ),
+            (
+                "https://[fd00::5]/v.mp4",
+                vec!["https://[fd00::5]:443".to_string()],
+            ),
+            // Loopback, metadata, public and named hosts never get remote LAN trust.
+            ("http://127.0.0.1:8080/v.mp4", vec![]),
+            ("http://169.254.169.254/latest", vec![]),
+            ("http://8.8.8.8/v.mp4", vec![]),
+            ("http://nas.lan:8080/v.mp4", vec![]),
+            ("http://192-168-1-5.abc.plex.direct:32400/v.mp4", vec![]),
+        ] {
+            assert_eq!(
+                registration_trust(url, None, true),
+                RegistrationTrust::Explicit(expected),
+                "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_origin_wire_field_parses() {
         let remote: ServicesCommand = serde_json::from_str(
             r#"{"command":"proxy_register_url","request_id":"1","host":"127.0.0.1","url":"https://nas.example.com/v","remote_origin":true}"#,
         )
