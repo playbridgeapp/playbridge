@@ -74,12 +74,15 @@ class TvSenderController extends ChangeNotifier {
     required PairingStore identity,
     required TvConnectionStore store,
     TvTransport? transport,
+    Future<StreamProxyLease> Function(Iterable<String>)? retainProxyUrls,
     this.reconnectDelay = defaultReconnectDelay,
     this.reconnectGiveUp = defaultReconnectGiveUp,
   })  : _identity = identity,
         _store = store,
         _discovery = TvDiscoveryBrowser(),
-        _transport = transport ?? PlayBridgeTransport();
+        _transport = transport ?? PlayBridgeTransport(),
+        _retainProxyUrls =
+            retainProxyUrls ?? StreamProxyServer.instance.retainUrls;
 
   /// Matches the phone's retry count/delay. Connection and authentication time
   /// is additional, so 30 retries are not a 90-second wall-clock deadline.
@@ -93,11 +96,13 @@ class TvSenderController extends ChangeNotifier {
   final TvConnectionStore _store;
   final TvDiscoveryBrowser _discovery;
   TvTransport _transport;
+  final Future<StreamProxyLease> Function(Iterable<String>) _retainProxyUrls;
 
   StreamSubscription<List<DiscoveredTv>>? _devSub;
   StreamSubscription<bool>? _scanSub;
   StreamSubscription<SenderConnectionState>? _stateSub;
   StreamProxyLease? _proxyLease;
+  final List<StreamProxyLease> _queuedProxyLeases = [];
   int _proxyLeaseGeneration = 0;
   StreamSubscription<TvCredentials>? _credSub;
   StreamSubscription<String>? _msgSub;
@@ -456,7 +461,7 @@ class TvSenderController extends ChangeNotifier {
 
   Future<bool> castVideo(PlayPayload video) async {
     final generation = ++_proxyLeaseGeneration;
-    final lease = await StreamProxyServer.instance.retainUrls([video.url]);
+    final lease = await _retainProxyUrls([video.url]);
     bool ok;
     try {
       ok = await _transport.castVideo(_withHistoryPreference(video));
@@ -468,7 +473,7 @@ class TvSenderController extends ChangeNotifier {
       lease.close();
       return ok;
     }
-    _proxyLease?.close();
+    _releaseProxyLeases();
     _proxyLease = lease;
     if (ok) {
       if (_transport.protocol != TvProtocol.playBridge) {
@@ -499,8 +504,8 @@ class TvSenderController extends ChangeNotifier {
       ..clear()
       ..addAll(items);
     final generation = ++_proxyLeaseGeneration;
-    final lease = await StreamProxyServer.instance
-        .retainUrls(outgoing.items.map((item) => item.url));
+    final lease =
+        await _retainProxyUrls(outgoing.items.map((item) => item.url));
     bool ok;
     try {
       ok = await _transport.castPlaylist(outgoing);
@@ -512,7 +517,7 @@ class TvSenderController extends ChangeNotifier {
       lease.close();
       return ok;
     }
-    _proxyLease?.close();
+    _releaseProxyLeases();
     _proxyLease = lease;
     if (ok && _transport.protocol != TvProtocol.playBridge) {
       _awaitingFreshPlayback = false;
@@ -624,7 +629,7 @@ class TvSenderController extends ChangeNotifier {
     }
     if (_transport case BrowserTransport browser) {
       final generation = ++_proxyLeaseGeneration;
-      final lease = await StreamProxyServer.instance.retainUrls([targetUrl]);
+      final lease = await _retainProxyUrls([targetUrl]);
       bool ok;
       try {
         ok = await browser.castBrowserMedia(
@@ -640,7 +645,7 @@ class TvSenderController extends ChangeNotifier {
         lease.close();
         return ok;
       }
-      _proxyLease?.close();
+      _releaseProxyLeases();
       _proxyLease = lease;
       if (ok) {
         _awaitingFreshPlayback = false;
@@ -651,12 +656,29 @@ class TvSenderController extends ChangeNotifier {
     return await castVideo(payload);
   }
 
-  Future<bool> queueAdd(PlayPayload item) =>
-      _transport.queueAdd(_withHistoryPreference(item));
+  Future<bool> queueAdd(PlayPayload item) async {
+    final generation = _proxyLeaseGeneration;
+    final lease = await _retainProxyUrls([item.url]);
+    try {
+      final ok = await _transport.queueAdd(_withHistoryPreference(item));
+      if (ok && generation == _proxyLeaseGeneration) {
+        _queuedProxyLeases.add(lease);
+      } else {
+        lease.close();
+      }
+      return ok;
+    } catch (_) {
+      lease.close();
+      rethrow;
+    }
+  }
 
   Future<bool> playlistJump(int index) => _transport.playlistJump(index);
 
-  Future<bool> sendControl(String command) => _transport.sendControl(command);
+  Future<bool> sendControl(String command) {
+    if (command == 'stop') _releaseProxyLeases();
+    return _transport.sendControl(command);
+  }
 
   Future<bool> sendContextQuery() => _transport.sendContextQuery();
 
@@ -698,11 +720,19 @@ class TvSenderController extends ChangeNotifier {
     return true;
   }
 
-  /// Resets the now-casting snapshot and notifies (hides the card).
-  void _clearNowCasting() {
+  void _releaseProxyLeases() {
     _proxyLeaseGeneration++;
     _proxyLease?.close();
     _proxyLease = null;
+    for (final lease in _queuedProxyLeases) {
+      lease.close();
+    }
+    _queuedProxyLeases.clear();
+  }
+
+  /// Receiver status only updates UI: idle/error can be a playlist transition.
+  /// Explicit stop, successful replacement, and detach release the leases.
+  void _clearNowCasting() {
     if (_castingTitle == null &&
         _remoteState.isEmpty &&
         _remotePositionMs == 0 &&
@@ -974,9 +1004,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   void _beginUserClose() {
-    _proxyLeaseGeneration++;
-    _proxyLease?.close();
-    _proxyLease = null;
+    _releaseProxyLeases();
     _sessionGeneration++;
     _userClosed = true;
     _retryInFlight = false;
@@ -1344,9 +1372,7 @@ class TvSenderController extends ChangeNotifier {
 
   @override
   void dispose() {
-    _proxyLeaseGeneration++;
-    _proxyLease?.close();
-    _proxyLease = null;
+    _releaseProxyLeases();
     if (_disposed) return;
     _disposed = true;
     _beginUserClose();

@@ -201,10 +201,8 @@ class BrowserCastTarget(
                 )
             }
         }
-        if (_status.value.state == PlaybackState.STOPPED) {
-            proxyLease?.close()
-            proxyLease = null
-        }
+        // Receiver status is not a reliable lease boundary. Keep ownership until
+        // explicit stop, successful replacement, or release/detach.
     }
 
     private fun mapBrowserState(raw: String): PlaybackState = when (raw.lowercase()) {

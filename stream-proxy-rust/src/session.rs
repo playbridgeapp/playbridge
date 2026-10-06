@@ -224,6 +224,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unretained_registration_keeps_idle_cutoff_and_first_owner_activates_lease() {
+        let manager = SessionManager::new();
+        let unused = manager
+            .register(
+                "https://media.example/unused".into(),
+                Default::default(),
+                None,
+            )
+            .unwrap();
+        assert!(!manager.sessions.get(&unused.id).unwrap().owner_managed);
+        manager
+            .sessions
+            .get_mut(&unused.id)
+            .unwrap()
+            .last_accessed_at = Instant::now() - Duration::from_secs(601);
+        assert!(manager.get(&unused.id).is_none());
+        assert!(
+            !manager.renew(&unused.id),
+            "expired initial registrations cannot be revived"
+        );
+        let retained = manager
+            .register(
+                "https://media.example/retained".into(),
+                Default::default(),
+                None,
+            )
+            .unwrap();
+        assert!(manager.renew(&retained.id));
+        manager
+            .sessions
+            .get_mut(&retained.id)
+            .unwrap()
+            .last_accessed_at = Instant::now() - Duration::from_secs(601);
+        assert!(
+            manager.get(&retained.id).is_some(),
+            "first retain, not registration, enables long pauses"
+        );
+    }
+
+    #[tokio::test]
     async fn active_session_count_is_bounded() {
         let manager = SessionManager::new();
         let mut first_id = None;

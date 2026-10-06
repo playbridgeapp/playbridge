@@ -1253,8 +1253,8 @@ class CastSessionManager(
     private fun maybeClearTerminalExternalMedia(status: PlaybackStatus) {
         if (!_externalMediaLoaded.value) return
         if (status.state !in TERMINAL_EXTERNAL_STATES) return
-        externalProxyLease?.close()
-        externalProxyLease = null
+        // Status can be transient (DLNA polling/playlist transitions). Only explicit
+        // stop, successful replacement, or detach releases playback ownership.
         _externalMediaLoaded.value = false
         _phonePathActive.value = false
         _externalMediaTitle.value = null

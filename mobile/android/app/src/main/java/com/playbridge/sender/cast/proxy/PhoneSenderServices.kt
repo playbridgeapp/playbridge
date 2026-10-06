@@ -338,6 +338,9 @@ class PhoneSenderServices private constructor(
             services
         }
 
+        /** Native command dispatch must not start/block a host for a Direct URL. */
+        internal fun retainMediaIfRunning(url: String): AutoCloseable? = instance?.retainMedia(url)
+
         fun shutdownIfRunning() {
             instance?.shutdown()
             instance = null

@@ -58,6 +58,10 @@ class WebSocketClient(
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
     
+    private val playbackLeases = com.playbridge.sender.cast.proxy.NativePlaybackLeases { url ->
+        com.playbridge.sender.cast.proxy.PhoneSenderServices.retainMediaIfRunning(url)
+    }
+
     @Volatile
     private var webSocket: WebSocket? = null
 
@@ -180,6 +184,7 @@ class WebSocketClient(
         data class PinMismatch(val serverName: String) : ConnectionState()
     }
     
+    @Synchronized
     fun connect(
         ip: String,
         port: Int,
@@ -191,6 +196,13 @@ class WebSocketClient(
         certFingerprint: String? = null,
         tvUuid: String = "",
     ) {
+        val previous = targetConnection
+        val sameReceiver = previous == null || if (previous.tvUuid.isNotBlank() && tvUuid.isNotBlank()) {
+            previous.tvUuid == tvUuid
+        } else {
+            previous.ip == ip && (previous.wssPort ?: previous.port) == (wssPort ?: port)
+        }
+        if (!sameReceiver) playbackLeases.clear()
         isUserDisconnect = false
         targetConnection = TvConnectionInfo(
             ip, port, token, serverName, deviceName, deviceUUID, wssPort, certFingerprint, tvUuid
@@ -600,19 +612,22 @@ class WebSocketClient(
             .build()
     }
 
+    @Synchronized
     fun send(message: String): Boolean {
         val startsPlayback = isNativePlaybackStartCommand(message)
         val ws = webSocket
         if (ws == null) {
             Log.w(TAG, "Cannot send, webSocket is null. State: ${_connectionState.value}")
             if (startsPlayback) recordPlaybackAttempt(message, false)
-            return false
+            return playbackLeases.send(message) { false }
         }
         val outgoing = applyCastHistoryPreference(
             message, castHistorySettings.preventHistory.value,
         )
         DebugNetworkLogger.command(TAG, outgoing)
-        val sent = ws.send(outgoing)
+        val sent = playbackLeases.send(outgoing) {
+            ws === webSocket && ws.send(outgoing)
+        }
         if (startsPlayback) recordPlaybackAttempt(message, sent)
         return sent
     }
@@ -804,6 +819,7 @@ class WebSocketClient(
         attemptConnection(conn.ip, conn.port, conn.serverName)
     }
 
+    @Synchronized
     fun disconnect() {
         // Stack trace helps attribute unexpected "User disconnect" (DevicePicker, notif
         // action, pairing dialog, etc.) without guessing from close reason alone.
@@ -811,8 +827,10 @@ class WebSocketClient(
         clearPendingMouseCommands()
         isUserDisconnect = true
         clearPairingSecrets()
-        webSocket?.close(1000, "User disconnect")
+        val oldSocket = webSocket
         webSocket = null
+        playbackLeases.clear()
+        oldSocket?.close(1000, "User disconnect")
         _connectionState.value = ConnectionState.Disconnected
     }
 

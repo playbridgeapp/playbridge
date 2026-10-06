@@ -101,8 +101,14 @@ not arbitrary directory traversal or destinations.
 no transparent fallback. Re-register media to obtain new URLs; external
 integrations generating tokens themselves must migrate. Endpoint shapes and
 registration response fields are unchanged. Encrypted and stateful URLs stay
-stable for the active native playback owner, including pause and seek; they are
-revoked when that owner releases them. HTTP reads cannot renew the lease.
+stable for the active native playback owner, including pause and seek. Registration
+alone keeps the initial ten-minute idle cutoff and two-hour maximum; first owner
+retain enables renewal with a six-hour abandonment grace. HTTP reads cannot renew
+the owner lease. Explicit stop, successful replacement, detach, and host teardown
+release ownership. Ambiguous receiver idle/error/end status only changes the UI,
+not authorization; this avoids revocation during playlist transitions. Transient
+Android renewal failures retry with capped backoff; expired/revoked grants are
+never revived.
 
 Native/admin local-media registration authorizes the selected local host,
 including same-host port redirects, not every private-network host. Explicit

@@ -300,12 +300,7 @@ async fn process_command(
                         content_type.as_deref(),
                     ),
                 })
-                .and_then(|media| {
-                    if !proxy.service().renew(&media.id) {
-                        return Err("Playback lease could not be activated".into());
-                    }
-                    serde_json::to_value(media).map_err(|error| error.to_string())
-                }),
+                .and_then(|media| serde_json::to_value(media).map_err(|error| error.to_string())),
         },
         ServicesCommand::ProxyRegisterFile {
             host,

@@ -5,6 +5,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /** Reference-counted native playback ownership. HTTP reads never reach this registry. */
 internal class PlaybackLeaseRegistry(
@@ -25,7 +27,22 @@ internal class PlaybackLeaseRegistry(
             val state = active.getOrPut(id) { State() }
             state.references++
             if (state.job == null) state.job = scope.launch {
-                while (runCatching { renew(id) }.getOrDefault(false)) delay(60_000)
+                var retryDelayMs = 1_000L
+                while (true) {
+                    val renewed = try {
+                        renew(id)
+                    } catch (_: Exception) {
+                        // RPC timeouts are transient; cancellation of this owner is not.
+                        currentCoroutineContext().ensureActive()
+                        delay(retryDelayMs)
+                        retryDelayMs = (retryDelayMs * 2).coerceAtMost(60_000L)
+                        continue
+                    }
+                    // Native false means the grant is already expired/revoked. Never revive it.
+                    if (!renewed) break
+                    retryDelayMs = 1_000L
+                    delay(60_000)
+                }
             }
             state
         }

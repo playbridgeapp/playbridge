@@ -56,4 +56,58 @@ class PlaybackLeaseRegistryTest {
         stale.close(); runCurrent(); assertEquals(0, revoked)
         current.close(); runCurrent(); assertEquals(1, revoked)
     }
+    @Test fun transientFailuresRetryWithBackoffAndResumeNormalHeartbeat() = runTest {
+        var renewed = 0
+        val registry = PlaybackLeaseRegistry(this, {
+            renewed++
+            if (renewed <= 2) throw IllegalStateException("temporary RPC failure")
+            true
+        }, {})
+        registry.register("media")
+        val lease = registry.retain("media")!!
+        runCurrent(); assertEquals(1, renewed)
+        advanceTimeBy(999); runCurrent(); assertEquals(1, renewed)
+        advanceTimeBy(1); runCurrent(); assertEquals(2, renewed)
+        advanceTimeBy(2_000); runCurrent(); assertEquals(3, renewed)
+        advanceTimeBy(60_000); runCurrent(); assertEquals(4, renewed)
+        lease.close(); runCurrent()
+    }
+    @Test fun finalCloseDuringBackoffCancelsRetryAndRevokesOnce() = runTest {
+        var attempts = 0; var revoked = 0
+        val registry = PlaybackLeaseRegistry(this, { attempts++; error("temporary") }, { revoked++ })
+        registry.register("media")
+        val lease = registry.retain("media")!!
+        runCurrent(); lease.close(); lease.close(); runCurrent()
+        advanceTimeBy(300_000); runCurrent()
+        assertEquals(1, attempts); assertEquals(1, revoked)
+    }
+    @Test fun shutdownDuringBackoffCannotRenewOrSubmitToFreedHost() = runTest {
+        var attempts = 0
+        val registry = PlaybackLeaseRegistry(this, { attempts++; error("temporary") }, { error("freed host") })
+        registry.register("media")
+        val lease = registry.retain("media")!!
+        runCurrent(); registry.clear(); lease.close()
+        advanceTimeBy(300_000); runCurrent(); assertEquals(1, attempts)
+    }
+    @Test fun rpcTimeoutIsRetriedButOwnerCancellationIsNot() = runTest {
+        var attempts = 0
+        val registry = PlaybackLeaseRegistry(this, {
+            attempts++
+            if (attempts == 1) kotlinx.coroutines.withTimeout(10) { kotlinx.coroutines.delay(100); true }
+            else true
+        }, {})
+        registry.register("media")
+        val lease = registry.retain("media")!!
+        runCurrent(); advanceTimeBy(1_010); runCurrent(); assertEquals(2, attempts)
+        lease.close(); runCurrent(); advanceTimeBy(120_000); runCurrent(); assertEquals(2, attempts)
+    }
+    @Test fun retryDelayIsCappedInsteadOfSpinning() = runTest {
+        var attempts = 0
+        val registry = PlaybackLeaseRegistry(this, { attempts++; error("temporary") }, {})
+        registry.register("media")
+        val lease = registry.retain("media")!!
+        runCurrent(); advanceTimeBy(300_000); runCurrent()
+        assertTrue(attempts in 7..12)
+        lease.close(); runCurrent()
+    }
 }
