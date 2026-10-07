@@ -42,7 +42,10 @@ window.playbridge.capabilities
 
 `getPlaybackDestination()` reads the native destination. Call
 `choosePlaybackDestination()` from a user interaction to show the native picker,
-or pass `{ destinationId: "this-device" }` for explicit phone playback.
+or pass `{ destinationId: "this-device" }` for explicit phone playback. The user
+gesture is checked natively, not only in the page. While a TV or AirPlay receiver
+is connected, `this-device` opens the native picker so the user confirms leaving
+it; a website never disconnects a receiver by itself.
 `play({ destinationId, items, initialOrientation })` returns a linked session and
 rechecks the destination after asynchronous preparation. Feature-detect
 `capabilities.playback` and `capabilities.localPlaybackOrientation`; see
@@ -104,8 +107,15 @@ The native bridge validates 64 KiB requests, at most 50 items per request, 200
 items per linked session, 16 subtitle URLs/resources per item, and 16 private
 origins per linked session. Replayed request IDs, subframes, cross-tab commands,
 and commands from a replaced document are rejected. Native frame, origin and
-document identity are the authority. The per-document JavaScript token correlates
-response delivery; it is not a secret or an authentication boundary within a page.
+document identity are the authority.
+
+Within the page, the API is a shim that talks to native only through a private
+`MessageChannel`. The native handler and the per-document token live in an
+isolated WebKit content world that page scripts cannot reach; that world also
+attests user activation. The port is handed over at document start, before page
+scripts run, so another script on the page cannot read requests or replies, or
+forge responses and session events. A script that wraps `window.playbridge`
+itself still sees the calls it wraps.
 
 The bridge uses readiness acknowledgement before initial events, a 20-second
 heartbeat, and bounded timeouts. Sessions expire after 10 minutes without page

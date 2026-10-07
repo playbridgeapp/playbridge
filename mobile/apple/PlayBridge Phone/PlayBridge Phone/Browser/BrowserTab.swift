@@ -257,10 +257,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     func deliverPageCast(_ message: [String: Any], documentID: UUID) {
         guard self.documentID == documentID else { return }
-        loadedWebView?.callAsyncJavaScript("window.__playbridgePageCastReceive?.(message)",
-            arguments: ["message": message], in: nil, in: .page, completionHandler: nil)
+        loadedWebView?.callAsyncJavaScript("window.__playbridgePageCastDeliver?.(message)",
+            arguments: ["message": message], in: nil, in: PageCastScript.world, completionHandler: nil)
     }
     private let popupInteraction = BrowserPopupInteraction()
+    private let pageCastScripts = PageCastScript.scripts()
     var popupOpenerURL: URL?
     private(set) var hasCommittedPage = false
     private var committedPageURL: URL?
@@ -355,9 +356,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         cc.addUserScript(WKUserScript(source: "window.__playbridgeDetectionEnabled = \(detectionEnabled); window.__playbridgeDetectionOptions = \(mediaDetectionSettings.scriptOptions(enabled: detectionEnabled));\n" + DetectionScript.source,
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: false))
-        cc.addUserScript(WKUserScript(source: PageCastScript.source,
+        cc.addUserScript(WKUserScript(source: pageCastScripts.page,
                                       injectionTime: .atDocumentStart,
                                       forMainFrameOnly: true))
+        cc.addUserScript(WKUserScript(source: pageCastScripts.broker,
+            injectionTime: .atDocumentStart, forMainFrameOnly: true, in: PageCastScript.world))
         cc.addUserScript(WKUserScript(source: BrowserPlaybackScript.source,
             injectionTime: .atDocumentStart, forMainFrameOnly: false, in: BrowserPlaybackScript.world))
         if isBridgedApp {
@@ -383,6 +386,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         // so detections are attributed to this tab.
         let cc = configuration.userContentController
         cc.add(handler, name: "playbridge")
+        cc.add(handler, contentWorld: PageCastScript.world, name: PageCastScript.handlerName)
         cc.add(handler, name: "networkLog")
         cc.add(handler, contentWorld: BrowserPlaybackScript.world, name: "playbackState")
         if bridgedAppOrigin != nil {

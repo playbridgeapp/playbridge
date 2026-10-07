@@ -160,10 +160,19 @@ final class PageCastCoordinator: ObservableObject {
         if ["destination", "choose_destination"].contains(request.operation) {
             guard request.isCurrent(requireActive: true), let transport else { reply(request, error: "not_allowed"); return }
             if request.operation == "choose_destination" {
+                // Set only by the isolated broker from navigator.userActivation (nil where
+                // WebKit lacks it). Page scripts cannot reach that handler or this field.
+                let activation = message["userActivation"] as? Bool
                 if let destination = (request.payload as? [String: Any])?["destinationId"] {
                     guard destination as? String == "this-device" else { reply(request, error: "invalid_request"); return }
-                    transport.selectWebsiteLocalDestination()
-                } else { onChooseDestination?() }
+                    guard activation == true else { reply(request, error: "user_gesture_required"); return }
+                    // A website never tears down a live receiver: the user confirms in the native picker.
+                    if transport.isConnected && transport.destinationID != nil { onChooseDestination?() }
+                    else { transport.selectWebsiteLocalDestination() }
+                } else {
+                    guard activation != false else { reply(request, error: "user_gesture_required"); return }
+                    onChooseDestination?()
+                }
             }
             request.deliver(["requestId": request.requestID, "ok": true, "destination": transport.playbackDestination])
             return

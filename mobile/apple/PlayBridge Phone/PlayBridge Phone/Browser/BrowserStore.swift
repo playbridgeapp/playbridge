@@ -483,6 +483,15 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
             tab?.recordMoviFullscreen(message.body)
             return
         }
+        if message.name == PageCastScript.handlerName {
+            // Only the isolated broker can reach this handler; page scripts cannot post to it.
+            guard let tab, message.webView === tab.loadedWebView, message.frameInfo.isMainFrame,
+                  let body = message.body as? [String: Any], body["type"] as? String == "pageCastRequest",
+                  let frameOrigin = BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)),
+                  frameOrigin == tab.pageCastOrigin else { return }
+            tab.onWebsiteCast?(body)
+            return
+        }
         if message.name == "playbackState" {
             guard message.webView === tab?.loadedWebView else { return }
             tab?.recordPlaybackState(message.body)
@@ -499,11 +508,6 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
             guard let tab, message.webView === tab.loadedWebView else { return }
             // Each frame uses its owning tab's policy, including cross-origin frames and BFCache restores.
             tab.registerDetectionFrame(message.frameInfo)
-        case "pageCastRequest":
-            guard let tab, message.webView === tab.loadedWebView, message.frameInfo.isMainFrame,
-                  let frameOrigin = BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)),
-                  frameOrigin == tab.pageCastOrigin else { return }
-            tab.onWebsiteCast?(body)
         case "mediaLifecycle":
             if tab?.detectionEnabled == true, message.frameInfo.isMainFrame { tab?.detector.beginMediaLifecycle() }
         case "video":

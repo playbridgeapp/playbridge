@@ -76,6 +76,31 @@ extension BrowserStartupChecks {
         casting.refresh()
         try check(casting.isLinked, "Same-document navigation broke the linked session")
 
+        // The page world cannot reach the isolated page-cast handler, token or delivery hook.
+        let reachable = try await view.evaluateJavaScript("""
+        [typeof window.webkit.messageHandlers.playbridgePageCast, typeof window.__playbridgePageCastDeliver,
+         typeof window.__playbridgePageCastReceive].join(',')
+        """) as? String
+        try check(reachable == "undefined,undefined,undefined", "Page world can reach the page-cast transport: \(reachable ?? "nil")")
+        let beforeDirect = received
+        _ = try await view.evaluateJavaScript("window.webkit.messageHandlers.playbridge.postMessage({type:'pageCastRequest',operation:'choose_destination',requestId:'direct',documentToken:'direct',payload:{destinationId:'this-device'}}); void(0)")
+        try await Task.sleep(nanoseconds: 200_000_000)
+        try check(received == beforeDirect, "Page posted a page-cast request without the isolated broker")
+        // Through the real API, choosing this device never disconnects a live receiver.
+        var pickerOpens = 0
+        casting.onChooseDestination = { pickerOpens += 1 }
+        _ = try await view.evaluateJavaScript("window.pbChoice = null; window.playbridge.choosePlaybackDestination({destinationId:'this-device'}).then(() => window.pbChoice = 'ok', e => window.pbChoice = e.code); void(0)")
+        var choice: String?
+        for _ in 0..<100 where choice == nil {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            choice = try await view.evaluateJavaScript("window.pbChoice") as? String
+        }
+        try check(receiver.isConnected && receiver.destinationID == "fixture-tv", "Website disconnected the receiver")
+        try check(choice == "user_gesture_required" || (choice == "ok" && pickerOpens == 1),
+                  "Unexpected destination choice outcome: \(choice ?? "nil"), picker \(pickerOpens)")
+        print("CHECK: website this-device choice with a live receiver: \(choice ?? "nil"), native picker opens \(pickerOpens)")
+        casting.onChooseDestination = nil
+
         let beforeIframe = received
         _ = try await view.evaluateJavaScript("var f=document.createElement('iframe'); f.srcdoc='<script>window.webkit.messageHandlers.playbridge.postMessage({type:\"pageCastRequest\",operation:\"cast\",requestId:\"iframe\",documentToken:\"iframe\",payload:{url:\"https://media.example/video.mp4\"}})<\\/script>'; document.body.appendChild(f); void(0)")
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -101,6 +126,6 @@ extension BrowserStartupChecks {
         try check(received == before, "Unverified origin reached coordinator")
         tab.load(base + "/parent")
         try await wait("restore page after casting checks") { !view.isLoading && view.url?.path == "/parent" }
-        print("CHECK: website permissions, WebKit API, lazy queue, revocation and frame isolation passed")
+        print("CHECK: website permissions, WebKit API, isolated transport, lazy queue, revocation and frame isolation passed")
     }
 }

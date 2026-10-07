@@ -110,12 +110,14 @@ private final class FakeTransport: PageCastTransport {
     }
     @discardableResult
     func send(_ operation: String, session: String? = nil, payload: [String: Any] = [:],
-              source: FakePage? = nil, token: String = "document-token", requestID: String? = nil) -> String {
+              source: FakePage? = nil, token: String = "document-token", requestID: String? = nil,
+              userActivation: Bool? = nil) -> String {
         sequence += 1
         let id = requestID ?? "request-\(sequence)"
         var message: [String: Any] = ["type": "pageCastRequest", "operation": operation,
             "requestId": id, "documentToken": token, "payload": payload]
         if let session { message["sessionId"] = session }
+        if let userActivation { message["userActivation"] = userActivation }
         coordinator.receive(message, from: source ?? page)
         return id
     }
@@ -442,11 +444,26 @@ private final class FakeTransport: PageCastTransport {
             precondition(f.transport.sends.isEmpty && f.coordinator.presentation == nil)
             var pickerOpens = 0
             f.coordinator.onChooseDestination = { pickerOpens += 1 }
+            // The picker is user-mediated; WebKit without navigator.userActivation reports nil.
             _ = await f.response(f.send("choose_destination"))
-            precondition(pickerOpens == 1)
-            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "arbitrary-device"]), error: "invalid_request")
-            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "this-device"]))
-            precondition(f.transport.playbackDestination["id"] as? String == "this-device")
+            _ = await f.response(f.send("choose_destination", userActivation: true))
+            precondition(pickerOpens == 2)
+            _ = await f.response(f.send("choose_destination", userActivation: false), error: "user_gesture_required")
+            precondition(pickerOpens == 2)
+            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "arbitrary-device"], userActivation: true), error: "invalid_request")
+            // A direct post without an attested gesture cannot switch away from the receiver.
+            for activation in [nil, false] as [Bool?] {
+                _ = await f.response(f.send("choose_destination", payload: ["destinationId": "this-device"], userActivation: activation),
+                                     error: "user_gesture_required")
+            }
+            precondition(f.transport.isConnected && f.transport.destinationID == "receiver-one" && pickerOpens == 2)
+            // Even with a gesture, a website never tears down a live receiver: the native picker opens instead.
+            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "this-device"], userActivation: true))
+            precondition(f.transport.isConnected && f.transport.destinationID == "receiver-one" && pickerOpens == 3)
+            // Without a live receiver, choosing this device is applied directly.
+            f.transport.isConnected = false
+            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "this-device"], userActivation: true))
+            precondition(f.transport.playbackDestination["id"] as? String == "this-device" && pickerOpens == 3)
         }
         do {
             let f = Fixture(approved: true)

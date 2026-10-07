@@ -6,40 +6,77 @@ const vm = require('node:vm');
 const { test } = require('node:test');
 
 const swift = fs.readFileSync(path.join(__dirname, '../PlayBridge Phone/PlayBridge Phone/Browser/PageCastScript.swift'), 'utf8');
-const source = swift.match(/static let source = #"""\n([\s\S]*?)\n\s*"""#/)[1];
+const extract = name => swift.match(new RegExp(`static let ${name} = #"""\\n([\\s\\S]*?)\\n\\s*"""#`))[1]
+  .replace(/__PLAYBRIDGE_PAGE_CAST_BOOT__/g, "'playbridge-page-cast-test'");
+const pageSource = extract('pageSource');
+const brokerSource = extract('brokerSource');
 
 class CustomEvent extends Event {
   constructor(name, options = {}) { super(name); this.detail = options.detail; }
 }
+// WebKit delivers port messages asynchronously; a synchronous structured-clone port keeps
+// these lifecycle tests deterministic while still crossing a clone boundary.
+class MessagePort {
+  constructor() { this.peer = null; this.onmessage = null; }
+  postMessage(data) {
+    const peer = this.peer;
+    if (peer && peer.onmessage) peer.onmessage({ data: structuredClone(data) });
+  }
+}
+class MessageChannel {
+  constructor() { this.port1 = new MessagePort(); this.port2 = new MessagePort(); this.port1.peer = this.port2; this.port2.peer = this.port1; }
+}
+class MessageEvent extends Event {
+  constructor(name, options = {}) { super(name); this.ports = options.ports || []; }
+}
 
-function browser({ subframe = false, existing = {}, unavailable = false } = {}) {
-  const window = new EventTarget();
+// Page and isolated worlds share the DOM (events, navigator activation) but nothing else:
+// each runs in its own context with its own built-ins and globals.
+function browser({ subframe = false, existing = {}, unavailable = false, brokerFirst = false, activation } = {}) {
+  const dom = new EventTarget();
   const messages = [];
   const timers = new Map();
   let time = 0;
   let timerId = 0;
-  Object.assign(window, {
-    playbridge: existing,
-    webkit: { messageHandlers: { playbridge: { postMessage(message) {
+  const userActivation = activation === undefined ? undefined : { isActive: activation };
+  const scheduling = {
+    setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  function world(extra) {
+    const window = {
+      addEventListener: dom.addEventListener.bind(dom),
+      removeEventListener: dom.removeEventListener.bind(dom),
+      dispatchEvent: dom.dispatchEvent.bind(dom),
+      navigator: userActivation ? { userActivation } : {},
+      ...extra,
+    };
+    window.top = subframe ? {} : window;
+    const context = vm.createContext({
+      window, navigator: window.navigator, EventTarget, Event, CustomEvent, MessageEvent, MessagePort,
+      MessageChannel, TextEncoder, ...scheduling,
+    });
+    return { window, context, run: code => vm.runInContext(code, context) };
+  }
+  const page = world({ playbridge: existing, webkit: { messageHandlers: {} } });
+  const broker = world({
+    webkit: { messageHandlers: { playbridgePageCast: { postMessage(message) {
       if (unavailable) throw new Error('disconnected');
       messages.push(JSON.parse(JSON.stringify(message)));
     } } } },
   });
-  window.top = subframe ? {} : window;
-  const context = vm.createContext({
-    window, EventTarget, CustomEvent, TextEncoder, crypto: { randomUUID: () => 'document' },
-    setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: time + delay }); return id; },
-    clearTimeout(id) { timers.delete(id); },
-  });
-  vm.runInContext(source, context);
+  broker.context.crypto = { randomUUID: () => 'document' };
+  if (brokerFirst) { broker.run(brokerSource); page.run(pageSource); }
+  else { page.run(pageSource); broker.run(brokerSource); }
   return {
-    window, messages, timers, api: window.playbridge,
-    inject() { vm.runInContext(source, context); },
+    window: page.window, page, broker, messages, timers, api: page.window.playbridge,
+    inject() { page.run(pageSource); broker.run(brokerSource); },
     receive(message) {
       if (typeof message === 'string') {
-        try { message = JSON.stringify({ documentToken: 'document', ...JSON.parse(message) }); } catch (_) {}
-      } else if (message) message = { documentToken: 'document', ...message };
-      window.__playbridgePageCastReceive(message);
+        try { message = JSON.parse(message); } catch (_) { return; }
+      }
+      if (message) message = { documentToken: 'document', ...message };
+      broker.window.__playbridgePageCastDeliver?.(message);
     },
     result(request, extra = {}) { this.receive({ requestId: request.requestId, ok: true, ...extra }); },
     async advance(ms) {
@@ -70,7 +107,7 @@ function browser({ subframe = false, existing = {}, unavailable = false } = {}) 
 test('installs only in the main frame and preserves existing page API on reinjection', () => {
   const child = browser({ subframe: true });
   assert.equal(child.api.linkCast, undefined);
-  assert.equal(child.window.__playbridgePageCastReceive, undefined);
+  assert.equal(child.window.__playbridgePageCastDeliver, undefined);
   const existing = { custom: 'keep', capabilities: { other: 1 } };
   const b = browser({ existing });
   assert.equal(b.api, existing);
@@ -111,7 +148,7 @@ test('linked API matches Android operations and delivers demand after listeners 
   const demands = [];
   session.addEventListener('needitems', event => demands.push(event.detail));
   await b.advance(0);
-  assert.deepEqual(demands, [{ requestId: 'demand-1' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(demands)), [{ requestId: 'demand-1' }]);
   assert.deepEqual(b.messages.at(-1).payload, { ready: true });
   b.result(b.messages.at(-1));
   const cases = [
@@ -209,7 +246,7 @@ test('pagehide cancels open requests and sessions, with safe back/forward restor
   assert.equal(newSession.sessionId, 'new-session');
 });
 
-test('same-document navigation retains sessions, unknown events are ignored, and receive accepts JSON', async () => {
+test('same-document navigation retains sessions and unknown or malformed events are ignored', async () => {
   const b = browser();
   const session = await b.open();
   b.window.dispatchEvent(new Event('popstate'));
@@ -217,7 +254,7 @@ test('same-document navigation retains sessions, unknown events are ignored, and
   const states = [];
   session.addEventListener('statechange', event => states.push(event.detail));
   b.receive('invalid JSON');
-  b.receive(JSON.stringify({ sessionId: session.sessionId, event: 'statechange', detail: { index: 2 } }));
+  b.receive({ sessionId: session.sessionId, event: 'statechange', detail: { index: 2 } });
   b.receive({ sessionId: 'unknown', event: 'statechange', detail: { index: 3 } });
   b.receive({ sessionId: session.sessionId, event: 'unsupported', detail: {} });
   assert.deepEqual(JSON.parse(JSON.stringify(states)), [{ index: 2 }]);
@@ -302,4 +339,86 @@ test('destination picker and explicit local override require user activation whe
   assert.equal(b.messages.at(-1).operation, 'choose_destination');
   b.result(b.messages.at(-1));
   await picker;
+});
+
+test('boot handshake works in either injection order and hands over exactly one port', async () => {
+  for (const brokerFirst of [false, true]) {
+    const b = browser({ brokerFirst });
+    const status = b.api.getPlaybackDestination();
+    assert.equal(b.messages.at(-1).operation, 'destination');
+    b.result(b.messages.at(-1), { destination: { id: 'this-device' } });
+    assert.equal((await status).destination.id, 'this-device');
+  }
+  // Later boot events from the page get no port and do not disturb the existing one.
+  const b = browser();
+  const stolen = [];
+  b.page.window.addEventListener('playbridge-page-cast-test-port', event => stolen.push(event.ports.length));
+  b.page.run(`window.dispatchEvent(new Event('playbridge-page-cast-test-ready'));
+    window.dispatchEvent(new Event('playbridge-page-cast-test-broker'));`);
+  assert.deepEqual(stolen, []);
+  const status = b.api.getPlaybackDestination();
+  b.result(b.messages.at(-1), { destination: { id: 'tv' } });
+  assert.equal((await status).destination.id, 'tv');
+});
+
+test('page scripts cannot reach the native handler, read the document token or the delivery hook', () => {
+  const b = browser();
+  assert.equal(b.page.run('typeof window.webkit.messageHandlers.playbridgePageCast'), 'undefined');
+  assert.equal(b.page.run('typeof window.__playbridgePageCastDeliver'), 'undefined');
+  assert.equal(b.page.run('typeof window.__playbridgePageCastReceive'), 'undefined');
+  // Everything the page world can observe of its own requests carries no token.
+  b.page.run(`window.seen = [];
+    const post = MessagePort.prototype.postMessage;
+    MessagePort.prototype.postMessage = function (message) { window.seen.push(JSON.stringify(message)); return post.call(this, message); };`);
+  b.api.getPlaybackDestination();
+  assert.equal(b.messages.at(-1).documentToken, 'document');
+  assert.equal(b.page.run('window.seen.length'), 0);
+  b.page.run('MessagePort.prototype.postMessage = post');
+});
+
+test('another page script cannot forge responses or session events, even by patching built-ins', async () => {
+  const b = browser();
+  // Patched after the API installed itself, as any later or third-party script would.
+  b.page.run(`window.captured = [];
+    const set = Map.prototype.set;
+    Map.prototype.set = function (key, value) { window.captured.push(value); return set.call(this, key, value); };
+    const then = Promise.prototype.then;
+    Promise.prototype.then = function (a, b) { window.captured.push('then'); return then.call(this, a, b); };
+    const dispatch = EventTarget.prototype.dispatchEvent;
+    EventTarget.prototype.dispatchEvent = function (event) {
+      if (event.type === 'needitems') window.captured.push('dispatch'); return dispatch.call(this, event);
+    };
+    window.restore = () => { EventTarget.prototype.dispatchEvent = dispatch; };`);
+  const opening = b.api.linkCast({ items: [{ id: 'one', url: 'https://media.example/one.mp4', headers: { Authorization: 'Bearer site-secret' } }] });
+  const request = b.messages.at(-1);
+  // The old global receiver and token-based forgeries have nothing to call.
+  b.page.run(`try { window.__playbridgePageCastReceive({ documentToken: 'document', requestId: '${request.requestId}', ok: true, sessionId: 'attacker' }); } catch (_) {}`);
+  b.page.run(`window.dispatchEvent(new MessageEvent('message', { ports: [] }));`);
+  b.result(request, { sessionId: 'native-session' });
+  const session = await opening;
+  assert.equal(session.sessionId, 'native-session');
+  await b.advance(0);
+  b.result(b.messages.at(-1));
+  const demands = [];
+  session.addEventListener('needitems', event => demands.push(event.detail.requestId));
+  b.receive({ documentToken: 'guessed', sessionId: 'native-session', event: 'needitems', detail: { requestId: 'attacker' } });
+  b.receive({ sessionId: 'native-session', event: 'needitems', detail: { requestId: 'native' } });
+  assert.deepEqual(demands, ['native']);
+  // Only the caller's own await on the promise it was handed goes through Promise.prototype.then;
+  // pending waiters, request state and session dispatch never touch patched built-ins.
+  assert.deepEqual(b.page.run('JSON.stringify(window.captured.filter(v => v !== "then").map(String))'), '[]');
+  b.page.run('window.restore()');
+});
+
+test('the broker, not the page, attests user activation for destination changes', () => {
+  const b = browser({ activation: false });
+  // A page script can spoof its own view of activation, but not the shared DOM state the broker reads.
+  b.page.run(`window.navigator = { userActivation: { isActive: true } };
+    Object.defineProperty(navigator, 'userActivation', { value: { isActive: true } });`);
+  b.api.choosePlaybackDestination({ destinationId: 'this-device' });
+  assert.equal(b.messages.at(-1).operation, 'choose_destination');
+  assert.equal(b.messages.at(-1).userActivation, false);
+  const unsupported = browser();
+  unsupported.api.getPlaybackDestination();
+  assert.equal(unsupported.messages.at(-1).userActivation, null);
 });
