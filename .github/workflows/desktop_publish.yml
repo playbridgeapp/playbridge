@@ -13,10 +13,31 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
+  test:
+    name: test
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/desktop_pr.yml
+    with:
+      always_run: true
+      ref: ${{ startsWith(inputs.version, 'desktop-v') && inputs.version || format('desktop-v{0}', inputs.version) }}
+
+  test-rust:
+    name: test-rust
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust_pr.yml
+    with:
+      include_cli_builds: false
+      ref: ${{ startsWith(inputs.version, 'desktop-v') && inputs.version || format('desktop-v{0}', inputs.version) }}
+
   publish:
     name: publish draft release
+    needs: [test, test-rust]
     runs-on: ubuntu-latest
     # Optional: add environment: desktop-release with required reviewers in repo settings.
     steps:

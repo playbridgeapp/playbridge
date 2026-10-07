@@ -31,7 +31,7 @@ jobs:
       - name: Install protoc and swift-protobuf
         run: brew install protobuf swift-protobuf
 
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1
 
       - name: Install protoc-gen-dart
         run: dart pub global activate protoc_plugin 22.4.0

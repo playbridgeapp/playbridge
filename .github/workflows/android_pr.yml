@@ -9,14 +9,25 @@ name: Android PR Checks
 # Runs on every PR to main so the required `phone` / `tv` statuses always
 # report, but the Gradle build only runs when android-relevant paths change
 # (see the paths-filter step). On unrelated PRs each leg is a no-op pass.
+# Release workflows call this with always_run before signing or publishing.
 
 on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      always_run:
+        description: Run Gradle checks even when path filters do not match
+        type: boolean
+        default: false
+      ref:
+        description: Git ref to check out; empty uses the caller SHA
+        type: string
+        default: ""
 
 concurrency:
-  group: android-pr-${{ github.ref }}
+  group: android-pr-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -40,7 +51,8 @@ jobs:
       run:
         working-directory: ./${{ matrix.dir }}
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        if: github.event_name != 'workflow_call' || !inputs.always_run
         id: filter
         with:
           filters: |
@@ -51,16 +63,28 @@ jobs:
               - 'shared/**'
               - 'protocol/**'
               - 'gradle/**'
-              - '.gitmodules'
               - '.github/workflows/android_pr.yml'
 
+      - name: Resolve check gate
+        id: gate
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_call" ] && [ "${{ inputs.always_run }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.relevant }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         with:
-          submodules: recursive
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Set up JDK 17
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -68,11 +92,11 @@ jobs:
           cache: gradle
 
       - name: Grant execute permission for gradlew
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: chmod +x gradlew
 
       - name: Test GeckoView port disconnect guard
-        if: steps.filter.outputs.relevant == 'true' && matrix.name == 'phone'
+        if: steps.gate.outputs.run == 'true' && matrix.name == 'phone'
         run: ./gradlew -p buildSrc test --stacktrace
 
       # Blocking gate: compile all apps, run unit tests across every module
@@ -80,5 +104,5 @@ jobs:
       # lint issues are recorded in per-module lint-baseline.xml files, so Lint
       # fails only on NEW issues a change introduces.
       - name: Assemble (debug), test & lint
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: ./gradlew assembleDebug check --stacktrace

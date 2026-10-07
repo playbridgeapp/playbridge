@@ -12,7 +12,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: test
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/web_pr.yml
+    with:
+      always_run: true
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
         with:
           version: 9
 
