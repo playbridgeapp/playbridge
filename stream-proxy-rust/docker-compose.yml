@@ -10,7 +10,7 @@ services:
     environment:
       - PORT=8888
       - ADDRESS=0.0.0.0
-      - PB_PROXY_PASSWORD=playbridge_token
+      - PB_PROXY_PASSWORD=${PB_PROXY_PASSWORD:?set PB_PROXY_PASSWORD}
     restart: unless-stopped
     ulimits:
       nofile:

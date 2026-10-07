@@ -22,12 +22,16 @@ RUN apt-get update \
         libavutil57 \
         libavcodec59 \
         libswresample4 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 10001 proxy \
+    && useradd --system --uid 10001 --gid proxy --no-create-home proxy
 
 COPY --from=builder /usr/src/app/target/release/stream-proxy-rust /usr/local/bin/stream-proxy-rust
 
 ENV PORT=8888
 ENV ADDRESS=0.0.0.0
+
+USER proxy
 
 EXPOSE 8888
 
