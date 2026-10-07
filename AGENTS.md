@@ -21,7 +21,7 @@ Portable project skills live in `.agents/skills/` and are the canonical speciali
 |---|---|
 | `playbridge-android` | Android phone, Android TV, shared Kotlin, and shared Android dependencies |
 | `playbridge-apple` | Apple phone and Apple TV applications |
-| `playbridge-desktop-proxy` | Flutter Desktop, its Rust-backed receiver adapter, and the Dart stream proxy |
+| `playbridge-desktop-proxy` | Flutter Desktop and its Rust-backed receiver adapter |
 | `playbridge-extension` | Browser extension and native-messaging integration |
 | `playbridge-web` | Svelte website and static web assets |
 | `playbridge-protocol` | Protocol schema, generated bindings, and consumer compatibility |
@@ -46,7 +46,7 @@ If `AGENTS.local.md` exists at the repository root, read and follow it for optio
 | Apple phone | `mobile/apple/` | SwiftUI/Xcode sender, MPVKit-only local playback; optional Cast Core external transports |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver and sender for macOS, Windows, and Linux |
-| Stream proxy (Dart) | `stream-proxy-dart/` | Legacy standalone proxy; not the production Desktop/phone proxy integration (those use Rust sender services) |
+| Stream proxy (Dart) | `stream-proxy-dart/` | Legacy/inactive standalone proxy (not in active CI; production Desktop and phone proxy integrations use Rust sender services) |
 | Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption |
 | Rust Cast Core | `cast/core/` | Portable discovery, protocol clients, pairing primitives, and casting sessions |
 | Rust Receiver | `cast/receiver/` | Secure reusable PlayBridge WSS receiver runtime; consumers provide playback and platform lifecycle |
@@ -123,7 +123,7 @@ Changes to `shared/src/commonMain/kotlin/com/playbridge/shared/protocol/Message.
 - `tv/android/player/app/src/main/java/com/playbridge/player/server/ServerService.kt`
 - `cast/receiver/` and `desktop/lib/receiver_server.dart`, which host Desktop receiver handling through the Rust runtime
 - Apple phone/TV Swift JSON consumers and Rust sender clients
-- `extension/src/background.ts`, for the extension-to-Desktop native messaging contract (the extension does not open receiver WSS directly)
+- `desktop/lib/native_host.dart` and `extension/src/native-bridge.ts`, if native-messaging payloads change (the extension talks native messaging to Desktop and does not consume receiver WSS or `Message.kt` directly)
 
 ### Native receiver runtime ripple
 

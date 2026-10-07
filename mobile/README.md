@@ -13,7 +13,7 @@ The **sender** in the PlayBridge suite. An Android phone app (`com.playbridge.se
 ## Tech
 
 - Kotlin + Jetpack Compose
-- Consumes the shared [`:shared`](../shared/) Kotlin Multiplatform module
+- Consumes the shared [`:shared`](../shared/) Kotlin module (currently Android-only)
 - `minSdk 24`, `compileSdk 35`, JDK 17
 
 ## Build

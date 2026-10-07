@@ -11,9 +11,9 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
     cd PlayBridge
     ```
 3.  **Set up the environment**:
-    - See the component prerequisites in [Build Instructions](README.md#build-instructions).
-    - For Android, install SDK 37 and a JDK supported by Gradle; the phone build resolves its JDK 21 toolchain.
-    - Sync the owning Android project (`mobile/android/` or `tv/android/`), not the repository root.
+    - See the component prerequisites in [Build Instructions](README.md#build-instructions) and the environment details in [AGENTS.md](AGENTS.md#environment).
+    - **Android**: Install SDK 37 and a JDK supported by Gradle; the phone build resolves its JDK 21 toolchain. Sync the owning Android project (`mobile/android/` or `tv/android/`), not the repository root.
+    - **Rust, Flutter, pnpm, Xcode**: For toolchains across Rust core/proxies, Flutter Desktop, browser extension/web (pnpm), and Apple (Swift/Xcode), see [AGENTS.md](AGENTS.md).
 
 ## Making Changes
 
@@ -24,11 +24,12 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
 2.  **Make your changes**: Implement your feature or fix.
 3.  **Run tests**: Ensure all tests pass.
     ```bash
-    # From the repository root: run the tests for the components you changed.
+    # Run tests for the components you changed (see AGENTS.md for details):
     (cd mobile/android && ./gradlew :app:testFossDebugUnitTest :shared:testAndroidHostTest)
     (cd tv/android && ./gradlew :player:app:testFossDebugUnitTest :shared:testAndroidHostTest)
     (cd extension && pnpm typecheck && pnpm test)
     (cd desktop && flutter test)
+    cargo test --workspace --locked
     ```
 4.  **Commit your changes**:
     ```bash
@@ -47,13 +48,11 @@ Thank you for your interest in contributing to PlayBridge! We welcome contributi
 
 ## Code Style
 
-- We use Kotlin's official coding conventions.
-- Please run the linter before submitting:
-    ```bash
-    # Run only the relevant Android component.
-    (cd mobile/android && ./gradlew :app:lintFossDebug)
-    (cd tv/android && ./gradlew :player:app:lintFossDebug)
-    ```
+- Follow the conventions and formatting for the language/toolchain you touch (see [AGENTS.md](AGENTS.md#build-and-test)):
+  - **Android / Kotlin**: Official Kotlin coding conventions. Run `./gradlew :app:lintFossDebug`.
+  - **Rust**: Format with `cargo fmt --all -- --check` and lint with `cargo clippy --workspace --all-targets --locked -- -D warnings`.
+  - **Flutter / Desktop**: Analyze with `flutter analyze` from `desktop/`.
+  - **Extension & Web**: Verify with `pnpm typecheck` or `pnpm check`.
 
 ## Questions?
 

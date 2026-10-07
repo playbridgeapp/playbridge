@@ -2,6 +2,7 @@
 name = "playbridge-cast-core-ffi"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 publish = false
 license = "AGPL-3.0-or-later"
 description = "UniFFI and stable C bindings for PlayBridge Cast Core"

@@ -182,6 +182,10 @@ store and may be exposed through local access or backups.
 **Done when:** Preference exports do not contain bearer tokens and legacy values
 are migrated or revoked.
 
+### SEC-005: (unused)
+
+*SEC-005 is not used. The number is left unassigned rather than renumbering the later entries.*
+
 ### SEC-006: Pre-authentication resource limits are uneven
 
 **Affected:** Primarily Android TV and Apple TV receivers; re-audit desktop when
