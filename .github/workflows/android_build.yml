@@ -67,6 +67,14 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
+    # See android_pr.yml: the phone Gradle daemon needs JetBrains JDK 21.
+    - name: Set up JetBrains JDK 21 for the Gradle daemon
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'jetbrains'
+
     - name: Decode Keystore
       if: steps.check_tag.outputs.skipped == 'false'
       env:

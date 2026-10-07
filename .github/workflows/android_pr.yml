@@ -91,6 +91,16 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
+      # The phone project pins its Gradle daemon to JetBrains JDK 21
+      # (gradle/gradle-daemon-jvm.properties). Install it here so Gradle does not
+      # download it from the pinned foojay.io URL, which now returns 400.
+      - name: Set up JetBrains JDK 21 for the Gradle daemon
+        if: steps.gate.outputs.run == 'true' && matrix.name == 'phone'
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'jetbrains'
+
       - name: Grant execute permission for gradlew
         if: steps.gate.outputs.run == 'true'
         run: chmod +x gradlew
