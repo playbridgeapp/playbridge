@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import com.playbridge.shared.logging.runCatchingLogged
 import java.io.BufferedReader
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -92,7 +93,7 @@ class LocalProxyServer(
 
     fun stop() {
         running = false
-        runCatching { server?.close() }
+        runCatchingLogged(TAG, "Could not close DLNA proxy server") { server?.close() }
         server = null
         entries.clear()
         originToToken.clear()
@@ -180,6 +181,7 @@ class LocalProxyServer(
                 break
             }
             thread(isDaemon = true) {
+                // Per-connection. A renderer disconnect is expected; warn would flood segment logs.
                 runCatching { handle(socket) }.onFailure { Log.d(TAG, "conn ended: ${it.message}") }
             }
         }
@@ -364,6 +366,7 @@ class LocalProxyServer(
                 doInput = true
                 headers.forEach { (k, v) ->
                     if (k.equals("Range", ignoreCase = true)) return@forEach
+                    // Per-header on the per-request path; restricted names are expected.
                     runCatching { setRequestProperty(k, v) }
                 }
                 if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
@@ -439,6 +442,7 @@ class LocalProxyServer(
         private val connection: HttpURLConnection,
     ) {
         fun close() {
+            // Per-request teardown. The peer often already closed the socket.
             runCatching { inputStream?.close() }
             runCatching { connection.disconnect() }
         }

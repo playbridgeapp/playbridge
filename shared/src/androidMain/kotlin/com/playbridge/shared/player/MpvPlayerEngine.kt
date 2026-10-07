@@ -7,6 +7,7 @@ import android.content.Context
 import android.view.Surface
 import com.playbridge.shared.logging.logger
 import com.playbridge.shared.logging.redactUrlForLog
+import com.playbridge.shared.logging.runCatchingLogged
 import playbridge.PlayPayload
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -260,18 +261,22 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
 
     private fun cleanupFailedInitialization(): Boolean {
         if (observerRegistered) {
-            runCatching { MPVLib.removeObserver(this) }
-                .onFailure { logger.w(TAG, "Failed to remove MPV observer during cleanup", it) }
+            runCatchingLogged(TAG, "Failed to remove MPV observer during cleanup") {
+                MPVLib.removeObserver(this)
+            }
             observerRegistered = false
         }
         var nativeReleased = !mpvCreated
         if (mpvCreated) {
-            runCatching { MPVLib.destroy() }
+            runCatchingLogged(
+                TAG,
+                "Failed to destroy partially initialized MPV",
+                ::logMpvFailure,
+            ) { MPVLib.destroy() }
                 .onSuccess {
                     mpvCreated = false
                     nativeReleased = true
                 }
-                .onFailure { logger.e(TAG, "Failed to destroy partially initialized MPV", it) }
         }
         mpvInitialized = false
         surfaceAttached = false
@@ -685,27 +690,30 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
         ) {
             if (ownsProcessMpv) {
                 if (mpvInitialized && surfaceAttached) {
-                    runCatching { detachSurfaceOnControlThread() }
-                        .onFailure { logger.w(TAG, "Failed to detach MPV surface during release", it) }
+                    runCatchingLogged(TAG, "Failed to detach MPV surface during release") {
+                        detachSurfaceOnControlThread()
+                    }
                 }
                 proxies.forEach { proxy ->
-                    runCatching { MPVLib.removeObserver(proxy) }
-                        .onFailure { logger.w(TAG, "Failed to remove MPV observer proxy", it) }
+                    runCatchingLogged(TAG, "Failed to remove MPV observer proxy") {
+                        MPVLib.removeObserver(proxy)
+                    }
                 }
                 if (observerRegistered) {
-                    runCatching { MPVLib.removeObserver(this) }
-                        .onFailure { logger.w(TAG, "Failed to remove MPV observer during release", it) }
+                    runCatchingLogged(TAG, "Failed to remove MPV observer during release") {
+                        MPVLib.removeObserver(this)
+                    }
                     observerRegistered = false
                 }
 
                 var nativeReleased = !mpvCreated
                 if (mpvCreated) {
-                    runCatching { MPVLib.destroy() }
-                        .onSuccess {
-                            mpvCreated = false
-                            nativeReleased = true
-                        }
-                        .onFailure { logger.e(TAG, "Failed to destroy MPV", it) }
+                    runCatchingLogged(TAG, "Failed to destroy MPV", ::logMpvFailure) {
+                        MPVLib.destroy()
+                    }.onSuccess {
+                        mpvCreated = false
+                        nativeReleased = true
+                    }
                 }
                 mpvInitialized = false
                 surfaceAttached = false
@@ -719,5 +727,9 @@ class MpvPlayerEngine(private val context: Context) : PlaybackEngine, MPVLib.Eve
             controlQueue.shutdownWatchdog()
         }
         controlQueue.shutdownAfterQueuedTasks()
+    }
+
+    private fun logMpvFailure(tag: String, message: String, error: Throwable) {
+        logger.e(tag, message, error)
     }
 }

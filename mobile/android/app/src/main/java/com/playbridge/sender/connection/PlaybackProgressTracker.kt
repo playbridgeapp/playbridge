@@ -10,6 +10,7 @@ import com.playbridge.sender.data.library.WatchlistStatus
 import com.playbridge.sender.data.settings.SettingsRepository
 import com.playbridge.sender.library.PlaylistUiState
 import com.playbridge.sender.cast.TvPlaybackStatus
+import com.playbridge.shared.logging.suspendRunCatchingLogged
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.combine
@@ -151,7 +152,9 @@ class PlaybackProgressTracker(
     init {
         // Drop stale resume points (default retention ~6 months).
         scope.launch {
-            runCatching { resumeDao.prune(System.currentTimeMillis() - RESUME_RETENTION_MS) }
+            suspendRunCatchingLogged(TAG, "Could not prune stale resume points") {
+                resumeDao.prune(System.currentTimeMillis() - RESUME_RETENTION_MS)
+            }
         }
         scope.launch {
             combine(
@@ -469,7 +472,8 @@ class PlaybackProgressTracker(
     ) {
         throttle.lastSavedKey = item.key
         throttle.lastSavedPosMs = positionMs
-        runCatching {
+        // Throttled to RESUME_SAVE_INTERVAL_MS, so a failing database cannot warn per tick.
+        suspendRunCatchingLogged(TAG, "Resume save failed") {
             resumeDao.upsert(
                 PlaybackResumeEntity(
                     contentKey = item.key,
@@ -482,7 +486,7 @@ class PlaybackProgressTracker(
                     durationMs = durationMs,
                 ),
             )
-        }.onFailure { Log.w(TAG, "Resume save failed: ${it.message}") }
+        }
     }
 
     /**
@@ -578,7 +582,9 @@ class PlaybackProgressTracker(
                 if (ProgressRules.isForwardProgress(season, catchUpEpisode, row.seasonProgress, row.episodeProgress)) {
                     watchlistDao.updateProgress(item.tmdbId, season, catchUpEpisode)
                     // Their resume points are moot now — they're implied watched.
-                    runCatching { resumeDao.deleteEpisodesUpTo(item.tmdbId, season, catchUpEpisode) }
+                    suspendRunCatchingLogged(TAG, "Could not clear skip-ahead resume points") {
+                        resumeDao.deleteEpisodesUpTo(item.tmdbId, season, catchUpEpisode)
+                    }
                     Log.i(TAG, "Skip-ahead: tmdb=${item.tmdbId} caught up to S${season}E$catchUpEpisode (started E$episode)")
                 }
             }
@@ -588,7 +594,9 @@ class PlaybackProgressTracker(
     private suspend fun markEpisodeWatched(tmdbId: Int, season: Int, episode: Int) {
         // Watched → never offer to resume it again. Runs BEFORE the dedup: a rewatch in
         // the same session re-creates resume points that still need cleaning at 90%.
-        runCatching { resumeDao.deleteByKey("tmdb:$tmdbId:$season:$episode") }
+        suspendRunCatchingLogged(TAG, "Could not delete episode resume point") {
+            resumeDao.deleteByKey("tmdb:$tmdbId:$season:$episode")
+        }
         if (!markedKeys.add("$tmdbId:$season:$episode")) return
         writeMutex.withLock {
             val existing = watchlistDao.getByIdSync(tmdbId)
@@ -622,16 +630,18 @@ class PlaybackProgressTracker(
     private fun maybeCompleteSeries(tmdbId: Int, season: Int, episode: Int) {
         if (!tmdb.isConfigured()) return
         scope.launch {
-            runCatching {
-                val details = tmdb.getTvDetails(tmdbId) ?: return@launch
-                if (details.nextEpisodeToAir != null) return@launch // still airing
+            suspendRunCatchingLogged(TAG, "Series-completion check failed") {
+                val details = tmdb.getTvDetails(tmdbId) ?: return@suspendRunCatchingLogged
+                if (details.nextEpisodeToAir != null) return@suspendRunCatchingLogged // still airing
                 val lastSeason = details.seasons
                     .filter { it.seasonNumber > 0 && it.episodeCount > 0 }
-                    .maxByOrNull { it.seasonNumber } ?: return@launch
-                if (season < lastSeason.seasonNumber) return@launch
-                if (season == lastSeason.seasonNumber && episode < lastSeason.episodeCount) return@launch
+                    .maxByOrNull { it.seasonNumber } ?: return@suspendRunCatchingLogged
+                if (season < lastSeason.seasonNumber) return@suspendRunCatchingLogged
+                if (season == lastSeason.seasonNumber && episode < lastSeason.episodeCount) {
+                    return@suspendRunCatchingLogged
+                }
                 writeMutex.withLock {
-                    val existing = watchlistDao.getByIdSync(tmdbId) ?: return@launch
+                    val existing = watchlistDao.getByIdSync(tmdbId) ?: return@withLock
                     if (existing.status != WatchlistStatus.COMPLETED.value) {
                         val now = System.currentTimeMillis()
                         watchlistDao.updateStatus(
@@ -640,14 +650,16 @@ class PlaybackProgressTracker(
                         Log.i(TAG, "Series completed: tmdb=$tmdbId (S${season}E$episode was the finale)")
                     }
                 }
-            }.onFailure { Log.w(TAG, "Series-completion check failed: ${it.message}") }
+            }
         }
     }
 
     private suspend fun markMovieWatched(tmdbId: Int) {
         // Watched → never offer to resume it again. Runs BEFORE the dedup: a rewatch in
         // the same session re-creates resume points that still need cleaning at 90%.
-        runCatching { resumeDao.deleteByKey("tmdb:$tmdbId") }
+        suspendRunCatchingLogged(TAG, "Could not delete movie resume point") {
+            resumeDao.deleteByKey("tmdb:$tmdbId")
+        }
         if (!markedKeys.add("movie:$tmdbId")) return
         writeMutex.withLock {
             val existing = watchlistDao.getByIdSync(tmdbId)

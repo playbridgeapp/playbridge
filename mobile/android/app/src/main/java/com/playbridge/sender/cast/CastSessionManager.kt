@@ -517,8 +517,9 @@ class CastSessionManager(
             Log.w(TAG, "ensureCastServiceRunning ignored in non-main process")
             return
         }
-        runCatching { CastSessionService.start(context) }
-            .onFailure { Log.w(TAG, "Could not ensure cast session service: ${it.message}") }
+        runCatchingLogged(TAG, "Could not ensure cast session service") {
+            CastSessionService.start(context)
+        }
     }
 
     /** Last known native receiver name — used for the FGS title while the socket is down. */
@@ -1020,13 +1021,13 @@ class CastSessionManager(
             .build()
         // Note: onAvailable also fires once at registration when a matching network is
         // already up; attemptRecovery() is a cheap no-op in that case (no prior target).
-        runCatching {
+        runCatchingLogged(TAG, "Could not register network callback") {
             cm.registerNetworkCallback(request, object : android.net.ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: android.net.Network) {
                     attemptRecovery("network available")
                 }
             })
-        }.onFailure { Log.w(TAG, "Could not register network callback: ${it.message}") }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1172,11 +1173,11 @@ class CastSessionManager(
     fun load(media: MediaItem, userInitiated: Boolean = true): Boolean {
         val target = _externalTarget.value ?: return false
         if (userInitiated) {
-            runCatching {
+            runCatchingLogged(TAG, "Could not supersede linked page queue") {
                 org.koin.core.context.GlobalContext.get()
                     .get<com.playbridge.sender.browser.LinkedPageCastCoordinator>()
                     .supersedeIfActive()
-            }.onFailure { Log.w(TAG, "Could not supersede linked page queue: ${it.message}") }
+            }
         }
         val route = media.effectiveRoute ?: if (target is BrowserCastTarget) {
             BrowserStreamRoute.effectiveMode(
@@ -1397,7 +1398,7 @@ class CastSessionManager(
         if (pm.isIgnoringBatteryOptimizations(context.packageName)) return@withContext
         val prefs = context.getSharedPreferences("browser_prefs", android.content.Context.MODE_PRIVATE)
         if (prefs.getBoolean("battery_exemption_prompted", false)) return@withContext
-        runCatching {
+        runCatchingLogged(TAG, "Couldn't open battery-optimization settings") {
             android.widget.Toast.makeText(
                 context,
                 "To keep casting stable with the screen off, set PlayBridge battery usage " +
@@ -1425,7 +1426,7 @@ class CastSessionManager(
             // Only burn the one-shot AFTER the settings screen actually launched — if the
             // intent fails (odd OEM builds), the next cast session gets another chance.
             prefs.edit().putBoolean("battery_exemption_prompted", true).apply()
-        }.onFailure { Log.w(TAG, "Couldn't open battery-optimization settings", it) }
+        }
     }
 
     /**
@@ -1437,7 +1438,7 @@ class CastSessionManager(
      * TV (it'll resume when reachable), while a foreground give-up switched to the phone.
      */
     private fun notifyReconnectGaveUp(backgrounded: Boolean) {
-        runCatching {
+        runCatchingLogged(TAG, "Could not post reconnect notification") {
             val mgr = context.getSystemService(Context.NOTIFICATION_SERVICE)
                 as android.app.NotificationManager
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
@@ -1472,7 +1473,7 @@ class CastSessionManager(
                 .apply { contentPi?.let { setContentIntent(it) } }
                 .build()
             mgr.notify(RECONNECT_NOTIF_ID, notif)
-        }.onFailure { Log.w(TAG, "Could not post reconnect notification: ${it.message}") }
+        }
     }
 
     private fun cancelReconnectGaveUpNotification() {
@@ -1629,16 +1630,16 @@ class CastSessionManager(
 
     /** Best-effort stop of phone-side series queues (native + external). Lazy Koin to avoid cycles. */
     private fun stopEpisodeQueues() {
-        runCatching {
+        runCatchingLogged(TAG, "TvQueueCoordinator.stop failed") {
             org.koin.core.context.GlobalContext.get()
                 .get<com.playbridge.sender.connection.TvQueueCoordinator>()
                 .stop()
-        }.onFailure { Log.w(TAG, "TvQueueCoordinator.stop failed: ${it.message}") }
-        runCatching {
+        }
+        runCatchingLogged(TAG, "ExternalQueueCoordinator.stop failed") {
             org.koin.core.context.GlobalContext.get()
                 .get<com.playbridge.sender.connection.ExternalQueueCoordinator>()
                 .stop()
-        }.onFailure { Log.w(TAG, "ExternalQueueCoordinator.stop failed: ${it.message}") }
+        }
     }
 
     /** @deprecated Prefer [endCastSession] / [disconnectSession]; kept for any external call sites. */

@@ -130,6 +130,7 @@ internal object JniUpstreamHttpClient {
     @JvmStatic
     fun close(handle: Long) {
         val open = openHandles.remove(handle) ?: return
+        // Per-segment teardown. A peer that already dropped the socket throws on every close.
         runCatching { open.input?.close() }
         runCatching { open.response?.close() }
         runCatching { open.call?.cancel() }
@@ -217,6 +218,7 @@ internal object JniUpstreamHttpClient {
             useCaches = false
             doInput = true
             headers.forEach { (k, v) ->
+                // Per-header on the per-request path; restricted names are expected.
                 runCatching { setRequestProperty(k, v) }
             }
             if (headers.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
@@ -245,7 +247,7 @@ internal object JniUpstreamHttpClient {
 
         // Accept success and 206; still open body for odd HLS-ish 2xx already covered.
         if (code !in 200..399) {
-            // Drain/close error stream; caller may retry.
+            // Per-request error-body close. The HTTP status is already logged by the caller.
             runCatching { stream?.close() }
             conn.disconnect()
             return ConnectOutcome(

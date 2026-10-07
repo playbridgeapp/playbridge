@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.content.getSystemService
+import com.playbridge.shared.logging.runCatchingLogged
 import java.io.BufferedInputStream
 import java.io.BufferedReader
 import java.io.IOException
@@ -332,10 +333,8 @@ class ExternalScreenMirrorCoordinator(
         if (sourceSize == (captureWidth to captureHeight)) return
         sourceSize = captureWidth to captureHeight
         framePacer?.resizeInput(captureWidth, captureHeight)
-        runCatching {
+        runCatchingLogged(TAG, "Unable to resize external mirror capture") {
             display?.resize(captureWidth, captureHeight, densityDpi)
-        }.onFailure {
-            Log.w(TAG, "Unable to resize external mirror capture", it)
         }
         Log.i(TAG, "External mirror source resized to ${captureWidth}x$captureHeight")
     }
@@ -359,13 +358,13 @@ class ExternalScreenMirrorCoordinator(
         projectionCallback = null
         projection?.stop()
         projection = null
-        runCatching { listener?.close() }
+        runCatchingLogged(TAG, "Could not close mirror listener") { listener?.close() }
         listener = null
         streamHub?.close()
         streamHub = null
-        runCatching { pipeRead?.close() }
+        runCatchingLogged(TAG, "Could not close mirror pipe read end") { pipeRead?.close() }
         pipeRead = null
-        runCatching { pipeWrite?.close() }
+        runCatchingLogged(TAG, "Could not close mirror pipe write end") { pipeWrite?.close() }
         pipeWrite = null
         executor?.shutdownNow()
         executor = null
@@ -375,7 +374,7 @@ class ExternalScreenMirrorCoordinator(
 
     private fun releaseEncoderOffMainThread(encoder: MediaCodecMpegTsEncoder) {
         Thread(
-            { runCatching { encoder.close() }.onFailure { Log.w(TAG, "Encoder release failed", it) } },
+            { runCatchingLogged(TAG, "Encoder release failed") { encoder.close() } },
             "PlayBridgeExternalMirrorStop",
         ).apply {
             isDaemon = true
@@ -442,6 +441,7 @@ class ExternalScreenMirrorCoordinator(
                 else -> respond(socket, MirrorHttpResponse.empty(404, "Not Found"))
             }
         } catch (_: IOException) {
+            // Per-request. Client disconnect is expected, and close often throws again.
             runCatching { socket.close() }
         }
     }
@@ -585,13 +585,16 @@ private class LiveMpegTsHub(
     fun close() {
         if (closed) return
         closed = true
-        runCatching { input.close() }
+        runCatchingLogged("ExternalScreenMirror", "Could not close mirror transport input") {
+            input.close()
+        }
         clients.keys.toList().forEach(::removeClient)
         segments.clear()
     }
 
     private fun removeClient(socket: Socket) {
         clients.remove(socket)?.close()
+        // Per-client disconnect during a live mirror; a second close is expected.
         runCatching { socket.close() }
     }
 
