@@ -64,7 +64,7 @@ jobs:
 
     - name: Set up Node
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v7
       with:
         node-version: '20'
         cache: pnpm
