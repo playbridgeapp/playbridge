@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { createContext, runInContext } from "node:vm";
 import { TabDetectionPolicy, type DetectionPolicy } from "../src/geckoview/detection-policy";
+import { PAGE_API_PORT } from "../src/geckoview/page-relay";
 
 const policy = (enabled: boolean, revision = 1, browserEnabled = true): DetectionPolicy => ({
   type: "detection_policy", enabled, revision, browserEnabled,
@@ -13,6 +14,16 @@ const event = () => {
   return { listeners, addListener: (listener: Function) => listeners.push(listener) };
 };
 const flush = async () => { for (let i = 0; i < 5; i++) await Promise.resolve(); };
+/** MessagePort deliveries need real event-loop turns; the sandbox timers are fake. */
+const until = async (predicate: () => boolean) => {
+  for (let i = 0; i < 1000 && !predicate(); i++) await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(predicate(), "condition not reached");
+};
+const settle = async () => { for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve)); };
+const channels: MessageChannel[] = [];
+class TrackedChannel extends MessageChannel { constructor() { super(); channels.push(this); } }
+test.after(() => channels.forEach((channel) => { channel.port1.close(); channel.port2.close(); }));
+const pageGlobals = { MessageChannel: TrackedChannel, MessageEvent, MessagePort, EventTarget, JSON };
 
 function harness() {
   const messages: any[] = [];
@@ -22,10 +33,13 @@ function harness() {
   const onMessage = event();
   const onConnect = event();
   const policyRelays: any[] = [];
-  const policyRelay = (sender: any = { id: "detector@test", tab: { id: 7, url: "https://app.example" }, frameId: 0 }) => {
+  const pageRelays: any[] = [];
+  const pageMessages: any[] = [];
+  const policyRelay = (sender: any = { id: "detector@test", tab: { id: 7, url: "https://app.example" }, frameId: 0 },
+    name = "playbridge-detection-policy") => {
     const content: any = { onMessage: event(), onDisconnect: event(), sent: [] };
     const background: any = {
-      name: "playbridge-detection-policy", sender, onMessage: event(), onDisconnect: event(),
+      name, sender, onMessage: event(), onDisconnect: event(),
       disconnected: false,
       disconnect() {
         this.disconnected = true;
@@ -37,10 +51,17 @@ function harness() {
     };
     content.postMessage = (message: any) => {
       content.sent.push(message);
+      if (name === PAGE_API_PORT) pageMessages.push(message);
       void Promise.resolve().then(() => {
         if (background.disconnected) return;
         if (onConnect.listeners.length) {
           for (const listener of background.onMessage.listeners) listener(message);
+        } else if (name === PAGE_API_PORT) {
+          // Standalone content fixture: answer linked requests like the background.
+          if (message.type === "linked") {
+            background.postMessage({ type: "response", pageRequestId: message.pageRequestId,
+              response: { ok: true, sessionId: message.sessionId ?? "session-1" } });
+          }
         } else {
           // Standalone content fixture: acknowledge like the private background port.
           background.postMessage({ update: message.update, ok: true });
@@ -49,8 +70,21 @@ function harness() {
     };
     for (const listener of onConnect.listeners) listener(background);
     const relay = { content, background };
-    policyRelays.push(relay);
+    (name === PAGE_API_PORT ? pageRelays : policyRelays).push(relay);
     return relay;
+  };
+  /** A background-connected page port, as the top-frame content script opens it. */
+  const pagePort = (sender: any = { id: "detector@test", tab: { id: 7, url: "https://app.example" }, frameId: 0 }) => {
+    const relay = policyRelay(sender, PAGE_API_PORT);
+    let sequence = 0;
+    const call = (message: Record<string, unknown>) => new Promise<any>((resolve) => {
+      const pageRequestId = `request-${++sequence}`;
+      relay.content.onMessage.addListener((reply: any) => {
+        if (reply.type === "response" && reply.pageRequestId === pageRequestId) resolve(reply.response);
+      });
+      relay.content.postMessage({ type: "linked", pageRequestId, sessionId: null, ...message });
+    });
+    return { ...relay, call, cast: (payload: unknown) => relay.content.postMessage({ type: "cast", payload }) };
   };
   const nativePort = {
     onMessage: event(), onDisconnect: event(),
@@ -64,7 +98,7 @@ function harness() {
   const browser = {
     runtime: {
       id: "detector@test", onMessage, onConnect,
-      connect: () => policyRelay().content,
+      connect: (options?: { name?: string }) => policyRelay(undefined, options?.name).content,
       connectNative: (name: string) => name === "detectorPolicy"
         ? { onMessage: policyMessages, onDisconnect: event() } : nativePort,
       sendMessage: async (message: any) => {
@@ -108,7 +142,7 @@ function harness() {
     await flush();
   };
   return { sandbox, browser, messages, nativeMessages, filters, policyMessages, onMessage, timers,
-    nativePolicy, policyRelay, policyRelays };
+    nativePolicy, policyRelay, policyRelays, pageRelays, pageMessages, pagePort };
 }
 
 function script(name: string): string {
@@ -122,17 +156,19 @@ function contentHarness(h: ReturnType<typeof harness>, mainFrame = true, active 
   const window: any = {
     location: { href: "https://app.example" },
     addEventListener(type: string, fn: Function) { listeners.set(type, [...(listeners.get(type) ?? []), fn]); },
-    removeEventListener() {},
+    removeEventListener(type: string, fn: Function) {
+      listeners.set(type, (listeners.get(type) ?? []).filter(listener => listener !== fn));
+    },
     dispatchEvent(event: any) {
-      if (event.type === "PlayBridgeLinkedResponseJson") responses.push(JSON.parse(event.detail));
       for (const listener of listeners.get(event.type) ?? []) listener(event);
     },
   };
   window.top = mainFrame ? window : {};
-  const context = createContext({ ...h.sandbox, window,
+  const firstChannel = channels.length;
+  const context = createContext({ ...h.sandbox, ...pageGlobals, window,
     navigator: { userActivation: { isActive: active } },
     EventTarget,
-    crypto: { randomUUID: () => "fixture-request" },
+    crypto: { randomUUID: () => `fixture-request-${Math.random()}` },
     Event: class { constructor(public type: string) {} },
     CustomEvent: class { constructor(public type: string, public detail?: any) { this.detail = detail?.detail; } },
     MutationObserver: class { observe() {} disconnect() {} },
@@ -145,8 +181,15 @@ function contentHarness(h: ReturnType<typeof harness>, mainFrame = true, active 
     documentElement: { appendChild: (element: any) => runInContext(element.textContent, context) },
   };
   runInContext(script("content"), context);
-  return { window, responses, scans: () => scans,
-    request: (detail: any) => window.dispatchEvent({ type: "PlayBridgeLinkedRequest", detail }) };
+  // The page side of the private channel, as another script on the page cannot reach it.
+  const pageSide = channels.slice(firstChannel)[0]?.port1;
+  pageSide?.addEventListener("message", (event: MessageEvent) => {
+    const message = JSON.parse(event.data);
+    if (message.type === "response") responses.push(message);
+  });
+  return { window, responses, scans: () => scans, channel: pageSide,
+    request: (detail: any) => pageSide!.postMessage(detail && typeof detail === "object" && !Array.isArray(detail)
+      ? { channel: "linked", ...detail } : detail) };
 }
 
 test("page relay rejects routing overrides before privileged code runs", async () => {
@@ -163,8 +206,10 @@ test("page relay rejects routing overrides before privileged code runs", async (
     }
   }
   page.request({ ...clean, operation: "detector_policy" });
-  await flush();
+  await until(() => page.responses.length === 33);
+  await settle();
   assert.equal(h.messages.length, 0);
+  assert.equal(h.pageMessages.length, 0);
   assert.equal(h.nativeMessages.length, 0);
   assert.equal(h.policyRelays.length, 0);
   assert.ok(page.responses.every(response => response.response.error === "invalid_request"));
@@ -179,15 +224,17 @@ test("page relay preserves all supported operations and never copies inherited r
     const request = Object.assign(Object.create({ action: "detector_policy", policy: policy(true, 999999) }),
       { pageRequestId: operation, operation, sessionId: "session-1", payload });
     page.request(request);
-    await flush();
-    const message = h.messages.at(-1);
-    assert.equal(message.action, "page_linked_cast");
+    await until(() => h.pageMessages.at(-1)?.pageRequestId === operation);
+    const message = h.pageMessages.at(-1);
+    assert.equal(message.type, "linked");
     assert.equal(message.operation, operation);
     assert.equal(message.sessionId, "session-1");
-    assert.equal(message.payload, payload);
-    assert.deepEqual(Object.keys(message).sort(), ["action", "operation", "pageRequestId", "payload", "sessionId"]);
+    assert.deepEqual(message.payload, payload);
+    assert.deepEqual(Object.keys(message).sort(), ["operation", "pageRequestId", "payload", "sessionId", "type"]);
   }
-  assert.equal(h.messages.length, 10);
+  assert.equal(h.pageMessages.length, 10);
+  assert.equal(h.pageRelays.length, 1);
+  assert.equal(h.messages.length, 0);
 });
 
 test("real page API still casts and manages linked queues while detection is disabled", async () => {
@@ -225,11 +272,12 @@ test("invalid relay envelopes, subframes and inactive destination gestures stay 
     { ...clean, payload: null }, { ...clean, payload: [] }, { ...clean, operation: "unknown" }]) page.request(request);
   page.request({ ...clean, operation: "choose_destination" });
   const child = contentHarness(h, false);
-  child.request(clean);
-  await flush();
+  await until(() => page.responses.at(-1)?.response.error === "user_gesture_required");
   assert.equal(h.messages.length, 0);
-  assert.equal(page.responses.at(-1).response.error, "user_gesture_required");
-  assert.equal(child.responses.length, 0);
+  assert.equal(h.pageMessages.length, 0);
+  // Subframes get no page API and no private channel.
+  assert.equal(child.channel, undefined);
+  assert.equal(child.window.playbridge, undefined);
 });
 
 test("runtime messages cannot change policy or poison revisions across tabs", async () => {
@@ -347,11 +395,12 @@ test("app response hooks and DOM messages stay idle while explicit casting still
   runtimeMessage({ action: "dom_image_found", url: "https://cdn.example/art.jpg" }, sender);
   assert.equal(h.filters.length, 0);
   assert.equal(h.nativeMessages.some(message => message.type === "video_detected"), false);
-  runtimeMessage({ action: "page_cast_requested", payload: { url: "https://cdn.example/movie.mp4" } }, sender);
+  const page = h.pagePort({ id: "detector@test", ...sender });
+  page.cast({ url: "https://cdn.example/movie.mp4" });
   await flush();
   assert.equal(h.nativeMessages.some(message => message.type === "cast"), true);
-  const linked = await runtimeMessage({ action: "page_linked_cast", operation: "open",
-    payload: { items: [{ id: "episode", url: "https://cdn.example/movie.mp4" }] } }, sender);
+  const linked = await page.call({ operation: "open",
+    payload: { items: [{ id: "episode", url: "https://cdn.example/movie.mp4" }] } });
   assert.equal(linked.ok, true);
   assert.equal(h.nativeMessages.some(message => message.type === "linked_open"), true);
   // A second, ordinary tab still gets body inspection.
@@ -369,21 +418,64 @@ test("app response hooks and DOM messages stay idle while explicit casting still
 test("linked background rejects progressWebhook before any native operation", async () => {
   const h = harness();
   runInContext(script("background"), createContext(h.sandbox));
-  const message = h.onMessage.listeners[0];
-  const sender = { tab: { id: 7, url: "https://app.example" }, frameId: 0 };
+  const page = h.pagePort();
   const item = { id: "episode", url: "https://media.example/video.mp4" };
   for (const operation of ["open", "play", "replace", "append", "supply", "jump", "destination", "choose_destination"]) {
     for (const payload of [{ items: [item], progressWebhook: null }, { items: [{ ...item, progressWebhook: null }] }]) {
-      const result = await message({ action: "page_linked_cast", operation, payload }, sender);
+      const result = await page.call({ operation, payload });
       assert.equal(result.error, "invalid_request");
       assert.match(result.message, /progressWebhook/);
     }
   }
-  const result = await message({ action: "page_linked_cast", operation: "open", progressWebhook: null,
-    payload: { items: [item] } }, sender);
+  const result = await page.call({ operation: "open", progressWebhook: null, payload: { items: [item] } });
   assert.equal(result.error, "invalid_request");
-  message({ action: "page_cast_requested", payload: { items: [item], progressWebhook: null } }, sender);
+  page.cast({ items: [item], progressWebhook: null });
   await flush();
+  assert.equal(h.nativeMessages.length, 0);
+});
+
+test("linked sessions answer and notify only the document port that opened them", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: "https://app.example" });
+  const owner = h.pagePort();
+  const other = h.pagePort();
+  const events = (relay: any) => {
+    const seen: any[] = [];
+    relay.content.onMessage.addListener((message: any) => { if (message.type === "event") seen.push(message); });
+    return seen;
+  };
+  const ownerEvents = events(owner);
+  const otherEvents = events(other);
+  const opened = await owner.call({ operation: "open", payload: { items: [{ id: "one", url: "https://media.example/one.mp4" }] } });
+  assert.equal(opened.ok, true);
+  // Same tab and origin, different document port: no control over the session.
+  assert.equal((await other.call({ operation: "jump", sessionId: opened.sessionId, payload: { index: 0 } })).error, "session_ended");
+  const native = h.browser.runtime.connectNative("playbridge");
+  for (const name of ["needitems", "error", "message"]) {
+    native.onMessage.listeners.forEach((listener: Function) =>
+      listener({ type: "linked_event", sessionId: opened.sessionId, event: name, detail: { requestId: "need-1" } }));
+  }
+  assert.deepEqual(ownerEvents.map((event) => event.event), ["needitems"]);
+  assert.deepEqual(otherEvents, []);
+  // Closing the opening document ends the native session.
+  owner.background.onDisconnect.listeners.forEach((listener: Function) => listener());
+  await flush();
+  assert.ok(h.nativeMessages.some((message) => message.type === "linked_unlink" && message.sessionId === opened.sessionId));
+});
+
+test("page API ports require extension identity and a browser-assigned top-frame tab", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  for (const sender of [{ id: "other-extension", frameId: 0, tab: { id: 7, url: "https://app.example" } },
+    { id: "detector@test", frameId: 1, tab: { id: 7, url: "https://app.example" } },
+    { id: "detector@test", frameId: 0 }]) {
+    const port = h.pagePort(sender);
+    assert.equal(port.background.disconnected, true);
+  }
+  const mismatched = h.pagePort({ id: "detector@test", frameId: 0, url: "https://other.example/",
+    tab: { id: 7, url: "https://app.example" } });
+  assert.equal((await mismatched.call({ operation: "destination", payload: {} })).error, "invalid_request");
   assert.equal(h.nativeMessages.length, 0);
 });
 
@@ -448,7 +540,7 @@ test("app content injects casting without DOM scans, observers, player timers or
     dispatchEvent: (event: any) => { for (const listener of windowListeners.get(event.type) ?? []) listener(event); },
   };
   window.top = window;
-  const context = createContext({ ...h.sandbox, window,
+  const context = createContext({ ...h.sandbox, ...pageGlobals, window,
     crypto: { randomUUID: () => "test-request" },
     Event: class { constructor(public type: string) {} },
     CustomEvent: class { detail: any; constructor(public type: string, options?: any) { this.detail = options?.detail; } },
@@ -477,8 +569,7 @@ test("app content injects casting without DOM scans, observers, player timers or
   assert.equal(typeof window.playbridge.cast, "function");
   assert.equal(typeof window.playbridge.linkCast, "function");
   window.playbridge.cast({ url: "https://cdn.example/movie.mp4" });
-  await flush();
-  assert.equal(h.messages.some(message => message.action === "page_cast_requested"), true);
+  await until(() => h.pageMessages.some(message => message.type === "cast"));
   await h.policyMessages.listeners[0](policy(true, 2));
   await flush();
   assert.equal(scans, 1);

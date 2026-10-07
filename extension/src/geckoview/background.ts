@@ -8,6 +8,7 @@
 
 import browser from "./browser";
 import { DETECTION_POLICY_PORT, TabDetectionPolicy, validDetectionPolicy, type DetectionPolicy } from "./detection-policy";
+import { LINKED_PAGE_EVENTS, PAGE_API_PORT, validPageRequestId } from "./page-relay";
 import {
   normalizeLinkedAppendPayload,
   normalizeLinkedJumpPayload,
@@ -239,6 +240,8 @@ type LinkedBinding = {
   tabId: number;
   origin: string;
   navigationGeneration: number;
+  /** The opening document's private runtime port; session events go nowhere else. */
+  pagePort?: any;
 };
 
 const linkedBindings = new Map<string, LinkedBinding>();
@@ -258,10 +261,12 @@ function randomId(): string {
 }
 
 function deliverLinkedEvent(binding: LinkedBinding, event: string, detail: Record<string, unknown>): void {
-  void browser.tabs.sendMessage(binding.tabId, {
-    type: "linked_cast_event",
-    event: { sessionId: binding.sessionId, event, detail },
-  }).catch(() => {});
+  if (!(LINKED_PAGE_EVENTS as readonly string[]).includes(event)) return;
+  try {
+    binding.pagePort?.postMessage({ type: "event", sessionId: binding.sessionId, event, detail });
+  } catch {
+    // The document is gone; port disconnect owns teardown.
+  }
 }
 
 function closeLinkedBinding(binding: LinkedBinding, reason: string, notifyNative = true): void {
@@ -386,12 +391,14 @@ function linkedError(error: string, message?: string): Record<string, unknown> {
 }
 
 async function handleLinkedPageRequest(
-  message: { operation?: string; sessionId?: string; payload?: unknown },
-  sender: { tab?: { id?: number; url?: string }; frameId?: number },
+  message: { operation?: string; sessionId?: string | null; payload?: unknown },
+  sender: { tab?: { id?: number; url?: string }; frameId?: number; url?: string },
+  pagePort?: any,
 ): Promise<Record<string, unknown>> {
   const tabId = sender.tab?.id;
   const origin = pageOrigin(sender.tab?.url);
-  if (tabId == null || sender.frameId !== 0 || !origin) return linkedError("invalid_request");
+  if (tabId == null || sender.frameId !== 0 || !origin ||
+      (sender.url !== undefined && pageOrigin(sender.url) !== origin)) return linkedError("invalid_request");
   if (!pageCastRequestWithinLimit(message.payload ?? {})) return linkedError("resource_limit");
   if (pageCastHasSenderOnlyFields(message) || pageCastHasSenderOnlyFields(message.payload)) {
     return linkedError("invalid_request", "progressWebhook is not available to websites");
@@ -418,7 +425,7 @@ async function handleLinkedPageRequest(
   else if (operation === "unlink") payload = {};
   else if (operation === "ping") payload = { ready: true };
   if (!payload || !operation) return linkedError("invalid_request");
-  let sessionId = message.sessionId;
+  let sessionId = message.sessionId ?? undefined;
   if (opening) sessionId = randomId();
   if (!sessionId) return linkedError("session_ended");
   if (linkedNativePending.size >= MAX_LINKED_NATIVE_PENDING) {
@@ -427,7 +434,8 @@ async function handleLinkedPageRequest(
 
   if (!opening) {
     const binding = linkedBindings.get(sessionId);
-    if (!binding || binding.tabId !== tabId || binding.origin !== origin || binding.navigationGeneration !== generation) {
+    if (!binding || binding.tabId !== tabId || binding.origin !== origin || binding.navigationGeneration !== generation ||
+        binding.pagePort !== pagePort) {
       return linkedError("session_ended");
     }
   }
@@ -475,7 +483,7 @@ async function handleLinkedPageRequest(
           .catch(() => {});
         return linkedError("session_ended");
       }
-      linkedBindings.set(sessionId, { sessionId, tabId, origin, navigationGeneration: generation });
+      linkedBindings.set(sessionId, { sessionId, tabId, origin, navigationGeneration: generation, pagePort });
     } else if (operation === "unlink") {
       linkedBindings.delete(sessionId);
     }
@@ -1637,6 +1645,70 @@ browser.runtime.onConnect.addListener((port: any) => {
   });
 });
 
+function handlePageCast(payload: unknown, sender: { tab?: { id?: number; url?: string }; frameId?: number }): void {
+  if (sender.frameId !== 0) return;
+  if (!pageCastRequestWithinLimit(payload ?? {})) return;
+  const request = normalizePageCastPayload(payload);
+  const origin = pageOrigin(sender.tab?.url);
+  const tabId = sender.tab?.id;
+  if (request && origin && tabId != null) {
+    // Use the browser-supplied tab URL, not a page-provided field, as Android's
+    // persisted-consent identity.
+    sendToNative({
+      type: "cast",
+      origin,
+      tabId,
+      navigationGeneration: currentNavigationGeneration(tabNavigationGenerations, tabId),
+      ...request,
+    });
+  } else {
+    plog("Ignoring invalid page cast request from", sender.tab?.id);
+  }
+}
+
+const PAGE_RELAY_FIELDS = new Set(["type", "pageRequestId", "operation", "sessionId", "payload"]);
+
+// The page API relays over one port per top-frame document. Responses and session
+// events return on that port only, so another document or frame never sees them.
+browser.runtime.onConnect.addListener((port: any) => {
+  if (port.name !== PAGE_API_PORT) return;
+  const sender = port.sender;
+  const tabId = sender?.tab?.id;
+  if (sender?.id !== browser.runtime.id || sender?.frameId !== 0 ||
+      !Number.isSafeInteger(tabId) || tabId < 0) {
+    port.disconnect();
+    return;
+  }
+  let connected = true;
+  port.onMessage.addListener((message: Record<string, unknown> | null) => {
+    if (!message || typeof message !== "object") return;
+    if (message.type === "cast") {
+      handlePageCast(message.payload, sender);
+      return;
+    }
+    const pageRequestId = message.pageRequestId;
+    if (message.type !== "linked" || !validPageRequestId(pageRequestId)) return;
+    if (Object.keys(message).some((key) => !PAGE_RELAY_FIELDS.has(key))) {
+      port.postMessage({ type: "response", pageRequestId, response: linkedError("invalid_request") });
+      return;
+    }
+    const request = {
+      operation: typeof message.operation === "string" ? message.operation : undefined,
+      sessionId: typeof message.sessionId === "string" ? message.sessionId : null,
+      payload: message.payload,
+    };
+    void handleLinkedPageRequest(request, sender, port).then((response) => {
+      if (connected) port.postMessage({ type: "response", pageRequestId, response });
+    });
+  });
+  port.onDisconnect.addListener(() => {
+    connected = false;
+    for (const binding of [...linkedBindings.values()]) {
+      if (binding.pagePort === port) closeLinkedBinding(binding, "navigation");
+    }
+  });
+});
+
 // DOM / player messages from content script
 browser.runtime.onMessage.addListener(
   (
@@ -1653,30 +1725,6 @@ browser.runtime.onMessage.addListener(
     },
     sender: { tab?: { id?: number; url?: string }; frameId?: number },
   ) => {
-    if (message?.action === "page_linked_cast") {
-      return handleLinkedPageRequest(message, sender);
-    }
-    if (message?.action === "page_cast_requested") {
-      if (sender.frameId !== 0) return false;
-      if (!pageCastRequestWithinLimit(message.payload ?? {})) return false;
-      const request = normalizePageCastPayload(message.payload);
-      const origin = pageOrigin(sender.tab?.url);
-      const tabId = sender.tab?.id;
-      if (request && origin && tabId != null) {
-        // Use the browser-supplied tab URL, not the page-provided message field,
-        // as Android's persisted-consent identity.
-        sendToNative({
-          type: "cast",
-          origin,
-          tabId,
-          navigationGeneration: currentNavigationGeneration(tabNavigationGenerations, tabId),
-          ...request,
-        });
-      } else {
-        plog("Ignoring invalid page cast request from", sender.tab?.id);
-      }
-      return false;
-    }
     if (
       message?.action !== "dom_video_found" &&
       message?.action !== "player_video_found" &&

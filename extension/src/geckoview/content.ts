@@ -6,29 +6,18 @@ import { PAGE_PLAYBACK_BRIDGE_SCRIPT } from "./page-bridge";
 
 import browser from "./browser";
 import { DETECTION_POLICY_PORT, detectionOptions, validDetectionPolicy } from "./detection-policy";
-import { normalizeLinkedPageRelay, validPageRequestId } from "./page-relay";
+import { LINKED_PAGE_EVENTS, PAGE_API_PORT, normalizeLinkedPageRelay, validPageRequestId } from "./page-relay";
+import { injectPageScriptWithChannel } from "./page-channel";
 import { isSupportedDomImage } from "./detected-media-kind";
 import { installPluginBridge } from "./plugin-bridge";
 
-// cloneInto is Firefox/GeckoView-only (not on TypeScript's DOM lib).
 let detectionEnabled = false;
 let options = detectionOptions();
 let policyUpdate = 0;
 let videoObserver: MutationObserver | undefined;
 
-const cloneIntoFn = (globalThis as { cloneInto?: (obj: unknown, scope: Window) => unknown })
-  .cloneInto;
-
 browser.runtime.onMessage.addListener((message: { type?: string }) => {
-  if (message?.type === "bridge_feedback") {
-    const detail =
-      typeof cloneIntoFn === "function"
-        ? cloneIntoFn(message, window)
-        : message;
-    window.dispatchEvent(new CustomEvent("PlayBridgeFeedback", { detail }));
-  } else if (message?.type === "detector_same_document_navigation") {
-    if (options.navigationRescans) scanAll();
-  }
+  if (message?.type === "detector_same_document_navigation" && options.navigationRescans) scanAll();
   return false;
 });
 
@@ -253,75 +242,81 @@ window.addEventListener("PlayBridgeMediaFound", ((event: CustomEvent) => {
     .catch(() => {});
 }) as EventListener);
 
-// The injected page-world bridge deliberately crosses into this isolated
-// content script through a DOM event. The background owns validation before it
-// reaches Android native messaging.
-window.addEventListener("PlayBridgeCast", ((event: CustomEvent) => {
+// The page API reaches this isolated script only through its private channel, and
+// the background only through this document's own runtime port. Nothing about a
+// request, response or session event is visible to other scripts on the page.
+function installPageApi(): void {
   if (window.top !== window) return;
-  browser.runtime
-    .sendMessage({
-      action: "page_cast_requested",
-      payload: event.detail,
-      origin: window.location.href,
-    })
-    .catch(() => {});
-}) as EventListener);
-
-window.addEventListener("PlayBridgeLinkedRequest", ((event: CustomEvent) => {
-  if (window.top !== window) return;
-  const detail = normalizeLinkedPageRelay(event.detail);
-  if (!detail) {
-    const pageRequestId = event.detail?.pageRequestId;
-    if (validPageRequestId(pageRequestId)) {
-      window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
-        detail: JSON.stringify({ pageRequestId, response: { ok: false, error: "invalid_request" } }),
-      }));
-    }
-    return;
-  }
-  if (detail.operation === "choose_destination" && navigator.userActivation && !navigator.userActivation.isActive) {
-    window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
-      detail: JSON.stringify({ pageRequestId: detail.pageRequestId, response: { ok: false, error: "user_gesture_required" } }),
-    }));
-    return;
-  }
-  browser.runtime
-    .sendMessage(detail)
-    .then((response: unknown) => {
-      window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
-        detail: JSON.stringify({ pageRequestId: detail?.pageRequestId, response }),
-      }));
-    })
-    .catch((error: Error) => {
-      window.dispatchEvent(new CustomEvent("PlayBridgeLinkedResponseJson", {
-        detail: JSON.stringify({
-          pageRequestId: detail?.pageRequestId,
-          response: { ok: false, error: "native_unavailable", message: error?.message },
-        }),
-      }));
+  const injected = injectPageScriptWithChannel(PAGE_PLAYBACK_BRIDGE_SCRIPT);
+  if (!injected) return;
+  const page = injected;
+  const outstanding = new Set<string>();
+  let relay: any;
+  const respond = (pageRequestId: string, response: unknown) => {
+    outstanding.delete(pageRequestId);
+    page.post({ channel: "linked", type: "response", pageRequestId, response });
+  };
+  function ensureRelay(): any {
+    if (relay) return relay;
+    const port = browser.runtime.connect({ name: PAGE_API_PORT });
+    relay = port;
+    port.onMessage.addListener((raw: unknown) => {
+      if (relay !== port || !raw || typeof raw !== "object") return;
+      const message = raw as Record<string, unknown>;
+      if (message.type === "response" && validPageRequestId(message.pageRequestId) &&
+          outstanding.has(message.pageRequestId)) {
+        const response = message.response && typeof message.response === "object" ? message.response : {};
+        respond(message.pageRequestId, response);
+      } else if (message.type === "event" && validPageRequestId(message.sessionId) &&
+          (LINKED_PAGE_EVENTS as readonly unknown[]).includes(message.event)) {
+        const detail = message.detail && typeof message.detail === "object" ? message.detail : {};
+        page.post({ channel: "linked", type: "event", sessionId: message.sessionId, event: message.event, detail });
+      }
     });
-}) as EventListener);
-
-browser.runtime.onMessage.addListener((message: { type?: string; event?: unknown }) => {
-  if (window.top !== window || message?.type !== "linked_cast_event") return;
-  // CustomEvent object details created in the extension's isolated world are not
-  // reliably readable by Firefox page scripts. A string crosses that boundary
-  // safely; the injected page bridge parses it into a page-owned object.
-  window.dispatchEvent(new CustomEvent("PlayBridgeLinkedEventJson", {
-    detail: JSON.stringify(message.event ?? {}),
-  }));
-});
+    port.onDisconnect.addListener(() => {
+      if (relay !== port) return;
+      relay = undefined;
+      for (const pageRequestId of [...outstanding]) {
+        respond(pageRequestId, { ok: false, error: "native_unavailable" });
+      }
+    });
+    return port;
+  }
+  function post(message: Record<string, unknown>, pageRequestId?: string): void {
+    try {
+      ensureRelay().postMessage(message);
+    } catch {
+      if (pageRequestId) respond(pageRequestId, { ok: false, error: "native_unavailable" });
+    }
+  }
+  page.onMessage((message: unknown) => {
+    if (window.top !== window || !message || typeof message !== "object") return;
+    const channel = (message as { channel?: unknown }).channel;
+    if (channel === "cast") {
+      post({ type: "cast", payload: (message as { payload?: unknown }).payload });
+      return;
+    }
+    if (channel !== "linked") return;
+    const detail = normalizeLinkedPageRelay(message);
+    if (!detail) {
+      const pageRequestId = (message as { pageRequestId?: unknown }).pageRequestId;
+      if (validPageRequestId(pageRequestId)) {
+        page.post({ channel: "linked", type: "response", pageRequestId, response: { ok: false, error: "invalid_request" } });
+      }
+      return;
+    }
+    if (detail.operation === "choose_destination" && navigator.userActivation && !navigator.userActivation.isActive) {
+      page.post({ channel: "linked", type: "response", pageRequestId: detail.pageRequestId,
+        response: { ok: false, error: "user_gesture_required" } });
+      return;
+    }
+    outstanding.add(detail.pageRequestId);
+    post(detail, detail.pageRequestId);
+  });
+}
 
 // The casting API is independent of automatic detection.
-(function injectBridge() {
-  if (window.top !== window) return;
-  const bridgeScript = document.createElement("script");
-  bridgeScript.textContent = PAGE_PLAYBACK_BRIDGE_SCRIPT;
-  (document.documentElement || document.head || document.body).appendChild(
-    bridgeScript,
-  );
-  bridgeScript.remove();
-})();
+installPageApi();
 
 // Only normal browsing pages with detection enabled receive player probes.
 installPluginBridge();

@@ -192,12 +192,6 @@
     }
   }
 
-  // Feedback round-trip from the native app (via background → content script)
-  window.addEventListener('PlayBridgeFeedback', function (e) {
-    var detail = e && e.detail;
-    log('PlayBridgeFeedback: ' + (detail ? JSON.stringify(detail) : '(no detail — Xray-filtered?)'), 'ok');
-  });
-
   // ── Payloads ────────────────────────────────────────────────────────────
   var GTV = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/';
   var linkedSession = null;
