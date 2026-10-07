@@ -288,12 +288,6 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         guard isActive(), prompt == nil else { request.finish(false); return }
         prompt = request
     }
-    func requestPageCast(_ payload: [String: Any], source: URL) {
-        guard isActive(), BrowserSitePolicy.origin(source) != nil,
-              BrowserSitePolicy.origin(source) == pageCastOrigin else { return }
-        onWebsiteCast?(["requestId": UUID().uuidString, "documentToken": documentID.uuidString,
-                        "operation": "cast", "payload": payload])
-    }
     func allowPopupsForSite() {
         BrowserSitePolicy.setPopupsAllowed(true, url: blockedPopupOrigin)
         popupBlocked = false

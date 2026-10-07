@@ -118,18 +118,17 @@ extension BrowserStartupChecks {
         let ended = try await view.evaluateJavaScript("window.pbEvents.includes('ended')") as? Bool
         try check(ended == true, "Permission revoke was not reported to the website")
 
-        tab.requestPageCast(["url": "https://media.example/next.mp4"], source: source)
+        _ = try await view.evaluateJavaScript("window.playbridge.cast({url:'https://media.example/next.mp4'}); void(0)")
         try await wait("new consent after revoke") { casting.presentation != nil }
         browser.select(browser.tabs.first { $0.id != tab.id }!.id)
         casting.resolvePrompt(true)
         try await wait("inactive tab rejected") { casting.presentation == nil }
         try check(!permissions.isApproved(tab.pageCastOrigin!), "Inactive page obtained approval")
-        let before = received
-        tab.requestPageCast(["url": "https://media.example/next.mp4"], source: source)
-        try check(received == before, "Background page requested casting")
+        _ = try await view.evaluateJavaScript("window.playbridge.cast({url:'https://media.example/next.mp4'}); void(0)")
+        try await Task.sleep(nanoseconds: 200_000_000)
+        // The broker forwards the request; the coordinator refuses opening operations from an inactive tab.
+        try check(casting.presentation == nil && !permissions.isApproved(tab.pageCastOrigin!), "Background page requested casting")
         browser.select(tab.id)
-        tab.requestPageCast(["url": "https://media.example/next.mp4"], source: URL(string: "https://wrong.test")!)
-        try check(received == before, "Unverified origin reached coordinator")
 
         permissions.approve(tab.pageCastOrigin!)
         browser.select(tab.id)
@@ -227,16 +226,8 @@ extension BrowserStartupChecks {
         let beforeLegacyCast = received
         _ = try await view.evaluateJavaScript("window.webkit.messageHandlers.playbridge.postMessage({type:'cast',payload:{url:'https://media.example/hostile.mp4'}}); void(0)")
         try await Task.sleep(nanoseconds: 200_000_000)
-        if received != beforeLegacyCast {
-            // TODO(#241): BrowserStore still routes page-world type "cast" to requestPageCast.
-            // A hostile page can start casting without the PlayBridge.PageCast broker. Tests-only
-            // change: do not fail the suite, and do not treat this as the security property passing.
-            print("SKIP #241: page-world detection handler type=cast still reaches page-cast operations")
-            casting.userStartedCast()
-            if casting.presentation != nil { casting.dismissPresentation() }
-        } else {
-            print("CHECK: page-world type=cast no longer reaches page cast")
-        }
+        try check(received == beforeLegacyCast, "Page-world type=cast reached page cast without the broker")
+        print("CHECK: page-world type=cast no longer reaches page cast")
 
         tab.load(base + "/parent")
         try await wait("restore page after casting checks") { !view.isLoading && view.url?.path == "/parent" }
