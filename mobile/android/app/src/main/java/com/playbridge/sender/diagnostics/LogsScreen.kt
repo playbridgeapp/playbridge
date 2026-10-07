@@ -53,13 +53,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
+import com.playbridge.sender.connection.TvLogsResult
+import com.playbridge.sender.connection.TvLogsSource
 import com.playbridge.sender.data.settings.SettingsRepository
 import org.koin.compose.koinInject
 
@@ -67,15 +66,14 @@ private enum class LogTab { PHONE, TV }
 
 /**
  * In-app log viewer. The Phone tab tails this app's own logcat (which already captures every
- * `android.util.Log` call and the shared logger); the TV tab pulls the player's persisted log
- * file over the existing `GET /logs` HTTP endpoint.
+ * `android.util.Log` call and the shared logger); the TV tab requests the player's persisted,
+ * redacted log over the paired WSS connection.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LogsScreen(
     onBack: () -> Unit,
-    tvIp: String? = null,
-    tvPort: Int? = null,
+    tvLogs: TvLogsSource? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -101,7 +99,7 @@ fun LogsScreen(
     // never lays out one multi-megabyte Text node, which would freeze the UI.
     var tvLines by remember { mutableStateOf<List<String>?>(null) }
     var tvLoading by remember { mutableStateOf(false) }
-    val tvAvailable = tvIp != null && tvPort != null
+    val tvAvailable = tvLogs != null
 
     // Poll the phone logcat while the Phone tab is visible.
     LaunchedEffect(tab, includeSystem, excludeFilters) {
@@ -192,7 +190,7 @@ fun LogsScreen(
                                         )
                                     } else if (tvAvailable) {
                                         tvLoading = true
-                                        tvLines = fetchTvLogs(tvIp!!, tvPort!!)
+                                        tvLines = fetchTvLogs(tvLogs!!)
                                         tvLoading = false
                                     }
                                 }
@@ -254,9 +252,9 @@ fun LogsScreen(
                                         )
                                         Toast.makeText(context, "Phone logs cleared", Toast.LENGTH_SHORT).show()
                                     } else if (tvAvailable) {
-                                        clearTvLogs(tvIp!!, tvPort!!)
-                                        tvLines = emptyList()
-                                        Toast.makeText(context, "TV logs cleared", Toast.LENGTH_SHORT).show()
+                                        val cleared = tvLogs!!(true) is TvLogsResult.Logs
+                                        if (cleared) tvLines = emptyList()
+                                        Toast.makeText(context, if (cleared) "TV logs cleared" else "Could not clear TV logs", Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
@@ -284,7 +282,7 @@ fun LogsScreen(
                         if (tvLines == null && tvAvailable) {
                             scope.launch {
                                 tvLoading = true
-                                tvLines = fetchTvLogs(tvIp!!, tvPort!!)
+                                tvLines = fetchTvLogs(tvLogs!!)
                                 tvLoading = false
                             }
                         }
@@ -629,39 +627,20 @@ private fun EmptyState(text: String) {
 
 private const val TV_LOG_MAX_LINES = 3000
 
-/** Fetches the TV log over HTTP and returns it split into a capped list of lines (newest kept). */
-private suspend fun fetchTvLogs(tvIp: String, tvPort: Int): List<String> = withContext(Dispatchers.IO) {
-    try {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
-        val response = client.newCall(
-            Request.Builder().url("http://$tvIp:$tvPort/logs").get().build()
-        ).execute()
-        if (response.isSuccessful) {
-            val lines = (response.body?.string() ?: "").split("\n")
-            if (lines.size > TV_LOG_MAX_LINES) lines.subList(lines.size - TV_LOG_MAX_LINES, lines.size).toList()
-            else lines
-        } else if (response.code == 403) {
-            listOf("Logging is disabled on the TV. Enable it in TV → Settings → Logs.")
-        } else {
-            listOf("Failed to fetch logs: ${response.code}")
+/** Fetches the TV log over the paired connection, split into a capped list of lines (newest kept). */
+private suspend fun fetchTvLogs(tvLogs: TvLogsSource): List<String> =
+    when (val result = tvLogs(false)) {
+        is TvLogsResult.Logs -> when {
+            !result.enabled -> listOf("Logging is disabled on the TV. Enable it in TV → Settings → Logs.")
+            else -> withContext(Dispatchers.Default) {
+                val lines = result.text.split("\n")
+                if (lines.size > TV_LOG_MAX_LINES) lines.subList(lines.size - TV_LOG_MAX_LINES, lines.size).toList()
+                else lines
+            }
         }
-    } catch (e: Exception) {
-        listOf("Error: ${e.message}")
+        TvLogsResult.Unsupported -> listOf("Update the PlayBridge TV app to view its logs from the phone.")
+        TvLogsResult.Unavailable -> listOf("The TV did not respond. Check the connection and try again.")
     }
-}
-
-private suspend fun clearTvLogs(tvIp: String, tvPort: Int) = withContext(Dispatchers.IO) {
-    try {
-        val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).build()
-        client.newCall(
-            Request.Builder().url("http://$tvIp:$tvPort/logs").delete().build()
-        ).execute().close()
-    } catch (_: Exception) {
-    }
-}
 
 private suspend fun shareLogs(context: Context, text: String, source: String) {
     if (text.isBlank()) {

@@ -92,6 +92,12 @@ sealed class IncomingMessage {
     data class UserAgent(val name: String, val value: String, val save: Boolean) : IncomingMessage()
     /** Phone asks the TV which user agent is active + which custom ones are saved. */
     data object UserAgentQuery : IncomingMessage()
+    /**
+     * Phone asks for the TV's persisted diagnostic log (or to clear it, with [clear]). The TV
+     * answers only the requesting connection with `logs`; the routed command carries the
+     * request id. Logs never leave the TV outside the paired WSS channel.
+     */
+    data class LogsQuery(val clear: Boolean) : IncomingMessage()
     data class Unknown(val type: String, val raw: String) : IncomingMessage()
 }
 
@@ -310,6 +316,33 @@ fun createUserScriptsJson(names: List<String>): String =
         put("names", buildJsonArray { names.forEach { add(it) } })
     }.toString()
 
+/** Phone → TV: fetch the persisted diagnostic log over the paired channel. */
+fun createLogsQueryJson(requestId: String): String =
+    buildJsonObject {
+        put("type", "logs_query")
+        put("requestId", requestId)
+    }.toString()
+
+/** Phone → TV: delete the persisted diagnostic log; the TV replies with an empty `logs`. */
+fun createLogsClearJson(requestId: String): String =
+    buildJsonObject {
+        put("type", "logs_clear")
+        put("requestId", requestId)
+    }.toString()
+
+/**
+ * TV → requesting phone: the newest part of the persisted log. [enabled] is false when
+ * logging is off on the TV; [truncated] marks that older lines were left out.
+ */
+fun createLogsJson(requestId: String?, enabled: Boolean, text: String, truncated: Boolean): String =
+    buildJsonObject {
+        put("type", "logs")
+        if (requestId != null) put("requestId", requestId)
+        put("enabled", enabled)
+        put("text", text)
+        put("truncated", truncated)
+    }.toString()
+
 /**
  * Apply (and, with [save], remember) a TV browser User-Agent. See [IncomingMessage.UserAgent]
  * for the blank-name / blank-value semantics. Standalone message (not a Wire command).
@@ -507,6 +540,8 @@ fun parseIncomingMessage(text: String): IncomingMessage {
                 save = root["save"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
             )
             "user_agent_query" -> IncomingMessage.UserAgentQuery
+            "logs_query" -> IncomingMessage.LogsQuery(clear = false)
+            "logs_clear" -> IncomingMessage.LogsQuery(clear = true)
             "screen_mirror_ready" -> screenMirrorSession(root)?.let(IncomingMessage::ScreenMirrorReady)
                 ?: IncomingMessage.Unknown("screen_mirror_ready_parse_error", text)
             "screen_mirror_answer" -> screenMirrorSdp(root)?.let { (sessionId, sdp) ->

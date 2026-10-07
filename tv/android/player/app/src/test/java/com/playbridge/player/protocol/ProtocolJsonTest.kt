@@ -2,6 +2,9 @@ package com.playbridge.player.protocol
 
 import com.playbridge.shared.protocol.createAuthResponseJson
 import com.playbridge.shared.protocol.createAddSubtitleCommandJson
+import com.playbridge.shared.protocol.createLogsClearJson
+import com.playbridge.shared.protocol.createLogsJson
+import com.playbridge.shared.protocol.createLogsQueryJson
 import com.playbridge.shared.protocol.createProtectedPairingApprovedJson
 import com.playbridge.shared.protocol.createPlaylistCommandJson
 import com.playbridge.shared.protocol.createScreenMirrorCandidateCommandJson
@@ -248,5 +251,27 @@ class ProtocolJsonTest {
         val confirmationMsg = (parsed as com.playbridge.shared.protocol.IncomingMessage.PairingConfirmation).msg
         assertEquals("pairing_confirmation", confirmationMsg.type)
         assertEquals("confirmation-mac", confirmationMsg.mac)
+    }
+
+    @Test
+    fun logsTravelAsPairedRequestAndTargetedReply() {
+        assertEquals(
+            com.playbridge.shared.protocol.IncomingMessage.LogsQuery(clear = false),
+            parseIncomingMessage(createLogsQueryJson("logs-1")),
+        )
+        assertEquals(
+            com.playbridge.shared.protocol.IncomingMessage.LogsQuery(clear = true),
+            parseIncomingMessage(createLogsClearJson("logs-2")),
+        )
+        val reply = obj(createLogsJson("logs-1", enabled = true, text = "line", truncated = true))
+        assertEquals("logs", reply["type"]?.jsonPrimitive?.content)
+        assertEquals("logs-1", reply["requestId"]?.jsonPrimitive?.content)
+        assertEquals("line", reply["text"]?.jsonPrimitive?.content)
+        assertEquals(true, reply["truncated"]?.jsonPrimitive?.content?.toBoolean())
+    }
+
+    @Test
+    fun receiverAdvertisesPairedDiagnosticLogs() {
+        assertTrue("diagnostic_logs_v1" in com.playbridge.player.server.TvCapabilities(emptyList(), emptyList()).features)
     }
 }
