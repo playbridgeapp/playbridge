@@ -86,13 +86,19 @@ function harness() {
     });
     return { ...relay, call, cast: (payload: unknown) => relay.content.postMessage({ type: "cast", payload }) };
   };
+  let holdLinkedResults = false;
+  const heldLinkedReplies: Array<() => void> = [];
   const nativePort = {
     onMessage: event(), onDisconnect: event(),
     postMessage: (message: any) => {
       nativeMessages.push(message);
-      for (const listener of nativePort.onMessage.listeners) {
-        listener({ type: "linked_result", bridgeRequestId: message.bridgeRequestId, ok: true });
-      }
+      const deliver = () => {
+        for (const listener of nativePort.onMessage.listeners) {
+          listener({ type: "linked_result", bridgeRequestId: message.bridgeRequestId, ok: true });
+        }
+      };
+      if (holdLinkedResults) heldLinkedReplies.push(deliver);
+      else deliver();
     },
   };
   const browser = {
@@ -129,20 +135,28 @@ function harness() {
     },
   };
   const timers = new Map<number, Function>();
+  const intervals: Function[] = [];
   let nextTimer = 0;
   const sandbox = {
     browser, URL, TextDecoder, TextEncoder, Uint8Array, ArrayBuffer, Map, Set, WeakSet,
     console: { log: () => {} },
     setTimeout: (callback: Function) => { timers.set(++nextTimer, callback); return nextTimer; },
     clearTimeout: (id: number) => timers.delete(id),
-    setInterval: () => 1,
+    setInterval: (callback: Function) => { intervals.push(callback); return intervals.length; },
   };
   const nativePolicy = async (policy: DetectionPolicy, sender: any) => {
     policyRelay({ id: browser.runtime.id, ...sender }).content.postMessage({ update: 1, policy });
     await flush();
   };
   return { sandbox, browser, messages, nativeMessages, filters, policyMessages, onMessage, timers,
-    nativePolicy, policyRelay, policyRelays, pageRelays, pageMessages, pagePort };
+    nativePolicy, policyRelay, policyRelays, pageRelays, pageMessages, pagePort,
+    holdNativeLinkedReplies(hold = true) { holdLinkedResults = hold; },
+    releaseNativeLinkedReplies() {
+      holdLinkedResults = false;
+      for (const deliver of heldLinkedReplies.splice(0)) deliver();
+    },
+    runIntervals() { for (const callback of intervals) callback(); },
+  };
 }
 
 function script(name: string): string {
@@ -827,4 +841,199 @@ test("network detection and response scanning work independently and stop active
   const detected = h.nativeMessages.filter(item => item.type === "video_detected");
   assert.ok(detected.length > 0);
   assert.ok(detected.every(item => item.url === "https://cdn.example/movie.mp4" && item.detectedBy === "content_type"));
+});
+
+const linkedItem = { id: "one", url: "https://media.example/one.mp4" };
+const topFrame = (id: number, url = "https://app.example") =>
+  ({ id: "detector@test", frameId: 0, tab: { id, url } });
+
+test("background page port rejects malformed activation and non-allow-listed fields", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const page = h.pagePort();
+  for (const userActivation of ["true", 1, 0, "false", {}, [], undefined]) {
+    const result = await page.call({ operation: "choose_destination", payload: {}, userActivation });
+    assert.equal(result.error, "invalid_request", `userActivation ${String(userActivation)}`);
+  }
+  for (const extra of [
+    { tabId: 99 },
+    { origin: "https://evil.example" },
+    { navigationGeneration: 99 },
+    { action: "detector_policy" },
+    { bridgeRequestId: "forged" },
+    { policy: { enabled: true } },
+  ]) {
+    const result = await page.call({ operation: "destination", payload: {}, ...extra });
+    assert.equal(result.error, "invalid_request");
+  }
+  assert.equal(h.nativeMessages.length, 0);
+
+  // false/true/null are attested values, not malformed. A page payload cannot override them.
+  const inactive = await page.call({
+    operation: "choose_destination", payload: { userActivation: true, destinationId: "this-device" },
+    userActivation: false,
+  });
+  assert.equal(inactive.ok, true);
+  const attested = h.nativeMessages.find(message => message.type === "linked_choose_destination");
+  assert.equal(attested.userActivation, false);
+  assert.equal(attested.tabId, 7);
+  assert.equal(attested.origin, "https://app.example");
+
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: "https://app.example/watch" });
+  page.content.postMessage({
+    type: "cast",
+    payload: { url: "https://media.example/one.mp4", origin: "https://evil.example", tabId: 99 },
+    origin: "https://evil.example",
+    tabId: 99,
+    navigationGeneration: 99,
+  });
+  await flush();
+  const cast = h.nativeMessages.find(message => message.type === "cast");
+  assert.equal(cast.origin, "https://app.example");
+  assert.equal(cast.tabId, 7);
+  assert.equal(cast.navigationGeneration, 1);
+  assert.equal(cast.items[0].url, "https://media.example/one.mp4");
+  assert.equal(cast.items[0].origin, undefined);
+  assert.equal(cast.items[0].tabId, undefined);
+});
+
+test("background drops non-allow-listed open fields and keeps its own tab binding", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: "https://app.example" });
+  const page = h.pagePort();
+  const opened = await page.call({
+    operation: "open",
+    payload: {
+      items: [{ ...linkedItem, userActivation: true, tabId: 99, origin: "https://evil.example" }],
+      tabId: 99,
+      origin: "https://evil.example",
+      navigationGeneration: 0,
+      userActivation: true,
+    },
+  });
+  assert.equal(opened.ok, true);
+  const native = h.nativeMessages.find(message => message.type === "linked_open");
+  assert.equal(native.tabId, 7);
+  assert.equal(native.origin, "https://app.example");
+  assert.equal(native.navigationGeneration, 1);
+  assert.equal(native.userActivation, undefined);
+  assert.deepEqual(Object.keys(native.payload).sort(), ["items", "startIndex"]);
+  assert.equal(native.payload.items[0].id, linkedItem.id);
+  assert.equal(native.payload.items[0].url, linkedItem.url);
+  assert.equal(native.payload.items[0].userActivation, undefined);
+  assert.equal(native.payload.items[0].tabId, undefined);
+  assert.equal(native.payload.items[0].origin, undefined);
+});
+
+test("stale navigation generation rejects in-flight and later page API requests", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const page = h.pagePort();
+  const commit = (url: string) =>
+    h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url });
+  commit("https://app.example");
+  try {
+    h.holdNativeLinkedReplies(true);
+    let settled = false;
+    const pending = page.call({ operation: "destination", payload: {} }).then((response) => {
+      settled = true;
+      return response;
+    });
+    await until(() => h.nativeMessages.some(message => message.type === "linked_destination"));
+    assert.equal(settled, false);
+    commit("https://app.example/next");
+    h.releaseNativeLinkedReplies();
+    assert.equal((await pending).error, "session_ended");
+
+    h.holdNativeLinkedReplies(true);
+    const opening = page.call({ operation: "open", payload: { items: [linkedItem] } });
+    await until(() => h.nativeMessages.some(message => message.type === "linked_open"));
+    commit("https://app.example/later");
+    assert.equal((await opening).error, "session_ended");
+    assert.ok(h.nativeMessages.some(message => message.type === "linked_cancel_open"));
+  } finally {
+    h.releaseNativeLinkedReplies();
+  }
+
+  const opened = await page.call({ operation: "open", payload: { items: [linkedItem] } });
+  assert.equal(opened.ok, true);
+  const events: any[] = [];
+  page.content.onMessage.addListener((message: any) => { if (message.type === "event") events.push(message); });
+  const native = h.browser.runtime.connectNative("playbridge");
+  native.onMessage.listeners.forEach((listener: Function) =>
+    listener({ type: "linked_event", sessionId: opened.sessionId, event: "statechange", detail: { positionMs: 1 } }));
+  assert.deepEqual(events.map(event => event.event), ["statechange"]);
+  commit("https://app.example/gone");
+  await flush();
+  native.onMessage.listeners.forEach((listener: Function) =>
+    listener({ type: "linked_event", sessionId: opened.sessionId, event: "statechange", detail: { positionMs: 2 } }));
+  // Navigation ends the binding. The page is told it ended; a late event is not delivered.
+  assert.deepEqual(events.map(event => event.event), ["statechange", "ended"]);
+  const jump = await page.call({ operation: "jump", sessionId: opened.sessionId, payload: { index: 0 } });
+  assert.equal(jump.error, "session_ended");
+  assert.equal(h.nativeMessages.some(message => message.type === "linked_jump"), false);
+});
+
+test("page API responses and session events do not cross tabs", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const tab7 = h.pagePort(topFrame(7));
+  const tab8 = h.pagePort(topFrame(8, "https://other.example"));
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: "https://app.example" });
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 8, url: "https://other.example" });
+  const opened = await tab7.call({ operation: "open", payload: { items: [linkedItem] } });
+  assert.equal(opened.ok, true);
+  const tab7Events: any[] = [];
+  const tab8Events: any[] = [];
+  tab7.content.onMessage.addListener((message: any) => { if (message.type === "event") tab7Events.push(message); });
+  tab8.content.onMessage.addListener((message: any) => { if (message.type === "event") tab8Events.push(message); });
+  const native = h.browser.runtime.connectNative("playbridge");
+  native.onMessage.listeners.forEach((listener: Function) =>
+    listener({ type: "linked_event", sessionId: opened.sessionId, event: "needitems", detail: { requestId: "need-1" } }));
+  assert.deepEqual(tab7Events.map(event => event.event), ["needitems"]);
+  assert.deepEqual(tab8Events, []);
+  assert.equal((await tab8.call({
+    operation: "jump", sessionId: opened.sessionId, payload: { index: 0 },
+  })).error, "session_ended");
+  assert.equal(h.nativeMessages.some(message => message.type === "linked_jump"), false);
+
+  const shared = "shared-request";
+  const replies: Record<number, any[]> = { 7: [], 8: [] };
+  tab7.content.onMessage.addListener((message: any) => {
+    if (message.pageRequestId === shared) replies[7].push(message);
+  });
+  tab8.content.onMessage.addListener((message: any) => {
+    if (message.pageRequestId === shared) replies[8].push(message);
+  });
+  tab7.content.postMessage({ type: "linked", pageRequestId: shared, operation: "destination", payload: {}, sessionId: null });
+  tab8.content.postMessage({ type: "linked", pageRequestId: shared, operation: "destination", payload: {}, sessionId: null });
+  await until(() => replies[7].length === 1 && replies[8].length === 1);
+  assert.equal(replies[7][0].response.ok, true);
+  assert.equal(replies[8][0].response.ok, true);
+  assert.equal(replies[7].length, 1);
+  assert.equal(replies[8].length, 1);
+  assert.notEqual(replies[7][0], replies[8][0]);
+});
+
+test("background heartbeat pings only the binding it opened", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  h.browser.webNavigation.onCommitted.listeners[0]({ frameId: 0, tabId: 7, url: "https://app.example" });
+  const page = h.pagePort();
+  const opened = await page.call({ operation: "open", payload: { items: [linkedItem] } });
+  const before = h.nativeMessages.length;
+  h.runIntervals();
+  await flush();
+  const pings = h.nativeMessages.slice(before).filter(message => message.type === "linked_ping");
+  assert.equal(pings.length, 1);
+  assert.equal(pings[0].sessionId, opened.sessionId);
+  assert.equal(pings[0].tabId, 7);
+  assert.equal(pings[0].origin, "https://app.example");
+  assert.equal(pings[0].navigationGeneration, 1);
+  // A page ping cannot retarget the binding. The background keeps its own tab and generation.
+  const forged = await page.call({
+    operation: "ping", sessionId: opened.sessionId, payload: { ready: true }, tabId: 8, navigationGeneration: 99,
+  });
+  assert.equal(forged.error, "invalid_request");
 });

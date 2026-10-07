@@ -98,6 +98,35 @@ class LinkedPageCastCoordinatorTest {
     }
 
     @Test
+    fun `open rejects a missing or negative tab and navigation generation`() {
+        assertNull(LinkedPageCastCoordinator.parseOpenMessage(JSONObject(validOpenMessage().toString()).apply {
+            remove("tabId")
+        }))
+        assertNull(LinkedPageCastCoordinator.parseOpenMessage(JSONObject(validOpenMessage().toString()).put("tabId", -1)))
+        assertNull(LinkedPageCastCoordinator.parseOpenMessage(JSONObject(validOpenMessage().toString()).apply {
+            remove("navigationGeneration")
+        }))
+        assertNull(
+            LinkedPageCastCoordinator.parseOpenMessage(
+                JSONObject(validOpenMessage().toString()).put("navigationGeneration", -1),
+            ),
+        )
+    }
+
+    @Test
+    fun `play requires a destination id and open does not`() {
+        val missing = JSONObject(validOpenMessage().toString()).put("type", "linked_play")
+        assertNull(LinkedPageCastCoordinator.parseOpenMessage(missing))
+        val blank = JSONObject(validOpenMessage().toString()).put("type", "linked_play")
+        blank.getJSONObject("payload").put("destinationId", "")
+        assertNull(LinkedPageCastCoordinator.parseOpenMessage(blank))
+        val play = JSONObject(validOpenMessage().toString()).put("type", "linked_play")
+        play.getJSONObject("payload").put("destinationId", "this-device")
+        assertEquals("this-device", LinkedPageCastCoordinator.parseOpenMessage(play)!!.destinationId)
+        assertNull(LinkedPageCastCoordinator.parseOpenMessage(validOpenMessage())!!.destinationId)
+    }
+
+    @Test
     fun `active session identity includes tab and navigation generation`() {
         val request = LinkedPageCastCoordinator.parseOpenMessage(validOpenMessage())
         val binding = request!!.linkedSessionBinding()
