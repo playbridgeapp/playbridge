@@ -66,21 +66,56 @@ fun UserScriptApprovalPrompt(review: UserScriptReview) {
         } catch (_: Exception) {
         }
     }
+    val sender = review.senderName?.takeIf { it.isNotBlank() }
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .padding(48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+            .padding(horizontal = 64.dp, vertical = 36.dp),
     ) {
-        UserScriptReviewCard(
-            title = stringResource(R.string.user_script_prompt_title),
-            review = review,
-            showTimeout = true,
+        Text(
+            text = stringResource(R.string.user_script_prompt_title),
+            color = Color.White,
+            fontSize = 40.sp,
+            fontWeight = FontWeight.Bold,
+        )
+        if (sender != null) {
+            Text(
+                text = stringResource(R.string.user_script_from, sender),
+                color = Color(0xFF00D9FF),
+                fontSize = 28.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 8.dp),
+            )
+        }
+        Spacer(modifier = Modifier.height(20.dp))
+        Surface(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(28.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                UserScriptReviewFields(review, showSender = false)
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        UserScriptDecisionRow(
             denyFocus = denyFocus,
             onDeny = { ServerService.denyPendingUserScript() },
             onApprove = { ServerService.approvePendingUserScript() },
+        )
+        Text(
+            text = stringResource(R.string.user_script_timeout),
+            color = Color.White.copy(alpha = 0.7f),
+            fontSize = 18.sp,
+            modifier = Modifier.padding(top = 12.dp),
         )
     }
 }
@@ -299,7 +334,7 @@ private fun UserScriptReviewCard(
     onApprove: () -> Unit,
 ) {
     val sender = review.senderName?.takeIf { it.isNotBlank() }
-        ?: stringResource(if (showTimeout) R.string.user_script_unknown_device else R.string.user_script_local_source)
+        ?: if (showTimeout) null else stringResource(R.string.user_script_local_source)
     Surface(shape = RoundedCornerShape(28.dp), modifier = Modifier.widthIn(max = 880.dp)) {
         Column(
             modifier = Modifier
@@ -308,64 +343,14 @@ private fun UserScriptReviewCard(
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Text(
-                text = stringResource(R.string.user_script_from, sender),
-                style = MaterialTheme.typography.titleLarge,
-            )
-            ReviewLine(stringResource(R.string.user_script_name), review.scriptName)
-            ReviewLine(
-                stringResource(R.string.user_script_size),
-                pluralStringResource(R.plurals.user_script_size_bytes, review.sizeBytes, review.sizeBytes),
-            )
-            ReviewLine(
-                stringResource(R.string.user_script_hash),
-                review.hashPrefix,
-                monospace = true,
-            )
-            Text(
-                text = stringResource(R.string.user_script_matches_label),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (review.runsOnAllSites) {
+            if (sender != null) {
                 Text(
-                    text = stringResource(R.string.user_script_all_sites_warning),
-                    color = MaterialTheme.colorScheme.error,
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 28.sp,
+                    text = stringResource(R.string.user_script_from, sender),
+                    style = MaterialTheme.typography.titleLarge,
                 )
-            } else if (review.matches.isEmpty()) {
-                Text(
-                    text = stringResource(R.string.user_script_no_valid_matches),
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.titleMedium,
-                )
-            } else {
-                review.matches.forEach { pattern ->
-                    Text(
-                        text = pattern,
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                OutlinedButton(onClick = onDeny, modifier = Modifier.focusRequester(denyFocus)) {
-                    Text(
-                        stringResource(R.string.user_script_deny),
-                        fontSize = 20.sp,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-                    )
-                }
-                Button(onClick = onApprove) {
-                    Text(
-                        stringResource(R.string.user_script_approve),
-                        fontSize = 20.sp,
-                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-                    )
-                }
-            }
+            UserScriptReviewFields(review, showSender = false)
+            UserScriptDecisionRow(denyFocus, onDeny, onApprove)
             if (showTimeout) {
                 Text(
                     text = stringResource(R.string.user_script_timeout),
@@ -374,6 +359,82 @@ private fun UserScriptReviewCard(
                     textAlign = TextAlign.Start,
                 )
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun UserScriptReviewFields(review: UserScriptReview, showSender: Boolean) {
+    val sender = review.senderName?.takeIf { it.isNotBlank() }
+    if (showSender && sender != null) {
+        Text(
+            text = stringResource(R.string.user_script_from, sender),
+            color = Color.White,
+            fontSize = 28.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+    ReviewLine(stringResource(R.string.user_script_name), review.scriptName)
+    ReviewLine(
+        stringResource(R.string.user_script_size),
+        pluralStringResource(R.plurals.user_script_size_bytes, review.sizeBytes, review.sizeBytes),
+    )
+    ReviewLine(
+        stringResource(R.string.user_script_hash),
+        review.hashPrefix,
+        monospace = true,
+    )
+    Text(
+        text = stringResource(R.string.user_script_matches_label),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    if (review.runsOnAllSites) {
+        Text(
+            text = stringResource(R.string.user_script_all_sites_warning),
+            color = MaterialTheme.colorScheme.error,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 28.sp,
+        )
+    } else if (review.matches.isEmpty()) {
+        Text(
+            text = stringResource(R.string.user_script_no_valid_matches),
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.titleMedium,
+        )
+    } else {
+        review.matches.forEach { pattern ->
+            Text(
+                text = pattern,
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun UserScriptDecisionRow(
+    denyFocus: FocusRequester,
+    onDeny: () -> Unit,
+    onApprove: () -> Unit,
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        OutlinedButton(onClick = onDeny, modifier = Modifier.focusRequester(denyFocus)) {
+            Text(
+                stringResource(R.string.user_script_deny),
+                fontSize = 20.sp,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+            )
+        }
+        Button(onClick = onApprove) {
+            Text(
+                stringResource(R.string.user_script_approve),
+                fontSize = 20.sp,
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+            )
         }
     }
 }

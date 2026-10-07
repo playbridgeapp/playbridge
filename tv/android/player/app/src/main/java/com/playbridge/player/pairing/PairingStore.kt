@@ -300,8 +300,11 @@ class PairingStore private constructor(
         if (token.isEmpty()) return null
         val verifier = hashToken(token)
         return pairedDevices.first().firstOrNull { device ->
-            device.tokenVerifier == verifier || (device.token.isNotEmpty() && device.token == token)
-        }?.name?.takeIf { it.isNotBlank() }
+            device.name.isNotBlank() && (
+                device.tokenVerifier.equals(verifier, ignoreCase = true) ||
+                    (device.token.isNotEmpty() && device.token == token)
+                )
+        }?.name
     }
 
     suspend fun isTokenAuthorized(token: String): Boolean {

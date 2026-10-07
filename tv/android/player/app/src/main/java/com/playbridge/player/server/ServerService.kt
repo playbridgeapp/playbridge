@@ -849,8 +849,8 @@ class ServerService : Service() {
                 // Don't block the command collector on the TV prompt. Names, sizes and
                 // hash prefixes are logged by UserScriptController; never the script body.
                 val connectionId = command.connectionId
-                val sender = webSocketServer?.pairedDeviceName(connectionId)
                 scope.launch {
+                    val sender = webSocketServer?.senderName(connectionId)
                     try {
                         userScripts.onPhoneMessage(sender, msg.name, msg.content)
                     } catch (e: CancellationException) {
