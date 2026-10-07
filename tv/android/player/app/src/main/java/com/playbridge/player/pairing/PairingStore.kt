@@ -295,6 +295,18 @@ class PairingStore private constructor(
         }
     }
 
+    /** Name of the paired device that owns [token], if one is recorded. Never logs the token. */
+    suspend fun deviceNameForToken(token: String): String? {
+        if (token.isEmpty()) return null
+        val verifier = hashToken(token)
+        return pairedDevices.first().firstOrNull { device ->
+            device.name.isNotBlank() && (
+                device.tokenVerifier.equals(verifier, ignoreCase = true) ||
+                    (device.token.isNotEmpty() && device.token == token)
+                )
+        }?.name
+    }
+
     suspend fun isTokenAuthorized(token: String): Boolean {
         val verifier = hashToken(token)
         var authorized = false

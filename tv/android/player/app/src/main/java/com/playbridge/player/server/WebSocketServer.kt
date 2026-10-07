@@ -21,7 +21,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
 import java.net.BindException
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.add
@@ -58,6 +57,7 @@ internal fun Throwable.isAddressAlreadyInUse(): Boolean =
 class WebSocketServer(
     private val port: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
     private val isTokenAuthorized: suspend (String) -> Boolean,
+    private val deviceNameForToken: suspend (String) -> String? = { null },
     private val onPairingApproved: suspend (deviceName: String, deviceUUID: String) -> String,
     private val onPairingCompleted: (deviceUUID: String, approved: Boolean) -> Unit = { _, _ -> },
     // App-private directory for the persisted TLS identity (PKCS12). wss:// is
@@ -105,12 +105,33 @@ class WebSocketServer(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startJob: Job? = null
 
-    // wss:// (Java-WebSocket) transport + its authenticated connections.
+    // wss:// (Java-WebSocket) transport + its authenticated trackedConnections.
     private var wssServer: WssTransport? = null
     private val wssClients = ConcurrentHashMap.newKeySet<org.java_websocket.WebSocket>()
-    private val nextConnectionId = AtomicLong(1)
-    private val connectionIds = ConcurrentHashMap<org.java_websocket.WebSocket, Long>()
-    private val connectionsById = ConcurrentHashMap<Long, org.java_websocket.WebSocket>()
+    private val trackedConnections = ConnectionSenderNames()
+    // Token stays in memory only for this socket and is never logged. Retried if the
+    // auth-time name lookup missed.
+    private val tokenNameLookups = ConcurrentHashMap<Long, suspend () -> String?>()
+
+    /** Paired device name recorded when this socket was authenticated. */
+    fun pairedDeviceName(connectionId: Long): String? = trackedConnections.nameFor(connectionId)
+
+    /**
+     * Sender name for a script prompt. Falls back to a fresh pairing-store lookup for a
+     * token reconnect whose first lookup returned null.
+     */
+    suspend fun senderName(connectionId: Long): String? {
+        trackedConnections.nameFor(connectionId)?.let { return it }
+        val resolved = try {
+            tokenNameLookups[connectionId]?.invoke()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }?.takeIf { it.isNotBlank() } ?: return null
+        trackedConnections.rememberId(connectionId, resolved)
+        return resolved
+    }
 
     // SPKI pin of our TLS cert, sent to senders at pairing. Set when wss starts.
     @Volatile var certFingerprint: String? = null
@@ -191,8 +212,8 @@ class WebSocketServer(
         startJob = null
         wssServer = null
         wssClients.clear()
-        connectionIds.clear()
-        connectionsById.clear()
+        trackedConnections.clear()
+        tokenNameLookups.clear()
         boundWssPort = null
         certFingerprint = null
         _connectionState.value = ConnectionState.Stopped
@@ -220,7 +241,7 @@ class WebSocketServer(
     }
 
     suspend fun sendTo(connectionId: Long, statusJson: String): Boolean {
-        val connection = connectionsById[connectionId] ?: return false
+        val connection = trackedConnections.connection<org.java_websocket.WebSocket>(connectionId) ?: return false
         return try {
             connection.send(statusJson)
             true
@@ -314,9 +335,7 @@ class WebSocketServer(
         }
 
         override fun onOpen(conn: org.java_websocket.WebSocket, handshake: org.java_websocket.handshake.ClientHandshake) {
-            val connectionId = nextConnectionId.getAndIncrement()
-            connectionIds[conn] = connectionId
-            connectionsById[connectionId] = conn
+            trackedConnections.open(conn)
             FileLogger.i(TAG, "wss connection: ${conn.remoteSocketAddress}")
             val ip = conn.remoteSocketAddress?.address?.hostAddress ?: ""
             val lockoutUntil = lockoutMap[ip]
@@ -327,7 +346,7 @@ class WebSocketServer(
         }
 
         override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) {
-            connectionIds.remove(conn)?.let(connectionsById::remove)
+            trackedConnections.close(conn)?.let { tokenNameLookups.remove(it) }
             authed.remove(conn)
             val handshake = inProgressHandshakes.remove(conn)
             if (handshake != null) {
@@ -371,7 +390,7 @@ class WebSocketServer(
                                 FileLogger.w(TAG, "Ignoring command with invalid requestId")
                                 return
                             }
-                            val connectionId = connectionIds[conn] ?: return
+                            val connectionId = trackedConnections.idOf(conn) ?: return
                             if (!_commands.tryEmit(RoutedCommand(connectionId, requestId, msg))) {
                                 FileLogger.w(TAG, "Dropping command because the bounded receiver queue is full")
                             }
@@ -390,7 +409,7 @@ class WebSocketServer(
             val bytes = ByteArray(message.remaining()).also { message.get(it) }
             if (bytes.size == 9) {
                 val unpacked = com.playbridge.shared.protocol.MousePacket.unpack(bytes) ?: return
-                val connectionId = connectionIds[conn] ?: return
+                val connectionId = trackedConnections.idOf(conn) ?: return
                 if (!_commands.tryEmit(
                         RoutedCommand(connectionId, null, IncomingMessage.Mouse(
                             playbridge.MousePayload(
@@ -516,6 +535,15 @@ class WebSocketServer(
                                 Base64.getEncoder().encodeToString(ciphertext),
                             ))
                         }
+                        // Authenticated on this socket. The phone does not send auth afterwards,
+                        // so the handshake name is the only sender name this connection will have.
+                        trackedConnections.remember(
+                            conn,
+                            authenticatedSenderName(
+                                handshakeDeviceName = handshake.deviceName,
+                                tokenOwnerName = null,
+                            ),
+                        )
                         registerAuthed(conn)
                         inProgressHandshakes.remove(conn)
                         onPairingCompleted(handshake.deviceUUID, true)
@@ -560,9 +588,29 @@ class WebSocketServer(
 
         private fun handleAuth(conn: org.java_websocket.WebSocket, msg: playbridge.AuthMessage) {
             val token = msg.token
+            val connectionId = trackedConnections.idOf(conn)
+            if (!token.isNullOrEmpty() && connectionId != null) {
+                tokenNameLookups[connectionId] = {
+                    deviceNameForToken(token)?.takeIf { it.isNotBlank() }
+                }
+            }
             scope.launch {
                 try {
                     if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
+                        val deviceName = try {
+                            deviceNameForToken(token)?.takeIf { it.isNotBlank() }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                        trackedConnections.remember(
+                            conn,
+                            authenticatedSenderName(
+                                handshakeDeviceName = inProgressHandshakes[conn]?.deviceName,
+                                tokenOwnerName = deviceName,
+                            ),
+                        )
                         val caps = capabilities()
                         if (conn.isOpen) {
                             conn.send(createAuthResponseJson(
