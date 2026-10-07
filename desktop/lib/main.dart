@@ -2267,42 +2267,61 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
       try {
         await Process.start('open', ['-a', 'mpv', url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
       try {
         await Process.start('open', ['-a', 'VLC', url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
       try {
         await Process.start('open', [url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
     } else if (Platform.isWindows) {
       try {
         await Process.start('mpv.exe', [url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
       try {
         await Process.start('vlc.exe', [url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
       try {
         await Process.start('cmd.exe', ['/c', 'start', '', url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
     } else if (Platform.isLinux) {
       try {
         await Process.start('mpv', [url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
       try {
         await Process.start('vlc', [url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
       try {
         await Process.start('xdg-open', [url]);
         return true;
-      } catch (_) {}
+      } catch (_) {
+        // Launcher missing; try the next one. The URL must not be logged.
+      }
     }
+    debugPrint('[player] no external player could be launched');
     return false;
   }
 }

@@ -47,7 +47,9 @@ Future<void> main() async {
         if (line.isEmpty) continue;
         try {
           _writeMessage(jsonDecode(line));
-        } catch (_) {}
+        } catch (_) {
+          // Malformed bridge line is dropped. It may contain the pairing token.
+        }
       }
     },
     onDone: () => exit(0),
@@ -97,7 +99,9 @@ Future<void> _readNativeMessages(
       try {
         final obj = jsonDecode(utf8.decode(msgBytes));
         if (obj is Map<String, dynamic>) onMessage(obj);
-      } catch (_) {}
+      } catch (_) {
+        // Malformed native frame is dropped. It may contain the pairing token.
+      }
     }
   }
 }

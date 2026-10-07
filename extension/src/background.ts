@@ -589,7 +589,9 @@ function persistVideos(tabId: number) {
   try {
     if (v && v.length) sessionStore.set({ [vkey(tabId)]: v });
     else sessionStore.remove(vkey(tabId));
-  } catch (_) {}
+  } catch {
+    /* session storage is best-effort */
+  }
 }
 
 // Resolves once the in-memory Maps have been re-merged from storage.session.
@@ -618,7 +620,9 @@ const hydrated: Promise<void> = (async () => {
         }
       }
     }
-  } catch (_) {}
+  } catch {
+    /* session storage may be unavailable after a service-worker restart */
+  }
 })();
 
 // ── Toolbar badge: count of detected streams on a tab ────────────────────────
@@ -629,7 +633,9 @@ try {
   // Match the popup theme: --accent (#D0BCFF) with near-black text (--bg-primary).
   actionApi?.setBadgeBackgroundColor?.({ color: "#D0BCFF" });
   actionApi?.setBadgeTextColor?.({ color: "#1C1B1F" });
-} catch (_) {}
+} catch {
+  /* badge colors are optional across browsers */
+}
 
 function updateBadge(tabId: number) {
   if (!actionApi || tabId < 0) return;
@@ -637,7 +643,9 @@ function updateBadge(tabId: number) {
   const n = filterPrimaryCastCandidates(tabVideos.get(tabId) ?? []).length;
   try {
     actionApi.setBadgeText({ tabId, text: n > 0 ? String(n) : "" }).catch(() => {});
-  } catch (_) {}
+  } catch {
+    /* tab may already be closed */
+  }
 }
 
 browser.tabs.onRemoved.addListener((tabId) => cleanupTab(tabId));

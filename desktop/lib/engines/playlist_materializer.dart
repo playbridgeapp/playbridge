@@ -332,7 +332,9 @@ class PlaylistMaterializer {
       final old = _tempFiles.removeAt(0);
       try {
         await File(old).delete();
-      } catch (_) {}
+      } catch (_) {
+        // Temp playlist may already be gone. This runs while capping retained files.
+      }
     }
     final uri = file.uri.toString(); // file:///…
     debugPrint('[playlist-materializer] wrote synthetic playlist → $uri');

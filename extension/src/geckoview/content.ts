@@ -336,7 +336,7 @@ function injectPlayerProbe(): void {
       if (${options.visibilityOverrides}) try {
         Object.defineProperty(document, 'hidden', { configurable: true, get: function() { return false; } });
         Object.defineProperty(document, 'visibilityState', { configurable: true, get: function() { return 'visible'; } });
-      } catch (_) {}
+      } catch (_) { /* page may already lock these properties */ }
       function report(url) {
         if (!url || typeof url !== 'string' || !url.startsWith('http')) return;
         window.dispatchEvent(new CustomEvent('PlayBridgeMediaFound', { detail: { url: url } }));
@@ -354,9 +354,9 @@ function injectPlayerProbe(): void {
                   if (item && item.sources) item.sources.forEach(function(s) { if (s && s.file) report(s.file); });
                 });
               }
-            } catch (e) {}
+            } catch (e) { /* player API shape varies; skip this probe */ }
           }
-        } catch (e) {}
+        } catch (e) { /* jwplayer may be missing or throw */ }
       }
       var timers = ${options.playerProbes && options.videos} ? [setTimeout(probe, 1500), setTimeout(probe, 4000)] : [];
       window.addEventListener('PlayBridgeStopDetection', function stop() {
@@ -366,7 +366,7 @@ function injectPlayerProbe(): void {
           else delete document.hidden;
           if (visibilityDescriptor) Object.defineProperty(document, 'visibilityState', visibilityDescriptor);
           else delete document.visibilityState;
-        } catch (_) {}
+        } catch (_) { /* page may reject restoring the original descriptor */ }
         window.removeEventListener('PlayBridgeStopDetection', stop);
       }, { once: true });
   })();`;

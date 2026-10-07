@@ -119,7 +119,9 @@ class ExtensionBridge {
         _sendStateTo(socket);
         return true;
       }
-    } catch (_) {}
+    } catch (_) {
+      // Malformed auth JSON is an auth failure. Do not log it; the line holds the token.
+    }
     return false;
   }
 
@@ -375,7 +377,9 @@ class ExtensionBridge {
   void _send(Socket socket, Map<String, dynamic> obj) {
     try {
       socket.write('${jsonEncode(obj)}\n');
-    } catch (_) {}
+    } catch (_) {
+      // Client already disconnected; state pushes must not warn-flood.
+    }
   }
 
   Future<void> _writeBridgeInfo(int port, String token) async {
@@ -388,7 +392,9 @@ class ExtensionBridge {
       if (!Platform.isWindows) {
         try {
           await Process.run('chmod', ['600', file.path]);
-        } catch (_) {}
+        } catch (_) {
+          // chmod is best-effort on filesystems without POSIX permissions.
+        }
       }
     } catch (e) {
       debugPrint('[ext-bridge] failed to write bridge.json: $e');
@@ -408,7 +414,9 @@ class ExtensionBridge {
     for (final s in _authed) {
       try {
         await s.close();
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[ext-bridge] client close failed: ${e.runtimeType}');
+      }
     }
     _authed.clear();
     await _server?.close();

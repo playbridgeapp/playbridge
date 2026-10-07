@@ -93,7 +93,9 @@ Future<bool> _forward(
           if (obj is Map && obj['type'] == 'result' && !completer.isCompleted) {
             completer.complete(obj['ok'] == true);
           }
-        } catch (_) {}
+        } catch (_) {
+          // Non-JSON bridge line is ignored. It may contain the pairing token.
+        }
       }
     },
     onDone: () {
@@ -116,7 +118,9 @@ Future<bool> _forward(
       .timeout(const Duration(seconds: 8), onTimeout: () => false);
   try {
     await socket.close();
-  } catch (_) {}
+  } catch (_) {
+    // Socket may already be closed.
+  }
   return ok;
 }
 
@@ -152,7 +156,9 @@ Future<bool> _launchApp(String value, String? title) async {
         return true;
       }
     }
-  } catch (_) {}
+  } catch (_) {
+    // Launch failure is reported to stderr below.
+  }
   stderr.writeln('playbridge_cast: PlayBridge is not running and could not be '
       'launched — open it and try again.');
   return false;

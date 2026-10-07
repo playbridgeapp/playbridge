@@ -308,7 +308,9 @@ class PairingStore {
     try {
       final host = Platform.localHostname;
       if (host.isNotEmpty) return host;
-    } catch (_) {}
+    } catch (_) {
+      // Hostname lookup can fail; fall back to a platform default.
+    }
     if (Platform.isMacOS) return 'Mac';
     if (Platform.isWindows) return 'PC';
     if (Platform.isLinux) return 'Linux';
