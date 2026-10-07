@@ -58,6 +58,7 @@ internal fun Throwable.isAddressAlreadyInUse(): Boolean =
 class WebSocketServer(
     private val port: Int = com.playbridge.shared.protocol.Config.DEFAULT_PORT,
     private val isTokenAuthorized: suspend (String) -> Boolean,
+    private val deviceNameForToken: suspend (String) -> String? = { null },
     private val onPairingApproved: suspend (deviceName: String, deviceUUID: String) -> String,
     private val onPairingCompleted: (deviceUUID: String, approved: Boolean) -> Unit = { _, _ -> },
     // App-private directory for the persisted TLS identity (PKCS12). wss:// is
@@ -111,6 +112,10 @@ class WebSocketServer(
     private val nextConnectionId = AtomicLong(1)
     private val connectionIds = ConcurrentHashMap<org.java_websocket.WebSocket, Long>()
     private val connectionsById = ConcurrentHashMap<Long, org.java_websocket.WebSocket>()
+    private val connectionDeviceNames = ConcurrentHashMap<Long, String>()
+
+    /** Paired device name captured at auth. Null if the token has no named device. */
+    fun pairedDeviceName(connectionId: Long): String? = connectionDeviceNames[connectionId]
 
     // SPKI pin of our TLS cert, sent to senders at pairing. Set when wss starts.
     @Volatile var certFingerprint: String? = null
@@ -327,7 +332,10 @@ class WebSocketServer(
         }
 
         override fun onClose(conn: org.java_websocket.WebSocket, code: Int, reason: String?, remote: Boolean) {
-            connectionIds.remove(conn)?.let(connectionsById::remove)
+            connectionIds.remove(conn)?.let { connectionId ->
+                connectionsById.remove(connectionId)
+                connectionDeviceNames.remove(connectionId)
+            }
             authed.remove(conn)
             val handshake = inProgressHandshakes.remove(conn)
             if (handshake != null) {
@@ -563,6 +571,16 @@ class WebSocketServer(
             scope.launch {
                 try {
                     if (!token.isNullOrEmpty() && isTokenAuthorized(token)) {
+                        val deviceName = try {
+                            deviceNameForToken(token)?.takeIf { it.isNotBlank() }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                        if (deviceName != null) {
+                            connectionIds[conn]?.let { connectionDeviceNames[it] = deviceName }
+                        }
                         val caps = capabilities()
                         if (conn.isOpen) {
                             conn.send(createAuthResponseJson(

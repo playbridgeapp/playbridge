@@ -338,6 +338,9 @@ fun SettingsScreen(
                                 }
                             )
                         }
+                        item {
+                            UserScriptSettingsSection()
+                        }
                     }
 
                     SettingsCategory.INTEGRATIONS -> {
@@ -932,7 +935,7 @@ enum class SettingsCategory(val label: String, val icon: ImageVector) {
 
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun SettingToggleItem(
+internal fun SettingToggleItem(
     label: String,
     description: String,
     checked: Boolean,

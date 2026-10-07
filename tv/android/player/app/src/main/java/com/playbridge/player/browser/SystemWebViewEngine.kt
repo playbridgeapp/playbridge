@@ -20,7 +20,11 @@ import com.playbridge.player.logging.DebugNetworkLogger
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.playbridge.player.userscript.USER_SCRIPT_SNAPSHOT
+import com.playbridge.player.userscript.UserScriptApprovals
+import com.playbridge.player.userscript.UserScriptGate
 import java.io.ByteArrayInputStream
+import java.io.File
 
 @SuppressLint("SetJavaScriptEnabled")
 class SystemWebViewEngine(
@@ -616,20 +620,30 @@ class SystemWebViewEngine(
     }
 
     /**
-     * Read every OPTIONAL user-supplied *.js from the app's external files dir
-     * (Android/data/<pkg>/files/). NOT shipped in the APK — these are scripts the user
-     * installs themselves (via `adb push`, a file manager, or "Install script" from the
-     * phone, which writes here). Lets a user run their own scripts (e.g. a YouTube
-     * ad-skipper we deliberately don't distribute). Read fresh each call so installing or
-     * removing one takes effect on the next page load. Each script must self-guard against
-     * double injection.
+     * Optional user scripts from the external files dir. A file runs only when its bytes
+     * hash to the TV-approved value and the top-level page matches one of its @match
+     * patterns (no @match means all pages, and only after that was explicitly approved).
+     * Pending installs live in a subdirectory and are not listed here. Read fresh so an
+     * approval or removal applies on the next page load.
      */
-    private fun externalUserScripts(): List<String> {
+    private fun approvedUserScripts(pageUrl: String): List<String> {
+        if (pageUrl.isBlank()) return emptyList()
         return try {
             val dir = context.getExternalFilesDir(null) ?: return emptyList()
-            dir.listFiles { f -> f.isFile && f.name.endsWith(".js") }
+            val approvals = UserScriptApprovals.load(File(context.filesDir, USER_SCRIPT_SNAPSHOT))
+            dir.listFiles { file -> file.isFile && file.name.endsWith(".js") }
                 ?.sortedBy { it.name }
-                ?.mapNotNull { if (it.canRead()) it.readText() else null }
+                ?.mapNotNull { file ->
+                    val bytes = try {
+                        if (!file.canRead()) return@mapNotNull null
+                        file.readBytes()
+                    } catch (_: Exception) {
+                        Log.w(TAG, "Could not read user script ${file.name}")
+                        return@mapNotNull null
+                    }
+                    if (!UserScriptGate.mayInject(bytes, pageUrl, approvals[file.name])) return@mapNotNull null
+                    bytes.toString(Charsets.UTF_8)
+                }
                 ?: emptyList()
         } catch (e: Exception) {
             Log.w(TAG, "Could not read external user scripts", e)
@@ -826,12 +840,13 @@ class SystemWebViewEngine(
                 view?.evaluateJavascript(videoControlScript, null)
             }
 
-            // Optional, user-supplied scripts (e.g. the YouTube "Continue watching?" guard
-            // or an ad-skipper). NOT shipped in the APK — loaded only from the app's
-            // external files dir, where the user (or the phone's script manager) puts them.
-            // Read fresh each page load so installing/removing one takes effect without a
-            // reinstall. Each script self-guards against double injection.
-            externalUserScripts().forEach { view?.evaluateJavascript(it, null) }
+            // Optional user scripts. Inject only for the top-level document, and only when
+            // the approved hash matches and the page URL matches @match. evaluateJavascript
+            // runs in the main frame, so a subframe finish must not select scripts.
+            val topUrl = view?.url
+            if (!topUrl.isNullOrBlank() && (url == null || url == topUrl)) {
+                approvedUserScripts(topUrl).forEach { view.evaluateJavascript(it, null) }
+            }
 
             // Inject cosmetic filters (element hiding CSS)
             val cosmeticCss = adBlocker.getCosmeticFilterCss()

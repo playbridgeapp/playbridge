@@ -25,6 +25,9 @@ import com.playbridge.shared.protocol.createContextJson
 import com.playbridge.shared.protocol.encodeSubtitleResourceJson
 import com.playbridge.player.pairing.PairingStore
 import com.playbridge.player.model.PairedDevice
+import com.playbridge.player.userscript.UserScriptController
+import com.playbridge.player.userscript.UserScriptReview
+import com.playbridge.player.userscript.UserScriptRuntime
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -60,6 +63,7 @@ class ServerService : Service() {
     }
     private var webSocketServer: WebSocketServer? = null
     private lateinit var pairingStore: PairingStore
+    private lateinit var userScripts: UserScriptController
     private lateinit var overlayWindow: OverlayWindowHelper
     private lateinit var screenMirrorController: ScreenMirrorReceiverController
 
@@ -178,6 +182,12 @@ class ServerService : Service() {
         super.onCreate()
         _staticInstance = this
         pairingStore = PairingStore(applicationContext)
+        userScripts = UserScriptRuntime.attach(
+            applicationContext,
+            publishPrompt = { review, decision -> showScriptPrompt(review, decision) },
+            clearPrompt = { clearUserScriptPrompt() },
+        )
+        userScripts.ensureMigrated()
         overlayWindow = OverlayWindowHelper(applicationContext)
         screenMirrorController = ScreenMirrorReceiverController(
             context = applicationContext,
@@ -327,6 +337,7 @@ class ServerService : Service() {
             webSocketServer = WebSocketServer(
                 port = port,
                 isTokenAuthorized = { token -> pairingStore.isTokenAuthorized(token) },
+                deviceNameForToken = { token -> pairingStore.deviceNameForToken(token) },
                 onPairingApproved = { deviceName, deviceUUID ->
                     val newToken = java.util.UUID.randomUUID().toString()
                     val receiverUUID = pairingStore.getOrCreateDeviceId()
@@ -835,27 +846,20 @@ class ServerService : Service() {
                 // Handled inside WebSocketServer's auth loop — should never reach here.
             }
             is IncomingMessage.UserScript -> {
-                // Persist a user-supplied browser script (e.g. the opt-in ad-skipper we
-                // don't ship) into the app's external files dir, where SystemWebViewEngine
-                // picks up any *.js on the next page load. Blank content uninstalls it.
-                // Sanitise the name to a bare *.js filename — no path traversal.
-                val safeName = msg.name.substringAfterLast('/').substringAfterLast('\\')
-                    .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
-                    .ifBlank { "user.js" }
-                    .let { if (it.endsWith(".js")) it else "$it.js" }
-                try {
-                    val file = java.io.File(getExternalFilesDir(null), safeName)
-                    if (msg.content.isBlank()) {
-                        val removed = file.delete()
-                        FileLogger.i(TAG, "User script uninstall: $safeName removed=$removed")
-                    } else {
-                        file.writeText(msg.content)
-                        FileLogger.i(TAG, "User script installed: $safeName (${msg.content.length} chars)")
+                // Don't block the command collector on the TV prompt. Names, sizes and
+                // hash prefixes are logged by UserScriptController; never the script body.
+                val connectionId = command.connectionId
+                val sender = webSocketServer?.pairedDeviceName(connectionId)
+                scope.launch {
+                    try {
+                        userScripts.onPhoneMessage(sender, msg.name, msg.content)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        FileLogger.w(TAG, "User script handling failed: ${e.javaClass.simpleName}")
                     }
-                } catch (e: Exception) {
-                    FileLogger.w(TAG, "Failed to write user script $safeName: ${e.message}")
+                    broadcastUserScripts()
                 }
-                broadcastUserScripts()   // let the phone's manager refresh
             }
             is IncomingMessage.UserScriptQuery -> broadcastUserScripts()
             is IncomingMessage.UserAgent -> {
@@ -1070,6 +1074,24 @@ class ServerService : Service() {
      * 2. fullScreenIntent notification — belt-and-suspenders fallback for strict OEMs that
      *    ignore the exemption. Android pops this as an overlay over whatever is on screen.
      */
+    private fun showScriptPrompt(review: UserScriptReview, decision: CompletableDeferred<Boolean>) {
+        publishUserScriptPrompt(review, decision)
+        try {
+            overlayWindow.show()
+            val intent = Intent(applicationContext, MainActivity::class.java).apply {
+                action = ACTION_OPEN_SCRIPT_APPROVAL
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_REORDER_TO_FRONT,
+                )
+            }
+            launchActivityFromBackground(intent, getString(R.string.user_script_prompt_notification))
+        } catch (e: Exception) {
+            FileLogger.w(TAG, "Could not bring script approval forward: ${e.javaClass.simpleName}")
+        }
+    }
+
     private fun launchActivityFromBackground(intent: Intent, description: String) {
         // Attempt 1: direct startActivity using the visible-overlay BAL exemption.
         try {
@@ -1228,6 +1250,8 @@ class ServerService : Service() {
         playbackWebhook.stop()
         synchronized(pendingWebhooks) { pendingWebhooks.clear() }
         webhookTransport.close()
+        denyPendingUserScript()
+        clearUserScriptPrompt()
         webSocketServer?.stop()
         if (::screenMirrorController.isInitialized) screenMirrorController.destroy()
         if (_screenMirrorController === screenMirrorController) _screenMirrorController = null
@@ -1294,6 +1318,8 @@ class ServerService : Service() {
         // Sent to MainActivity (via startActivity) to navigate to the PairingScreen.
         // Fired whenever a new device starts a connection attempt while the app is backgrounded.
         const val ACTION_OPEN_PAIRING = "com.playbridge.player.ACTION_OPEN_PAIRING"
+        // Brings MainActivity forward so the TV owner can approve a phone-pushed script.
+        const val ACTION_OPEN_SCRIPT_APPROVAL = "com.playbridge.player.ACTION_OPEN_SCRIPT_APPROVAL"
         // Sent (as an explicit broadcast to this package) by the tv/browser app when its
         // BrowserActivity is destroyed, so ServerService can reset activeContext to "idle".
         const val ACTION_CONTEXT_IDLE = "com.playbridge.player.ACTION_CONTEXT_IDLE"
@@ -1334,6 +1360,28 @@ class ServerService : Service() {
         val pairingCompletions: SharedFlow<PairingCompletion> = _pairingCompletions.asSharedFlow()
 
         fun denyPairing() { _staticInstance?.webSocketServer?.denyPairing() }
+
+        private val _pendingUserScriptReview = MutableStateFlow<UserScriptReview?>(null)
+        val pendingUserScriptReview: StateFlow<UserScriptReview?> = _pendingUserScriptReview.asStateFlow()
+        private var pendingUserScriptDecision: CompletableDeferred<Boolean>? = null
+
+        fun approvePendingUserScript() {
+            pendingUserScriptDecision?.complete(true)
+        }
+
+        fun denyPendingUserScript() {
+            pendingUserScriptDecision?.complete(false)
+        }
+
+        internal fun publishUserScriptPrompt(review: UserScriptReview, decision: CompletableDeferred<Boolean>) {
+            pendingUserScriptDecision = decision
+            _pendingUserScriptReview.value = review
+        }
+
+        internal fun clearUserScriptPrompt() {
+            _pendingUserScriptReview.value = null
+            pendingUserScriptDecision = null
+        }
 
         fun start(context: Context) {
             val intent = Intent(context, ServerService::class.java)

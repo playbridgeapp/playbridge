@@ -34,6 +34,7 @@ import com.playbridge.player.ui.LibraryScreen
 import com.playbridge.player.ui.PairingScreen
 import com.playbridge.player.ui.PairingNavigationState
 import com.playbridge.player.ui.SettingsScreen
+import com.playbridge.player.ui.UserScriptApprovalPrompt
 import com.playbridge.player.ui.resumePositionForHistoryItem
 import com.playbridge.player.ui.components.AppSidebar
 import com.playbridge.player.ui.theme.AppTheme
@@ -62,7 +63,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        if (intent?.action == ServerService.ACTION_OPEN_PAIRING) {
+        if (intent?.action == ServerService.ACTION_OPEN_PAIRING ||
+            intent?.action == ServerService.ACTION_OPEN_SCRIPT_APPROVAL
+        ) {
             requestScreenOnForPairing("onCreate")
         }
 
@@ -154,6 +157,8 @@ class MainActivity : ComponentActivity() {
         if (intent.action == ServerService.ACTION_OPEN_PAIRING) {
             requestScreenOnForPairing("onNewIntent")
             _openPairingRequest.value = true
+        } else if (intent.action == ServerService.ACTION_OPEN_SCRIPT_APPROVAL) {
+            requestScreenOnForPairing("scriptApproval")
         }
     }
 
@@ -196,6 +201,7 @@ fun MainContent(
     val connectionState by ServerService.connectionState.collectAsState()
     val connectedCount by ServerService.connectedClientCount.collectAsState()
     val pendingPairingRequest by ServerService.pendingPairingRequest.collectAsState()
+    val pendingUserScript by ServerService.pendingUserScriptReview.collectAsState()
     val pairedDevices by pairingStore.pairedDevices.collectAsState(initial = emptyList())
     val isOnboardingDone by pairingStore.isOnboardingDone.collectAsState(initial = true)
 
@@ -302,7 +308,12 @@ fun MainContent(
 
     // Background comes straight from the themed Surface (colorScheme.surface), so
     // Dark / AMOLED / Light are respected with no extra gradient layer.
+    // A script prompt replaces the shell so D-pad focus cannot escape to Deny’s neighbors.
     Box(modifier = Modifier.fillMaxSize()) {
+        if (pendingUserScript != null) {
+            UserScriptApprovalPrompt(pendingUserScript!!)
+            return@Box
+        }
         Row(modifier = Modifier.fillMaxSize()) {
             AppSidebar(
                 currentScreen = currentScreen,
@@ -346,7 +357,7 @@ fun MainContent(
         }
     }
 
-    androidx.activity.compose.BackHandler(enabled = previousScreen != null) {
+    androidx.activity.compose.BackHandler(enabled = pendingUserScript == null && previousScreen != null) {
         val target = previousScreen
         previousScreen = null
         if (target != null) currentScreen = target
