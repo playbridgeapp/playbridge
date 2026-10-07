@@ -315,7 +315,7 @@ private fun SettingsHubContent(
                     org.koin.compose.koinInject()
                 val updateState by updateChecker.state.collectAsState()
                 val checking = updateState is
-                    com.playbridge.sender.update.UpdateState.Checking
+                    com.playbridge.shared.update.UpdateState.Checking
 
                 Spacer(modifier = Modifier.height(12.dp))
                 Box(

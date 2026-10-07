@@ -593,7 +593,7 @@ fun SettingsScreen(
                             }
                             val updateState by updateChecker.state.collectAsState()
                             val checking = updateState is
-                                com.playbridge.player.update.UpdateState.Checking
+                                com.playbridge.shared.update.UpdateState.Checking
                             // The dialog/progress UI itself is rendered once at the activity
                             // root (MainActivity); here we only expose the manual trigger.
                             SettingClickableItem(

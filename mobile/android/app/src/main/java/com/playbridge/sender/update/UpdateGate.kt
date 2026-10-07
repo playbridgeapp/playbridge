@@ -17,6 +17,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
 import androidx.compose.runtime.collectAsState
+import com.playbridge.shared.update.InstallSource
+import com.playbridge.shared.update.UpdateInfo
+import com.playbridge.shared.update.UpdateState
 
 /**
  * Renders the update flow driven by [UpdateChecker.state]. Drop it once near the top of

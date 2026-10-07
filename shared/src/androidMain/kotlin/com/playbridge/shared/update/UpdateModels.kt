@@ -1,4 +1,4 @@
-package com.playbridge.sender.update
+package com.playbridge.shared.update
 
 /**
  * How the app was installed on this device. Decides which update path we take:
@@ -13,7 +13,7 @@ enum class InstallSource {
 }
 
 /**
- * A dotted-triple app version (e.g. `0.8.0`) parsed for comparison.
+ * A dotted app version (e.g. `0.8.0`) parsed for comparison.
  *
  * Non-numeric suffixes are ignored so `0.8.0` and any future `0.8.0-rc1`-style tag still
  * parse to their numeric core. Missing components default to 0 (`0.8` == `0.8.0`).

@@ -28,6 +28,7 @@ use crate::{
     credentials::{PlaybridgeCredentials, SenderIdentity, now_seconds},
     json_session::{self, ControlRequest, JsonCastSession, SessionInfo},
     preferred::PreferredDevice,
+    receive::DEFAULT_PORT,
 };
 
 type CommandConfirmation = (
@@ -617,7 +618,7 @@ pub(crate) async fn run_json_pair(
     let pair_path = pair_code_file.as_deref().map(PathBuf::from);
     let (socket, _) = cast_to_playbridge_maybe_pair(
         &address,
-        receiver.wss_port.or(receiver.port).unwrap_or(8765),
+        receiver.wss_port.or(receiver.port).unwrap_or(DEFAULT_PORT),
         PlaybridgeLoad {
             device_name: &receiver.name,
             device_uuid: &uuid,
@@ -1527,7 +1528,7 @@ pub(crate) async fn run_device_receiver_command(
     let empty_payload = json!({ "items": [] });
     let (mut socket, features) = cast_to_playbridge_with_features(
         &address,
-        receiver.wss_port.or(receiver.port).unwrap_or(8765),
+        receiver.wss_port.or(receiver.port).unwrap_or(DEFAULT_PORT),
         PlaybridgeLoad {
             device_name: &receiver.name,
             device_uuid: &uuid,
@@ -1856,7 +1857,7 @@ async fn connect_and_load(
     let protocol = receiver.protocol;
     let control = match protocol {
         ReceiverProtocol::PlayBridge => {
-            let port = receiver.wss_port.or(receiver.port).unwrap_or(8765);
+            let port = receiver.wss_port.or(receiver.port).unwrap_or(DEFAULT_PORT);
             let uuid = receiver_uuid(&receiver);
             let (socket, features) = cast_to_playbridge_maybe_pair(
                 &address,
@@ -2075,7 +2076,7 @@ pub(crate) async fn run_dashboard_cast(
     let protocol = target.protocol.as_str().to_owned();
     let mut control = match protocol.to_lowercase().as_str() {
         "playbridge" | "native" => {
-            let port = target.wss_port.or(target.port).unwrap_or(8765);
+            let port = target.wss_port.or(target.port).unwrap_or(DEFAULT_PORT);
             let uuid = target.uuid.clone().unwrap_or_else(|| target.id.0.clone());
             let (socket, features) = cast_to_playbridge_dashboard(
                 &address,
@@ -3182,6 +3183,7 @@ fn playlist_command(media_url: &str, media_title: &str, skip_history: bool) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::receive::DEFAULT_PORT;
 
     #[tokio::test]
     async fn regular_payload_file_is_read_without_being_removed() {
@@ -3440,8 +3442,8 @@ mod tests {
             name: "Living Room".into(),
             protocol: protocol.into(),
             address: "192.168.1.20".into(),
-            port: Some(8765),
-            wss_port: Some(8765),
+            port: Some(DEFAULT_PORT),
+            wss_port: Some(DEFAULT_PORT),
             location: None,
         }
     }
@@ -3453,8 +3455,8 @@ mod tests {
         assert_eq!(receiver.protocol, ReceiverProtocol::Dlna);
         assert_eq!(receiver.name, "Living Room");
         assert_eq!(receiver.addresses, vec!["192.168.1.20"]);
-        assert_eq!(receiver.port, Some(8765));
-        assert_eq!(receiver.wss_port, Some(8765));
+        assert_eq!(receiver.port, Some(DEFAULT_PORT));
+        assert_eq!(receiver.wss_port, Some(DEFAULT_PORT));
         assert_eq!(receiver.uuid.as_deref(), Some("tv-1"));
     }
 
