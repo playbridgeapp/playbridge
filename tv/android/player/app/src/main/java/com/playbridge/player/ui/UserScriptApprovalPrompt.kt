@@ -2,6 +2,7 @@ package com.playbridge.player.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,11 +10,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -31,7 +33,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -60,51 +62,71 @@ import kotlinx.coroutines.withContext
 fun UserScriptApprovalPrompt(review: UserScriptReview) {
     val denyFocus = remember { FocusRequester() }
     BackHandler { ServerService.denyPendingUserScript() }
+    val sender = review.senderName?.takeIf { it.isNotBlank() }
+    // A long @match list is the only thing that scrolls. The all-sites warning is one
+    // line and must stay on screen; a 1080p TV is often only ~540dp tall.
+    val scrollMatches = review.matches.size > MATCHES_SHOWN_WITHOUT_SCROLL && !review.runsOnAllSites
+    var listFocusable by remember(review) { mutableStateOf(false) }
     LaunchedEffect(review) {
+        // Deny wins over match-list rows. Enable list focus only after that, so a long
+        // list cannot take the initial D-pad focus.
         try {
             denyFocus.requestFocus()
         } catch (_: Exception) {
         }
+        listFocusable = scrollMatches
     }
-    val sender = review.senderName?.takeIf { it.isNotBlank() }
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .padding(horizontal = 64.dp, vertical = 36.dp),
+            .padding(horizontal = 48.dp, vertical = 20.dp),
     ) {
         Text(
             text = stringResource(R.string.user_script_prompt_title),
             color = Color.White,
-            fontSize = 40.sp,
+            fontSize = 36.sp,
             fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
         if (sender != null) {
             Text(
                 text = stringResource(R.string.user_script_from, sender),
                 color = Color(0xFF00D9FF),
-                fontSize = 28.sp,
+                fontSize = 24.sp,
                 fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(top = 8.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp),
             )
         }
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(12.dp))
         Surface(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
-            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(28.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-            ) {
-                UserScriptReviewFields(review, showSender = false)
-            }
+            UserScriptMetaRow(
+                review = review,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+            )
         }
+        Spacer(modifier = Modifier.height(14.dp))
+        // Outside the facts card on purpose: a weighted card clipped this block on 1080p,
+        // hiding "Runs on ALL sites" above the Approve button.
+        Text(
+            text = stringResource(R.string.user_script_matches_label),
+            color = Color.White.copy(alpha = 0.75f),
+            fontSize = 16.sp,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        UserScriptMatchBody(
+            review = review,
+            scroll = scrollMatches,
+            contentColor = Color.White,
+            listFocusable = listFocusable,
+            modifier = if (scrollMatches) Modifier.weight(1f).fillMaxWidth() else Modifier.fillMaxWidth(),
+        )
         Spacer(modifier = Modifier.height(16.dp))
         UserScriptDecisionRow(
             denyFocus = denyFocus,
@@ -114,8 +136,8 @@ fun UserScriptApprovalPrompt(review: UserScriptReview) {
         Text(
             text = stringResource(R.string.user_script_timeout),
             color = Color.White.copy(alpha = 0.7f),
-            fontSize = 18.sp,
-            modifier = Modifier.padding(top = 12.dp),
+            fontSize = 16.sp,
+            modifier = Modifier.padding(top = 8.dp),
         )
     }
 }
@@ -335,13 +357,12 @@ private fun UserScriptReviewCard(
 ) {
     val sender = review.senderName?.takeIf { it.isNotBlank() }
         ?: if (showTimeout) null else stringResource(R.string.user_script_local_source)
-    Surface(shape = RoundedCornerShape(28.dp), modifier = Modifier.widthIn(max = 880.dp)) {
-        Column(
-            modifier = Modifier
-                .padding(horizontal = 40.dp, vertical = 32.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
+    val scrollMatches = review.matches.size > MATCHES_SHOWN_WITHOUT_SCROLL && !review.runsOnAllSites
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        modifier = Modifier.widthIn(max = 880.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp)) {
             Text(title, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
             if (sender != null) {
                 Text(
@@ -349,67 +370,33 @@ private fun UserScriptReviewCard(
                     style = MaterialTheme.typography.titleLarge,
                 )
             }
-            UserScriptReviewFields(review, showSender = false)
+            Spacer(modifier = Modifier.height(12.dp))
+            UserScriptMetaRow(review)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = stringResource(R.string.user_script_matches_label),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            UserScriptMatchBody(
+                review = review,
+                scroll = scrollMatches,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                listFocusable = scrollMatches,
+                // Cap the list so Approve stays on screen. weight() is unsafe here: the
+                // dialog surface is wrap-content and would pass an infinite max height.
+                modifier = if (scrollMatches) Modifier.heightIn(max = 180.dp) else Modifier,
+            )
+            Spacer(modifier = Modifier.height(12.dp))
             UserScriptDecisionRow(denyFocus, onDeny, onApprove)
             if (showTimeout) {
                 Text(
                     text = stringResource(R.string.user_script_timeout),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Start,
                 )
             }
-        }
-    }
-}
-
-@OptIn(ExperimentalTvMaterial3Api::class)
-@Composable
-private fun UserScriptReviewFields(review: UserScriptReview, showSender: Boolean) {
-    val sender = review.senderName?.takeIf { it.isNotBlank() }
-    if (showSender && sender != null) {
-        Text(
-            text = stringResource(R.string.user_script_from, sender),
-            color = Color.White,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-    }
-    ReviewLine(stringResource(R.string.user_script_name), review.scriptName)
-    ReviewLine(
-        stringResource(R.string.user_script_size),
-        pluralStringResource(R.plurals.user_script_size_bytes, review.sizeBytes, review.sizeBytes),
-    )
-    ReviewLine(
-        stringResource(R.string.user_script_hash),
-        review.hashPrefix,
-        monospace = true,
-    )
-    Text(
-        text = stringResource(R.string.user_script_matches_label),
-        style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
-    if (review.runsOnAllSites) {
-        Text(
-            text = stringResource(R.string.user_script_all_sites_warning),
-            color = MaterialTheme.colorScheme.error,
-            fontWeight = FontWeight.ExtraBold,
-            fontSize = 28.sp,
-        )
-    } else if (review.matches.isEmpty()) {
-        Text(
-            text = stringResource(R.string.user_script_no_valid_matches),
-            color = MaterialTheme.colorScheme.error,
-            style = MaterialTheme.typography.titleMedium,
-        )
-    } else {
-        review.matches.forEach { pattern ->
-            Text(
-                text = pattern,
-                fontFamily = FontFamily.Monospace,
-                style = MaterialTheme.typography.bodyLarge,
-            )
         }
     }
 }
@@ -439,17 +426,110 @@ private fun UserScriptDecisionRow(
     }
 }
 
+private const val MATCHES_SHOWN_WITHOUT_SCROLL = 3
+private val ScriptWarningRed = Color(0xFFFF5252)
+
 @OptIn(ExperimentalTvMaterial3Api::class)
 @Composable
-private fun ReviewLine(label: String, value: String, monospace: Boolean = false) {
-    Column {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+private fun UserScriptMetaRow(review: UserScriptReview, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        CompactFact(
+            label = stringResource(R.string.user_script_name),
+            value = review.scriptName,
+            modifier = Modifier.weight(1.5f),
+        )
+        CompactFact(
+            label = stringResource(R.string.user_script_size),
+            value = pluralStringResource(R.plurals.user_script_size_bytes, review.sizeBytes, review.sizeBytes),
+            modifier = Modifier.weight(0.9f),
+        )
+        CompactFact(
+            label = stringResource(R.string.user_script_hash),
+            value = review.hashPrefix,
+            monospace = true,
+            modifier = Modifier.weight(1.1f),
+        )
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun CompactFact(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    monospace: Boolean = false,
+) {
+    Column(modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
         Text(
             text = value,
             style = MaterialTheme.typography.titleMedium,
             fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default,
             fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+@OptIn(ExperimentalTvMaterial3Api::class)
+@Composable
+private fun UserScriptMatchBody(
+    review: UserScriptReview,
+    scroll: Boolean,
+    contentColor: Color,
+    listFocusable: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    when {
+        review.runsOnAllSites -> Text(
+            text = stringResource(R.string.user_script_all_sites_warning),
+            color = ScriptWarningRed,
+            fontWeight = FontWeight.ExtraBold,
+            fontSize = 28.sp,
+            modifier = modifier,
+        )
+        review.matches.isEmpty() -> Text(
+            text = stringResource(R.string.user_script_no_valid_matches),
+            color = ScriptWarningRed,
+            fontWeight = FontWeight.Bold,
+            fontSize = 20.sp,
+            modifier = modifier,
+        )
+        scroll -> LazyColumn(
+            modifier = modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            itemsIndexed(review.matches) { _, pattern ->
+                Text(
+                    text = pattern,
+                    color = contentColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 18.sp,
+                    modifier = if (listFocusable) Modifier.focusable() else Modifier,
+                )
+            }
+        }
+        else -> Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            review.matches.forEach { pattern ->
+                Text(
+                    text = pattern,
+                    color = contentColor,
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 18.sp,
+                )
+            }
+        }
     }
 }
 
