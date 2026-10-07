@@ -27,6 +27,8 @@ import com.playbridge.sender.model.TvDevice
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.util.ProcessUtil
+import com.playbridge.shared.logging.runCatchingLogged
+import com.playbridge.shared.logging.suspendRunCatchingLogged
 import kotlinx.coroutines.CoroutineScope
 import com.playbridge.sender.cast.proxy.NativePlaybackLeases
 import kotlinx.coroutines.CancellationException
@@ -614,8 +616,9 @@ class CastSessionManager(
         scope.launch {
             _reconnecting.collectLatest { active ->
                 if (!active) return@collectLatest
-                val saved = runCatching { connectionStore.tvDevice.first() }.getOrNull()
-                    ?: return@collectLatest
+                val saved = suspendRunCatchingLogged(TAG, "Could not read saved TV for reconnect scan") {
+                    connectionStore.tvDevice.first()
+                }.getOrNull() ?: return@collectLatest
                 if (saved.uuid.isEmpty()) return@collectLatest
                 discoveryRepository.start(
                     owner = ReceiverDiscoveryRepository.OWNER_RECONNECT,
@@ -637,7 +640,9 @@ class CastSessionManager(
                         if (healed != current) {
                             Log.i(TAG, "Reconnect scan: saved TV re-announced at " +
                                 "${found.ip}:${found.port} (was ${current.ip}:${current.port})")
-                            runCatching { connectionStore.saveTvDevice(healed) }
+                            suspendRunCatchingLogged(TAG, "Could not save healed TV address") {
+                                connectionStore.saveTvDevice(healed)
+                            }
                             current = healed
                         }
                         val s = webSocketClient.connectionState.value
@@ -851,8 +856,9 @@ class CastSessionManager(
             val attempt = reconnectAttempt
             reconnectAttempt += 1
             // Surface the retry cycle so the connecting popup can show progress (1-based).
-            val deviceName = runCatching { connectionStore.tvDevice.first() }.getOrNull()
-                ?.name ?: "TV"
+            val deviceName = suspendRunCatchingLogged(TAG, "Could not read saved TV name") {
+                connectionStore.tvDevice.first()
+            }.getOrNull()?.name ?: "TV"
             _reconnectStatus.value = ReconnectStatus(attempt + 1, RECONNECT_GIVE_UP, deviceName)
             // Linear pacing over a realistic window: real drops (router reboot, TV Wi-Fi
             // waking from standby, AP roaming) take tens of seconds, so retry steadily for
@@ -872,7 +878,11 @@ class CastSessionManager(
             // Pass the saved record: if discovery has UUID-matched the TV at a new address
             // (router restart / DHCP change), the attempt targets the fresh IP, not the
             // dead one cached from the previous socket.
-            webSocketClient.reconnect(runCatching { connectionStore.tvDevice.first() }.getOrNull())
+            webSocketClient.reconnect(
+                suspendRunCatchingLogged(TAG, "Could not read saved TV for reconnect") {
+                    connectionStore.tvDevice.first()
+                }.getOrNull(),
+            )
         }
     }
 
@@ -940,7 +950,7 @@ class CastSessionManager(
         backgroundStandDownJob = scope.launch {
             delay(IDLE_BACKGROUND_GRACE_MS)
             if (isForeground) return@launch
-            val keepAlive = runCatching {
+            val keepAlive = suspendRunCatchingLogged(TAG, "Could not read keep-connection setting") {
                 settingsRepository.keepTvConnectionInBackground.first()
             }.getOrDefault(false)
             if (keepAlive) {
@@ -993,7 +1003,11 @@ class CastSessionManager(
             // reconnect() internally no-ops when there was no prior link this process
             // (cold start — ConnectionViewModel's auto-connect owns that) or when the
             // user disconnected deliberately.
-            webSocketClient.reconnect(runCatching { connectionStore.tvDevice.first() }.getOrNull())
+            webSocketClient.reconnect(
+                suspendRunCatchingLogged(TAG, "Could not read saved TV for recovery") {
+                    connectionStore.tvDevice.first()
+                }.getOrNull(),
+            )
         }
     }
 
@@ -1226,7 +1240,15 @@ class CastSessionManager(
         val loadTarget = target
         externalLoadJob = scope.launch {
             val incomingLease = com.playbridge.sender.cast.proxy.PhoneSenderServices.get()?.retainMedia(media.url)
-            val primary = runCatching { loadTarget.load(epochMedia) }
+            val primary = try {
+                suspendRunCatchingLogged(TAG, "${loadTarget.kind} load failed") {
+                    loadTarget.load(epochMedia)
+                }
+            } catch (cancelled: CancellationException) {
+                // load() suspends; close the lease before cancellation leaves this coroutine.
+                incomingLease?.close()
+                throw cancelled
+            }
             if (generation != externalLoadGeneration || _externalTarget.value !== loadTarget) {
                 incomingLease?.close()
                 return@launch
@@ -1259,7 +1281,6 @@ class CastSessionManager(
                     )
                     _externalMediaLoaded.value = false
                     _phonePathActive.value = false
-                    Log.w(TAG, "${loadTarget.kind} load failed: ${error.message}")
                     if (loadTarget is BrowserCastTarget) {
                         _castNotices.tryEmit("TV browser couldn’t play this stream")
                     }
@@ -1293,16 +1314,20 @@ class CastSessionManager(
     fun adjustVolume(up: Boolean) {
         when (val target = _externalTarget.value) {
             is GoogleCastTarget -> scope.launch {
-                runCatching { target.adjustVolume(if (up) 0.05f else -0.05f) }
+                suspendRunCatchingLogged(TAG, "Google Cast volume adjustment failed") {
+                    target.adjustVolume(if (up) 0.05f else -0.05f)
+                }
             }
             is RokuCastTarget -> target.sendKeypress(if (up) "VolumeUp" else "VolumeDown")
             is DlnaCastTarget -> scope.launch {
-                runCatching { target.adjustVolume(if (up) 5 else -5) }
-                    .onFailure { Log.w(TAG, "DLNA volume adjustment failed: ${it.message}") }
+                suspendRunCatchingLogged(TAG, "DLNA volume adjustment failed") {
+                    target.adjustVolume(if (up) 5 else -5)
+                }
             }
             is BrowserCastTarget -> scope.launch {
-                runCatching { target.adjustVolume(if (up) 0.05 else -0.05) }
-                    .onFailure { Log.w(TAG, "Browser volume adjustment failed: ${it.message}") }
+                suspendRunCatchingLogged(TAG, "Browser volume adjustment failed") {
+                    target.adjustVolume(if (up) 0.05 else -0.05)
+                }
             }
             else -> Unit
         }
@@ -1327,8 +1352,9 @@ class CastSessionManager(
     private fun controlExternal(operation: String, block: suspend (CastTarget) -> Unit) {
         val target = _externalTarget.value ?: return
         scope.launch {
-            runCatching { block(target) }
-                .onFailure { Log.w(TAG, "${target.kind} $operation failed: ${it.message}") }
+            suspendRunCatchingLogged(TAG, "${target.kind} $operation failed") {
+                block(target)
+            }
         }
     }
 
@@ -1450,7 +1476,7 @@ class CastSessionManager(
     }
 
     private fun cancelReconnectGaveUpNotification() {
-        runCatching {
+        runCatchingLogged(TAG, "Could not cancel reconnect notification") {
             (context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager)
                 .cancel(RECONNECT_NOTIF_ID)
         }
@@ -1482,7 +1508,7 @@ class CastSessionManager(
         connectionCoordinator.markIdle()
         if (_nativeTarget.value != null) {
             scope.launch {
-                runCatching {
+                runCatchingLogged(TAG, "Could not send native stop command") {
                     webSocketClient.send(
                         com.playbridge.shared.protocol.createControlCommandJson("stop")
                     )
@@ -1585,8 +1611,9 @@ class CastSessionManager(
             externalLoadJob = null
             _externalTarget.value?.let { target ->
                 scope.launch {
-                    runCatching { target.stop() }
-                        .onFailure { Log.w(TAG, "${target.kind} mirror stop failed: ${it.message}") }
+                    suspendRunCatchingLogged(TAG, "${target.kind} mirror stop failed") {
+                        target.stop()
+                    }
                 }
             }
             _externalMediaLoaded.value = false

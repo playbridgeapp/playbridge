@@ -59,6 +59,8 @@ import com.playbridge.player.ui.player.PlaybackCapabilities
 import com.playbridge.player.ui.player.SettingsTab
 import com.playbridge.player.ui.player.UnifiedTrack
 import com.playbridge.player.ui.theme.PlayBridgeTVTheme
+import com.playbridge.shared.logging.runCatchingLogged
+import com.playbridge.shared.logging.suspendRunCatchingLogged
 import com.playbridge.shared.protocol.MediaKind
 import com.playbridge.shared.protocol.createStatusJson
 import com.playbridge.shared.protocol.encodePlayPayloadListJson
@@ -99,6 +101,10 @@ internal fun shouldKeepPlayerScreenOn(
 ): Boolean = isHostStarted && (
     isPlaying || isBuffering || hasTransition || hasPrePlay || isStillWatchingPrompting
     )
+
+private fun logPlayerFailure(tag: String, message: String, error: Throwable) {
+    FileLogger.w(tag, message, error)
+}
 
 /**
  * Permanent host shell for renderer-process playback.
@@ -224,17 +230,23 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
 
         override fun setLoudnessEnhancer(enabled: Boolean) {
             val currentSession = session ?: return
-            runCatching { rendererService?.setAudioBoost(enabled, currentSession.sessionId) }
+            runCatchingLogged(TAG, "Renderer audio boost failed", ::logPlayerFailure) {
+                rendererService?.setAudioBoost(enabled, currentSession.sessionId)
+            }
         }
 
         override fun setSubtitleDelay(delayMs: Long) {
             val currentSession = session ?: return
-            runCatching { rendererService?.setSubtitleDelay(delayMs, currentSession.sessionId) }
+            runCatchingLogged(TAG, "Renderer subtitle delay failed", ::logPlayerFailure) {
+                rendererService?.setSubtitleDelay(delayMs, currentSession.sessionId)
+            }
         }
 
         override fun setPlaybackSpeed(speed: Float) {
             val currentSession = session ?: return
-            runCatching { rendererService?.setPlaybackSpeed(speed, currentSession.sessionId) }
+            runCatchingLogged(TAG, "Renderer playback speed failed", ::logPlayerFailure) {
+                rendererService?.setPlaybackSpeed(speed, currentSession.sessionId)
+            }
         }
 
         override fun play() = handleControl("play")
@@ -427,7 +439,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         if (!isFinishing && !isChangingConfigurations) {
             handleControl("pause")
         }
-        runCatching { unregisterReceiver(controlReceiver) }
+        runCatchingLogged(TAG, "Could not unregister playback control receiver", ::logPlayerFailure) {
+            unregisterReceiver(controlReceiver)
+        }
         super.onStop()
     }
 
@@ -477,7 +491,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     onLoop = {
                         val enabled = !controlsViewModel.controlsState.value.isLooping
                         session?.let { currentSession ->
-                            runCatching {
+                            runCatchingLogged(TAG, "Overlay setLooping failed", ::logPlayerFailure) {
                                 rendererService?.setLooping(enabled, currentSession.sessionId)
                             }
                         }
@@ -499,7 +513,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     },
                     onScalingSelected = { mode ->
                         session?.let { currentSession ->
-                            runCatching {
+                            runCatchingLogged(TAG, "Overlay setVideoScaling failed", ::logPlayerFailure) {
                                 rendererService?.setVideoScaling(mode, currentSession.sessionId)
                             }
                         }
@@ -580,7 +594,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 FileLogger.i(TAG, "Video quality selected: ${track.id}")
                 val maxHeight = track.id.removePrefix("max:").toIntOrNull() ?: 0
                 controlsViewModel.setVideoQuality(maxHeight)
-                runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Track selection setVideoQuality failed", ::logPlayerFailure) {
+                    renderer.setVideoQuality(maxHeight, currentSession.sessionId)
+                }
                 syncPlaybackContext()
                 broadcastPlayerSettings()
             }
@@ -590,7 +606,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     "Audio track requested: id=${track.id}, name=${track.name}, " +
                         "details=${track.secondaryText}; awaiting renderer track confirmation",
                 )
-                runCatching { renderer.setAudioTrack(track.id, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Track selection setAudioTrack failed", ::logPlayerFailure) {
+                    renderer.setAudioTrack(track.id, currentSession.sessionId)
+                }
             }
             "sub" -> {
                 FileLogger.i(
@@ -622,7 +640,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.clearSubtitle()
         subtitleView.setCues(emptyList())
         subtitleTracks = subtitleTracks.map { it.copy(selected = it.id == trackId) }
-        runCatching { renderer.setSubtitleTrack(trackId, sessionId) }
+        runCatchingLogged(TAG, "Subtitle selection setSubtitleTrack failed", ::logPlayerFailure) {
+            renderer.setSubtitleTrack(trackId, sessionId)
+        }
         updateTrackControls()
         syncPlaybackContext()
         broadcastTracks()
@@ -685,7 +705,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         clearPendingNativeSubtitle()
         subtitleView.setCues(emptyList())
         externalSubtitleOverlayActive = false
-        runCatching { renderer.setSubtitleTrack("off", sessionId) }
+        runCatchingLogged(TAG, "External subtitle clear setSubtitleTrack failed", ::logPlayerFailure) {
+            renderer.setSubtitleTrack("off", sessionId)
+        }
         val renderingMode = SubtitleRenderingMode.read(this)
 
         // Native sidecars are attached after the renderer reports READY. Attaching while MPV is
@@ -784,7 +806,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         clearInitialSubtitleHandled()
         subtitleView.setCues(emptyList())
         controlsViewModel.clearSubtitle()
-        runCatching { oldSession?.let { rendererService?.release(it.sessionId) } }
+        runCatchingLogged(TAG, "Renderer release before switch failed", ::logPlayerFailure) {
+            oldSession?.let { rendererService?.release(it.sessionId) }
+        }
         unbindCurrentRenderer()
         rotateRendererSurface()
         terminateRendererProcess(oldKind)
@@ -815,8 +839,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         progressManager.saveProgress()
         val currentSession = session
         if (currentSession != null) {
-            runCatching { rendererService?.stop(currentSession.sessionId) }
-            runCatching { rendererService?.release(currentSession.sessionId) }
+            runCatchingLogged(TAG, "Renderer stop on destroy failed", ::logPlayerFailure) {
+                rendererService?.stop(currentSession.sessionId)
+            }
+            runCatchingLogged(TAG, "Renderer release on destroy failed", ::logPlayerFailure) {
+                rendererService?.release(currentSession.sessionId)
+            }
         }
         unbindCurrentRenderer()
         subtitleView.setCues(emptyList())
@@ -894,13 +922,19 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         // media session even when the selected renderer kind has not changed.
         val oldRendererReleased = currentMediaKind == MediaKind.IMAGE && oldSession != null && oldRenderer != null
         if (oldRendererReleased) {
-            runCatching { oldRenderer.detachSurface(oldSession.sessionId) }
-            runCatching { oldRenderer.release(oldSession.sessionId) }
+            runCatchingLogged(TAG, "Renderer detach before replacement failed", ::logPlayerFailure) {
+                oldRenderer.detachSurface(oldSession.sessionId)
+            }
+            runCatchingLogged(TAG, "Renderer release before replacement failed", ::logPlayerFailure) {
+                oldRenderer.release(oldSession.sessionId)
+            }
         }
 
         if (targetKind != oldKind) {
             if (!oldRendererReleased) {
-                runCatching { oldSession?.let { oldRenderer?.release(it.sessionId) } }
+                runCatchingLogged(TAG, "Renderer release on kind change failed", ::logPlayerFailure) {
+                    oldSession?.let { oldRenderer?.release(it.sessionId) }
+                }
             }
             unbindCurrentRenderer()
             rotateRendererSurface()
@@ -1066,7 +1100,11 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun unbindCurrentRenderer() {
         val currentConnection = connection
         connection = null
-        if (currentConnection != null) runCatching { unbindService(currentConnection) }
+        if (currentConnection != null) {
+            runCatchingLogged(TAG, "Could not unbind renderer service", ::logPlayerFailure) {
+                unbindService(currentConnection)
+            }
+        }
         rendererService = null
         preparedSessionId = 0L
     }
@@ -1351,7 +1389,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                                 ).toSafeLogString(),
                         )
                         audioTracks = audioTracks.map { it.copy(selected = it.id == match.id) }
-                        runCatching { renderer.setAudioTrack(match.id, currentSession.sessionId) }
+                        runCatchingLogged(TAG, "Saved audio restore setAudioTrack failed", ::logPlayerFailure) {
+                            renderer.setAudioTrack(match.id, currentSession.sessionId)
+                        }
                     }
                 }
             }
@@ -1373,7 +1413,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                     subtitleTracks = subtitleTracks.map {
                         it.copy(selected = it.id == "off" || it.id == "none")
                     }
-                    runCatching { renderer.setSubtitleTrack("off", currentSession.sessionId) }
+                    runCatchingLogged(TAG, "Saved subtitle-off setSubtitleTrack failed", ::logPlayerFailure) {
+                        renderer.setSubtitleTrack("off", currentSession.sessionId)
+                    }
                 }
             } else {
                 val subtitleCandidates = subtitleTracks.map { it.asPlaybackCandidate() }
@@ -1430,7 +1472,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                             subtitleTracks = subtitleTracks.map {
                                 it.copy(selected = it.id == match.id)
                             }
-                            runCatching {
+                            runCatchingLogged(TAG, "Saved subtitle restore setSubtitleTrack failed", ::logPlayerFailure) {
                                 renderer.setSubtitleTrack(match.id, currentSession.sessionId)
                             }
                         }
@@ -1644,10 +1686,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                                 }
                                 return@launch
                             }
-                            val historyUpdated = runCatching {
+                            val historyUpdated = suspendRunCatchingLogged(
+                                TAG,
+                                "Unable to update the Library thumbnail",
+                                ::logPlayerFailure,
+                            ) {
                                 historyStore.updateThumbnail(historyId, thumbnailUrl)
-                            }.onFailure {
-                                FileLogger.w(TAG, "Unable to update the Library thumbnail")
                             }.isSuccess
                             withContext(Dispatchers.Main) {
                                 if (historyUpdated &&
@@ -1761,7 +1805,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         )
         lastPositionMs = target
         controlsViewModel.setPendingSeekTime(target)
-        runCatching { rendererService?.seekTo(target, expectedSessionId) }
+        runCatchingLogged(TAG, "Renderer seek failed", ::logPlayerFailure) {
+            rendererService?.seekTo(target, expectedSessionId)
+        }
     }
 
     private fun handleRendererEvent(event: Bundle) {
@@ -1867,7 +1913,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 pendingPlayingState = null
                 pendingSeekTracker.clear()
                 sessionCoordinator.markStopped(currentSession.sessionId)
-                runCatching { rendererService?.release(currentSession.sessionId) }
+                runCatchingLogged(TAG, "Renderer release after stop failed", ::logPlayerFailure) {
+                    rendererService?.release(currentSession.sessionId)
+                }
                 session = null
                 finish()
             }
@@ -1901,8 +1949,12 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         currentMediaKind = resolveMediaKind(payload)
         presentationPayload = payload.takeIf { currentMediaKind != MediaKind.VIDEO }
         if (currentMediaKind == MediaKind.IMAGE && outgoingSession != null) {
-            runCatching { renderer.detachSurface(outgoingSession.sessionId) }
-            runCatching { renderer.release(outgoingSession.sessionId) }
+            runCatchingLogged(TAG, "Renderer detach before playlist item failed", ::logPlayerFailure) {
+                renderer.detachSurface(outgoingSession.sessionId)
+            }
+            runCatchingLogged(TAG, "Renderer release before playlist item failed", ::logPlayerFailure) {
+                renderer.release(outgoingSession.sessionId)
+            }
         }
         session = sessionCoordinator.begin(
             if (currentMediaKind == MediaKind.IMAGE) RendererKind.IMAGE else rendererKind,
@@ -1954,7 +2006,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         session?.let { currentSession ->
             sessionCoordinator.requestStop(currentSession.sessionId)
             if (currentMediaKind != MediaKind.IMAGE) {
-                runCatching { rendererService?.stop(currentSession.sessionId) }
+                runCatchingLogged(TAG, "Renderer stop on finish failed", ::logPlayerFailure) {
+                    rendererService?.stop(currentSession.sessionId)
+                }
             }
         }
         imageTimerJob?.cancel()
@@ -2186,12 +2240,16 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             if (!capabilities.scalingAvailable && previousState.videoScalingMode != "Fit") {
                 controlsViewModel.setVideoScaling("Fit")
-                runCatching { renderer.setVideoScaling("Fit", currentSession.sessionId) }
+                runCatchingLogged(TAG, "Capability fallback setVideoScaling failed", ::logPlayerFailure) {
+                    renderer.setVideoScaling("Fit", currentSession.sessionId)
+                }
                 updateVideoSurfaceLayout()
             }
             if (!capabilities.qualityAvailable && previousState.videoQualityMaxHeight != 0) {
                 controlsViewModel.setVideoQuality(0)
-                runCatching { renderer.setVideoQuality(0, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Capability fallback setVideoQuality failed", ::logPlayerFailure) {
+                    renderer.setVideoQuality(0, currentSession.sessionId)
+                }
             }
             syncPlaybackContext()
         }
@@ -2225,7 +2283,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             SubtitleRenderingMode.AUTO -> {
                 externalSubtitleOverlayActive = true
                 subtitleView.setCues(emptyList())
-                runCatching { rendererService?.setSubtitleTrack("off", sessionId) }
+                runCatchingLogged(TAG, "External subtitle fallback setSubtitleTrack failed", ::logPlayerFailure) {
+                    rendererService?.setSubtitleTrack("off", sessionId)
+                }
                 val lateResource = lateSubtitleResources[url]
                 controlsViewModel.loadExternalSubtitle(
                     url,
@@ -2360,7 +2420,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         cancelPrePlayCountdown()
         failedSession?.let { sessionCoordinator.markFailed(it.sessionId, message) }
         cancelStartupWatchdog()
-        runCatching { failedSession?.let { rendererService?.release(it.sessionId) } }
+        runCatchingLogged(TAG, "Renderer release after failure failed", ::logPlayerFailure) {
+            failedSession?.let { rendererService?.release(it.sessionId) }
+        }
         unbindCurrentRenderer()
         rotateRendererSurface()
         terminateRendererProcess(failedKind)
@@ -2430,7 +2492,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
     private fun startPrePlayCountdown(sessionId: Long) {
         if (prePlayCountdownJob?.isActive == true) return
         val renderer = rendererService ?: return
-        runCatching { renderer.pause(sessionId) }
+        runCatchingLogged(TAG, "Pre-play pause failed", ::logPlayerFailure) {
+            renderer.pause(sessionId)
+        }
         hostPlaying = false
         pendingPlayingState = false
         controlsViewModel.setPlaying(false)
@@ -2446,7 +2510,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
             showTransition(R.string.player_starting, force = true)
             pendingPlayingState = true
-            runCatching { rendererService?.play(sessionId) }
+            runCatchingLogged(TAG, "Pre-play countdown play failed", ::logPlayerFailure) {
+                rendererService?.play(sessionId)
+            }
         }
     }
 
@@ -2457,7 +2523,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         controlsViewModel.setPrePlay(null, clearOnlineSubs = false)
         showTransition(R.string.player_starting, force = true)
         pendingPlayingState = true
-        runCatching { rendererService?.play(currentSession.sessionId) }
+        runCatchingLogged(TAG, "Pre-play skip play failed", ::logPlayerFailure) {
+            rendererService?.play(currentSession.sessionId)
+        }
     }
 
     private fun cancelPrePlayCountdown() {
@@ -2534,12 +2602,16 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 hostPlaying = true
                 pendingPlayingState = true
                 controlsViewModel.setPlaying(true)
-                runCatching { renderer.play(currentSession.sessionId) }
+                runCatchingLogged(TAG, "Control play failed", ::logPlayerFailure) {
+                    renderer.play(currentSession.sessionId)
+                }
             }
             command == "pause" -> {
                 hostPlaying = false
                 pendingPlayingState = false
-                runCatching { renderer.pause(currentSession.sessionId) }
+                runCatchingLogged(TAG, "Control pause failed", ::logPlayerFailure) {
+                    renderer.pause(currentSession.sessionId)
+                }
                 controlsViewModel.showControls(full = true, playing = false)
                 progressManager.saveProgress()
             }
@@ -2547,14 +2619,18 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 if (hostPlaying) {
                     hostPlaying = false
                     pendingPlayingState = false
-                    runCatching { renderer.pause(currentSession.sessionId) }
+                    runCatchingLogged(TAG, "Control toggle pause failed", ::logPlayerFailure) {
+                        renderer.pause(currentSession.sessionId)
+                    }
                     controlsViewModel.showControls(full = true, playing = false)
                     progressManager.saveProgress()
                 } else {
                     hostPlaying = true
                     pendingPlayingState = true
                     controlsViewModel.setPlaying(true)
-                    runCatching { renderer.play(currentSession.sessionId) }
+                    runCatchingLogged(TAG, "Control toggle play failed", ::logPlayerFailure) {
+                        renderer.play(currentSession.sessionId)
+                    }
                 }
             }
             command?.startsWith("seek_to:") == true -> command
@@ -2566,7 +2642,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 }
             command?.startsWith("audio_track:") == true -> {
                 val trackId = command.removePrefix("audio_track:")
-                runCatching { renderer.setAudioTrack(trackId, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Remote setAudioTrack failed", ::logPlayerFailure) {
+                    renderer.setAudioTrack(trackId, currentSession.sessionId)
+                }
             }
             command?.startsWith("sub_track:") == true -> {
                 val trackId = command.removePrefix("sub_track:")
@@ -2608,7 +2686,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 val value = command.removePrefix("video_quality:")
                 val maxHeight = value.takeUnless { it.equals("auto", true) }?.toIntOrNull() ?: 0
                 controlsViewModel.setVideoQuality(maxHeight)
-                runCatching { renderer.setVideoQuality(maxHeight, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Remote setVideoQuality failed", ::logPlayerFailure) {
+                    renderer.setVideoQuality(maxHeight, currentSession.sessionId)
+                }
                 syncPlaybackContext()
                 broadcastPlayerSettings()
             }
@@ -2622,7 +2702,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
                 }
             command?.startsWith("scaling:") == true -> {
                 val mode = command.removePrefix("scaling:")
-                runCatching { renderer.setVideoScaling(mode, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Remote setVideoScaling failed", ::logPlayerFailure) {
+                    renderer.setVideoScaling(mode, currentSession.sessionId)
+                }
                 controlsViewModel.setVideoScaling(mode)
                 updateVideoSurfaceLayout()
                 syncPlaybackContext()
@@ -2640,7 +2722,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             }
             command == "loop_on" || command == "loop_off" -> {
                 val enabled = command == "loop_on"
-                runCatching { renderer.setLooping(enabled, currentSession.sessionId) }
+                runCatchingLogged(TAG, "Remote setLooping failed", ::logPlayerFailure) {
+                    renderer.setLooping(enabled, currentSession.sessionId)
+                }
                 controlsViewModel.setLooping(enabled)
                 syncPlaybackContext()
                 FileLogger.i(
@@ -2906,7 +2990,9 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         override fun surfaceDestroyed(holder: SurfaceHolder) {
             surface = null
             session?.let { currentSession ->
-                runCatching { rendererService?.detachSurface(currentSession.sessionId) }
+                runCatchingLogged(TAG, "Renderer detach on surface destroy failed", ::logPlayerFailure) {
+                    rendererService?.detachSurface(currentSession.sessionId)
+                }
             }
         }
     }
@@ -3001,7 +3087,7 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
         if (!::playerRoot.isInitialized) return
         val oldView = surfaceView
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            runCatching {
+            runCatchingLogged(TAG, "Could not reset surface frame rate", ::logPlayerFailure) {
                 oldView.holder.surface.takeIf(Surface::isValid)?.setFrameRate(
                     0f,
                     Surface.FRAME_RATE_COMPATIBILITY_DEFAULT,
