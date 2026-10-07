@@ -68,7 +68,7 @@ try {
   });
 
   const exitCode = await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ["--test", ...outfiles], {
+    const child = spawn(process.execPath, ["--test", "--test-timeout=30000", ...outfiles], {
       stdio: "inherit",
     });
     child.on("error", reject);

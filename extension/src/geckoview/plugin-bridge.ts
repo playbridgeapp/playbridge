@@ -1,4 +1,5 @@
 import browser from "./browser";
+import { PAGE_CHANNEL_PRELUDE, injectPageScriptWithChannel, type PageChannel } from "./page-channel";
 
 const MAX_REQUEST_BYTES = 16 * 1024;
 const OPERATIONS = new Set(["status", "resolve", "manage", "cancel"]);
@@ -29,51 +30,81 @@ export function validPluginBridgeRequest(value: unknown): value is Record<string
 }
 
 // This extends the page's existing cast API; it never replaces window.playbridge.
+// Requests and responses use the private channel from page-channel.ts.
 export const PLUGIN_PAGE_BRIDGE_SCRIPT = `
 (function() {
   var bridge = window.playbridge = window.playbridge || {};
   if (bridge.plugins) return;
-  var pending = new Map();
+  ${PAGE_CHANNEL_PRELUDE}
+  var pending = Object.create(null);
+  var pendingCount = 0;
+  var sequence = 0;
+  var PromiseCtor = Promise;
+  var ErrorCtor = Error;
+  var EventCtor = Event;
+  var dispatchWindow = window.dispatchEvent.bind(window);
+  var stringify = JSON.stringify;
+  var encode = TextEncoder.prototype.encode.bind(new TextEncoder());
+  var setTimer = setTimeout;
+  var clearTimer = clearTimeout;
+  var randomId = crypto.randomUUID ? crypto.randomUUID.bind(crypto) : null;
   bridge.capabilities = Object.assign({}, bridge.capabilities, { nativePlugins: 0 });
+  function rejectAll(message, onlyResolve) {
+    for (var id in pending) {
+      var waiter = pending[id];
+      if (onlyResolve && waiter.operation !== 'resolve') continue;
+      delete pending[id];
+      pendingCount--;
+      clearTimer(waiter.timer);
+      waiter.reject(new ErrorCtor(message));
+    }
+  }
   function invoke(operation, payload) {
-    return new Promise(function(resolve, reject) {
-      if (pending.size >= 4) { reject(new Error('Too many pending device plugin requests')); return; }
-      var id = crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random();
+    return new PromiseCtor(function(resolve, reject) {
+      if (pendingCount >= 4) { reject(new ErrorCtor('Too many pending device plugin requests')); return; }
+      var id = randomId ? randomId() : 'plugin-' + (++sequence);
       var json;
-      try { json = JSON.stringify({ requestId: id, operation: operation, payload: payload || {} }); }
-      catch (_) { reject(new Error('Invalid device plugin request')); return; }
-      if (new TextEncoder().encode(json).length > ${MAX_REQUEST_BYTES}) { reject(new Error('Device plugin request too large')); return; }
-      var timer = setTimeout(function() {
-        pending.delete(id);
-        reject(new Error('Device plugin request timed out'));
+      try { json = stringify({ requestId: id, operation: operation, payload: payload || {} }); }
+      catch (_) { reject(new ErrorCtor('Invalid device plugin request')); return; }
+      if (encode(json).length > ${MAX_REQUEST_BYTES}) { reject(new ErrorCtor('Device plugin request too large')); return; }
+      var timer = setTimer(function() {
+        if (!pending[id]) return;
+        delete pending[id];
+        pendingCount--;
+        reject(new ErrorCtor('Device plugin request timed out'));
       }, 65000);
-      pending.set(id, { operation: operation, resolve: resolve, reject: reject, timer: timer });
-      window.dispatchEvent(new CustomEvent('PlayBridgePluginsRequestJson', { detail: json }));
+      pending[id] = { operation: operation, resolve: resolve, reject: reject, timer: timer };
+      pendingCount++;
+      if (!channelSend(json)) {
+        delete pending[id];
+        pendingCount--;
+        clearTimer(timer);
+        reject(new ErrorCtor('Device plugins unavailable'));
+      }
     });
   }
-  window.addEventListener('PlayBridgePluginsResponseJson', function(event) {
-    var message;
-    try { message = JSON.parse(event.detail); } catch (_) { return; }
+  channelReceive(function(message) {
     if (message.type === 'plugin_capabilities') {
       bridge.capabilities.nativePlugins = message.available === true ? 1 : 0;
-      window.dispatchEvent(new Event('PlayBridgePluginsReady'));
+      dispatchWindow(new EventCtor('PlayBridgePluginsReady'));
       return;
     }
     if (message.type === 'plugin_disconnected') {
       bridge.capabilities.nativePlugins = 0;
-      pending.forEach(function(waiter) { clearTimeout(waiter.timer); waiter.reject(new Error('Device plugins disconnected')); });
-      pending.clear();
+      rejectAll('Device plugins disconnected', false);
       return;
     }
-    var waiter = pending.get(message.requestId);
+    if (typeof message.requestId !== 'string') return;
+    var waiter = pending[message.requestId];
     if (!waiter) return;
-    pending.delete(message.requestId);
-    clearTimeout(waiter.timer);
+    delete pending[message.requestId];
+    pendingCount--;
+    clearTimer(waiter.timer);
     if (message.ok === true) {
       if (waiter.operation === 'status') bridge.capabilities.nativePlugins = message.data && message.data.available === true ? 1 : 0;
       waiter.resolve(message.data || {});
     } else {
-      var error = new Error(message.error || 'Device plugin request failed');
+      var error = new ErrorCtor(message.error || 'Device plugin request failed');
       error.code = message.error || 'native_plugins_unavailable';
       waiter.reject(error);
     }
@@ -83,13 +114,8 @@ export const PLUGIN_PAGE_BRIDGE_SCRIPT = `
     resolve: function(request) { return invoke('resolve', request); },
     manage: function() { return invoke('manage', {}); },
     cancel: function() {
-      pending.forEach(function(waiter, id) {
-        if (waiter.operation !== 'resolve') return;
-        pending.delete(id);
-        clearTimeout(waiter.timer);
-        waiter.reject(new Error('Device plugin resolution cancelled'));
-      });
-      window.dispatchEvent(new CustomEvent('PlayBridgePluginsRequestJson', { detail: JSON.stringify({ operation: 'cancel' }) }));
+      rejectAll('Device plugin resolution cancelled', true);
+      channelSend(stringify({ operation: 'cancel' }));
     }
   };
 })();
@@ -100,14 +126,15 @@ export function installPluginBridge(): void {
   let port: ReturnType<typeof browser.runtime.connectNative> | undefined;
   let closed = false;
   let capabilities: unknown;
+  let page: PageChannel | null = null;
   function deliver(message: unknown): void {
-    window.dispatchEvent(new CustomEvent("PlayBridgePluginsResponseJson", { detail: JSON.stringify(message) }));
+    page?.post(message);
   }
-  window.addEventListener("PlayBridgePluginsRequestJson", ((event: CustomEvent) => {
-    if (window.top !== window || typeof event.detail !== "string" || new TextEncoder().encode(event.detail).length > MAX_REQUEST_BYTES) return;
+  function handleRequest(raw: unknown): void {
+    if (typeof raw !== "string" || new TextEncoder().encode(raw).length > MAX_REQUEST_BYTES) return;
     let request: Record<string, unknown>;
     try {
-      const value: unknown = JSON.parse(event.detail);
+      const value: unknown = JSON.parse(raw);
       if (!validPluginBridgeRequest(value)) {
         const id = (value as { requestId?: unknown } | null)?.requestId;
         if (typeof id === "string" && id.length >= 1 && id.length <= 128 && !/[\x00-\x1f\x7f]/.test(id)) {
@@ -127,7 +154,7 @@ export function installPluginBridge(): void {
     }
     try { port.postMessage(request); }
     catch { deliver({ type: "plugin_response", requestId: request.requestId, ok: false, error: "native_plugins_unavailable" }); }
-  }) as EventListener);
+  }
   function connect(): void {
     closed = false;
     capabilities = undefined;
@@ -141,10 +168,8 @@ export function installPluginBridge(): void {
     } catch { closed = true; deliver({ type: "plugin_disconnected" }); }
   }
   connect();
-  const script = document.createElement("script");
-  script.textContent = PLUGIN_PAGE_BRIDGE_SCRIPT;
-  (document.documentElement || document.head || document.body).appendChild(script);
-  script.remove();
+  page = injectPageScriptWithChannel(PLUGIN_PAGE_BRIDGE_SCRIPT);
+  page?.onMessage(handleRequest);
   if (capabilities) deliver(capabilities);
   window.addEventListener("hashchange", () => {
     if (!closed) { try { port?.postMessage({ operation: "cancel" }); } catch { /* Document closed. */ } }
