@@ -2,6 +2,7 @@
 name = "stream-proxy-rust"
 version = "0.1.1"
 edition = "2021"
+rust-version.workspace = true
 description = "High-performance PlayBridge streaming proxy server in Rust with MediaFlow AES-256 encryption & stateful sessions"
 
 [features]

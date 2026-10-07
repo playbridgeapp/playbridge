@@ -2,6 +2,7 @@
 name = "playbridge-cast-receiver"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 publish = false
 license = "AGPL-3.0-or-later"
 description = "Reusable PlayBridge secure receiver runtime"
