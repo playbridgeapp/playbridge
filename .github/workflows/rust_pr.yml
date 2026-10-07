@@ -61,7 +61,7 @@ jobs:
 
   cli-build:
     name: cli-${{ matrix.os }}
-    if: github.event_name != 'workflow_call' || inputs.include_cli_builds
+    if: ${{ inputs.include_cli_builds != false }}
     strategy:
       fail-fast: false
       matrix:

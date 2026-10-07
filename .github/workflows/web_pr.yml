@@ -39,7 +39,7 @@ jobs:
         working-directory: ./web/site
     steps:
       - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
-        if: github.event_name != 'workflow_call' || !inputs.always_run
+        if: ${{ !inputs.always_run }}
         id: filter
         with:
           filters: |
@@ -57,7 +57,7 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_call" ] && [ "${{ inputs.always_run }}" = "true" ]; then
+          if [ "${{ inputs.always_run }}" = "true" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ steps.filter.outputs.relevant }}" = "true" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
