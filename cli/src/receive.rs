@@ -21,7 +21,7 @@ use tokio::{
     time::sleep,
 };
 
-const DEFAULT_PORT: u16 = 8765;
+pub(crate) const DEFAULT_PORT: u16 = 8765;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ReceiverDashboardCommand {
