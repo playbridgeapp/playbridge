@@ -513,16 +513,7 @@ final class TabScriptHandler: NSObject, WKScriptMessageHandler {
         case "video":
             guard message.webView === tab?.loadedWebView, tab?.acceptsDetection(body) == true else { return }
             tab?.detector.ingest(body)
-        case "cast":
-            guard message.webView === tab?.loadedWebView, message.frameInfo.isMainFrame,
-                  BrowserSitePolicy.origin(BrowserPopupInteraction.originURL(message.frameInfo)) == tab?.pageCastOrigin,
-                  let payload = body["payload"] as? [String: Any],
-                  let source = message.frameInfo.request.url else { return }
-            do {
-                try PageCastRequest.rejectSenderOnlyFields(body)
-                try PageCastRequest.rejectSenderOnlyFields(payload)
-            } catch { return }
-            tab?.requestPageCast(payload, source: source)
+        // Website casts arrive only through the PlayBridge.PageCast broker, never this page-world handler.
         case "pickerState":
             if message.frameInfo.isMainFrame, body["active"] as? Bool == false { tab?.pickerDidFinish() }
         case "pickerSelection":
