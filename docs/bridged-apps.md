@@ -25,11 +25,12 @@ Linked website casts do not display a mini playback bar over browser or bridged-
 
 ## Unified playback destinations
 
-Android and iOS advertise `playbridge.capabilities.playback === 1`. The selected native destination is authoritative, including an explicit **This device** selection. Websites can display and change it without starting media:
+Android and iOS advertise `playbridge.capabilities.playback === 1`. The selected native destination is authoritative, including an explicit **This device** selection. Websites can display and change it without starting media, but the destination identity is consent-gated:
 
 ```ts
 const { destination } = await playbridge.getPlaybackDestination()
-// { id, name, kind: 'local' | 'native' | 'external', connected }
+// Before website-casting consent: { id: null, name: null, kind, connected }
+// After consent: { id, name, kind: 'local' | 'native' | 'external', connected }
 await playbridge.choosePlaybackDestination() // opens the existing native destination picker
 await playbridge.choosePlaybackDestination({ destinationId: 'this-device' }) // explicit local recovery
 const session = await playbridge.play({
@@ -41,7 +42,11 @@ const session = await playbridge.play({
 })
 ```
 
-`play()` uses the linked-session event and `provideItems()` contract. Phone playback opens the existing native fullscreen player; a selected receiver uses its normal native transport. Resume positions, explicit media headers, metadata and supported subtitles travel with the items. Website and private-server permissions apply to playback just as they do to casting. The requested destination is checked again after asynchronous preparation; a changed or disconnected target rejects the request, allowing the website to offer reconnect or explicit local playback.
+Before the origin has website-casting consent, `getPlaybackDestination()` returns only `{ id: null, name: null, kind, connected }`. `kind` and `connected` are not identifying. After consent, `name` is the device name and `id` is `this-device` for phone playback, or HMAC-SHA256 of an install secret (generated once and stored only on the device) over `origin`, a NUL byte, and the receiver endpoint key. The raw `protocol:stableId` endpoint key is not sent to websites, and two origins do not receive the same id for one receiver. `play()` must pass the id from this call. `this-device` remains the literal id for explicit local playback. A previously learned raw endpoint key does not match.
+
+`choosePlaybackDestination()` and `{ destinationId: 'this-device' }` require a user gesture. The isolated content script reads `navigator.userActivation.isActive` and native code checks that attestation; a page script cannot supply it. Without an attested gesture, native rejects with `user_gesture_required`. While a receiver is connected, `this-device` opens the native picker instead of disconnecting it. A website never disconnects a live receiver by itself.
+
+`play()` uses the linked-session event and `provideItems()` contract. Phone playback opens the existing native fullscreen player; a selected receiver uses its normal native transport. Resume positions, explicit media headers, metadata and supported subtitles travel with the items. Website and private-server permissions apply to playback just as they do to casting, and linked-session operations re-check that consent. The requested destination is checked again after asynchronous preparation; a changed or disconnected target rejects the request, allowing the website to offer reconnect or explicit local playback.
 
 Phone hosts advertise `capabilities.localPlaybackOrientation === 1`. The optional top-level `play()` field `initialOrientation` accepts only `auto`, `portrait`, or `landscape` and is honored only for **This device**. Omission/`auto` preserves the host’s existing orientation policy; explicit choices set the opening orientation without removing native rotation controls. iOS requests scene geometry once and restores the preceding page on dismissal; if the OS refuses the request, playback continues with a visible explanation. Orientation is session presentation state, not receiver playlist metadata, and episode changes do not reopen or rotate the player. Websites must feature-detect this capability rather than assume older hosts support it.
 

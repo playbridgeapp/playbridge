@@ -1204,12 +1204,14 @@ final class ConnectionViewModel: ObservableObject {
 }
 
 extension ConnectionViewModel: PageCastTransport {
+    /// Internal route identity. Session checks compare this; do not send it to a website.
     var playbackDestination: [String: Any] {
         let local = UserDefaults.standard.string(forKey: "last_receiver_protocol") == "this_phone" || (destinationID == nil)
         if local { return ["id": "this-device", "name": "This device", "kind": "local", "connected": true] }
         return ["id": destinationID ?? "unavailable", "name": receiverName ?? "TV",
                 "kind": isAirPlay || isExternalReceiver ? "external" : "native", "connected": isConnected]
     }
+
     @MainActor func startWebsiteExternalPlayback(_ request: PageCastRequest) async throws {
         guard isConnected, isAirPlay || isExternalReceiver, request.items.count == 1 else { throw PageCastError(code: "unsupported_target") }
         let target = destinationID

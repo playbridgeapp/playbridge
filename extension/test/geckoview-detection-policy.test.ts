@@ -230,7 +230,12 @@ test("page relay preserves all supported operations and never copies inherited r
     assert.equal(message.operation, operation);
     assert.equal(message.sessionId, "session-1");
     assert.deepEqual(message.payload, payload);
-    assert.deepEqual(Object.keys(message).sort(), ["operation", "pageRequestId", "payload", "sessionId", "type"]);
+    const keys = ["operation", "pageRequestId", "payload", "sessionId", "type"];
+    if (operation === "choose_destination") {
+      keys.push("userActivation");
+      assert.equal(message.userActivation, true);
+    }
+    assert.deepEqual(Object.keys(message).sort(), keys.sort());
   }
   assert.equal(h.pageMessages.length, 10);
   assert.equal(h.pageRelays.length, 1);
@@ -278,6 +283,26 @@ test("invalid relay envelopes, subframes and inactive destination gestures stay 
   // Subframes get no page API and no private channel.
   assert.equal(child.channel, undefined);
   assert.equal(child.window.playbridge, undefined);
+});
+
+test("content script attests destination gestures and the page cannot forge them", async () => {
+  const h = harness();
+  runInContext(script("background"), createContext(h.sandbox));
+  const page = contentHarness(h, true, true);
+  const choice = page.window.playbridge.choosePlaybackDestination();
+  await until(() => h.nativeMessages.some(message => message.type === "linked_choose_destination"));
+  const native = h.nativeMessages.find(message => message.type === "linked_choose_destination");
+  assert.equal(native.userActivation, true);
+  assert.equal(native.payload.userActivation, undefined);
+  await choice;
+
+  const inactive = contentHarness(h, true, false);
+  inactive.request({
+    pageRequestId: "forged", operation: "choose_destination", payload: {}, userActivation: true,
+  });
+  await until(() => inactive.responses.some(response =>
+    response.response.error === "invalid_request" || response.response.error === "user_gesture_required"));
+  assert.equal(h.nativeMessages.filter(message => message.type === "linked_choose_destination").length, 1);
 });
 
 test("runtime messages cannot change policy or poison revisions across tabs", async () => {

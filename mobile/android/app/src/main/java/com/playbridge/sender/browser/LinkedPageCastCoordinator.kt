@@ -99,6 +99,41 @@ internal fun pageRequestSuperseded(
 ): Boolean = requestTabId == navigationTabId &&
     navigationGeneration > requestNavigationGeneration
 
+/** Native identity of the document that opened a linked session. */
+internal data class LinkedSessionBinding(
+    val sessionId: String,
+    val origin: String,
+    val tabId: Int,
+    val navigationGeneration: Long,
+)
+
+internal fun LinkedPageCastOpenRequest.linkedSessionBinding() = LinkedSessionBinding(
+    sessionId = sessionId,
+    origin = origin,
+    tabId = tabId,
+    navigationGeneration = navigationGeneration,
+)
+
+/** Session commands must match the opening document, not only the session id and origin. */
+internal fun linkedMessageMatchesSession(
+    binding: LinkedSessionBinding,
+    message: JSONObject,
+    origin: String,
+): Boolean = binding.sessionId == message.optString("sessionId") &&
+    binding.origin == origin &&
+    binding.tabId == message.optInt("tabId", Int.MIN_VALUE) &&
+    binding.navigationGeneration == message.optLong("navigationGeneration", Long.MIN_VALUE)
+
+/**
+ * Website consent is re-checked on every linked operation, like iOS ownedSession.
+ * A message for another document is session_ended and must not end the active session.
+ */
+internal fun linkedSessionOperationError(sessionMatches: Boolean, websiteApproved: Boolean): String? = when {
+    !sessionMatches -> "session_ended"
+    !websiteApproved -> "not_allowed"
+    else -> null
+}
+
 private const val LINKED_SESSION_IDLE_TIMEOUT_MILLIS = 10 * 60 * 1_000L
 private const val LINKED_SESSION_MAX_LIFETIME_MILLIS = 2 * 60 * 60 * 1_000L
 
@@ -128,6 +163,8 @@ class LinkedPageCastCoordinator(
         val openBridgeRequestId: String,
         val sessionId: String,
         val origin: String,
+        val tabId: Int,
+        val navigationGeneration: Long,
         val receiver: TvDevice,
         val ids: MutableList<String>,
         val createdAtMillis: Long = System.currentTimeMillis(),
@@ -229,8 +266,10 @@ class LinkedPageCastCoordinator(
 
     fun isMessageForActiveSession(message: JSONObject, origin: String): Boolean {
         val session = active ?: return false
-        return session.sessionId == message.optString("sessionId") && session.origin == origin
+        return linkedMessageMatchesSession(session.binding(), message, origin)
     }
+
+    private fun Active.binding() = LinkedSessionBinding(sessionId, origin, tabId, navigationGeneration)
 
     fun cancelOpen(targetBridgeRequestId: String, reason: String = "navigation") {
         synchronized(cancelledOpenRequests) {
@@ -258,10 +297,13 @@ class LinkedPageCastCoordinator(
                 active?.let { old -> event(old, "ended", JSONObject().put("reason", "superseded")) }
                 tvQueueCoordinator.stop()
                 externalQueueCoordinator.stop()
+                val binding = request.linkedSessionBinding()
                 val next = Active(
                     openBridgeRequestId = request.bridgeRequestId,
-                    sessionId = request.sessionId,
-                    origin = request.origin,
+                    sessionId = binding.sessionId,
+                    origin = binding.origin,
+                    tabId = binding.tabId,
+                    navigationGeneration = binding.navigationGeneration,
                     receiver = receiver,
                     ids = request.items.mapTo(mutableListOf()) { it.id },
                     allowedPrivateOrigins = request.items.flatMapTo(linkedSetOf()) { it.payload.allowed_private_origins },
@@ -295,10 +337,10 @@ class LinkedPageCastCoordinator(
 
     fun handle(message: JSONObject) {
         val bridgeRequestId = message.optString("bridgeRequestId")
-        val sessionId = message.optString("sessionId")
         val type = message.optString("type")
         val session = active
-        if (session == null || session.sessionId != sessionId) {
+        val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin"))
+        if (session == null || origin == null || !linkedMessageMatchesSession(session.binding(), message, origin)) {
             result(bridgeRequestId, false, "session_ended")
             return
         }

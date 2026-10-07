@@ -136,6 +136,9 @@ private final class FakeTransport: PageCastTransport {
         else { precondition(reply["ok"] as? Bool == true, "Unexpected failure: \(reply)") }
         return reply
     }
+    func pageDestinationId() -> String {
+        coordinator.websiteDestination(for: page.pageCastOrigin!)["id"] as! String
+    }
     func open(items: [[String: Any]] = [Fixture.item()], ready: Bool = true) async -> String {
         permissions.approve(page.pageCastOrigin!)
         let id = send("open", payload: ["items": items])
@@ -440,8 +443,14 @@ private final class FakeTransport: PageCastTransport {
             let f = Fixture()
             let status = f.send("destination")
             let destination = await f.response(status)["destination"] as! [String: Any]
-            precondition(destination["id"] as? String == "receiver-one")
+            precondition(destination["id"] is NSNull && destination["name"] is NSNull,
+                         "An unconsented destination must not disclose a device id or name")
+            precondition(destination["kind"] as? String == "native" && destination["connected"] as? Bool == true)
             precondition(f.transport.sends.isEmpty && f.coordinator.presentation == nil)
+            // A raw endpoint key must not confirm the receiver or open a consent prompt.
+            _ = await f.response(f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]]),
+                                 error: "receiver_changed")
+            precondition(f.coordinator.presentation == nil)
             var pickerOpens = 0
             f.coordinator.onChooseDestination = { pickerOpens += 1 }
             // The picker is user-mediated; WebKit without navigator.userActivation reports nil.
@@ -467,16 +476,23 @@ private final class FakeTransport: PageCastTransport {
         }
         do {
             let f = Fixture(approved: true)
+            let disclosed = await f.response(f.send("destination"))["destination"] as! [String: Any]
+            let disclosedId = disclosed["id"] as? String
+            precondition(disclosedId != nil && disclosedId != "receiver-one" && disclosedId != f.transport.destinationID)
+            precondition(disclosed["name"] as? String == "receiver-one")
+            precondition(disclosedId == f.pageDestinationId())
+            precondition(f.coordinator.websiteDestination(for: "https://other.example")["id"] as? String != disclosedId)
             _ = await f.response(f.send("play", payload: ["items": [Fixture.item()]]), error: "invalid_request")
             _ = await f.response(f.send("play", payload: ["destinationId": "wrong", "items": [Fixture.item()]]), error: "receiver_changed")
+            _ = await f.response(f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]]), error: "receiver_changed")
             f.transport.isConnected = false
-            _ = await f.response(f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]]), error: "connect_failed")
+            _ = await f.response(f.send("play", payload: ["destinationId": f.pageDestinationId(), "items": [Fixture.item()]]), error: "connect_failed")
             precondition(f.transport.sends.isEmpty && f.transport.localOpens == 0)
         }
         do {
             let gate = ResolveGate()
             let f = Fixture(approved: true, resolve: { _, _, _ in await gate.wait() })
-            let play = f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]])
+            let play = f.send("play", payload: ["destinationId": f.pageDestinationId(), "items": [Fixture.item()]])
             await f.wait({ gate.entered }, "play DNS resolution")
             f.transport.selectWebsiteLocalDestination()
             gate.release()
@@ -526,7 +542,7 @@ private final class FakeTransport: PageCastTransport {
         do {
             let f = Fixture(approved: true)
             f.transport.playbackKind = "external"; f.transport.isAirPlay = true
-            let play = f.send("play", payload: ["destinationId": "receiver-one", "items": [Fixture.item()]])
+            let play = f.send("play", payload: ["destinationId": f.pageDestinationId(), "items": [Fixture.item()]])
             let session = await f.response(play)["sessionId"] as! String
             precondition(f.transport.externalOpens == 1 && f.transport.sends.isEmpty)
             _ = await f.response(f.send("ping", session: session, payload: ["ready": true]))
@@ -539,6 +555,18 @@ private final class FakeTransport: PageCastTransport {
         print("PASS unified destination picker, explicit local selection, launch locking, local progress/queue and external media ownership")
     }
 
+    static func destinationIdsArePerOrigin() {
+        let secret = Data(repeating: 0x11, count: 32)
+        let id = PageDestinationPrivacy.id(secret: secret, origin: "https://site.example", endpointKey: "playbridge:living-room")
+        precondition(id == "37d57a2370dbcf92f916f78ccbbc329e462c706f7fe15bafe2e5f6f2ca775411")
+        precondition(id != PageDestinationPrivacy.id(secret: secret, origin: "https://other.example", endpointKey: "playbridge:living-room"))
+        let hidden = PageDestinationPrivacy.project(
+            ["id": "playbridge:living-room", "name": "Living Room", "kind": "native", "connected": true],
+            origin: "https://site.example", approved: false, secret: secret)
+        precondition(hidden["id"] is NSNull && hidden["name"] is NSNull && hidden["kind"] as? String == "native")
+        print("PASS per-origin destination ids")
+    }
+
     @MainActor static func main() async {
         // Demand is deterministic regardless of the developer's configured preference.
         let previous = UserDefaults.standard.object(forKey: "website_cast_prefetch")
@@ -548,6 +576,7 @@ private final class FakeTransport: PageCastTransport {
             else { UserDefaults.standard.removeObject(forKey: "website_cast_prefetch") }
         }
         await rejectsWebsiteWebhooks()
+        destinationIdsArePerOrigin()
         await unifiedPlayback()
         await permissionFlow()
         await privatePermissionsAndPayloads()

@@ -305,13 +305,19 @@ function installPageApi(): void {
       }
       return;
     }
-    if (detail.operation === "choose_destination" && navigator.userActivation && !navigator.userActivation.isActive) {
+    // Read activation in this isolated world. The page channel rejects a page-supplied
+    // userActivation field, and this value overwrites anything the page could have sent.
+    const activation = navigator.userActivation && typeof navigator.userActivation.isActive === "boolean"
+      ? navigator.userActivation.isActive
+      : null;
+    if (detail.operation === "choose_destination" && activation === false) {
       page.post({ channel: "linked", type: "response", pageRequestId: detail.pageRequestId,
         response: { ok: false, error: "user_gesture_required" } });
       return;
     }
     outstanding.add(detail.pageRequestId);
-    post(detail, detail.pageRequestId);
+    post(detail.operation === "choose_destination" ? { ...detail, userActivation: activation } : detail,
+      detail.pageRequestId);
   });
 }
 

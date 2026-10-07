@@ -30,7 +30,7 @@ class PagePlaybackCoordinator(
     private var createdAtMillis = 0L
     private var lastActivityAtMillis = 0L
 
-    suspend fun destination(): JSONObject {
+    suspend fun destination(origin: String? = null): JSONObject {
         val route = connection.route.value
         val device = if (route is CastSessionManager.Route.External) connection.activeExternalDevice.value
             else connection.tvDevice.first()
@@ -40,10 +40,27 @@ class PagePlaybackCoordinator(
             is CastSessionManager.Route.NativeTv -> connection.connectionState.value is WebSocketClient.ConnectionState.Connected
             is CastSessionManager.Route.External -> connection.castSessionState.value.isReadyForPlayback
         }
-        return JSONObject().put("id", if (local) "this-device" else device?.endpointKey?.toString() ?: "unavailable")
-            .put("name", if (local) "This device" else device?.name ?: "TV")
-            .put("kind", if (local) "local" else if (route is CastSessionManager.Route.NativeTv) "native" else "external")
-            .put("connected", connected)
+        val rawId = if (local) PageDestinationPrivacy.THIS_DEVICE else device?.endpointKey?.toString() ?: PageDestinationPrivacy.UNAVAILABLE
+        val rawName = if (local) "This device" else device?.name ?: "TV"
+        val kind = if (local) "local" else if (route is CastSessionManager.Route.NativeTv) "native" else "external"
+        val normalized = origin?.let(PageCastConsentStore::normalizeOrigin)
+        return pagePlaybackDestination(
+            rawId = rawId,
+            rawName = rawName,
+            kind = kind,
+            connected = connected,
+            origin = normalized,
+            consented = normalized != null && PageCastConsentStore.isApproved(context, normalized),
+            installSecret = PageDestinationPrivacy.installSecret(context),
+        )
+    }
+
+    /** A selected non-local route with a live transport. Websites must not disconnect it. */
+    private fun liveReceiverConnected(): Boolean = when (val route = connection.route.value) {
+        is CastSessionManager.Route.ThisDevice -> false
+        is CastSessionManager.Route.NativeTv ->
+            connection.connectionState.value is WebSocketClient.ConnectionState.Connected
+        is CastSessionManager.Route.External -> connection.castSessionState.value.isReadyForPlayback
     }
 
     fun handle(message: JSONObject): Boolean {
@@ -53,14 +70,28 @@ class PagePlaybackCoordinator(
                 val tab = message.optInt("tabId", -1)
                 val generation = message.optLong("navigationGeneration", -1)
                 if (!Components.isCurrentPageNavigation(tab, generation)) { reply(message, "session_ended"); return@launch }
+                val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin"))
                 if (type == "linked_choose_destination") {
                     val payload = message.optJSONObject("payload") ?: JSONObject()
-                    if (payload.has("destinationId")) {
-                        if (payload.opt("destinationId") != "this-device") { reply(message, "invalid_request"); return@launch }
-                        connection.selectThisDevice()
-                    } else Components.playbackDevicePicker.request()
+                    val hasDestinationId = payload.has("destinationId") && !payload.isNull("destinationId")
+                    val destinationId = payload.opt("destinationId") as? String
+                    when (pageDestinationGesture(
+                        hasDestinationId,
+                        destinationId,
+                        jsonBooleanOrNull(if (message.has("userActivation")) message.opt("userActivation") else null),
+                        liveReceiverConnected(),
+                    )) {
+                        PageDestinationGesture.OPEN_PICKER -> Components.playbackDevicePicker.request()
+                        PageDestinationGesture.SELECT_THIS_DEVICE -> connection.selectThisDevice()
+                        PageDestinationGesture.REJECT_GESTURE -> {
+                            reply(message, "user_gesture_required"); return@launch
+                        }
+                        PageDestinationGesture.REJECT_INVALID -> {
+                            reply(message, "invalid_request"); return@launch
+                        }
+                    }
                 }
-                val value = destination()
+                val value = destination(origin)
                 if (Components.isCurrentPageNavigation(tab, generation)) reply(message, destination = value)
                 else reply(message, "session_ended")
             }
@@ -71,6 +102,11 @@ class PagePlaybackCoordinator(
         if (message.optString("origin") != session.origin || message.optInt("tabId", -1) != session.tabId ||
             message.optLong("navigationGeneration", -1) != session.navigationGeneration) {
             reply(message, "session_ended"); return true
+        }
+        if (!PageCastConsentStore.isApproved(context, session.origin)) {
+            reply(message, "not_allowed")
+            end("permission_reset")
+            return true
         }
         lastActivityAtMillis = System.currentTimeMillis()
         when (type) {
@@ -97,10 +133,11 @@ class PagePlaybackCoordinator(
     }
 
     suspend fun open(request: LinkedPageCastOpenRequest) {
-        val destination = destination()
+        val destination = destination(request.origin)
         if (!Components.isCurrentPageNavigation(request.tabId, request.navigationGeneration) ||
             linked.isOpenCancelled(request.bridgeRequestId)) { reject(request, "session_ended"); return }
-        if (destination.optString("id") != request.destinationId) { reject(request, "receiver_changed"); return }
+        if (!PageCastConsentStore.isApproved(context, request.origin)) { reject(request, "not_allowed"); return }
+        if (!pageDestinationMatches(request)) { reject(request, "receiver_changed"); return }
         if (!destination.optBoolean("connected")) { reject(request, "connect_failed"); return }
         end("superseded")
         linked.supersedeIfActive()
@@ -140,7 +177,8 @@ class PagePlaybackCoordinator(
                 var epoch: Long? = loadedEpoch
                 while (active === request) {
                     delay(1000)
-                    if (destination().optString("id") != request.destinationId || !destination().optBoolean("connected")) {
+                    val current = destination(request.origin)
+                    if (current.optString("id") != request.destinationId || !current.optBoolean("connected")) {
                         end("receiver_changed"); break
                     }
                     if (!PageCastConsentStore.isApproved(context, request.origin) ||
@@ -185,6 +223,16 @@ class PagePlaybackCoordinator(
         Components.postLinkedMessage(JSONObject().put("type", "linked_event").put("sessionId", session.sessionId)
             .put("event", name).put("detail", detail))
         if (name == "ended") { active = null; externalProgress?.cancel(); externalProgress = null }
+    }
+
+    private suspend fun pageDestinationMatches(request: LinkedPageCastOpenRequest): Boolean {
+        val id = request.destinationId ?: return false
+        val route = connection.route.value
+        val device = if (route is CastSessionManager.Route.External) connection.activeExternalDevice.value
+            else connection.tvDevice.first()
+        val rawId = if (route is CastSessionManager.Route.ThisDevice) PageDestinationPrivacy.THIS_DEVICE
+            else device?.endpointKey?.toString() ?: PageDestinationPrivacy.UNAVAILABLE
+        return pageDestinationIdMatches(id, rawId, request.origin, PageDestinationPrivacy.installSecret(context))
     }
 
     private fun reply(message: JSONObject, error: String? = null, destination: JSONObject? = null) {
