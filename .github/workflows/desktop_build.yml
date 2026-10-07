@@ -15,11 +15,28 @@ on:
       - 'cli/**'
       - 'protocol/**'
       - '.github/workflows/desktop_build.yml'
-      - '.gitmodules'
   workflow_dispatch:
 
 jobs:
+  test:
+    name: test
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/desktop_pr.yml
+    with:
+      always_run: true
+
+  test-rust:
+    name: test-rust
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust_pr.yml
+    with:
+      include_cli_builds: false
+
   build-windows:
+    needs: [test, test-rust]
     runs-on: windows-latest
     defaults:
       run:
@@ -32,7 +49,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -54,15 +70,16 @@ jobs:
 
     - name: Set up Flutter
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: subosito/flutter-action@v2
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         channel: stable
         cache: true
 
     - name: Set up Rust
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
       with:
+        toolchain: stable
         targets: x86_64-pc-windows-msvc
 
     - name: Install dependencies
@@ -117,6 +134,7 @@ jobs:
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   build-linux:
+    needs: [test, test-rust]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -129,7 +147,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -163,15 +180,16 @@ jobs:
 
     - name: Set up Flutter
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: subosito/flutter-action@v2
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         channel: stable
         cache: true
 
     - name: Set up Rust
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
       with:
+        toolchain: stable
         targets: x86_64-unknown-linux-gnu
 
     - name: Install dependencies
@@ -208,6 +226,7 @@ jobs:
           s3://${{ secrets.R2_BUCKET }}/desktop-release/
 
   build-macos:
+    needs: [test, test-rust]
     runs-on: macos-latest
     defaults:
       run:
@@ -220,7 +239,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -240,15 +258,16 @@ jobs:
 
     - name: Set up Flutter
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: subosito/flutter-action@v2
+      uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
       with:
         channel: stable
         cache: true
 
     - name: Set up Rust
       if: steps.check_tag.outputs.skipped == 'false'
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
       with:
+        toolchain: stable
         targets: aarch64-apple-darwin,x86_64-apple-darwin
 
     - name: Install dependencies
@@ -303,7 +322,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -326,7 +344,7 @@ jobs:
         done
 
     - name: Create draft GitHub release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
       with:
         tag_name: desktop-v${{ steps.version.outputs.version }}
         name: PlayBridge Desktop v${{ steps.version.outputs.version }}

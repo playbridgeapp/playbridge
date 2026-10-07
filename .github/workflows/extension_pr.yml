@@ -1,17 +1,27 @@
 name: Extension PR Checks
-# protocol submodule: playbridgeapp/playbridge-protocol
 #
 # Runs on every PR to main so the required `extension` status always reports,
 # but the heavy build steps only execute when extension-relevant paths change
 # (see the paths-filter step). On unrelated PRs the job is a fast no-op pass.
+# Release workflows call this with always_run before signing or publishing.
 
 on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      always_run:
+        description: Run extension checks even when path filters do not match
+        type: boolean
+        default: false
+      ref:
+        description: Git ref to check out; empty uses the caller SHA
+        type: string
+        default: ""
 
 concurrency:
-  group: extension-pr-${{ github.ref }}
+  group: extension-pr-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -27,49 +37,66 @@ jobs:
       run:
         working-directory: ./extension
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        if: ${{ !inputs.always_run }}
         id: filter
         with:
           filters: |
             relevant:
               - 'extension/**'
               - 'protocol/**'
-              - '.gitmodules'
               - '.github/workflows/extension_pr.yml'
 
-      - uses: actions/checkout@v4
-        if: steps.filter.outputs.relevant == 'true'
-        with:
-          submodules: true
+      - name: Resolve check gate
+        id: gate
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.always_run }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.relevant }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: pnpm/action-setup@v4
-        if: steps.filter.outputs.relevant == 'true'
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        if: steps.gate.outputs.run == 'true'
         with:
           version: 9
 
       - uses: actions/setup-node@v4
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: extension/pnpm-lock.yaml
 
       - name: Install dependencies
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm install --frozen-lockfile
 
       # esbuild (build) does NOT type-check, so do it explicitly.
       - name: Type check
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm exec tsc --noEmit
 
+      - name: Test
+        if: steps.gate.outputs.run == 'true'
+        run: pnpm test
+
       - name: Build
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm run build
 
       # Validate the built add-on the same way AMO will before the release
       # signing pipeline runs. The build emits dist/firefox + dist/chrome;
       # lint the Firefox build.
       - name: Lint extension (web-ext)
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: npx --yes web-ext lint --source-dir dist/firefox

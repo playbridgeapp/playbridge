@@ -18,7 +18,9 @@ PbUpstreamCheckedCallbacks test_upstream_callbacks(void) { return installed; }
 C
 python3 "$repo_root/mobile/apple/tests/apple-upstream-fixture.py" "$test_dir/port" &
 fixture_pid=$!
-for attempt in {1..100}; do [ -s "$test_dir/port" ] && break; sleep 0.05; done
+# A cold CI runner can take several seconds to start Python.
+for attempt in {1..600}; do [ -s "$test_dir/port" ] && break; sleep 0.05; done
+if [ ! -s "$test_dir/port" ]; then echo "upstream fixture did not report a port" >&2; exit 1; fi
 export UPSTREAM_PROXY_CONNECT_MARKER="$test_dir/port.connect"
 export UPSTREAM_TEST_ORIGIN="http://127.0.0.1:$(cat "$test_dir/port")"
 clang -c "$test_dir/shim.c" -o "$test_dir/shim.o"

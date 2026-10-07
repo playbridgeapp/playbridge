@@ -116,5 +116,6 @@ final class PhoneSenderServices {
         controls.reveal(); controls.stop(); try await settle(); precondition(controls.visible)
         print("PASS shared auto-hide timer, pause/buffering, scrubbing/sheets, VoiceOver, touch lock/unlock and lifecycle cancellation")
     }
-    static func settle() async throws { try await Task.sleep(nanoseconds: 80_000_000) }
+    // Well above the 20 ms hide delay so slow CI runners settle too.
+    static func settle() async throws { try await Task.sleep(nanoseconds: 400_000_000) }
 }

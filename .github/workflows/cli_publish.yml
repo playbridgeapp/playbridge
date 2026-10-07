@@ -15,8 +15,17 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: test
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust_pr.yml
+    with:
+      ref: ${{ startsWith(inputs.version, 'cli-v') && inputs.version || format('cli-v{0}', inputs.version) }}
+
   publish:
     name: publish draft release
+    needs: test
     runs-on: ubuntu-latest
     # Optional: add environment: cli-release with required reviewers in repo settings.
     steps:

@@ -19,7 +19,17 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    name: test
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/android_pr.yml
+    with:
+      always_run: true
+
   build-phone:
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -32,7 +42,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -57,6 +66,14 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: gradle
+
+    # See android_pr.yml: the phone Gradle daemon needs JetBrains JDK 21.
+    - name: Set up JetBrains JDK 21 for the Gradle daemon
+      if: steps.check_tag.outputs.skipped == 'false'
+      uses: actions/setup-java@v4
+      with:
+        java-version: '21'
+        distribution: 'jetbrains'
 
     - name: Decode Keystore
       if: steps.check_tag.outputs.skipped == 'false'
@@ -128,6 +145,7 @@ jobs:
           --recursive --exclude "*" --include "*.aab"
 
   build-tv-player:
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -140,7 +158,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -229,6 +246,7 @@ jobs:
           --recursive --exclude "*" --include "*.aab"
 
   build-tv-geckoview-plugin:
+    needs: test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -241,7 +259,6 @@ jobs:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        submodules: recursive
 
     - name: Get version
       id: version
@@ -348,7 +365,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
 
       - name: Download build artifacts from R2
         env:
@@ -376,7 +392,7 @@ jobs:
 
       - name: Create Phone draft release
         if: needs.build-phone.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: phone-v${{ steps.versions.outputs.phone }}
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
@@ -396,7 +412,7 @@ jobs:
 
       - name: Create TV Player draft release
         if: needs.build-tv-player.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: tv-player-v${{ steps.versions.outputs.player }}
           name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
@@ -418,7 +434,7 @@ jobs:
 
       - name: Create TV GeckoView Plugin draft release
         if: needs.build-tv-geckoview-plugin.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}
           name: PlayBridge TV GeckoView Plugin v${{ steps.versions.outputs.browser }}

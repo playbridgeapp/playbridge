@@ -1,0 +1,106 @@
+name: Apple PR Checks
+# Host harnesses only. These compile with the macOS Swift/clang toolchains and
+# do not sign or install an app.
+#
+# Not run here, because they need a booted simulator, xcodebuild, and/or ad-hoc
+# codesign: run-browser-startup-checks.sh, run-bridged-app-ui-checks.sh,
+# run-media-library-checks.sh, run-mpv-phone-probe.sh.
+# Not run here, because they need a prebuilt Rust archive and a LAN address:
+# run-sender-services-checks.sh, run-dlna-checks.sh, and run-stream-route-checks.sh --network.
+# run-fixture-checks.sh is not run here: DetectionScriptLifecycleTests.js fails
+# before the rest of that script (pre-existing; do not delete the test to go green).
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'mobile/apple/**'
+      - 'tv/apple/**'
+      - 'cast/ffi/include/**'
+      - '.github/workflows/apple_pr.yml'
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'mobile/apple/**'
+      - 'tv/apple/**'
+      - 'cast/ffi/include/**'
+      - '.github/workflows/apple_pr.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apple:
+    name: apple
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dashboard tile order
+        run: bash mobile/apple/tests/run-dashboard-order-checks.sh
+
+      - name: Bridged-app declarations
+        run: bash mobile/apple/tests/run-bridged-app-declaration-checks.sh
+
+      - name: Page cast model
+        run: bash mobile/apple/tests/run-page-cast-model-checks.sh
+
+      - name: Page cast coordinator
+        run: bash mobile/apple/tests/run-page-cast-coordinator-checks.sh
+
+      - name: AirPlay queue
+        run: bash mobile/apple/tests/run-airplay-queue-checks.sh
+
+      - name: AirPlay subtitles
+        run: bash mobile/apple/tests/run-airplay-subtitle-checks.sh
+
+      - name: Cast playback session
+        run: bash mobile/apple/tests/run-cast-playback-checks.sh
+
+      - name: Google Cast controller
+        run: bash mobile/apple/tests/run-google-cast-checks.sh
+
+      - name: Cast history
+        run: bash mobile/apple/tests/run-cast-history-checks.sh
+
+      - name: Remote control
+        run: bash mobile/apple/tests/run-remote-control-checks.sh
+
+      - name: Saved receivers
+        run: bash mobile/apple/tests/run-saved-receiver-checks.sh
+
+      - name: Stream routes
+        run: bash mobile/apple/tests/run-stream-route-checks.sh
+
+      - name: Playback errors
+        run: bash mobile/apple/tests/run-playback-error-checks.sh
+
+      - name: Phone playback engine
+        run: bash mobile/apple/tests/run-phone-engine-checks.sh
+
+      - name: Phone player features
+        run: bash mobile/apple/tests/run-phone-player-features-checks.sh
+
+      - name: Website playback
+        run: bash mobile/apple/tests/run-website-playback-checks.sh
+
+      - name: Apple proxy upstream shim
+        run: bash mobile/apple/tests/run-apple-upstream-checks.sh
+
+      - name: Page cast and detection scripts
+        run: node --test mobile/apple/tests/PageCastScriptTests.js mobile/apple/tests/DetectionScriptTests.js
+
+      - name: TV progress webhook
+        run: bash tv/apple/tests/run-progress-webhook-checks.sh
+
+      - name: TV receiver review
+        run: bash tv/apple/tests/run-receiver-review-checks.sh
+
+      - name: TV MPV AudioUnit fallback
+        run: python3 tv/apple/tests/run-mpv-audio-unit-checks.py

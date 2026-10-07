@@ -13,6 +13,16 @@ on:
       - '.github/workflows/rust_pr.yml'
       - '.github/workflows/cli_build.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to check out; empty uses the caller SHA
+        type: string
+        default: ""
+      include_cli_builds:
+        description: Also compile the CLI on Linux, macOS, and Windows
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -24,10 +34,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
+          toolchain: stable
           components: clippy,rustfmt
 
       - name: Verify formatting
@@ -48,6 +61,8 @@ jobs:
 
   cli-build:
     name: cli-${{ matrix.os }}
+    # toJSON: a missing input is null, and null == false in expressions.
+    if: ${{ toJSON(inputs.include_cli_builds) != 'false' }}
     strategy:
       fail-fast: false
       matrix:
@@ -56,9 +71,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
 
       - name: Build CLI
         run: cargo build --release --locked -p playbridge-cast-cli

@@ -2,18 +2,31 @@ name: Desktop PR Checks
 # Flutter (libmpv/media_kit) desktop receiver.
 # Analyze + test run on a single Linux runner without native builds;
 # the cross-platform release build stays in desktop_build.yml.
+# Rust workspace fmt/test/clippy live in rust_pr.yml (release builds call that
+# workflow directly so this job does not run them a second time).
 #
 # Runs on every PR to main so the required `desktop` status always reports,
 # but the heavy Flutter steps only execute when desktop-relevant paths change
 # (see the paths-filter step). On unrelated PRs the job is a fast no-op pass.
+# Release workflows call this with always_run before packaging or publishing.
 
 on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      always_run:
+        description: Run Flutter checks even when path filters do not match
+        type: boolean
+        default: false
+      ref:
+        description: Git ref to check out; empty uses the caller SHA
+        type: string
+        default: ""
 
 concurrency:
-  group: desktop-pr-${{ github.ref }}
+  group: desktop-pr-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -29,7 +42,8 @@ jobs:
       run:
         working-directory: ./desktop
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        if: ${{ !inputs.always_run }}
         id: filter
         with:
           filters: |
@@ -41,55 +55,67 @@ jobs:
               - 'cast/**'
               - 'cli/**'
               - 'protocol/**'
-              - '.gitmodules'
               - '.github/workflows/desktop_pr.yml'
 
-      - uses: actions/checkout@v4
-        if: steps.filter.outputs.relevant == 'true'
-        with:
-          submodules: recursive
+      - name: Resolve check gate
+        id: gate
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.always_run }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.relevant }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: subosito/flutter-action@v2
-        if: steps.filter.outputs.relevant == 'true'
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        if: steps.gate.outputs.run == 'true'
         with:
           channel: stable
           cache: true
 
       - name: Set up Rust
-        if: steps.filter.outputs.relevant == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
-          components: clippy,rustfmt
+          toolchain: stable
 
       - name: Install dependencies
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: flutter pub get
 
       - name: Install Cast Core Dart dependencies
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./packages/playbridge_cast_core_dart
         run: dart pub get
 
       - name: Verify formatting
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Verify Cast Core Dart formatting
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./packages/playbridge_cast_core_dart
         run: dart format --output=none --set-exit-if-changed .
 
       - name: Analyze
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: flutter analyze
 
       - name: Analyze Cast Core Dart package
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./packages/playbridge_cast_core_dart
         run: dart analyze --fatal-infos
 
       - name: Build native Rust FFI library
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ${{ github.workspace }}
         run: |
           cargo build --manifest-path Cargo.toml --package playbridge-cast-core-ffi --features sender-services
@@ -97,25 +123,10 @@ jobs:
           cp target/debug/libplaybridge_cast_core_ffi.so desktop/native/cast_core/linux/
 
       - name: Run tests
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: flutter test
 
       - name: Test Cast Core Dart package
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./packages/playbridge_cast_core_dart
         run: dart test
-
-      - name: Verify Rust formatting
-        if: steps.filter.outputs.relevant == 'true'
-        working-directory: .
-        run: cargo fmt --all -- --check
-
-      - name: Test Rust workspace
-        if: steps.filter.outputs.relevant == 'true'
-        working-directory: .
-        run: cargo test --workspace --all-targets
-
-      - name: Lint Rust workspace
-        if: steps.filter.outputs.relevant == 'true'
-        working-directory: .
-        run: cargo clippy --workspace --all-targets -- -D warnings

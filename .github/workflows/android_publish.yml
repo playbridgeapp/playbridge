@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
   validate:
@@ -61,9 +62,21 @@ jobs:
             echo "✅ Found draft $TAG: $url"
           fi
 
+  test:
+    name: test
+    needs: validate
+    if: needs.validate.outputs.is_draft == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/android_pr.yml
+    with:
+      always_run: true
+      ref: ${{ needs.validate.outputs.tag }}
+
   publish-play-store:
     name: publish to Play Store
-    needs: validate
+    needs: [validate, test]
     if: needs.validate.outputs.is_draft == 'true' && inputs.product != 'tv-geckoview-plugin'
     runs-on: ubuntu-latest
     steps:
@@ -81,7 +94,7 @@ jobs:
 
       - name: Publish Phone to Play Store (open testing)
         if: inputs.product == 'phone'
-        uses: r0adkll/upload-google-play@v1.1.5
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.sender
@@ -91,7 +104,7 @@ jobs:
 
       - name: Publish TV Player to Play Store (open testing)
         if: inputs.product == 'tv-player'
-        uses: r0adkll/upload-google-play@v1.1.5
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_SERVICE_ACCOUNT_JSON }}
           packageName: com.playbridge.player
@@ -101,11 +114,12 @@ jobs:
 
   publish-github:
     name: publish GitHub release
-    needs: [validate, publish-play-store]
+    needs: [validate, test, publish-play-store]
     if: |
       always() &&
       needs.validate.result == 'success' &&
       needs.validate.outputs.is_draft == 'true' &&
+      needs.test.result == 'success' &&
       (needs.publish-play-store.result == 'success' || needs.publish-play-store.result == 'skipped')
     runs-on: ubuntu-latest
     steps:

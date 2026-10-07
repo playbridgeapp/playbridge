@@ -3,15 +3,26 @@ name: Web PR Checks
 # Runs on every PR to main so the required `web` status always reports,
 # but the heavy build steps only execute when web-relevant paths change
 # (see the paths-filter step). On unrelated PRs the job is a fast no-op pass.
+# The deploy workflow calls this with always_run before publishing.
 
 on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      always_run:
+        description: Run web checks even when path filters do not match
+        type: boolean
+        default: false
+      ref:
+        description: Git ref to check out; empty uses the caller SHA
+        type: string
+        default: ""
 
 # Cancel superseded runs on the same PR.
 concurrency:
-  group: web-pr-${{ github.ref }}
+  group: web-pr-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -27,7 +38,8 @@ jobs:
       run:
         working-directory: ./web/site
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        if: ${{ !inputs.always_run }}
         id: filter
         with:
           filters: |
@@ -40,16 +52,31 @@ jobs:
               - 'browser-receiver-rust/Cargo.toml'
               - '.github/workflows/web_pr.yml'
 
-      - uses: actions/checkout@v4
-        if: steps.filter.outputs.relevant == 'true'
+      - name: Resolve check gate
+        id: gate
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.always_run }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.relevant }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
 
-      - uses: pnpm/action-setup@v4
-        if: steps.filter.outputs.relevant == 'true'
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+        if: steps.gate.outputs.run == 'true'
         with:
           version: 9
 
       - uses: actions/setup-node@v4
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: 22
           cache: pnpm
@@ -58,32 +85,32 @@ jobs:
             browser-receiver-rust/web/pnpm-lock.yaml
 
       - name: Install receiver dependencies
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./browser-receiver-rust/web
         run: pnpm install --frozen-lockfile
 
       - name: Receiver tests
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./browser-receiver-rust/web
         run: pnpm test
 
       - name: Receiver generated assets are current
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         working-directory: ./browser-receiver-rust/web
         run: pnpm check:generated
 
       - name: Install dependencies
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Type & Svelte check
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm check
 
       - name: Update resolver tests
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm test
 
       - name: Build
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: pnpm build

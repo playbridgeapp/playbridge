@@ -112,9 +112,19 @@ jobs:
         shell: pwsh
         run: '[scriptblock]::Create((Get-Content -Raw cli/install.ps1)) | Out-Null'
 
+  test:
+    name: test
+    needs: validate
+    if: needs.validate.outputs.skipped == 'false'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/rust_pr.yml
+    with:
+      ref: ${{ github.sha }}
+
   build:
     name: ${{ matrix.asset }}
-    needs: validate
+    needs: [validate, test]
     if: needs.validate.outputs.skipped == 'false'
     strategy:
       fail-fast: false
@@ -146,8 +156,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Build CLI
@@ -192,7 +203,7 @@ jobs:
         run: sha256sum *.tar.gz > SHA256SUMS
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: cli-v${{ needs.validate.outputs.version }}
           name: PlayBridge CLI v${{ needs.validate.outputs.version }}

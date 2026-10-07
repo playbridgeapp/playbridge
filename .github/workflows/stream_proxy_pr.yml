@@ -4,9 +4,19 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      always_run:
+        description: Run proxy checks even when path filters do not match
+        type: boolean
+        default: false
+      ref:
+        description: Git ref to check out; empty uses the caller SHA
+        type: string
+        default: ""
 
 concurrency:
-  group: stream-proxy-pr-${{ github.ref }}
+  group: stream-proxy-pr-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -22,7 +32,8 @@ jobs:
       run:
         working-directory: ./stream-proxy-rust
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+        if: ${{ !inputs.always_run }}
         id: filter
         with:
           filters: |
@@ -30,30 +41,47 @@ jobs:
               - 'stream-proxy-rust/**'
               - '.github/workflows/stream_proxy_pr.yml'
 
+      - name: Resolve check gate
+        id: gate
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.always_run }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.filter.outputs.relevant }}" = "true" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
+        with:
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Install Rust Toolchain
-        if: steps.filter.outputs.relevant == 'true'
-        uses: dtolnay/rust-toolchain@stable
+        if: steps.gate.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # v1
+        with:
+          toolchain: stable
 
       - name: Cache Cargo dependencies
-        if: steps.filter.outputs.relevant == 'true'
-        uses: Swatinem/rust-cache@v2
+        if: steps.gate.outputs.run == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: ./stream-proxy-rust
 
       - name: Run cargo test
-        if: steps.filter.outputs.relevant == 'true'
+        if: steps.gate.outputs.run == 'true'
         run: cargo test
 
       - name: Set up Docker Buildx
-        if: steps.filter.outputs.relevant == 'true'
-        uses: docker/setup-buildx-action@v3
+        if: steps.gate.outputs.run == 'true'
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build Docker image (dry-run)
-        if: steps.filter.outputs.relevant == 'true'
-        uses: docker/build-push-action@v6
+        if: steps.gate.outputs.run == 'true'
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ./stream-proxy-rust
           file: ./stream-proxy-rust/Dockerfile
