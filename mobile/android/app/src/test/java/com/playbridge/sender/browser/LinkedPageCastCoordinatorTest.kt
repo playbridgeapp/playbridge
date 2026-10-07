@@ -98,6 +98,45 @@ class LinkedPageCastCoordinatorTest {
     }
 
     @Test
+    fun `active session identity includes tab and navigation generation`() {
+        val request = LinkedPageCastCoordinator.parseOpenMessage(validOpenMessage())
+        val binding = request!!.linkedSessionBinding()
+        assertEquals(1, binding.tabId)
+        assertEquals(1L, binding.navigationGeneration)
+        val message = validOpenMessage()
+        assertEquals(true, linkedMessageMatchesSession(binding, message, "https://website.example"))
+        assertEquals(false, linkedMessageMatchesSession(binding, message, "https://other.example"))
+        assertEquals(
+            false,
+            linkedMessageMatchesSession(binding, JSONObject(message.toString()).put("tabId", 2), binding.origin),
+        )
+        assertEquals(
+            false,
+            linkedMessageMatchesSession(
+                binding,
+                JSONObject(message.toString()).put("navigationGeneration", 2L),
+                binding.origin,
+            ),
+        )
+        assertEquals(
+            false,
+            linkedMessageMatchesSession(
+                binding,
+                JSONObject(message.toString()).put("sessionId", "other-session"),
+                binding.origin,
+            ),
+        )
+    }
+
+    @Test
+    fun `linked operations require current website consent`() {
+        assertEquals(null, linkedSessionOperationError(sessionMatches = true, websiteApproved = true))
+        assertEquals("not_allowed", linkedSessionOperationError(sessionMatches = true, websiteApproved = false))
+        assertEquals("session_ended", linkedSessionOperationError(sessionMatches = false, websiteApproved = false))
+        assertEquals("session_ended", linkedSessionOperationError(sessionMatches = false, websiteApproved = true))
+    }
+
+    @Test
     fun `new document navigation supersedes only requests from that tab`() {
         assertEquals(true, pageRequestSuperseded(7, 3, 7, 4))
         assertEquals(false, pageRequestSuperseded(7, 3, 8, 4))

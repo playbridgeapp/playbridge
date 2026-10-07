@@ -475,8 +475,12 @@ class BrowserActivity : ComponentActivity() {
     ) {
         lifecycleScope.launch {
             if (linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)) return@launch
+            if (!PageCastConsentStore.isApproved(this@BrowserActivity, request.origin)) {
+                linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
+                return@launch
+            }
             if (request.destinationId != null) {
-                val destination = pagePlaybackCoordinator.destination()
+                val destination = pagePlaybackCoordinator.destination(request.origin)
                 if (destination.optString("id") != request.destinationId) {
                     linkedPageCastCoordinator.reject(request.bridgeRequestId, "receiver_changed"); return@launch
                 }
@@ -538,13 +542,19 @@ class BrowserActivity : ComponentActivity() {
                 linkedPageCastCoordinator.reject(request.bridgeRequestId, "connect_failed")
                 return@launch
             }
-            if (request.destinationId != null && pagePlaybackCoordinator.destination().optString("id") != request.destinationId) {
+            if (request.destinationId != null &&
+                pagePlaybackCoordinator.destination(request.origin).optString("id") != request.destinationId
+            ) {
                 linkedPageCastCoordinator.reject(request.bridgeRequestId, "receiver_changed")
                 return@launch
             }
             if (!Components.isCurrentPageNavigation(request.tabId, request.navigationGeneration) ||
                 linkedPageCastCoordinator.isOpenCancelled(request.bridgeRequestId)) {
                 linkedPageCastCoordinator.reject(request.bridgeRequestId, "session_ended")
+                return@launch
+            }
+            if (!PageCastConsentStore.isApproved(this@BrowserActivity, request.origin)) {
+                linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
                 return@launch
             }
             linkedPageCastCoordinator.open(request, targetDevice)
@@ -1230,12 +1240,19 @@ class BrowserActivity : ComponentActivity() {
                         val origin = PageCastConsentStore.normalizeOrigin(message.optString("origin"))
                         val tabId = message.optInt("tabId", -1)
                         val navigationGeneration = message.optLong("navigationGeneration", -1)
-                        if (origin == null || tabId < 0 || navigationGeneration < 0 ||
-                            !linkedPageCastCoordinator.isMessageForActiveSession(message, origin)
-                        ) {
-                            linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), "session_ended")
+                        val sessionMatches = origin != null && tabId >= 0 && navigationGeneration >= 0 &&
+                            linkedPageCastCoordinator.isMessageForActiveSession(message, origin)
+                        linkedSessionOperationError(
+                            sessionMatches,
+                            origin != null && PageCastConsentStore.isApproved(this@BrowserActivity, origin),
+                        )?.let { error ->
+                            linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), error)
+                            // Consent was revoked after open. Drop website authority; a mismatched
+                            // document must not unlink the session it does not own.
+                            if (error == "not_allowed") linkedPageCastCoordinator.unlink("permission_reset")
                             return@linkedRequest
                         }
+                        val websiteOrigin = origin ?: return@linkedRequest
                         lifecycleScope.launch {
                             val requestedPrivateOrigins =
                                 linkedPageCastCoordinator.messageRequestedPrivateOrigins(message)
@@ -1243,17 +1260,18 @@ class BrowserActivity : ComponentActivity() {
                                         linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), "invalid_request")
                                         return@launch
                                     }
-                            if (!Components.isCurrentPageNavigation(tabId, navigationGeneration) ||
-                                !linkedPageCastCoordinator.isMessageForActiveSession(message, origin)
-                            ) {
-                                linkedPageCastCoordinator.reject(
-                                    message.optString("bridgeRequestId"),
-                                    "session_ended",
-                                )
+                            val stillMatches = Components.isCurrentPageNavigation(tabId, navigationGeneration) &&
+                                linkedPageCastCoordinator.isMessageForActiveSession(message, websiteOrigin)
+                            linkedSessionOperationError(
+                                stillMatches,
+                                PageCastConsentStore.isApproved(this@BrowserActivity, websiteOrigin),
+                            )?.let { error ->
+                                linkedPageCastCoordinator.reject(message.optString("bridgeRequestId"), error)
+                                if (error == "not_allowed") linkedPageCastCoordinator.unlink("permission_reset")
                                 return@launch
                             }
                             val unapprovedPrivateOrigins = PageCastConsentStore.unapprovedPrivateOrigins(
-                                this@BrowserActivity, origin, requestedPrivateOrigins,
+                                this@BrowserActivity, websiteOrigin, requestedPrivateOrigins,
                             )
                             if (unapprovedPrivateOrigins.isNotEmpty()) {
                                 pendingLinkedOperation?.let {
@@ -1264,14 +1282,14 @@ class BrowserActivity : ComponentActivity() {
                                 }
                                 pendingLinkedOperation = PendingLinkedOperation(
                                     message,
-                                    origin,
+                                    websiteOrigin,
                                     tabId,
                                     navigationGeneration,
                                     requestedPrivateOrigins,
                                 )
                             } else {
                                 if (linkedPageCastCoordinator.allowPrivateOriginsForActive(
-                                        origin, requestedPrivateOrigins,
+                                        websiteOrigin, requestedPrivateOrigins,
                                     )
                                 ) {
                                     linkedPageCastCoordinator.handle(message)

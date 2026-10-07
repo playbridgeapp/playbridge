@@ -390,8 +390,17 @@ function linkedError(error: string, message?: string): Record<string, unknown> {
   return { ok: false, error, ...(message ? { message } : {}) };
 }
 
+function attestedUserActivation(value: unknown): boolean | null {
+  return value === true || value === false ? value : null;
+}
+
 async function handleLinkedPageRequest(
-  message: { operation?: string; sessionId?: string | null; payload?: unknown },
+  message: {
+    operation?: string;
+    sessionId?: string | null;
+    payload?: unknown;
+    userActivation?: boolean | null;
+  },
   sender: { tab?: { id?: number; url?: string }; frameId?: number; url?: string },
   pagePort?: any,
 ): Promise<Record<string, unknown>> {
@@ -406,8 +415,10 @@ async function handleLinkedPageRequest(
   const operation = message.operation;
   const generation = currentNavigationGeneration(tabNavigationGenerations, tabId);
   if (operation === "destination" || operation === "choose_destination") {
+    // userActivation is set by the isolated content script, never copied from the page payload.
     const response = await sendLinkedNative({ type: `linked_${operation}`, origin, tabId,
-      navigationGeneration: generation, payload: message.payload ?? {} }, 30_000);
+      navigationGeneration: generation, payload: message.payload ?? {},
+      userActivation: attestedUserActivation(message.userActivation) }, 30_000);
     if (!isCurrentNavigationGeneration(tabNavigationGenerations, tabId, generation)) return linkedError("session_ended");
     return response;
   }
@@ -1666,7 +1677,7 @@ function handlePageCast(payload: unknown, sender: { tab?: { id?: number; url?: s
   }
 }
 
-const PAGE_RELAY_FIELDS = new Set(["type", "pageRequestId", "operation", "sessionId", "payload"]);
+const PAGE_RELAY_FIELDS = new Set(["type", "pageRequestId", "operation", "sessionId", "payload", "userActivation"]);
 
 // The page API relays over one port per top-frame document. Responses and session
 // events return on that port only, so another document or frame never sees them.
@@ -1692,10 +1703,16 @@ browser.runtime.onConnect.addListener((port: any) => {
       port.postMessage({ type: "response", pageRequestId, response: linkedError("invalid_request") });
       return;
     }
+    if ("userActivation" in message && message.userActivation !== true &&
+        message.userActivation !== false && message.userActivation !== null) {
+      port.postMessage({ type: "response", pageRequestId, response: linkedError("invalid_request") });
+      return;
+    }
     const request = {
       operation: typeof message.operation === "string" ? message.operation : undefined,
       sessionId: typeof message.sessionId === "string" ? message.sessionId : null,
       payload: message.payload,
+      userActivation: attestedUserActivation(message.userActivation),
     };
     void handleLinkedPageRequest(request, sender, port).then((response) => {
       if (connected) port.postMessage({ type: "response", pageRequestId, response });

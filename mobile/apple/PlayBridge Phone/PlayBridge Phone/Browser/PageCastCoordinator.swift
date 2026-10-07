@@ -174,7 +174,7 @@ final class PageCastCoordinator: ObservableObject {
                     onChooseDestination?()
                 }
             }
-            request.deliver(["requestId": request.requestID, "ok": true, "destination": transport.playbackDestination])
+            request.deliver(["requestId": request.requestID, "ok": true, "destination": websiteDestination(for: request.origin)])
             return
         }
         if request.operation == "cancel" {
@@ -269,10 +269,10 @@ final class PageCastCoordinator: ObservableObject {
             guard let id = (request.payload as? [String: Any])?["destinationId"] as? String,
                   !id.isEmpty, id.utf16.count <= 256 else { throw PageCastError(code: "invalid_request") }
             expected = id
-            try checkDestination(id)
+            try checkDestination(id, origin: request.origin)
         } else { expected = nil }
         let grants = try await authorize(request, items: parsed.items, declared: parsed.privateOrigins, metadata: parsed.metadata)
-        if let expected { try checkDestination(expected) }
+        if let expected { try checkDestination(expected, origin: request.origin) }
         if request.operation == "play", transport?.playbackDestination["kind"] as? String == "local", let transport {
             endSession("superseded")
             let session = Session(owner: request, receiverID: "this-device", items: parsed.items, grants: grants, local: true)
@@ -283,7 +283,7 @@ final class PageCastCoordinator: ObservableObject {
                 self.event(session, name, detail)
             }
             try check(request)
-            try checkDestination("this-device")
+            try checkDestination("this-device", origin: request.origin)
             guard permissions.isApproved(request.origin), grants.isSubset(of: permissions.privateOrigins(for: request.origin)) else { throw PageCastError(code: "not_allowed") }
             active = session
             transport.commitWebsiteLocalPlayback()
@@ -294,10 +294,12 @@ final class PageCastCoordinator: ObservableObject {
         }
         if request.operation == "play", transport?.playbackDestination["kind"] as? String == "external", let transport, let expected {
             endSession("superseded")
-            let session = Session(owner: request, receiverID: expected, items: parsed.items, grants: grants)
+            // Keep the raw route id. The page's HMAC must not become the session's receiver identity.
+            guard let rawId = transport.playbackDestination["id"] as? String else { throw PageCastError(code: "receiver_changed") }
+            let session = Session(owner: request, receiverID: rawId, items: parsed.items, grants: grants)
             session.external = true
             try await transport.startWebsiteExternalPlayback(parsed)
-            try check(request); try checkDestination(expected)
+            try check(request); try checkDestination(expected, origin: request.origin)
             session.playbackID = transport.websitePlayback?.playbackId
             active = session; controllerName = Self.displayName(request.origin)
             startTimer(); reply(request, sessionID: session.id)
@@ -312,7 +314,7 @@ final class PageCastCoordinator: ObservableObject {
         let session = request.operation != "cast" ? Session(owner: request, receiverID: receiverID, items: parsed.items, grants: grants) : nil
         try await transport.sendWebsitePlaylist(parsed, allowedPrivateOrigins: grants)
         try check(request)
-        if let expected { try checkDestination(expected) }
+        if let expected { try checkDestination(expected, origin: request.origin) }
         guard transport.destinationID == receiverID else { throw PageCastError(code: "receiver_changed") }
         if let session {
             active = session
@@ -322,9 +324,18 @@ final class PageCastCoordinator: ObservableObject {
         } else { reply(request) }
     }
 
-    private func checkDestination(_ id: String) throws {
-        guard let destination = transport?.playbackDestination, destination["id"] as? String == id else { throw PageCastError(code: "receiver_changed") }
-        guard destination["connected"] as? Bool == true else { throw PageCastError(code: "connect_failed") }
+    /// Identity the page may display. Consent-gated and per-origin; internal route ids stay on the transport.
+    func websiteDestination(for origin: String) -> [String: Any] {
+        let raw = transport?.playbackDestination ?? ["id": PageDestinationPrivacy.unavailableId, "name": "TV", "kind": "native", "connected": false]
+        return PageDestinationPrivacy.project(raw, origin: origin, approved: permissions.isApproved(origin), secret: permissions.installSecret())
+    }
+
+    private func checkDestination(_ id: String, origin: String) throws {
+        guard let rawId = transport?.playbackDestination["id"] as? String,
+              PageDestinationPrivacy.matches(pageId: id, rawId: rawId, origin: origin, secret: permissions.installSecret()) else {
+            throw PageCastError(code: "receiver_changed")
+        }
+        guard transport?.playbackDestination["connected"] as? Bool == true else { throw PageCastError(code: "connect_failed") }
     }
 
     private func ensureReceiver(_ request: Request) async throws {

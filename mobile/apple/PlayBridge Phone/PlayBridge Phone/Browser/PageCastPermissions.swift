@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import Security
 
 extension Notification.Name {
     static let pageCastPermissionsChanged = Notification.Name("pageCastPermissionsChanged")
@@ -81,10 +83,58 @@ final class PageCastPermissions {
         changed("privateReset")
     }
 
+    /// Generated once. Consent resets must not rotate it, or already-disclosed per-origin ids would change.
+    func installSecret() -> Data {
+        let key = "pageDestination.installSecret"
+        if let existing = defaults.data(forKey: key), existing.count == 32 { return existing }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+            for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) }
+        }
+        let created = Data(bytes)
+        defaults.set(created, forKey: key)
+        return created
+    }
+
     private var grants: [String: [String]] { defaults.dictionary(forKey: grantsKey) as? [String: [String]] ?? [:] }
     private func changed(_ reason: String, origin: String? = nil) {
         var info = ["reason": reason]
         if let origin { info["origin"] = origin }
         NotificationCenter.default.post(name: .pageCastPermissionsChanged, object: self, userInfo: info)
+    }
+}
+
+/// Page-facing destination identity. Same construction as Android PageDestinationPrivacy:
+/// HMAC-SHA256(installSecret, origin || NUL || endpointKey). Raw endpoint keys are never returned.
+enum PageDestinationPrivacy {
+    static let localId = "this-device"
+    static let unavailableId = "unavailable"
+
+    static func id(secret: Data, origin: String, endpointKey: String) -> String {
+        var input = Data(origin.utf8)
+        input.append(0)
+        input.append(contentsOf: endpointKey.utf8)
+        let code = HMAC<SHA256>.authenticationCode(for: input, using: SymmetricKey(data: secret))
+        return code.map { String(format: "%02x", Int($0)) }.joined()
+    }
+
+    static func project(_ raw: [String: Any], origin: String, approved: Bool, secret: Data) -> [String: Any] {
+        let kind = raw["kind"] ?? "native"
+        let connected = raw["connected"] ?? false
+        guard approved, let rawId = raw["id"] as? String, !rawId.isEmpty else {
+            return ["id": NSNull(), "name": NSNull(), "kind": kind, "connected": connected]
+        }
+        let name = raw["name"] ?? NSNull()
+        if rawId == localId || rawId == unavailableId {
+            return ["id": rawId, "name": name, "kind": kind, "connected": connected]
+        }
+        return ["id": id(secret: secret, origin: origin, endpointKey: rawId), "name": name, "kind": kind, "connected": connected]
+    }
+
+    /// Raw endpoint keys do not match. `this-device` is the only literal id a page may send.
+    static func matches(pageId: String, rawId: String, origin: String, secret: Data) -> Bool {
+        if pageId == localId { return rawId == localId }
+        if rawId == localId || rawId == unavailableId || rawId.isEmpty { return false }
+        return pageId == id(secret: secret, origin: origin, endpointKey: rawId)
     }
 }
