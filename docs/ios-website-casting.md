@@ -31,7 +31,7 @@ page. Remote shows **Controlled by [website]** with **Unlink**. Phone-local
 
 ## Page API
 
-The main frame exposes `playbridge_injected`, `playbridge_injected_version = 4`,
+The main frame exposes `playbridge_injected`, `playbridge_injected_version = 5`,
 and these capability flags:
 
 ```js

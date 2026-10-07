@@ -182,6 +182,10 @@ store and may be exposed through local access or backups.
 **Done when:** Preference exports do not contain bearer tokens and legacy values
 are migrated or revoked.
 
+### SEC-005: [Reserved / Retired]
+
+*Note: The SEC-005 identifier was resolved/retired separately during security review; this identifier is reserved to avoid renumbering existing external references.*
+
 ### SEC-006: Pre-authentication resource limits are uneven
 
 **Affected:** Primarily Android TV and Apple TV receivers; re-audit desktop when

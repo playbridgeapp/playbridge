@@ -213,7 +213,7 @@ PlayBridge is a monorepo; each component has its own documentation:
 5. **[Rust Cast](cast/)** (`cast/core/`, `cast/receiver/`, `cast/ffi/`) — Portable discovery/casting core, secure reusable receiver runtime, and UniFFI/C/JNI/Dart bindings.
 6. **[Rust Stream Proxy](stream-proxy-rust/)** (`stream-proxy-rust/`) — High-performance Rust streaming proxy and MediaFlow AES-256 encryption.
 7. **[Rust CLI](cli/)** (`cli/`) — Command-line client binary (`playbridge`) for Rust Core.
-8. **[Shared Module](shared/)** (`shared/`) — Kotlin Multiplatform module currently targeting Android only, shared by the phone and TV builds; player engines and protocol bindings.
+8. **[Shared Module](shared/)** (`shared/`) — Shared Kotlin module currently targeting Android only (configured via Kotlin Multiplatform plugin), shared by the phone and TV builds; player engines and protocol bindings.
 9. **[Protocol](protocol/)** (`protocol/`) — AsyncAPI WSS contract, detailed connection flow, and retained protobuf bindings.
 
 ## Documentation
@@ -252,7 +252,7 @@ phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/
 - **Desktop**: Flutter SDK (Dart `^3.6`) and libmpv
 - **Apple TV**: Xcode with CocoaPods (see [tv/](tv/))
 - **Browser Extension**: Node.js and `pnpm`
-- **Rust Core & Proxy**: Rust 1.91+ (`cargo`; required by the current workspace `Cargo.lock`)
+- **Rust Core & Proxy**: Rust 1.91+ (`cargo`; required by current workspace `Cargo.lock`; MSRV 1.88)
 
 ### Building
 

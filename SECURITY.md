@@ -7,9 +7,9 @@ each component. There is no supported 1.0.x release line.
 
 | Version | Security support |
 | ------- | ---------------- |
-| Latest published alpha release of each component | Reports accepted; fixes target the next release |
-| Current `main` development branch | Reports accepted; fixes developed here |
-| Older component releases | Upgrade recommended; no maintained backport branches |
+| Latest 0.x release of each component | Supported (reports accepted; fixes target the next 0.x release) |
+| Current `main` development branch | Supported (fixes developed here) |
+| Older 0.x component releases | Upgrade recommended; no maintained backport branches |
 
 See [GitHub Releases](https://github.com/playbridgeapp/playbridge/releases) for
 published versions. Include the component, version, and commit (if known) in
