@@ -61,7 +61,8 @@ jobs:
 
   cli-build:
     name: cli-${{ matrix.os }}
-    if: ${{ inputs.include_cli_builds != false }}
+    # toJSON: a missing input is null, and null == false in expressions.
+    if: ${{ toJSON(inputs.include_cli_builds) != 'false' }}
     strategy:
       fail-fast: false
       matrix:

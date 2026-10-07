@@ -8,9 +8,16 @@ export function pageWorld(globals: Record<string, unknown> = {}) {
     constructor() { super(); channels.push(this); }
   }
   const window: any = Object.assign(new EventTarget(), { playbridge: {} as any });
+  // Page request timeouts run for up to minutes. Unref them so a test that leaves a
+  // request unanswered doesn't keep the test process alive past its timeout.
+  const pageSetTimeout = (callback: () => void, ms?: number) => {
+    const timer = setTimeout(callback, ms);
+    timer.unref?.();
+    return timer;
+  };
   const context = vm.createContext({
     window, EventTarget, Event, CustomEvent, MessageEvent, MessagePort, MessageChannel: TrackedChannel,
-    TextEncoder, setTimeout, clearTimeout, ...globals,
+    TextEncoder, setTimeout: pageSetTimeout, clearTimeout, ...globals,
   });
   const run = (source: string) => vm.runInContext(source, context);
   const inject = (source: string): PageChannel | null => {

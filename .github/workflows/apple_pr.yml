@@ -6,7 +6,7 @@ name: Apple PR Checks
 # codesign: run-browser-startup-checks.sh, run-bridged-app-ui-checks.sh,
 # run-media-library-checks.sh, run-mpv-phone-probe.sh.
 # Not run here, because they need a prebuilt Rust archive and a LAN address:
-# run-sender-services-checks.sh, run-dlna-checks.sh.
+# run-sender-services-checks.sh, run-dlna-checks.sh, and run-stream-route-checks.sh --network.
 # run-fixture-checks.sh is not run here: DetectionScriptLifecycleTests.js fails
 # before the rest of that script (pre-existing; do not delete the test to go green).
 
@@ -77,9 +77,6 @@ jobs:
 
       - name: Stream routes
         run: bash mobile/apple/tests/run-stream-route-checks.sh
-
-      - name: Stream routes (local network fixture)
-        run: bash mobile/apple/tests/run-stream-route-checks.sh --network
 
       - name: Playback errors
         run: bash mobile/apple/tests/run-playback-error-checks.sh
