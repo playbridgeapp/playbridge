@@ -1,6 +1,7 @@
 package com.playbridge.sender.update
 
 import android.content.Context
+import com.playbridge.shared.update.UpdateInstaller
 import java.io.File
 
 /**
@@ -9,15 +10,15 @@ import java.io.File
  * Play build contains no self-update code at all — [UpdateChecker] sees
  * [selfUpdateSupported] = false and routes users to the Play listing instead.
  */
-class ApkInstaller(@Suppress("UNUSED_PARAMETER") appContext: Context) {
+class ApkInstaller(@Suppress("UNUSED_PARAMETER") appContext: Context) : UpdateInstaller {
 
     /** Play builds never sideload — UpdateChecker treats every install as Play-sourced. */
-    val selfUpdateSupported: Boolean get() = false
+    override val selfUpdateSupported: Boolean get() = false
 
-    suspend fun download(url: String, onProgress: (Float?) -> Unit): File =
+    override suspend fun download(url: String, onProgress: (Float?) -> Unit): File =
         throw UnsupportedOperationException("Self-update is not available in Play builds")
 
-    fun launchInstall(apk: File) {
+    override fun launchInstall(apk: File) {
         throw UnsupportedOperationException("Self-update is not available in Play builds")
     }
 
