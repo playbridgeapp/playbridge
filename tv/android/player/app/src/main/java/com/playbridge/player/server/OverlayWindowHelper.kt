@@ -20,7 +20,7 @@ private const val TAG = "OverlayWindowHelper"
  * startActivity() from background services, even foreground services. However, one of the
  * BAL exemptions is: "the app has a non-app visible window" (callingUidHasNonAppVisibleWindow).
  * A TYPE_APPLICATION_OVERLAY window counts as a "non-app visible window" and makes the
- * app's UID exempt from BAL — allowing the ServerService to launch PlayerActivity or
+ * app's UID exempt from BAL — allowing the ServerService to launch PlayerHostActivity or
  * BrowserActivity when a play/browser command arrives even if the TV app is backgrounded.
  *
  * LIFECYCLE:

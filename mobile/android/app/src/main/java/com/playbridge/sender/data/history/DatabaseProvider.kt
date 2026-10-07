@@ -201,8 +201,8 @@ object DatabaseProvider {
 
     private val MIGRATION_20_21 = object : Migration(20, 21) {
         override fun migrate(db: SupportSQLiteDatabase) {
-            // Nuvio scraper-plugin support (NUVIO_PLAN Phase 1). The repo itself is an
-            // installed_addons row (resource "nuvio"); per-scraper metadata lives here.
+            // Nuvio scraper plugins. The repo itself is an installed_addons row
+            // (resource "nuvio"); per-scraper metadata lives here.
             db.execSQL(
                 "CREATE TABLE IF NOT EXISTS `nuvio_scrapers` (" +
                     "`repoUrl` TEXT NOT NULL, " +
@@ -223,7 +223,7 @@ object DatabaseProvider {
 
     private val MIGRATION_21_22 = object : Migration(21, 22) {
         override fun migrate(db: SupportSQLiteDatabase) {
-            // Per-scraper settings (NUVIO_PLAN Phase 4).
+            // Per-scraper settings stored on the scraper row.
             db.execSQL("ALTER TABLE nuvio_scrapers ADD COLUMN hasSettings INTEGER NOT NULL DEFAULT 0")
             db.execSQL("ALTER TABLE nuvio_scrapers ADD COLUMN settingsJson TEXT NOT NULL DEFAULT '{}'")
         }

@@ -872,7 +872,7 @@ class ExoRendererService : Service() {
 
     /**
      * Persist decoder compatibility flags so the *next* ExoPlayer session avoids a broken path
-     * (tunneling / Dolby Vision / async MediaCodec) — same learning as ExoPlayerActivity.
+     * (tunneling / Dolby Vision / async MediaCodec).
      */
     private fun learnDecoderCompatibilityFlags(error: PlaybackException) {
         val prefs = getSharedPreferences("browser_prefs", MODE_PRIVATE)

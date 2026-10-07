@@ -711,12 +711,12 @@ class TvSenderController extends ChangeNotifier {
 
   Future<bool> sendContextQuery() => _transport.sendContextQuery();
 
-  // Transport for the active cast (command strings match the TV's InputHandler).
+  // Transport for the active cast (command strings match the TV player).
   Future<bool> playPause() => sendControl('toggle');
   Future<bool> seekForward() => sendControl('seek_forward');
   Future<bool> seekBack() => sendControl('seek_back');
 
-  /// Absolute seek to [positionMs]. The TV's InputHandler accepts
+  /// Absolute seek to [positionMs]. The TV player accepts
   /// `seek_to:<positionMs>` (used by the phone seekbar too).
   Future<bool> seekToMs(int positionMs) =>
       sendControl('seek_to:${positionMs < 0 ? 0 : positionMs}');

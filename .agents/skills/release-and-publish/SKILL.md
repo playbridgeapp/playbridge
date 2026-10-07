@@ -17,7 +17,6 @@ description: Prepare a PlayBridge release by explicitly requested version uprevs
 | Extension | `extension/manifests/chrome.json` and `extension/manifests/firefox.json` | `extension/CHANGELOG.md` |
 | CLI | `cli/Cargo.toml` | `cli/CHANGELOG.md` |
 | Stream proxy (Rust) | `stream-proxy-rust/Cargo.toml` | `stream-proxy-rust/CHANGELOG.md` |
-| Stream proxy (Dart) | `stream-proxy-dart/pubspec.yaml` | `stream-proxy-dart/CHANGELOG.md` |
 
 The embedded GeckoView manifest has its own version; do not synchronize it to the
 store extension version automatically. Inspect the TV GeckoView plugin's own

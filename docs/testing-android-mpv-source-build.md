@@ -133,7 +133,7 @@ Clear old logs immediately before reproducing a problem:
 
 ```shell
 adb logcat -c
-adb logcat -v time MpvPlayerActivity:V MpvPlayerEngine:V mpv:V ExoPlayerActivity:V ExoPlayerEngine:V '*:S'
+adb logcat -v time PlayerHostActivity:V MpvRendererService:V ExoRendererService:V MpvPlayerEngine:V ExoPlayerEngine:V mpv:V '*:S'
 ```
 
 If the filtered log omits the cause, collect a full log for the shortest

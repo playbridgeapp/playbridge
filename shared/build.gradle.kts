@@ -13,8 +13,8 @@ kotlin {
         compilerOptions {
             jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         }
-        // Wire commonTest to a JVM host-test compilation so the shared player
-        // logic (PlayerViewModel, queue/playlist) is actually unit-tested.
+        // Wire commonTest to a JVM host-test compilation so shared player
+        // logic (playback engine, queue/playlist) is actually unit-tested.
         // isReturnDefaultValues lets android.util.Log calls no-op under plain JVM tests.
         withHostTestBuilder {
         }.configure {

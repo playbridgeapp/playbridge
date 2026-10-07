@@ -472,7 +472,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                 // try the next capable decoder (alternate vendor codec, then software)
                 // instead of surfacing a fatal playback error.
                 setEnableDecoderFallback(true)
-                // "codec_async_blocked" is set by ExoPlayerActivity after a fatal
+                // "codec_async_blocked" is set by ExoRendererService after a fatal
                 // decoder error in async mode: some vendor decoders (MTK TV panels)
                 // crash when MediaCodec is operated asynchronously (the API 31+
                 // default) yet decode the same stream fine synchronously — observed
@@ -483,7 +483,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
                     logger.i(TAG, "Async MediaCodec blocked on this device — using synchronous codec mode")
                     forceDisableMediaCodecAsynchronousQueueing()
                 }
-                // "dv_decoders_blocked" is set by ExoPlayerActivity after a Dolby Vision
+                // "dv_decoders_blocked" is set by ExoRendererService after a Dolby Vision
                 // hardware decoder fatally failed (MTK DV decoders accept dvhe.08 then die
                 // with 0xfffffff4). Excluding DV decoders makes media3 select the HEVC/AVC
                 // BASE-LAYER decoders it already appends as compatibility fallbacks for DV
@@ -548,7 +548,7 @@ class ExoPlayerEngine(private val context: Context) : PlaybackEngine {
         // but many vendor decoders (notably MediaTek TV panels: "vendor decode not
         // init", CodecException 0xfffffff4 right after the tunneled configure) crash
         // on tunneled 4K while decoding the same stream fine without it.
-        // "tunneling_auto_blocked" is set by ExoPlayerActivity after a fatal decoder
+        // "tunneling_auto_blocked" is set by ExoRendererService after a fatal decoder
         // error in tunneled mode; an explicit user toggle of the setting clears it.
         val useTunneling = prefs.getBoolean("tunneled_playback", false) &&
             !prefs.getBoolean("tunneling_auto_blocked", false)
