@@ -159,14 +159,14 @@ class PlayerHostActivity : ComponentActivity(), PlaybackProgressSource {
             stopPlayback = ::finishPlaybackSession,
             onPromptChanged = { refreshKeepScreenOn() },
         ).also { controller ->
-            val prefs = getSharedPreferences("browser_prefs", MODE_PRIVATE)
+            val prefs = getSharedPreferences(StillWatchingPrefs.STILL_WATCHING_PREFS, MODE_PRIVATE)
             controller.updateSettings(
-                prefs.getBoolean(PlayerActivity.PREF_STILL_WATCHING_ENABLED, false),
-                PlayerActivity.normalizeStillWatchingThreshold(
-                    prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_THRESHOLD_MIN, 90),
+                prefs.getBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, false),
+                StillWatchingPrefs.normalizeStillWatchingThreshold(
+                    prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, 90),
                 ),
-                PlayerActivity.normalizeStillWatchingResponseSeconds(
-                    prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_RESPONSE_SEC, 300),
+                StillWatchingPrefs.normalizeStillWatchingResponseSeconds(
+                    prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, 300),
                 ),
             )
         }

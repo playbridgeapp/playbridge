@@ -41,7 +41,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.ui.graphics.vector.ImageVector
-import com.playbridge.player.player.PlayerActivity
+import com.playbridge.player.player.StillWatchingPrefs
 import com.playbridge.player.player.SubtitleRenderingMode
 import com.playbridge.player.data.HistoryThumbnailMode
 
@@ -76,12 +76,12 @@ fun SettingsScreen(
     var hideSoftKeyboard by remember { mutableStateOf(prefs.getBoolean("hide_soft_keyboard", false)) }
     var frameRateMatching by remember { mutableStateOf(prefs.getBoolean("frame_rate_matching", false)) }
     var loudnessEnhancer by remember { mutableStateOf(prefs.getBoolean("loudness_enhancer", false)) }
-    var stillWatchingEnabled by remember { mutableStateOf(prefs.getBoolean(PlayerActivity.PREF_STILL_WATCHING_ENABLED, false)) }
+    var stillWatchingEnabled by remember { mutableStateOf(prefs.getBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, false)) }
     var stillWatchingMinutes by remember {
-        mutableStateOf(PlayerActivity.normalizeStillWatchingThreshold(prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_THRESHOLD_MIN, 90)))
+        mutableStateOf(StillWatchingPrefs.normalizeStillWatchingThreshold(prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, 90)))
     }
     var stillWatchingResponseSeconds by remember {
-        mutableStateOf(PlayerActivity.normalizeStillWatchingResponseSeconds(prefs.getInt(PlayerActivity.PREF_STILL_WATCHING_RESPONSE_SEC, 300)))
+        mutableStateOf(StillWatchingPrefs.normalizeStillWatchingResponseSeconds(prefs.getInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, 300)))
     }
     var enableHistory by remember { mutableStateOf(prefs.getBoolean("enable_history", true)) }
     var historyThumbnailMode by remember {
@@ -229,7 +229,7 @@ fun SettingsScreen(
                                 checked = stillWatchingEnabled,
                                 onCheckedChange = {
                                     stillWatchingEnabled = it
-                                    prefs.edit().putBoolean(PlayerActivity.PREF_STILL_WATCHING_ENABLED, it).apply()
+                                    prefs.edit().putBoolean(StillWatchingPrefs.PREF_STILL_WATCHING_ENABLED, it).apply()
                                 }
                             )
                         }
@@ -237,7 +237,7 @@ fun SettingsScreen(
                             SettingDropdownItem(
                                 label = "Check After",
                                 description = "Active playback time before asking whether to continue.",
-                                options = PlayerActivity.STILL_WATCHING_PRESETS.sorted().map { minutes ->
+                                options = StillWatchingPrefs.STILL_WATCHING_PRESETS.sorted().map { minutes ->
                                     val label = when {
                                         minutes < 60 -> "$minutes minutes"
                                         minutes % 60 == 0 -> "${minutes / 60} ${if (minutes == 60) "hour" else "hours"}"
@@ -247,9 +247,9 @@ fun SettingsScreen(
                                 },
                                 selected = stillWatchingMinutes.toString(),
                                 onSelected = { value ->
-                                    value.toIntOrNull()?.takeIf { it in PlayerActivity.STILL_WATCHING_PRESETS }?.let {
+                                    value.toIntOrNull()?.takeIf { it in StillWatchingPrefs.STILL_WATCHING_PRESETS }?.let {
                                         stillWatchingMinutes = it
-                                        prefs.edit().putInt(PlayerActivity.PREF_STILL_WATCHING_THRESHOLD_MIN, it).apply()
+                                        prefs.edit().putInt(StillWatchingPrefs.PREF_STILL_WATCHING_THRESHOLD_MIN, it).apply()
                                     }
                                 }
                             )
@@ -258,14 +258,14 @@ fun SettingsScreen(
                             SettingDropdownItem(
                                 label = "Response Time",
                                 description = "Time to respond before playback stops.",
-                                options = PlayerActivity.STILL_WATCHING_RESPONSE_PRESETS.sorted().map { seconds ->
+                                options = StillWatchingPrefs.STILL_WATCHING_RESPONSE_PRESETS.sorted().map { seconds ->
                                     seconds.toString() to if (seconds < 60) "$seconds seconds" else "${seconds / 60} ${if (seconds == 60) "minute" else "minutes"}"
                                 },
                                 selected = stillWatchingResponseSeconds.toString(),
                                 onSelected = { value ->
-                                    value.toIntOrNull()?.takeIf { it in PlayerActivity.STILL_WATCHING_RESPONSE_PRESETS }?.let {
+                                    value.toIntOrNull()?.takeIf { it in StillWatchingPrefs.STILL_WATCHING_RESPONSE_PRESETS }?.let {
                                         stillWatchingResponseSeconds = it
-                                        prefs.edit().putInt(PlayerActivity.PREF_STILL_WATCHING_RESPONSE_SEC, it).apply()
+                                        prefs.edit().putInt(StillWatchingPrefs.PREF_STILL_WATCHING_RESPONSE_SEC, it).apply()
                                     }
                                 }
                             )

@@ -179,7 +179,7 @@ object PhoneExoPlayerFactory {
     }
 
     /**
-     * TV-style audio recovery (ExoPlayerActivity discontinuity / decoder-init).
+     * TV-style audio recovery (discontinuity / decoder-init).
      * Stages: `reinit` | `clear-override` | `drop-audio` | default play nudge.
      */
     @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)

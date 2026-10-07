@@ -1,16 +1,15 @@
 ---
 name: playbridge-desktop-proxy
-description: Work on PlayBridge Flutter Desktop, its Rust-backed receiver adapter, and the Dart stream proxy. Use for receiver UI and playback adapters, Dart FFI lifecycle, libmpv/media_kit, desktop sender behavior, extension bridge integration, local proxy routing, HLS rewriting, FFmpeg AVIO, proxy authentication, Docker packaging, or changes under desktop/ and stream-proxy-dart/.
+description: Work on PlayBridge Flutter Desktop and its Rust-backed receiver adapter. Use for receiver UI and playback adapters, Dart FFI lifecycle, libmpv/media_kit, desktop sender behavior, extension bridge integration, local proxy routing, HLS rewriting, FFmpeg AVIO, proxy authentication, Docker packaging, or changes under desktop/.
 ---
 
 # PlayBridge Desktop and Stream Proxy
 
 ## Establish ownership
 
-- Treat `desktop/` and `stream-proxy-dart/` as separate build and release units.
+- Treat `desktop/` as the Flutter Desktop build. The standalone Dart stream proxy has been removed; production proxying is the Rust sender service and `stream-proxy-rust/`.
 - Treat `desktop/lib/receiver_server.dart` as the production PlayBridge receiver adapter. Rust owns TLS/WSS, pairing, authentication, limits, and command decoding; Dart owns `PlayerController`, UI, certificate/token persistence, discovery publishing, and application lifecycle.
 - Treat Rust sender services as the owner of Desktop's outbound discovery/cast workers, embedded Rust stream proxy, and sender-hosted browser receiver lifecycle. Dart owns UI policy, routing choices, media preparation, and session orchestration around those services.
-- Treat `desktop/lib/server.dart` as legacy/test-only until an explicit cleanup removes it. Do not implement production receiver behavior there.
 - Keep small in-process proxy adaptations with the Desktop owner. Split out a proxy owner for API, authentication, networking, HLS rewriting, FFmpeg, Docker, or standalone release work.
 - Give shared Desktop/proxy interfaces one writer while the other consumer reviews compatibility.
 - Load `playbridge-extension` for native-messaging or browser-to-Desktop bridge changes.
@@ -44,11 +43,4 @@ cd packages/playbridge_cast_core_dart && dart analyze --fatal-infos
 cd ../../desktop && flutter test test/rust_receiver_runtime_test.dart
 ```
 
-From `stream-proxy-dart/`:
-
-```bash
-dart format --output=none --set-exit-if-changed .
-dart analyze --fatal-infos
-```
-
-Run `dart test` when proxy tests exist or are added. Build the Docker image when container, native dependency, or packaging behavior changes.
+Build the Rust proxy Docker image when container, native dependency, or packaging behavior changes. Load `playbridge-stream-proxy-rust` for that work.

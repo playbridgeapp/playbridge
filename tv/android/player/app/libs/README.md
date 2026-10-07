@@ -14,7 +14,7 @@ See `prebuilt/media3/README.md`.
 
 ## mpv-android.aar — Internal (MPV) player mode
 
-`MpvPlayerActivity` depends on the `is.xyz.mpv.MPVLib` class from the mpv-android prebuilt AAR.
+The live TV player (`PlayerHostActivity` / `MpvRendererService`) depends on the `is.xyz.mpv.MPVLib` class from the mpv-android prebuilt AAR.
 It is committed here and wired up in `tv/android/player/app/build.gradle.kts`:
 
 ```kotlin

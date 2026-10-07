@@ -46,8 +46,7 @@ If `AGENTS.local.md` exists at the repository root, read and follow it for optio
 | Apple phone | `mobile/apple/` | SwiftUI/Xcode sender, MPVKit-only local playback; optional Cast Core external transports |
 | Apple TV | `tv/apple/` | Swift/Xcode project |
 | Desktop | `desktop/` | Flutter receiver and sender for macOS, Windows, and Linux |
-| Stream proxy (Dart) | `stream-proxy-dart/` | Legacy/inactive standalone proxy (not in active CI; production Desktop and phone proxy integrations use Rust sender services) |
-| Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption |
+| Stream proxy (Rust) | `stream-proxy-rust/` | High-performance Rust streaming proxy with MediaFlow AES-256 encryption. The old standalone Dart proxy has been removed. |
 | Rust Cast Core | `cast/core/` | Portable discovery, protocol clients, pairing primitives, and casting sessions |
 | Rust Receiver | `cast/receiver/` | Secure reusable PlayBridge WSS receiver runtime; consumers provide playback and platform lifecycle |
 | Rust FFI | `cast/ffi/` | UniFFI plus stable C/JNI bindings for Cast sessions, sender services, and receiver runtime |

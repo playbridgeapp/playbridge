@@ -1407,8 +1407,8 @@ class ServerService : Service() {
         }
 
         /**
-         * Mark activeContext as "player" when a PlayerActivity starts.
-         * Called from PlayerActivity.onCreate() so that videos launched directly from the TV
+         * Mark activeContext as "player" when the player starts.
+         * Called from PlayerHostActivity so that videos launched directly from the TV
          * (history/favourites screen) are treated the same as phone-cast videos — the
          * request_pairing context guard will block the PairingScreen while they're playing.
          */
@@ -1445,12 +1445,12 @@ class ServerService : Service() {
 
         /**
          * Reset activeContext to "idle" from a player or browser activity when it finishes.
-         * Called from PlayerActivity.onDestroy() and (via broadcast) from the TV browser app.
+         * Called from PlayerHostActivity and (via broadcast) from the TV browser app.
          * Without this, the context guard in the request_pairing handler would permanently block
          * the PairingScreen after the first playback session ends.
          */
         fun notifyContextIdle() {
-            // Player-side callers (PlayerActivity/PrePlay teardown): only clear if a
+            // Player-side callers (PlayerHostActivity/PrePlay teardown): only clear if a
             // player still owns the context, so a browser opened afterwards survives.
             _staticInstance?.setContextIdleInternal(setOf("player"))
         }

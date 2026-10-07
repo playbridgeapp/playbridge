@@ -144,7 +144,7 @@ class WebSocketServer(
     // NOTE: there is no manual "approve" entry point. Approval is driven exclusively by
     // the SAS confirmation MAC (see handlePreAuth → pairing_confirmation): the phone proves
     // it holds the shared secret, and only a matching MAC completes the approval. A manual
-    // Allow button would bypass key confirmation, so it was removed (Phase 1).
+    // Allow button would bypass key confirmation, so it was removed.
     fun denyPairing() {
         _pendingPairingRequest.value?.approval?.complete(false)
     }
@@ -180,7 +180,6 @@ class WebSocketServer(
             }
         }
     }
-// ... (handleConnection remains same)
 
     fun stop() {
         // Detach references and flip state synchronously; do the (blocking) engine

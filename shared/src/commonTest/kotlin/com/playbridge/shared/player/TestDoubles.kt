@@ -1,7 +1,6 @@
 package com.playbridge.shared.player
 
 import playbridge.PlayPayload
-import com.playbridge.shared.resume.ResumeStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -55,16 +54,5 @@ internal class FakePlaybackEngine : PlaybackEngine {
     override fun release() {
         released = true
         _state.value = PlaybackState.Idle
-    }
-}
-
-/**
- * Test-double [ResumeStore] for unit tests.
- */
-internal class FakeResumeStore : ResumeStore {
-    private val store = mutableMapOf<String, Long>()
-    override suspend fun loadPosition(url: String): Long = store[url] ?: 0L
-    override suspend fun savePosition(url: String, positionMs: Long) {
-        store[url] = positionMs
     }
 }
