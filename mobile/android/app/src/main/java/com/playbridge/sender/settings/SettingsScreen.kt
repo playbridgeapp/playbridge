@@ -7,6 +7,7 @@ import com.playbridge.sender.browser.PopupBlockerSettingsScreen
 import com.playbridge.sender.browser.PageCastConsentSettingsScreen
 import com.playbridge.sender.cast.StreamingSettingsScreen
 import com.playbridge.sender.cast.TVSettingsScreen
+import com.playbridge.sender.connection.TvLogsSource
 import com.playbridge.sender.diagnostics.LogsScreen
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
@@ -83,8 +84,7 @@ private sealed class SettingsHubRow {
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    tvIp: String? = null,
-    tvPort: Int? = null,
+    tvLogs: TvLogsSource? = null,
     showBack: Boolean = true,
 ) {
     var section by remember { mutableStateOf<SettingsSection>(SettingsSection.Hub) }
@@ -131,16 +131,14 @@ fun SettingsScreen(
         )
         SettingsSection.TV -> TVSettingsScreen(
             onBack = { section = SettingsSection.Hub },
-            tvIp = tvIp,
-            tvPort = tvPort
+            tvLogs = tvLogs
         )
         SettingsSection.ImportExport -> ImportExportSettingsScreen(
             onBack = { section = SettingsSection.Hub }
         )
         SettingsSection.Logs -> LogsScreen(
             onBack = { section = SettingsSection.Hub },
-            tvIp = tvIp,
-            tvPort = tvPort
+            tvLogs = tvLogs
         )
     }
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
+import com.playbridge.shared.logging.redactLogText
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -33,14 +34,17 @@ object FileLogger {
     private const val RING_CAPACITY = 1500
     private const val PREFS = "browser_prefs"
     private const val PREF_LOGGING_ENABLED = "logging_enabled"
+    // Files written before lines were redacted may hold stream URLs and headers.
+    private const val PREF_LOGS_REDACTED = "logs_redacted_v1"
 
     private lateinit var logDir: File
     @Volatile private lateinit var logFile: File
     @Volatile private var activeLogFileName: String = LOG_FILE_NAME
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
-    // Logging is OFF by default: persisted logs can contain stream URLs and request headers
-    // (incl. Debrid tokens) and are served over the LAN via GET /logs, so retention is opt-in.
+    // Logging is OFF by default and every line is redacted (URLs, credential headers and
+    // tokens) before it is kept. Paired phones fetch logs only over the authenticated WSS
+    // channel (`logs_query`); there is no LAN HTTP endpoint.
     @Volatile private var enabled: Boolean = false
     private var prefs: android.content.SharedPreferences? = null
 
@@ -69,6 +73,10 @@ object FileLogger {
         logFile = File(logDir, activeLogFileName)
         prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         enabled = prefs?.getBoolean(PREF_LOGGING_ENABLED, false) ?: false
+        if (prefs?.getBoolean(PREF_LOGS_REDACTED, false) != true) {
+            logDir.listFiles()?.forEach { it.delete() }
+            prefs?.edit()?.putBoolean(PREF_LOGS_REDACTED, true)?.apply()
+        }
         if (enabled) i(TAG, "FileLogger initialized — log path: ${logFile.absolutePath}")
     }
 
@@ -115,10 +123,10 @@ object FileLogger {
         if (!enabled) return
         val sw = StringWriter()
         throwable.printStackTrace(PrintWriter(sw))
-        val line = buildString {
+        val line = redactLogText(buildString {
             append("${timestamp()} CRASH [${thread.name}] ${throwable.javaClass.name}: ${throwable.message}\n")
             append(sw.toString())
-        }
+        })
         pushRecent(line)
         try {
             // Capture snapshot of logFile to avoid racing with the handler thread's rotation
@@ -129,7 +137,20 @@ object FileLogger {
         }
     }
 
-    // ── File access for HTTP endpoint ──────────────────────────────────
+    // ── File access for the paired logs_query command ─────────────────
+
+    /**
+     * Returns the newest [maxChars] of the persisted log, oldest line first, and whether
+     * older content was left out. Lines are already redacted when written.
+     */
+    fun readTail(maxChars: Int): Pair<String, Boolean> {
+        val combined = getLogFiles().reversed().joinToString("\n") { file ->
+            try { file.readText() } catch (_: Exception) { "" }
+        }
+        if (combined.length <= maxChars) return combined to false
+        val tail = combined.substring(combined.length - maxChars)
+        return tail.substring(tail.indexOf('\n') + 1) to true
+    }
 
     /** Returns all log files (current + rotated), newest first. */
     fun getLogFiles(): List<File> {
@@ -160,7 +181,7 @@ object FileLogger {
     private fun append(level: String, tag: String, msg: String, tr: Throwable? = null) {
         // Gated: when logging is disabled nothing is retained on disk or in memory.
         if (!enabled) return
-        val line = buildString {
+        val line = redactLogText(buildString {
             append("${timestamp()} $level/$tag: $msg")
             if (tr != null) {
                 append("\n")
@@ -169,7 +190,7 @@ object FileLogger {
                 append(sw.toString())
             }
             append("\n")
-        }
+        })
         pushRecent(line)
         handler.post {
             try {

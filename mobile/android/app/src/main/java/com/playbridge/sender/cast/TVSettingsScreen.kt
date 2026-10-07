@@ -5,6 +5,8 @@ import android.content.Context
 import org.koin.compose.koinInject
 import org.koin.androidx.compose.koinViewModel
 import com.playbridge.sender.connection.ConnectionViewModel
+import com.playbridge.sender.connection.TvLogsResult
+import com.playbridge.sender.connection.TvLogsSource
 import com.playbridge.sender.data.settings.SettingsRepository
 import android.os.Environment
 import android.widget.Toast
@@ -25,26 +27,22 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TVSettingsScreen(
     onBack: () -> Unit,
-    tvIp: String? = null,
-    tvPort: Int? = null
+    tvLogs: TvLogsSource? = null
 ) {
     val context = LocalContext.current
     val settingsRepository: SettingsRepository = koinInject()
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
     val scope = rememberCoroutineScope()
-    val isTvAvailable = tvIp != null && tvPort != null
+    val isTvAvailable = tvLogs != null
 
     // Options reflect what the connected/last-paired TV reported it supports. Capabilities are
     // persisted on the saved device, so the real list survives disconnects (see
@@ -241,10 +239,10 @@ fun TVSettingsScreen(
 
             Button(
                 onClick = {
-                    if (tvIp == null || tvPort == null) return@Button
+                    if (tvLogs == null) return@Button
                     isDownloading = true
                     scope.launch {
-                        downloadTvLogs(context, tvIp, tvPort)
+                        downloadTvLogs(context, tvLogs)
                         isDownloading = false
                     }
                 },
@@ -264,10 +262,10 @@ fun TVSettingsScreen(
 
             OutlinedButton(
                 onClick = {
-                    if (tvIp == null || tvPort == null) return@OutlinedButton
+                    if (tvLogs == null) return@OutlinedButton
                     isClearing = true
                     scope.launch {
-                        clearTvLogs(context, tvIp, tvPort)
+                        clearTvLogs(context, tvLogs)
                         isClearing = false
                     }
                 },
@@ -283,37 +281,30 @@ fun TVSettingsScreen(
     }
 }
 
-private suspend fun downloadTvLogs(context: Context, tvIp: String, tvPort: Int) {
+private fun tvLogsFailure(result: TvLogsResult): String = when (result) {
+    is TvLogsResult.Logs -> "TV logging is disabled. Enable it in TV → Settings → Logs."
+    TvLogsResult.Unsupported -> "Update the PlayBridge TV app to download its logs."
+    TvLogsResult.Unavailable -> "The TV did not respond. Check the connection and try again."
+}
+
+private suspend fun downloadTvLogs(context: Context, tvLogs: TvLogsSource) {
+    val result = tvLogs(false)
     withContext(Dispatchers.IO) {
         try {
-            val client = OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .readTimeout(30, TimeUnit.SECONDS)
-                .build()
-
-            val response = client.newCall(
-                Request.Builder().url("http://$tvIp:$tvPort/logs").get().build()
-            ).execute()
-
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: "Empty log"
+            if (result is TvLogsResult.Logs && result.enabled) {
                 val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
                 val fileName = "playbridge_tv_logs_$timestamp.txt"
                 val file = File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
                     fileName
                 )
-                file.writeText(body)
+                file.writeText(result.text.ifEmpty { "Empty log" })
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Logs saved to Downloads/$fileName", Toast.LENGTH_LONG).show()
                 }
-            } else if (response.code == 403) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "TV logging is disabled. Enable it in TV → Settings → Logs.", Toast.LENGTH_LONG).show()
-                }
             } else {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Failed to download logs: ${response.code}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, tvLogsFailure(result), Toast.LENGTH_LONG).show()
                 }
             }
         } catch (e: Exception) {
@@ -324,28 +315,13 @@ private suspend fun downloadTvLogs(context: Context, tvIp: String, tvPort: Int) 
     }
 }
 
-private suspend fun clearTvLogs(context: Context, tvIp: String, tvPort: Int) {
-    withContext(Dispatchers.IO) {
-        try {
-            val client = OkHttpClient.Builder()
-                .connectTimeout(10, TimeUnit.SECONDS)
-                .build()
-
-            val response = client.newCall(
-                Request.Builder().url("http://$tvIp:$tvPort/logs").delete().build()
-            ).execute()
-
-            withContext(Dispatchers.Main) {
-                if (response.isSuccessful) {
-                    Toast.makeText(context, "TV logs cleared", Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, "Failed to clear logs: ${response.code}", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
-            }
+private suspend fun clearTvLogs(context: Context, tvLogs: TvLogsSource) {
+    val result = tvLogs(true)
+    withContext(Dispatchers.Main) {
+        if (result is TvLogsResult.Logs && result.enabled) {
+            Toast.makeText(context, "TV logs cleared", Toast.LENGTH_SHORT).show()
+        } else {
+            Toast.makeText(context, tvLogsFailure(result), Toast.LENGTH_SHORT).show()
         }
     }
 }

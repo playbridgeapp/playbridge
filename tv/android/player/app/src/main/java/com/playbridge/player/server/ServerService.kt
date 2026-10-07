@@ -46,6 +46,8 @@ private const val MPV_PROCESS_EXIT_TIMEOUT_MS = 5_000L
 // browser_prefs keys for the TV browser User-Agent override (see IncomingMessage.UserAgent).
 private const val KEY_ACTIVE_UA_NAME = "active_user_agent_name"
 private const val KEY_ACTIVE_UA_VALUE = "active_user_agent_value"
+// Newest part of the TV log sent per logs_query; the phone shows at most a few thousand lines.
+private const val MAX_LOGS_REPLY_CHARS = 1_000_000
 private const val KEY_SAVED_UAS = "saved_user_agents"
 
 class ServerService : Service() {
@@ -228,7 +230,7 @@ class ServerService : Service() {
         return START_STICKY
     }
 
-    private fun registerNsdService(port: Int, wssPort: Int?, logsPort: Int?) {
+    private fun registerNsdService(port: Int, wssPort: Int?) {
         if (registrationListener != null) return // Already registered
 
         val deviceName = android.provider.Settings.Global.getString(
@@ -251,12 +253,6 @@ class ServerService : Service() {
                     setAttribute(
                         com.playbridge.shared.protocol.NsdConstants.KEY_WSS_PORT,
                         wssPort.toString()
-                    )
-                }
-                if (logsPort != null) {
-                    setAttribute(
-                        com.playbridge.shared.protocol.NsdConstants.KEY_LOGS_PORT,
-                        logsPort.toString()
                     )
                 }
                 if (preferredIp != null && preferredIp != "auto" && preferredIp.isNotEmpty()) {
@@ -351,11 +347,11 @@ class ServerService : Service() {
                 tlsDir = tlsDir,
                 // Persist and advertise only after Java-WebSocket confirms the listener
                 // is bound. The SRV port and wss_port must describe the same live endpoint.
-                onWssReady = { actualPort, logsPort ->
+                onWssReady = { actualPort ->
                     scope.launch {
                         pairingStore.setServerPort(actualPort)
                         _serverInfo.value = ServerInfo(ip = ip, port = actualPort, token = "")
-                        registerNsdService(actualPort, actualPort, logsPort)
+                        registerNsdService(actualPort, actualPort)
                     }
                 },
                 // Resolved per auth so a GeckoView plugin installed later is picked up
@@ -894,6 +890,7 @@ class ServerService : Service() {
                 applyUserAgentLive(prefs)
                 broadcastUserAgents(prefs)
             }
+            is IncomingMessage.LogsQuery -> sendLogs(command, msg.clear)
             is IncomingMessage.UserAgentQuery ->
                 broadcastUserAgents(getSharedPreferences("browser_prefs", Context.MODE_PRIVATE))
             is IncomingMessage.Unknown -> {
@@ -905,6 +902,22 @@ class ServerService : Service() {
     private fun broadcastContext() {
         scope.launch {
             webSocketServer?.broadcastStatus(createContextJson(activeContext))
+        }
+    }
+
+    /**
+     * Answers only the requesting paired connection. Clearing deletes the files first, so
+     * the reply never carries lines from before the clear.
+     */
+    private fun sendLogs(command: WebSocketServer.RoutedCommand, clear: Boolean) {
+        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val enabled = FileLogger.isEnabled()
+            if (clear && enabled) FileLogger.clearLogs()
+            val (text, truncated) = if (enabled && !clear) FileLogger.readTail(MAX_LOGS_REPLY_CHARS) else "" to false
+            webSocketServer?.sendTo(
+                command.connectionId,
+                com.playbridge.shared.protocol.createLogsJson(command.requestId, enabled, text, truncated),
+            )
         }
     }
 

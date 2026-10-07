@@ -14,8 +14,11 @@ schema disagree, the schema defines JSON shape and this document defines sequenc
   occupied. The mDNS SRV port is the active receiver endpoint, and the `wss_port` TXT key mirrors
   the active secure port for compatibility. `device_name` is only a display hint and is not
   trusted identity.
-- Receivers with a separate HTTP diagnostics listener may advertise its active port in the
-  optional `logs_port` TXT key. It is not part of the authenticated WSS transport.
+- Diagnostic logs are available only to authenticated senders, through `logs_query` and
+  `logs_clear` on the WSS channel (feature `diagnostic_logs_v1`). The receiver answers the
+  requesting connection alone with `logs`, and redacts URLs and credentials before persisting
+  a line. The legacy `logs_port` TXT key and its unauthenticated HTTP listener are retired;
+  senders must not fetch logs from an advertised port.
 - The WebSocket URL is `wss://<host>:<wss_port>/`. IPv6 literals must be bracketed. All protocol
   messages after the HTTP upgrade are either UTF-8 JSON text frames or the 9-byte pointer frame.
 - Receivers use a locally generated TLS identity. Paired senders validate its SPKI pin on every

@@ -991,12 +991,9 @@ fun AppNavHost(
                     BackHandler { onScreenChange(lastMainScreen) }
                     SettingsScreen(
                         onBack = { onScreenChange(lastMainScreen) },
-                        tvIp = if (connectionState is WebSocketClient.ConnectionState.Connected) tvDevice?.ip else null,
-                        // New receivers advertise the independent diagnostics listener.
-                        // Legacy Android TVs used receiverPort + 1 without a TXT key.
-                        tvPort = if (connectionState is WebSocketClient.ConnectionState.Connected) {
-                            tvDevice?.logsPort
-                                ?: tvDevice?.port?.takeIf { it < 65535 }?.plus(1)
+                        // TV logs travel only over the paired connection.
+                        tvLogs = if (connectionState is WebSocketClient.ConnectionState.Connected) {
+                            { clear: Boolean -> connectionCoordinator.requestTvLogs(clear) }
                         } else null,
                         showBack = true,
                     )

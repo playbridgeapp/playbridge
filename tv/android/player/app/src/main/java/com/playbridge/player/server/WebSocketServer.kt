@@ -12,12 +12,6 @@ import kotlinx.coroutines.CompletableDeferred
 import com.playbridge.player.logging.FileLogger
 import java.util.Base64
 import com.playbridge.shared.crypto.SasCrypto
-import io.ktor.http.*
-import io.ktor.server.application.*
-import io.ktor.server.cio.*
-import io.ktor.server.engine.*
-import io.ktor.server.response.*
-import io.ktor.server.routing.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,7 +65,7 @@ class WebSocketServer(
     private val tlsDir: File? = null,
     // Invoked from Java-WebSocket's onStart path with the actual bound port. It is
     // never invoked for a failed bind, so callers cannot advertise a dead endpoint.
-    private val onWssReady: ((wssPort: Int, logsPort: Int?) -> Unit)? = null,
+    private val onWssReady: ((wssPort: Int) -> Unit)? = null,
     // Players/browsers this receiver supports, re-evaluated per auth so a plugin installed
     // after start-up is picked up on the next (re)connect. Reported to the phone at auth.
     private val capabilities: () -> TvCapabilities = {
@@ -108,7 +102,6 @@ class WebSocketServer(
     private val failedAttemptsMap = ConcurrentHashMap<String, Int>()
     private val lockoutMap = ConcurrentHashMap<String, Long>()
 
-    private var diagnosticsServer: EmbeddedServer<*, *>? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var startJob: Job? = null
 
@@ -175,9 +168,8 @@ class WebSocketServer(
         startJob = scope.launch {
             try {
                 val selectedPort = startWssTransport()
-                val logsPort = startDiagnosticsServer(selectedPort)
                 _connectionState.value = ConnectionState.Running(selectedPort)
-                onWssReady?.invoke(selectedPort, logsPort)
+                onWssReady?.invoke(selectedPort)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -195,11 +187,9 @@ class WebSocketServer(
         // teardown off the caller's thread. This is invoked from ServerService.onDestroy
         // on the main thread — the previous runBlocking teardown could stall it for
         // 1.5s+ (ANR territory).
-        val ktor = diagnosticsServer
         val wss = wssServer
         startJob?.cancel()
         startJob = null
-        diagnosticsServer = null
         wssServer = null
         wssClients.clear()
         connectionIds.clear()
@@ -209,7 +199,6 @@ class WebSocketServer(
         _connectionState.value = ConnectionState.Stopped
         scope.launch {
             try {
-                ktor?.stop(500, 1000)
                 try { wss?.stop(500) } catch (e: Exception) { FileLogger.e(TAG, "Error stopping wss", e) }
                 FileLogger.i(TAG, "Server stopped")
             } catch (e: Exception) {
@@ -287,80 +276,6 @@ class WebSocketServer(
             lastBindFailure,
         )
     }
-
-    private suspend fun startDiagnosticsServer(selectedPort: Int): Int? {
-        val preferredPort = if (selectedPort < 65535) selectedPort + 1 else 0
-        val started = try {
-            startDiagnosticsServerOn(preferredPort)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (preferredFailure: Exception) {
-            FileLogger.w(TAG, "Diagnostics server failed on port $preferredPort; trying an OS-assigned port")
-            if (preferredPort == 0) {
-                FileLogger.e(TAG, "Diagnostics server unavailable", preferredFailure)
-                return null
-            }
-            try {
-                startDiagnosticsServerOn(0)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (fallbackFailure: Exception) {
-                FileLogger.e(TAG, "Diagnostics server unavailable", fallbackFailure)
-                return null
-            }
-        }
-        diagnosticsServer = started
-        val actualPort = try {
-            started.engine.resolvedConnectors().firstOrNull()?.port
-        } catch (e: Exception) {
-            FileLogger.w(TAG, "Could not resolve diagnostics server port", e)
-            null
-        }?.takeIf { it in 1..65535 }
-        FileLogger.i(TAG, "http log server on 0.0.0.0:${actualPort ?: "OS-assigned"}")
-        return actualPort
-    }
-
-    private fun startDiagnosticsServerOn(diagnosticsPort: Int): EmbeddedServer<*, *> =
-        embeddedServer(CIO, host = "0.0.0.0", port = diagnosticsPort) {
-            routing {
-                get("/logs") {
-                    if (!FileLogger.isEnabled()) {
-                        call.respondText(
-                            "Logging is disabled on the TV.",
-                            ContentType.Text.Plain,
-                            HttpStatusCode.Forbidden
-                        )
-                        return@get
-                    }
-                    val logFiles = FileLogger.getLogFiles()
-                    if (logFiles.isEmpty()) {
-                        call.respondText("No log files found.", ContentType.Text.Plain)
-                        return@get
-                    }
-                    val combined = logFiles.reversed().joinToString("\n") { it.readText() }
-                    call.response.header(
-                        HttpHeaders.ContentDisposition,
-                        ContentDisposition.Attachment.withParameter(
-                            ContentDisposition.Parameters.FileName, "playbridge_tv_logs.txt"
-                        ).toString()
-                    )
-                    call.respondText(combined, ContentType.Text.Plain)
-                }
-
-                delete("/logs") {
-                    if (!FileLogger.isEnabled()) {
-                        call.respondText(
-                            "Logging is disabled on the TV.",
-                            ContentType.Text.Plain,
-                            HttpStatusCode.Forbidden
-                        )
-                        return@delete
-                    }
-                    FileLogger.clearLogs()
-                    call.respondText("Logs cleared.", ContentType.Text.Plain)
-                }
-            }
-        }.start(wait = false)
 
     // Shared pairing approval: displays the SAS code and awaits the phone's confirmation MAC
     // (auto-deny after 60s). The window matches the desktop receiver and gives the user room

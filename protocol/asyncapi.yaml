@@ -305,6 +305,8 @@ components:
         - $ref: '#/components/schemas/UserScriptQuery'
         - $ref: '#/components/schemas/UserAgent'
         - $ref: '#/components/schemas/UserAgentQuery'
+        - $ref: '#/components/schemas/LogsQuery'
+        - $ref: '#/components/schemas/LogsClear'
     ReceiverFrame:
       oneOf:
         - $ref: '#/components/schemas/Pong'
@@ -320,6 +322,7 @@ components:
         - $ref: '#/components/schemas/PlayerSettings'
         - $ref: '#/components/schemas/UserScripts'
         - $ref: '#/components/schemas/UserAgents'
+        - $ref: '#/components/schemas/Logs'
         - $ref: '#/components/schemas/ScreenMirrorReady'
         - $ref: '#/components/schemas/ScreenMirrorAnswer'
         - $ref: '#/components/schemas/ScreenMirrorCandidate'
@@ -364,7 +367,7 @@ components:
           type: array
           uniqueItems: true
           items:
-            enum: [queue_crud_v1, stable_item_ids, command_results, progress_webhook_v1]
+            enum: [queue_crud_v1, stable_item_ids, command_results, progress_webhook_v1, diagnostic_logs_v1]
       additionalProperties: false
     PairingRequest:
       deprecated: true
@@ -1051,6 +1054,35 @@ components:
               name: { type: string }
               value: { type: string }
             additionalProperties: false
+      additionalProperties: false
+    LogsQuery:
+      type: object
+      required: [type, requestId]
+      description: Authenticated sender asks for the receiver's persisted diagnostic log.
+      properties:
+        type: { const: logs_query }
+        requestId: { type: string, minLength: 1, maxLength: 128 }
+      additionalProperties: false
+    LogsClear:
+      type: object
+      required: [type, requestId]
+      description: Authenticated sender deletes the receiver's persisted diagnostic log.
+      properties:
+        type: { const: logs_clear }
+        requestId: { type: string, minLength: 1, maxLength: 128 }
+      additionalProperties: false
+    Logs:
+      type: object
+      required: [type, requestId, enabled, text, truncated]
+      description: >-
+        Reply to logs_query or logs_clear, sent only to the requesting connection. Lines are
+        redacted before persistence; text holds the newest part of the log.
+      properties:
+        type: { const: logs }
+        requestId: { type: string, minLength: 1, maxLength: 128 }
+        enabled: { type: boolean, description: False when logging is off on the receiver. }
+        text: { type: string }
+        truncated: { type: boolean, description: True when older lines were left out. }
       additionalProperties: false
     SpkiPin:
       type: string

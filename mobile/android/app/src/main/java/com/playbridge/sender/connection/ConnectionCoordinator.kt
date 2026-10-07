@@ -18,6 +18,19 @@ data class QueueCommandResult(
     val error: String?,
 )
 
+/** Result of asking the connected TV for its persisted diagnostic log. */
+sealed class TvLogsResult {
+    /** [enabled] is false when logging is off on the TV; [truncated] means older lines were left out. */
+    data class Logs(val enabled: Boolean, val text: String, val truncated: Boolean) : TvLogsResult()
+    /** The TV predates paired log transfer (no `diagnostic_logs_v1`). */
+    data object Unsupported : TvLogsResult()
+    /** Not connected, or the TV did not answer in time. */
+    data object Unavailable : TvLogsResult()
+}
+
+/** Fetches (or, with `clear`, deletes) the TV log over the paired WSS connection. */
+typealias TvLogsSource = suspend (clear: Boolean) -> TvLogsResult
+
 /**
  * TV browser User-Agent state, as last reported by the TV: [active] is the name of the
  * selected entry (blank = default/no override), [entries] are the name→value pairs saved
@@ -47,6 +60,7 @@ class ConnectionCoordinator(
     val tvSubtitleTracks = MutableStateFlow<List<MediaTrack>>(emptyList())
     val tvPlayerSettings = MutableStateFlow(TvPlayerSettings())
     private val pendingQueueCommands = ConcurrentHashMap<String, CompletableDeferred<QueueCommandResult>>()
+    private val pendingLogRequests = ConcurrentHashMap<String, CompletableDeferred<TvLogsResult.Logs>>()
     
     // Names of user scripts currently installed on the TV (for the management UI).
     val installedUserScripts = MutableStateFlow<List<String>>(emptyList())
@@ -144,6 +158,18 @@ class ConnectionCoordinator(
                                 )
                             }
                         }
+                        "logs" -> {
+                            val requestId = json.optString("requestId", "")
+                            if (requestId.isNotEmpty()) {
+                                pendingLogRequests.remove(requestId)?.complete(
+                                    TvLogsResult.Logs(
+                                        enabled = json.optBoolean("enabled", false),
+                                        text = json.optString("text", ""),
+                                        truncated = json.optBoolean("truncated", false),
+                                    ),
+                                )
+                            }
+                        }
                         "tracks" -> {
                             fun parseTracks(arr: org.json.JSONArray?): List<MediaTrack> =
                                 buildList {
@@ -210,6 +236,30 @@ class ConnectionCoordinator(
                     Log.e(TAG, "Error parsing WebSocket message: ${e.message}", e)
                 }
             }
+        }
+    }
+
+    /** TV logs travel only over the authenticated connection, answered to this phone alone. */
+    suspend fun requestTvLogs(clear: Boolean, timeoutMs: Long = 20_000L): TvLogsResult {
+        if (webSocketClient.connectionState.value !is WebSocketClient.ConnectionState.Connected) {
+            return TvLogsResult.Unavailable
+        }
+        if ("diagnostic_logs_v1" !in webSocketClient.tvCapabilitiesState.value.features) {
+            return TvLogsResult.Unsupported
+        }
+        val requestId = java.util.UUID.randomUUID().toString()
+        val deferred = CompletableDeferred<TvLogsResult.Logs>()
+        pendingLogRequests[requestId] = deferred
+        return try {
+            val message = if (clear) {
+                com.playbridge.shared.protocol.createLogsClearJson(requestId)
+            } else {
+                com.playbridge.shared.protocol.createLogsQueryJson(requestId)
+            }
+            if (!webSocketClient.send(message)) return TvLogsResult.Unavailable
+            withTimeoutOrNull(timeoutMs) { deferred.await() } ?: TvLogsResult.Unavailable
+        } finally {
+            pendingLogRequests.remove(requestId, deferred)
         }
     }
 
