@@ -27,7 +27,7 @@ struct AppleProxyUpstreamTests {
             return (length, length > 0 ? Array(bytes.prefix(Int(length))) : [])
         }
         let (handle, status, metadata) = open("/body", headers: "{\"Referer\":\"https://example.test/player\",\"User-Agent\":\"AppleFixture\"}")
-        precondition(handle > 0 && status == 200 && metadata.contains("content-length"))
+        precondition(handle > 0 && status == 200 && metadata.contains("content-length"), "open /body: handle=\(handle) status=\(status) \(metadata) origin=\(origin)")
         var total = 0
         while true {
             let (count, bytes) = read(handle)
