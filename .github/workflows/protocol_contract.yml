@@ -17,7 +17,7 @@ jobs:
   check-asyncapi:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Check AsyncAPI structure and references
         working-directory: protocol
@@ -26,7 +26,7 @@ jobs:
   check-generated:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install protoc and swift-protobuf
         run: brew install protobuf swift-protobuf

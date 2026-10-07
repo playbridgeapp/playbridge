@@ -33,7 +33,7 @@ jobs:
     name: unix installer
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate shell installer syntax
         run: sh -n cli/install.sh
@@ -45,7 +45,7 @@ jobs:
     name: windows installer
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Parse and test PowerShell installer
         shell: pwsh

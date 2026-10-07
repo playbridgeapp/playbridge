@@ -46,7 +46,7 @@ jobs:
       skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -144,7 +144,7 @@ jobs:
       skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -236,7 +236,7 @@ jobs:
       skipped: ${{ steps.check_tag.outputs.skipped }}
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -319,7 +319,7 @@ jobs:
       contents: write
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
