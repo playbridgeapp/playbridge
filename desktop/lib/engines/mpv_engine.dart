@@ -431,7 +431,9 @@ class MpvEngine extends PlayerEngine {
       if (vid.id == 'no') {
         await player.setVideoTrack(VideoTrack.auto());
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[mpv] video-track restore failed: ${e.runtimeType}');
+    }
     // Disarm route-watch for the new item so open-time device flaps don't pause.
     _audioRouteArmed = false;
     _playingSince = null;

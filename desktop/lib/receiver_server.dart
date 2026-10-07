@@ -573,7 +573,10 @@ class ReceiverServer extends ChangeNotifier {
               if (file != null) {
                 try {
                   await file.parent.delete(recursive: true);
-                } catch (_) {}
+                } catch (e) {
+                  debugPrint(
+                      '[receiver] subtitle temp cleanup failed: ${e.runtimeType}');
+                }
               }
             }
           }());

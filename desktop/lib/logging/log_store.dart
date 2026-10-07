@@ -175,7 +175,9 @@ class LogStore {
       for (final f in dir.listSync().whereType<File>()) {
         if (_isLogFile(f)) f.deleteSync();
       }
-    } catch (_) {}
+    } catch (_) {
+      // Log files may already be gone. Do not log; this is the log store.
+    }
   }
 
   // ── internal ──────────────────────────────────────────────────────────
@@ -206,7 +208,9 @@ class LogStore {
     try {
       if (file.existsSync() && file.lengthSync() >= _maxFileSize) _rotate();
       file.writeAsStringSync('$line\n', mode: FileMode.append, flush: false);
-    } catch (_) {}
+    } catch (_) {
+      // Disk write is best-effort. Logging here would recurse through the tee.
+    }
   }
 
   void _rotate() {
@@ -220,7 +224,9 @@ class LogStore {
         if (src.existsSync()) src.renameSync('${file.path}.${i + 1}');
       }
       if (file.existsSync()) file.renameSync('${file.path}.1');
-    } catch (_) {}
+    } catch (_) {
+      // Rotation is best-effort. Logging here would recurse through the tee.
+    }
   }
 
   String _format(LogEntry e) {

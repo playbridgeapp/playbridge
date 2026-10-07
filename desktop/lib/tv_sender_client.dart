@@ -526,7 +526,9 @@ class TvSenderClient {
     if (c != null) {
       try {
         await c.sink.close().timeout(const Duration(seconds: 1));
-      } catch (_) {}
+      } catch (_) {
+        // Peer may already have closed the socket.
+      }
     }
   }
 
