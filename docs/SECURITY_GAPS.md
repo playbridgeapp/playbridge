@@ -182,9 +182,9 @@ store and may be exposed through local access or backups.
 **Done when:** Preference exports do not contain bearer tokens and legacy values
 are migrated or revoked.
 
-### SEC-005: [Reserved / Retired]
+### SEC-005: (unused)
 
-*Note: The SEC-005 identifier was resolved/retired separately during security review; this identifier is reserved to avoid renumbering existing external references.*
+*SEC-005 is not used. The number is left unassigned rather than renumbering the later entries.*
 
 ### SEC-006: Pre-authentication resource limits are uneven
 

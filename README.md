@@ -252,7 +252,7 @@ phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/
 - **Desktop**: Flutter SDK (Dart `^3.6`) and libmpv
 - **Apple TV**: Xcode with CocoaPods (see [tv/](tv/))
 - **Browser Extension**: Node.js and `pnpm`
-- **Rust Core & Proxy**: Rust 1.91+ (`cargo`; required by current workspace `Cargo.lock`; MSRV 1.88)
+- **Rust Core & Proxy**: Rust 1.91+ (`cargo`; required by current workspace `Cargo.lock`)
 
 ### Building
 
