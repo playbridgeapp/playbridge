@@ -28,6 +28,7 @@ import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
+import 'playback_clock.dart';
 import 'playback_osd.dart';
 import 'playback_speed.dart';
 import 'subtitle_delay.dart';
@@ -254,6 +255,8 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   SkipSegment? _lastSkipped;
   String? _skipItemKey;
   int _skipFetchGen = 0;
+  int _seekRepeatCount = 0;
+  LogicalKeyboardKey? _seekRepeatKey;
 
   static const _mediaExts = {
     'mp4',
@@ -1034,10 +1037,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           shortcuts: {
             const SingleActivator(LogicalKeyboardKey.space):
                 const PlayPauseIntent(),
-            const SingleActivator(LogicalKeyboardKey.arrowRight):
-                const SeekForwardIntent(),
-            const SingleActivator(LogicalKeyboardKey.arrowLeft):
-                const SeekBackwardIntent(),
+
             const SingleActivator(LogicalKeyboardKey.arrowUp):
                 const VolumeUpIntent(),
             const SingleActivator(LogicalKeyboardKey.arrowDown):
@@ -1151,6 +1151,31 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               onKeyEvent: (_, event) {
                 if (event is KeyDownEvent && !_stillWatching.isPrompting) {
                   _stillWatching.recordUserActivity();
+                }
+                final left = event.logicalKey == LogicalKeyboardKey.arrowLeft;
+                final right = event.logicalKey == LogicalKeyboardKey.arrowRight;
+                if (left || right) {
+                  if (event is KeyUpEvent) {
+                    _seekRepeatCount = 0;
+                    _seekRepeatKey = null;
+                    return KeyEventResult.ignored;
+                  }
+                  if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                    if (event is KeyDownEvent ||
+                        _seekRepeatKey != event.logicalKey) {
+                      _seekRepeatCount = 0;
+                      _seekRepeatKey = event.logicalKey;
+                    } else {
+                      _seekRepeatCount++;
+                    }
+                    final step = seekStepMs(_seekRepeatCount);
+                    final label = step >= 50000 ? '50s' : '10s';
+                    _seekBy(
+                      left ? -step : step,
+                      osd: left ? '≪ $label' : '≫ $label',
+                    );
+                    return KeyEventResult.handled;
+                  }
                 }
                 return KeyEventResult.ignored;
               },
@@ -2146,7 +2171,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         SizedBox(
                           width: 56,
                           child: Text(
-                            _fmt(Duration(milliseconds: p.durationMs)),
+                            formatRemainingClock(pos.toInt(), p.durationMs),
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.white70),
                           ),

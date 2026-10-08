@@ -74,6 +74,13 @@ class PlayerController extends ChangeNotifier {
         (_engine as MpvEngine).onError = _onError;
     }
 
+    if (_engine is MpvEngine) {
+      (_engine as MpvEngine).seedTrackPrefs(
+        audioLang: store?.preferredAudioLanguage,
+        subLang: store?.preferredSubtitleLanguage,
+        subsOff: store?.subtitlesDisabled ?? false,
+      );
+    }
     _engine.addListener(notifyListeners);
     _hasInited = true;
     notifyListeners();
@@ -299,8 +306,37 @@ class PlayerController extends ChangeNotifier {
 
   dynamic get tracks => _engine.tracks;
   dynamic get track => _engine.track;
-  Future<void> setAudioTrack(dynamic t) => _engine.setAudioTrack(t);
-  Future<void> setSubtitleTrack(dynamic t) => _engine.setSubtitleTrack(t);
+  Future<void> setAudioTrack(dynamic t) async {
+    await _engine.setAudioTrack(t);
+    try {
+      final id = t.id as String?;
+      final lang = t.language as String?;
+      if (id == 'auto') {
+        await store?.setPreferredAudioLanguage(null);
+      } else if (lang != null && lang.isNotEmpty) {
+        await store?.setPreferredAudioLanguage(lang);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setSubtitleTrack(dynamic t) async {
+    await _engine.setSubtitleTrack(t);
+    try {
+      final id = t.id as String?;
+      final lang = t.language as String?;
+      if (id == 'no') {
+        await store?.setSubtitlesDisabled(true);
+        await store?.setPreferredSubtitleLanguage(null);
+      } else {
+        await store?.setSubtitlesDisabled(false);
+        if (id == 'auto') {
+          await store?.setPreferredSubtitleLanguage(null);
+        } else if (lang != null && lang.isNotEmpty) {
+          await store?.setPreferredSubtitleLanguage(lang);
+        }
+      }
+    } catch (_) {}
+  }
 
   // Engine-agnostic track surface for the phone remote (`tracks` message +
   // `audio_track:`/`sub_track:` control commands).

@@ -72,6 +72,9 @@ class PairingStore {
   static const _kAutoSkipRecap = 'pb.auto_skip_recap';
   static const _kAutoSkipOutro = 'pb.auto_skip_outro';
   static const _kIntroDbApiKey = 'pb.introdb_api_key';
+  static const _kPreferredAudioLang = 'pb.preferred_audio_lang';
+  static const _kPreferredSubtitleLang = 'pb.preferred_subtitle_lang';
+  static const _kSubtitlesDisabled = 'pb.subtitles_disabled';
 
   static const int defaultReceiverPort = 8765;
 
@@ -189,6 +192,36 @@ class PairingStore {
   String get introDbApiKey => _prefs.getString(_kIntroDbApiKey) ?? '';
   Future<void> setIntroDbApiKey(String value) =>
       _prefs.setString(_kIntroDbApiKey, value);
+
+  String? get preferredAudioLanguage {
+    final v = _prefs.getString(_kPreferredAudioLang);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  Future<void> setPreferredAudioLanguage(String? value) async {
+    if (value == null || value.isEmpty) {
+      await _prefs.remove(_kPreferredAudioLang);
+    } else {
+      await _prefs.setString(_kPreferredAudioLang, value);
+    }
+  }
+
+  String? get preferredSubtitleLanguage {
+    final v = _prefs.getString(_kPreferredSubtitleLang);
+    return (v == null || v.isEmpty) ? null : v;
+  }
+
+  Future<void> setPreferredSubtitleLanguage(String? value) async {
+    if (value == null || value.isEmpty) {
+      await _prefs.remove(_kPreferredSubtitleLang);
+    } else {
+      await _prefs.setString(_kPreferredSubtitleLang, value);
+    }
+  }
+
+  bool get subtitlesDisabled => _prefs.getBool(_kSubtitlesDisabled) ?? false;
+  Future<void> setSubtitlesDisabled(bool value) =>
+      _prefs.setBool(_kSubtitlesDisabled, value);
 
   StreamProxyMode get streamProxyMode {
     final index = _prefs.getInt(_kStreamProxyMode) ?? StreamProxyMode.off.index;

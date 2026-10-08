@@ -14,7 +14,7 @@ class _KeyboardShortcutsDialog extends StatelessWidget {
 
   static const _rows = <(String, String)>[
     ('Space', 'Play / pause'),
-    ('← / →', 'Seek −10s / +10s'),
+    ('← / →', 'Seek −10s / +10s (hold: −50s / +50s)'),
     ('↑ / ↓', 'Volume up / down'),
     ('[ / ]', 'Playback speed down / up'),
     ('Z', 'Cycle Fit / Zoom / Fill'),

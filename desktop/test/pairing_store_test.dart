@@ -5,6 +5,20 @@ import 'package:playbridge_desktop/pairing_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('preferred audio and subtitle language persist', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PairingStore.load();
+    expect(store.preferredAudioLanguage, isNull);
+    expect(store.subtitlesDisabled, isFalse);
+    await store.setPreferredAudioLanguage('jpn');
+    await store.setPreferredSubtitleLanguage('eng');
+    await store.setSubtitlesDisabled(true);
+    final reloaded = await PairingStore.load();
+    expect(reloaded.preferredAudioLanguage, 'jpn');
+    expect(reloaded.preferredSubtitleLanguage, 'eng');
+    expect(reloaded.subtitlesDisabled, isTrue);
+  });
+
   test('skip-segment prefs default off and persist', () async {
     SharedPreferences.setMockInitialValues({});
     final store = await PairingStore.load();

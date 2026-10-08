@@ -233,6 +233,17 @@ class MpvEngine extends PlayerEngine {
   String? _preferredSubLang;
   bool _subsOff = false;
 
+  /// Restore persisted language prefs before the next item enumerates tracks.
+  void seedTrackPrefs({
+    String? audioLang,
+    String? subLang,
+    bool subsOff = false,
+  }) {
+    _preferredAudioLang = audioLang;
+    _preferredSubLang = subLang;
+    _subsOff = subsOff;
+  }
+
   @override
   Future<void> setAudioTrack(dynamic t) async {
     final track = t as AudioTrack;
