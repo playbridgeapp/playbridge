@@ -7,7 +7,6 @@ struct PhoneFilesScreen: View {
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
     @EnvironmentObject private var collections: CollectionsStore
-    @EnvironmentObject private var browser: BrowserStore
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("pb_library_category") private var category = "Videos"
     @State private var query = ""
@@ -51,7 +50,7 @@ struct PhoneFilesScreen: View {
                 Menu {
                     Picker("Sort", selection: $sortByName) { Text("Recently added").tag(false); Text("Name").tag(true) }
                     Picker("Source", selection: $source) {
-                        ForEach(["All", "Photos", "Files", "Downloads"], id: \.self) { Text($0).tag($0) }
+                        ForEach(["All", "Photos", "Files"], id: \.self) { Text($0).tag($0) }
                     }
                 } label: { Image(systemName: "line.3.horizontal.decrease.circle") }.accessibilityLabel("Sort and filter")
             }.padding(12).background(Theme.surfaceContainer).cornerRadius(12).padding(.horizontal, 12)
@@ -65,7 +64,7 @@ struct PhoneFilesScreen: View {
                         VStack(spacing: 12) {
                             Image(systemName: category == "Audio" ? "music.note.list" : "photo.on.rectangle").font(Theme.font(.largeTitle))
                             Text(query.isEmpty ? "No \(category.lowercased()) yet" : "No matching media").font(Theme.font(.headline))
-                            Text(category == "Audio" ? "Import audio from Files. Completed audio downloads also appear here." : "Import from Files or browse the Photos you’ve allowed. Completed media downloads also appear here.")
+                            Text(category == "Audio" ? "Import audio from Files." : "Import from Files or browse the Photos you’ve allowed.")
                                 .font(Theme.font(.subheadline)).multilineTextAlignment(.center).foregroundColor(Theme.onSurfaceVariant)
                             Button("Import from Files") { showImporter = true }.buttonStyle(.borderedProminent)
                         }.padding(28)
@@ -151,7 +150,7 @@ struct PhoneFilesScreen: View {
         }
     }
 
-    private func refresh() { library.refreshDownloads(browser.downloads.items); library.refreshPhotos() }
+    private func refresh() { library.refreshPhotos() }
     @ViewBuilder private var photosAccess: some View {
         if library.authorization == .notDetermined {
             Button("Connect Photos") { Task { await library.requestPhotos() } }.buttonStyle(.bordered)

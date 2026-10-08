@@ -76,6 +76,7 @@
 				AA0000000000000000000008 /* Frameworks */,
 				AA0000000000000000000009 /* Resources */,
 				AA0000000000000000000014 /* Verify Release Cast Core */,
+				AA0000000000000000000018 /* Fix Embedded Framework Minimum OS */,
 			);
 			buildRules = (
 			);
@@ -156,6 +157,22 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "/bin/sh \"${SRCROOT}/verify-cast-core-link.sh\"";
+		};
+		AA0000000000000000000018 /* Fix Embedded Framework Minimum OS */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(SRCROOT)/fix-embedded-framework-min-os.sh",
+			);
+			name = "Fix Embedded Framework Minimum OS";
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"${SRCROOT}/fix-embedded-framework-min-os.sh\"";
 		};
 /* End PBXShellScriptBuildPhase section */
 

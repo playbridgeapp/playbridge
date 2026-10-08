@@ -6,13 +6,22 @@
 
 **Status:** Not ready for App Store submission
 
+The Apple TV app has its own checklist: [`tvos-app-store-readiness-audit.md`](tvos-app-store-readiness-audit.md).
+
 ## Remediation update — September 23, 2026
 
 - `PrivacyInfo.xcprivacy` now declares the app's UserDefaults, file-timestamp, and system-boot-time reasons. It was verified inside an unsigned Release archive; confirm it again in the distribution-signed archive.
 - The iOS marketing version is now `0.3.3`, and the dashboard's `exit(0)` action has been removed.
 - Browser settings now links to the privacy policy. The website policy source now describes browser, search, filter-list, receiver, and proxy traffic; deploy and review the live page before submission. The App Store Connect privacy-policy URL and disclosures still require account access.
 - Release builds now check the linked app binary for Cast Core symbols. A clean build without Cast Core fails with an actionable error, while a build with the generated framework succeeds. The symbols were also confirmed in the unsigned archive's dSYM; archive stripping removes them from the distributed executable's symbol table. The release pipeline still needs to generate the framework before archiving.
-- The multicast entitlement, media-download/content-rights decision, signed archive, account metadata, and physical-device tests remain open.
+- The multicast entitlement, Content Rights answers, signed archive, account metadata, and physical-device tests remain open.
+
+## Remediation update — October 7, 2026
+
+- **New upload blocker fixed: embedded framework minimum OS.** All 27 MPVKit 1.0.0 frameworks ship `MinimumOSVersion = 100.0`. App Store validation rejects embedded frameworks that declare a higher minimum OS than the app. A new build phase, **Fix Embedded Framework Minimum OS** (`fix-embedded-framework-min-os.sh`), clamps them to `IPHONEOS_DEPLOYMENT_TARGET` and re-signs each modified framework. Verified: an unsigned Release device build reports 16.0 for all 27 frameworks, and an ad-hoc-signed simulator build passes `codesign --verify --deep --strict`.
+- **Multicast entitlement is now a one-line toggle.** `MulticastEntitlement.xcconfig` (included from `CastCoreOptional.xcconfig`) defaults `PB_MULTICAST_ENTITLEMENT = NO`. With `NO`, device builds skip the SSDP scan and show a "add devices manually" message. Simulator builds still scan. Once Apple grants the entitlement, set it to `YES`: the build then signs with `config/DLNAMulticast.entitlements`, compiles discovery in, and the Release check also requires `pb_discovery_start`. Both settings were built and verified.
+- **Disk-space API not yet declared.** The statically linked media stack references `fstatfs` (`NSPrivacyAccessedAPICategoryDiskSpace`); the app's own code does not. It is left undeclared because no reason code honestly fits mpv's network-filesystem check. Watch the first upload for `ITMS-91053`.
+- Correction: the phone links the standard LGPL **MPVKit** product. SPM also downloads the `*-GPL` artifacts, but they are not embedded.
 
 ## Executive summary
 
@@ -76,16 +85,16 @@ The policy should distinguish between data PlayBridge itself collects and data n
 
 ### 5. Provision multicast discovery correctly
 
-`mobile/apple/config/DLNAMulticast.entitlements` declares `com.apple.developer.networking.multicast`, but the phone target does not currently set `CODE_SIGN_ENTITLEMENTS`. The local DLNA documentation also notes that the target does not have the entitlement.
+`mobile/apple/config/DLNAMulticast.entitlements` declares `com.apple.developer.networking.multicast`. Signing with it is controlled by `PB_MULTICAST_ENTITLEMENT` in `PlayBridge Phone/MulticastEntitlement.xcconfig`. The default is `NO`, so device builds skip SSDP discovery (see the October 7 update).
 
 Before distributing DLNA/Roku SSDP discovery:
 
 1. Request Apple's restricted multicast networking entitlement.
 2. Enable it for the App ID and distribution provisioning profile.
-3. Set the phone target's Code Signing Entitlements path to `../config/DLNAMulticast.entitlements`.
+3. Set `PB_MULTICAST_ENTITLEMENT = YES`.
 4. Verify discovery on a physical device with the distribution-signed build.
 
-If the entitlement will not be available for the initial release, hide or disable automatic SSDP discovery in the App Store configuration. See Apple's [Local Network Privacy FAQ](https://developer.apple.com/news/?id=0oi77447).
+The initial release can ship with the default `NO`; manual DLNA/Roku connections still work. See Apple's [Local Network Privacy FAQ](https://developer.apple.com/news/?id=0oi77447).
 
 ## High-risk App Review areas
 
@@ -95,13 +104,39 @@ The browser exposes a **Download Link** action for arbitrary media URLs in `Brow
 
 This creates a significant Guideline 5.2.3 risk. Apple may require evidence that the app is authorized to download or save third-party audio and video.
 
-Before submission, choose one of these approaches:
+**Resolved October 7, 2026: downloads now behave like Safari.**
 
-- Remove or restrict downloads to content the user owns or is authorized to save.
-- Limit the feature to user-provided media and clearly explain that positioning in the UI and review notes.
-- Provide documented authorization for any supported third-party sources.
+- The long-press **Download Link** action has been removed. Downloads start only when a website sends a file: a `Content-Disposition: attachment` response, a type WebKit cannot display, or an `<a download>` link.
+- Each download asks first: **Download "name"?**, with its size and source host.
+- Finished files stay in the browser's Downloads list, with Save to Files and Share. They no longer appear as a "Downloads" source in the media library. Casting a downloaded file means saving it to Files and then importing it.
+- There is still no download button for detected streams. Keep that out of App Store builds.
 
 The App Store Connect **Content Rights** answer must accurately describe this behavior. Give App Review a controlled sample source and precise steps that do not depend on copyrighted third-party media. See [App Review Guidelines 5.2.2 and 5.2.3](https://developer.apple.com/app-store/review/guidelines/).
+
+### Background keep-alive during external casts (Guideline 2.5.4)
+
+While the phone controls an external receiver, `Network/CastSystemPlayback.swift` keeps the app running in the background with the `audio` background mode by looping a silent PCM file. `Network/CastPlaybackSession.swift` stops it after 5 minutes paused (`pausedAudioGrace`) and when the session ends. Guideline 2.5.4 limits background modes to their intended purpose, and a silent-audio loop is a known rejection reason. Casting apps that control external hardware are commonly reported to be accepted for this, but enforcement varies.
+
+**Decision (October 7, 2026): ship as is and explain it in the review notes.**
+
+- The behavior presents as a media session: lock-screen and Control Center now-playing info and controls drive playback on the TV.
+- It runs only during an active external cast. It never runs just because the app is open.
+- Background work the TV depends on: serving local files and "via phone" proxy streams, advancing DLNA episode queues, and keeping website-supplied (lazy) queues supplied.
+
+Suggested review-notes text:
+
+> PlayBridge is a remote control for video playing on a TV or other receiver on the user's network. During an active cast, PlayBridge keeps running in the background so the user can control the TV from the lock screen and Control Center, and so the phone can keep serving media and advancing episodes that the TV depends on (local files, DLNA renderers, website queues). This stops when the cast ends or after five minutes paused.
+
+**If rejected under 2.5.4:** reply in the Resolution Center with the explanation above first. If the rejection stands, keep the app alive only when the phone does real work for the receiver: local file or proxy serving, DLNA queues, website queues. Remote control of a native PlayBridge TV does not need it, because the TV runs its own queue and the phone reconnects when reopened. That change is contained in `CastPlaybackSession.swift` (the `keepAlive` decision).
+
+### Website bridge and Bridged Apps (Guideline 4.7)
+
+Websites can call `window.playbridge` (see [`bridged-apps.md`](bridged-apps.md)), and users can install opted-in websites as dashboard tiles ("Bridged Apps").
+
+- **Guideline 4.7.2** prohibits exposing *native platform APIs* to web content without Apple's permission. `window.playbridge` exposes only PlayBridge's own casting and playback features, not device capabilities. Destination identity requires per-website casting consent, and choosing a destination requires an attested user gesture. State this plainly in the review notes.
+- **Bridged Apps** behave like HTML5 mini apps under 4.7. Users add them from websites they visit; PlayBridge ships no built-in catalog. Keep it that way for App Store builds.
+- **Content risk comes from the websites, not the bridge.** iOS deliberately omits Stremio add-ons and Debrid (Guideline 5.2.3). A bridged app published or promoted by PlayBridge that offers the same kind of content, such as add-on or scraper front ends, can look like circumventing that decision. Before submission, review what the companion apps in the `bridged-apps` repository offer, and do not link or promote add-on/scraper front ends from the App Store build or its listing.
+- **For App Review,** demo the bridge with a neutral test page or a Jellyfin server. Do not use streaming-aggregator content.
 
 ### Unrestricted web access and age rating
 
@@ -117,7 +152,7 @@ The following items cannot be confirmed from source code and must be completed i
 - Complete the Content Rights declaration accurately.
 - Confirm EU Digital Services Act trader status if distributing in the EU.
 - Complete export-compliance questions.
-- Add review notes, test content, and any receiver setup required to exercise the app.
+- Add review notes, test content, and any receiver setup required to exercise the app. Include the background keep-alive and website-bridge explanations from High-risk App Review areas.
 - Upload a distribution-signed archive and run App Store validation.
 
 ### Export compliance
@@ -142,7 +177,7 @@ See [`NSAllowsArbitraryLoadsInWebContent`](https://developer.apple.com/documenta
 
 ### Background audio
 
-The app declares the `audio` background mode and appears to use it for real media playback. Keep the entitlement limited to active playback and explain the behavior in review notes if requested.
+The `audio` background mode covers local playback and the external-cast keep-alive. See "Background keep-alive during external casts" under High-risk App Review areas.
 
 ### Swift concurrency warnings
 
@@ -206,8 +241,14 @@ Do not submit the iOS build until all applicable items are complete:
 - [x] Remove the `exit(0)` UI and behavior.
 - [x] Add an in-app privacy policy link.
 - [ ] Deploy the corrected privacy policy and verify the live page.
-- [ ] Provision the multicast entitlement or disable automatic SSDP discovery.
-- [ ] Resolve and document the media-download/content-rights position.
+- [x] Disable automatic SSDP discovery on devices unless the multicast entitlement is enabled (`PB_MULTICAST_ENTITLEMENT`).
+- [ ] Request the multicast entitlement, then set `PB_MULTICAST_ENTITLEMENT = YES` and test discovery on a device.
+- [x] Clamp MPVKit's embedded framework `MinimumOSVersion` (100.0) to the deployment target.
+- [ ] Check the first upload for `ITMS-91053` (disk space).
+- [x] Resolve the media-download position (Safari-style downloads; no link or stream download actions).
+- [ ] Answer the Content Rights declaration to match.
+- [ ] Put the background keep-alive and website-bridge explanations in the review notes.
+- [ ] Review the companion bridged apps' content; keep add-on/scraper front ends out of the App Store build, listing and review demo.
 - [ ] Complete App Privacy, age rating, Content Rights, export compliance, and EU trader declarations.
 - [x] Make a Release build fail when Cast Core symbols are absent.
 - [ ] Build Cast Core in the clean release pipeline and verify its symbols in the distribution archive's dSYM.

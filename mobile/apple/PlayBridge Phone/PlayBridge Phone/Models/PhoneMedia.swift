@@ -16,8 +16,8 @@ struct PhoneMedia: Codable, Identifiable, Hashable {
             return nil
         }
     }
-    enum Source: String, Codable { case imported, photos, download
-        var title: String { switch self { case .imported: return "Files"; case .photos: return "Photos"; case .download: return "Downloads" } }
+    enum Source: String, Codable { case imported, photos
+        var title: String { switch self { case .imported: return "Files"; case .photos: return "Photos" } }
     }
     let id: String
     var title: String

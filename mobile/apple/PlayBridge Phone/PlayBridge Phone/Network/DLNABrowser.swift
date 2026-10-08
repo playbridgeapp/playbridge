@@ -23,6 +23,13 @@ final class DLNABrowser: ObservableObject {
     private let kind: Kind
     init(kind: Kind = .dlna) { self.kind = kind }
     private let worker = DispatchQueue(label: "com.playbridge.dlna-discovery")
+    // iOS blocks SSDP multicast on devices without Apple's restricted entitlement,
+    // so device builds skip a scan that can only fail (see MulticastEntitlement.xcconfig).
+#if targetEnvironment(simulator) || PB_MULTICAST_ENTITLED
+    private static let multicastAvailable = true
+#else
+    private static let multicastAvailable = false
+#endif
     private var scan: DLNAScanCancellation?
     private var generation = UUID()
 
@@ -52,6 +59,10 @@ final class DLNABrowser: ObservableObject {
 
     func start() {
         guard !isScanning else { return }
+        guard Self.multicastAvailable else {
+            error = "Automatic \(kind.label) discovery isn't available in this version. Add DLNA and Roku devices manually."
+            return
+        }
         generation = UUID()
         let current = generation
         isScanning = true
