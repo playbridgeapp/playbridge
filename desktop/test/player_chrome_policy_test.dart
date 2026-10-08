@@ -49,4 +49,17 @@ void main() {
       isTrue,
     );
   });
+
+  test('chrome stays up until the first frame plays', () {
+    expect(
+      PlayerChromePolicy.resolve(playing: true, pinned: false, started: false)
+          .visible,
+      isTrue,
+    );
+    expect(
+      PlayerChromePolicy.resolve(playing: true, pinned: false, started: true)
+          .visible,
+      isFalse,
+    );
+  });
 }
