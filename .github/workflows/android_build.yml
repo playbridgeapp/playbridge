@@ -392,7 +392,7 @@ jobs:
 
       - name: Create Phone draft release
         if: needs.build-phone.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: phone-v${{ steps.versions.outputs.phone }}
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
@@ -412,7 +412,7 @@ jobs:
 
       - name: Create TV Player draft release
         if: needs.build-tv-player.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: tv-player-v${{ steps.versions.outputs.player }}
           name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
@@ -434,7 +434,7 @@ jobs:
 
       - name: Create TV GeckoView Plugin draft release
         if: needs.build-tv-geckoview-plugin.outputs.skipped == 'false'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}
           name: PlayBridge TV GeckoView Plugin v${{ steps.versions.outputs.browser }}

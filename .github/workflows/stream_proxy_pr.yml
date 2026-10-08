@@ -32,7 +32,7 @@ jobs:
       run:
         working-directory: ./stream-proxy-rust
     steps:
-      - uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         if: ${{ !inputs.always_run }}
         id: filter
         with:
@@ -81,7 +81,7 @@ jobs:
 
       - name: Build Docker image (dry-run)
         if: steps.gate.outputs.run == 'true'
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ./stream-proxy-rust
           file: ./stream-proxy-rust/Dockerfile
