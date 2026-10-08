@@ -15,6 +15,7 @@ struct MPVPhonePlayerView: View {
     @State private var showQueue = false
     @State private var seekFeedback = 0
     @State private var feedbackTask: Task<Void, Never>?
+    @State private var scrubPreview: PhonePlayerScrub.Preview?
 
     init(session: PlaybackSession, controls: PhonePlayerControls? = nil, onDismiss: (() -> Void)? = nil) {
         self.session = session
@@ -29,7 +30,27 @@ struct MPVPhonePlayerView: View {
                     .id(ObjectIdentifier(engine))
                     .ignoresSafeArea()
             }
-            HStack(spacing: 0) { tapZone(-10); tapZone(10) }
+            PhonePlayerSurfaceGestures(
+                duration: session.durationSeconds,
+                position: session.positionSeconds,
+                locked: controls.locked,
+                voiceOver: voiceOver,
+                onTap: { controls.tap() },
+                onDoubleTap: { skip($0, fromTransport: false) },
+                onScrub: { preview in
+                    scrubPreview = preview
+                    controls.setScrubbing(preview != nil, source: .surfaceGesture)
+                },
+                onCommit: { preview in
+                    scrubPreview = nil
+                    controls.setScrubbing(false, source: .surfaceGesture)
+                    guard !controls.locked, !voiceOver, session.durationSeconds > 0 else { return }
+                    session.seek(to: preview.target)
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            .accessibilityHidden(true)
             if session.mpvState.buffering {
                 ProgressView().tint(.white).allowsHitTesting(false)
             }
@@ -73,6 +94,16 @@ struct MPVPhonePlayerView: View {
                     if seekFeedback < 0 { Spacer() }
                 }.padding(24).allowsHitTesting(false).accessibilityHidden(true)
             }
+            if let scrubPreview {
+                VStack(spacing: 4) {
+                    Text(scrubPreview.offsetLabel).font(.system(size: 40, weight: .bold)).monospacedDigit()
+                    Text(scrubPreview.timeLabel).font(.title3.weight(.semibold)).monospacedDigit()
+                }
+                .padding(.horizontal, 24).padding(.vertical, 16)
+                .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white).tint(.white)
@@ -89,7 +120,7 @@ struct MPVPhonePlayerView: View {
         .onChange(of: showQueue) { _ in controls.setSheetPresented(showSettings || showQueue) }
         .onChange(of: session.alternativeEngine.map { ObjectIdentifier($0) }) { _ in
             scrubbing = false; controls.setScrubbing(false)
-            feedbackTask?.cancel(); seekFeedback = 0
+            feedbackTask?.cancel(); seekFeedback = 0; scrubPreview = nil
             controls.reveal()
         }
         .onDisappear { controls.stop(); feedbackTask?.cancel(); feedbackTask = nil }
@@ -99,18 +130,6 @@ struct MPVPhonePlayerView: View {
         .sheet(isPresented: $showQueue, onDismiss: { controls.reveal() }) { queue }
     }
 
-    private func tapZone(_ offset: Double) -> some View {
-        Color.clear.contentShape(Rectangle())
-            .gesture(TapGesture(count: 2).exclusively(before: TapGesture(count: 1)).onEnded { value in
-                switch value {
-                case .first:
-                    guard !controls.locked else { controls.reveal(); return }
-                    skip(offset)
-                case .second: controls.tap()
-                }
-            })
-            .accessibilityHidden(true)
-    }
     private var toolbar: some View {
         HStack(spacing: 4) {
             if let onDismiss {
@@ -152,12 +171,12 @@ struct MPVPhonePlayerView: View {
                         Image(systemName: "backward.end.fill").frame(width: 44, height: 44)
                     }.accessibilityLabel("Previous episode").disabled(session.websiteQueueIndex == 0 || session.websiteQueueChangingItem)
                 }
-                Button { skip(-10) } label: { Image(systemName: "gobackward.10").frame(width: 44, height: 44) }
+                Button { skip(-10, fromTransport: true) } label: { Image(systemName: "gobackward.10").frame(width: 44, height: 44) }
                     .accessibilityLabel("Back 10 seconds")
                 Button { controls.reveal(); session.isPlaying ? session.pause() : session.play() } label: {
                     Image(systemName: session.isPlaying ? "pause.fill" : "play.fill").font(.title).frame(width: 44, height: 44)
                 }.accessibilityLabel(session.isPlaying ? "Pause" : "Play").accessibilityIdentifier("phone-player-play")
-                Button { skip(10) } label: { Image(systemName: "goforward.10").frame(width: 44, height: 44) }
+                Button { skip(10, fromTransport: true) } label: { Image(systemName: "goforward.10").frame(width: 44, height: 44) }
                     .accessibilityLabel("Forward 10 seconds")
                 if !session.websiteQueueTitles.isEmpty {
                     Button { controls.reveal(); session.onWebsiteJump?(session.websiteQueueIndex + 1) } label: {
@@ -210,9 +229,10 @@ struct MPVPhonePlayerView: View {
                         buffering: session.mpvState.buffering || session.websiteWaitingForNext || session.websiteQueueChangingItem,
                         voiceOver: voiceOver)
     }
-    private func skip(_ offset: Double) {
+    private func skip(_ offset: Double, fromTransport: Bool) {
         guard !controls.locked else { return }
-        controls.reveal(); session.skip(by: offset)
+        controls.touchChrome(from: fromTransport ? .transport : .surfaceGesture)
+        session.skip(by: offset)
         let step = Int(offset)
         seekFeedback = (seekFeedback.signum() == step.signum() ? seekFeedback : 0) + step
         feedbackTask?.cancel()
@@ -225,6 +245,147 @@ struct MPVPhonePlayerView: View {
         guard seconds.isFinite else { return "0:00" }
         let value = Int(max(0, min(seconds, 360_000)))
         return value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60) : String(format: "%d:%02d", value / 60, value % 60)
+    }
+}
+
+private struct PhonePlayerSurfaceGestures: UIViewRepresentable {
+    var duration: Double
+    var position: Double
+    var locked: Bool
+    var voiceOver: Bool
+    var onTap: () -> Void
+    var onDoubleTap: (Double) -> Void
+    var onScrub: (PhonePlayerScrub.Preview?) -> Void
+    var onCommit: (PhonePlayerScrub.Preview) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        let single = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.singleTap))
+        let double = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
+        double.numberOfTapsRequired = 2
+        single.require(toFail: double)
+        let pan = PhonePlayerScrubPan(target: context.coordinator, action: #selector(Coordinator.pan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.cancelsTouchesInView = true
+        let coordinator = context.coordinator
+        pan.gate = { [weak coordinator] in
+            guard let parent = coordinator?.parent else { return PhonePlayerScrub.Gate(duration: 0, locked: true, voiceOver: true) }
+            return PhonePlayerScrub.Gate(duration: parent.duration, locked: parent.locked, voiceOver: parent.voiceOver)
+        }
+        view.addGestureRecognizer(double)
+        view.addGestureRecognizer(single)
+        view.addGestureRecognizer(pan)
+        return view
+    }
+    func updateUIView(_ uiView: UIView, context: Context) { context.coordinator.parent = self }
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject {
+        var parent: PhonePlayerSurfaceGestures
+        private var origin = 0.0
+        private var preview: PhonePlayerScrub.Preview?
+        private var tickBucket = 0
+        private var heldClamp: PhonePlayerScrub.ClampEdge?
+        private let startHaptic = UIImpactFeedbackGenerator(style: .light)
+        private let edgeHaptic = UIImpactFeedbackGenerator(style: .medium)
+        private let tickHaptic = UISelectionFeedbackGenerator()
+        init(_ parent: PhonePlayerSurfaceGestures) { self.parent = parent }
+
+        @objc func singleTap() { parent.onTap() }
+        @objc func doubleTap(_ recognizer: UITapGestureRecognizer) {
+            guard !parent.locked else { parent.onTap(); return }
+            guard let view = recognizer.view else { return }
+            parent.onDoubleTap(recognizer.location(in: view).x < view.bounds.midX ? -10 : 10)
+        }
+        @objc func pan(_ recognizer: UIPanGestureRecognizer) {
+            guard let recognizer = recognizer as? PhonePlayerScrubPan else { return }
+            switch recognizer.state {
+            case .began:
+                origin = parent.position
+                tickBucket = 0
+                heldClamp = nil
+                startHaptic.prepare(); edgeHaptic.prepare(); tickHaptic.prepare()
+                fallthrough
+            case .changed:
+                guard let translation = recognizer.dragTranslation() else { return }
+                if preview == nil {
+                    switch PhonePlayerScrub.decide(start: recognizer.dragStart ?? .zero, translation: translation, viewSize: recognizer.view?.bounds.size ?? .zero, position: origin, gate: recognizer.gate()) {
+                    case .ignore: recognizer.state = .cancelled; return
+                    case .pending: return
+                    case .scrub(let next):
+                        startHaptic.impactOccurred(); startHaptic.prepare()
+                        noteTicks(next)
+                        preview = next
+                        parent.onScrub(next)
+                    }
+                } else if let next = recognizer.livePreview(origin: origin, duration: parent.duration) {
+                    noteTicks(next)
+                    preview = next
+                    parent.onScrub(next)
+                }
+            case .ended:
+                let translation = recognizer.dragTranslation() ?? .zero
+                let size = recognizer.view?.bounds.size ?? .zero
+                let qualifiedNow: PhonePlayerScrub.Preview? = {
+                    guard case .scrub(let next) = PhonePlayerScrub.decide(start: recognizer.dragStart ?? .zero, translation: translation, viewSize: size, position: origin, gate: recognizer.gate()) else { return nil }
+                    return next
+                }()
+                if let commit = PhonePlayerScrub.commit(recognizer.livePreview(origin: origin, duration: parent.duration) ?? qualifiedNow ?? preview, ended: preview != nil || qualifiedNow != nil) {
+                    parent.onCommit(commit)
+                }
+                preview = nil
+                parent.onScrub(nil)
+            case .cancelled, .failed:
+                _ = PhonePlayerScrub.commit(preview, ended: false)
+                preview = nil
+                tickBucket = 0
+                heldClamp = nil
+                parent.onScrub(nil)
+            default: break
+            }
+        }
+
+        private func noteTicks(_ next: PhonePlayerScrub.Preview) {
+            let ticks = PhonePlayerScrub.hapticTicks(previousBucket: tickBucket, offset: next.offset, target: next.target, duration: parent.duration, heldClamp: heldClamp)
+            tickBucket = PhonePlayerScrub.tickBucket(offset: next.offset)
+            if ticks > 0 {
+                for _ in 0..<ticks { tickHaptic.selectionChanged(); tickHaptic.prepare() }
+            }
+            if let edge = PhonePlayerScrub.clampEdgeArrival(target: next.target, duration: parent.duration, held: heldClamp) {
+                edgeHaptic.impactOccurred(); edgeHaptic.prepare()
+                heldClamp = edge
+            } else if PhonePlayerScrub.clampEdge(target: next.target, duration: parent.duration) == nil {
+                heldClamp = nil
+            }
+        }
+    }
+}
+
+/// Fails immediately for edge, home-indicator, locked, VoiceOver, and unknown-duration drags.
+private final class PhonePlayerScrubPan: UIPanGestureRecognizer {
+    var gate: () -> PhonePlayerScrub.Gate = { PhonePlayerScrub.Gate(duration: 0, locked: true, voiceOver: true) }
+    private(set) var dragStart: CGPoint?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        dragStart = touches.first?.location(in: view)
+        super.touchesBegan(touches, with: event)
+        if let dragStart, let view, PhonePlayerScrub.ignoredStart(dragStart, in: view.bounds.size) || !PhonePlayerScrub.isEnabled(gate()) {
+            state = .failed
+        }
+    }
+    override func reset() { super.reset(); dragStart = nil }
+
+    func dragTranslation() -> CGSize? {
+        guard let dragStart, let view else { return nil }
+        let now = location(in: view)
+        return CGSize(width: now.x - dragStart.x, height: now.y - dragStart.y)
+    }
+    func livePreview(origin: Double, duration: Double) -> PhonePlayerScrub.Preview? {
+        guard let dragStart, let view, !PhonePlayerScrub.ignoredStart(dragStart, in: view.bounds.size), PhonePlayerScrub.isEnabled(gate()) else { return nil }
+        return PhonePlayerScrub.preview(translationX: location(in: view).x - dragStart.x, viewWidth: view.bounds.width, position: origin, duration: duration)
     }
 }
 

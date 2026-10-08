@@ -15,6 +15,12 @@ import Combine
     private var sheetPresented = false
     private var hideTask: Task<Void, Never>?
     private let delay: UInt64
+    /// Increments only when a reveal/schedule is requested. Surface gestures must not touch it.
+    private(set) var hideGeneration = 0
+
+    enum ChromeSource { case slider, transport, surfaceGesture
+        var revealsChrome: Bool { self != .surfaceGesture }
+    }
 
     init(hideDelayNanoseconds: UInt64 = 3_000_000_000) { delay = hideDelayNanoseconds }
     func update(playing: Bool, buffering: Bool, voiceOver: Bool) {
@@ -28,6 +34,9 @@ import Combine
         if locked { unlockVisible = true } else { visible = true }
         schedule()
     }
+    /// Transport buttons and the bottom slider keep the bars alive. A swipe-scrub or
+    /// double-tap seek must not reveal, hide, or extend them.
+    func touchChrome(from source: ChromeSource) { if source.revealsChrome { reveal() } }
     func tap() {
         if locked { reveal() }
         else if voiceOver { reveal() }
@@ -41,7 +50,10 @@ import Combine
         locked = false; unlockVisible = false; visible = true
         schedule()
     }
-    func setScrubbing(_ value: Bool) { scrubbing = value; if value { reveal() }; schedule() }
+    func setScrubbing(_ value: Bool, source: ChromeSource = .slider) {
+        guard source.revealsChrome else { return }
+        scrubbing = value; if value { reveal() }; schedule()
+    }
     func setSheetPresented(_ value: Bool) { sheetPresented = value; if value { reveal() }; schedule() }
     func setSuspended(_ value: Bool) { suspended = value; schedule() }
     func stop() {
@@ -49,6 +61,7 @@ import Combine
         suspended = true; scrubbing = false; sheetPresented = false
     }
     private func schedule() {
+        hideGeneration += 1
         hideTask?.cancel(); hideTask = nil
         guard !suspended, !voiceOver, !scrubbing, !sheetPresented,
               (locked && unlockVisible) || (!locked && visible && playing && !buffering) else { return }

@@ -25,7 +25,7 @@ source = root / 'PlayBridge Phone'
 source.mkdir()
 for name in ['Network/PhonePlaybackEngine.swift', 'Network/MPVPhonePlayback.swift', 'Network/PlaybackSession.swift',
              'Network/StreamRouteService.swift', 'Network/PhonePlayerPreferences.swift',
-             'UI/PhonePlayerControls.swift', 'UI/PhonePlayerSettingsView.swift', 'UI/MPVPhonePlayerView.swift',
+             'UI/PhonePlayerControls.swift', 'UI/PhonePlayerScrub.swift', 'UI/PhonePlayerSettingsView.swift', 'UI/MPVPhonePlayerView.swift',
              'UI/PhonePlayerOpeningOrientationView.swift', 'UI/Theme.swift']:
     shutil.copy2(phone / 'PlayBridge Phone' / name, source / Path(name).name)
 shutil.copy2(repo / 'mobile/apple/tests/MPVPhonePlaybackProbe.swift', source / 'Probe.swift')
