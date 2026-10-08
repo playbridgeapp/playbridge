@@ -7,8 +7,8 @@ AVPlayer fallback or **Try with mpv** action. A missing mpv engine fails explici
 Retries preserve the selected route, headers and current position. Original URL
 and MIME information remain available for diagnostics, not engine selection.
 
-MPVKit is pinned with Swift Package Manager in the phone project. The Apple TV's
-separate CocoaPods dependency is unchanged. The phone links the standard product,
+MPVKit is pinned with Swift Package Manager in the phone project. The Apple TV
+pins the same version in its own project. Both link the standard product,
 not MPVKit-GPL. See `THIRD_PARTY_LICENSES.md` for the pinned source and notices.
 
 ## Player behavior

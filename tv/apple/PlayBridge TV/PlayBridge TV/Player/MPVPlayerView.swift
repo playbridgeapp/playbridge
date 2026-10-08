@@ -1,7 +1,8 @@
 import SwiftUI
 import AVFoundation
 import AVKit
-import MPVKit
+import Metal
+import Libmpv
 
 // MARK: - SwiftUI representable
 
@@ -90,7 +91,6 @@ class MPVViewController: UIViewController {
     var onSwitch: ((PlaybackEngine, Double) -> Void)?
     var onBroadcast: (([String: Any]) -> Void)?
     private var statusTimer: Timer?
-    private var videoRecovery = MPVVideoRecoveryState()
     var isPreBuffering: Bool = false {
         didSet { if isPreBuffering != oldValue { applyPreBufferingState() } }
     }
@@ -109,8 +109,11 @@ class MPVViewController: UIViewController {
     /// to a deallocating object. Balanced (released) once in `teardown()`.
     private var callbackSelfPtr: UnsafeMutableRawPointer?
 
-    // MARK: Rendering — native AVFoundation video output
-    private let displayLayer = AVSampleBufferDisplayLayer()
+    // MARK: Rendering — mpv gpu-next on Metal (MoltenVK)
+    private let metalLayer = MPVMetalLayer()
+    private var didSetupMPV = false
+    /// Video decoding is detached while backgrounded; Metal cannot present then.
+    private var videoDetachedForBackground = false
 
     // MARK: UI
     private var playbackState = PlayerControlsData()
@@ -146,16 +149,16 @@ class MPVViewController: UIViewController {
         videoView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(videoView)
 
-        displayLayer.videoGravity = .resizeAspect
-        displayLayer.backgroundColor = UIColor.black.cgColor
+        metalLayer.device = MTLCreateSystemDefaultDevice()
+        metalLayer.framebufferOnly = true
+        metalLayer.backgroundColor = UIColor.black.cgColor
         updateRenderingSurface()
-        videoView.layer.addSublayer(displayLayer)
+        videoView.layer.addSublayer(metalLayer)
 
         playbackState.title = mediaTitle ?? ""
         externalSubtitleCatalog = ExternalSubtitleCatalog(urls: subtitles ?? [])
         playbackState.externalSubtitleTracks = externalSubtitleCatalog.unloadedTracks(excluding: [])
         setupHUD()
-        setupMPV()
         startRemoteSync()
         showUI(autoHide: true)
     }
@@ -163,12 +166,22 @@ class MPVViewController: UIViewController {
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         updateRenderingSurface()
+        // gpu-next sizes its swapchain from the layer, so start mpv once it has real bounds.
+        if !didSetupMPV, !isMpvStopped, videoView.bounds.width > 1, videoView.bounds.height > 1 {
+            didSetupMPV = true
+            setupMPV()
+        }
     }
 
     private func updateRenderingSurface() {
+        let bounds = videoView.bounds
+        guard bounds.width > 1, bounds.height > 1 else { return }
+        let scale = view.window?.screen.scale ?? videoView.contentScaleFactor
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        displayLayer.frame = videoView.bounds
+        metalLayer.frame = bounds
+        metalLayer.contentsScale = scale
+        metalLayer.drawableSize = CGSize(width: bounds.width * scale, height: bounds.height * scale)
         CATransaction.commit()
     }
 
@@ -182,68 +195,20 @@ class MPVViewController: UIViewController {
     }
 
     @objc private func onApplicationBackground() {
-        guard !isMpvStopped else { return }
-        videoRecovery.enterBackground()
+        guard !isMpvStopped, !videoDetachedForBackground else { return }
+        // Metal cannot present while backgrounded. Detach video decoding and restore it
+        // on return; pause and audio state are untouched.
+        videoDetachedForBackground = true
+        setPropertyAsync("vid", value: "no")
     }
 
     @objc private func onApplicationActive() {
         guard !isMpvStopped else { return }
-        videoRecovery.becomeActive()
         configureAudioSession()
         updateRenderingSurface()
-        recoverNativeVideoIfNeeded()
-    }
-
-    @objc private func onVideoRendererRequiresFlush() {
-        // Renderer notifications may arrive from a decoder thread.
-        DispatchQueue.main.async { [weak self] in self?.recoverNativeVideoIfNeeded() }
-    }
-
-    private func recoverNativeVideoIfNeeded() {
-        guard !isMpvStopped,
-              UIApplication.shared.applicationState == .active else { return }
-        let requiresFlush: Bool
-        let status: AVQueuedSampleBufferRenderingStatus
-        if #available(tvOS 17.0, *) {
-            requiresFlush = displayLayer.sampleBufferRenderer.requiresFlushToResumeDecoding
-            status = displayLayer.sampleBufferRenderer.status
-        } else {
-            requiresFlush = displayLayer.requiresFlushToResumeDecoding
-            status = displayLayer.status
-        }
-        guard let token = videoRecovery.begin(rendererNeedsFlush: requiresFlush || status == .failed) else { return }
-        let identity = mediaIdentity
-        #if DEBUG
-        print("[MPV video-recovery] flushing status=\(status.rawValue) requiresFlush=\(requiresFlush)")
-        #endif
-        let complete = { [weak self] in
-            DispatchQueue.main.async { [weak self] in
-                guard let self, !self.isMpvStopped,
-                      self.videoRecovery.finish(token), self.mediaIdentity == identity else { return }
-                // The VO supplies decoded pixel buffers, so continuing playback supplies
-                // fresh images after flush. A paused player needs a same-position redraw.
-                // Do not unpause, reload the URL, change tracks, or seek a live stream.
-                self.mpvQueue.async { [weak self] in
-                    guard let self, let handle = self.mpv, !self.isMpvStopped,
-                          self.mediaIdentity == identity else { return }
-                    if self.stringProperty(handle, "pause") == "yes",
-                       self.stringProperty(handle, "seekable") == "yes" {
-                        let result = self.mpvCommand(handle, ["seek", "0", "relative+exact"])
-                        #if DEBUG
-                        print("[MPV video-recovery] paused redraw status=\(result)")
-                        #endif
-                    }
-                }
-                #if DEBUG
-                print("[MPV video-recovery] flush complete; playback state preserved")
-                #endif
-            }
-        }
-        if #available(tvOS 17.0, *) {
-            displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: false, completionHandler: complete)
-        } else {
-            displayLayer.flush()
-            complete()
+        if videoDetachedForBackground {
+            videoDetachedForBackground = false
+            setPropertyAsync("vid", value: "auto")
         }
     }
 
@@ -254,6 +219,7 @@ class MPVViewController: UIViewController {
     // MARK: - MPV Initialisation
 
     private func setupMPV() {
+        guard !isMpvStopped else { return }
         // Configure the audio session BEFORE mpv initialises its audio unit. If the session is
         // still the default (non-playback) category when mpv's `ao` starts, audio is silent until
         // the route is renegotiated — the "no sound for the first ~minute" symptom.
@@ -265,16 +231,16 @@ class MPVViewController: UIViewController {
         }
         mpv = handle
 
-        // Native VO expects an AVSampleBufferDisplayLayer, retained through teardown.
-        var widVal = Int64(Int(bitPattern: Unmanaged.passUnretained(displayLayer).toOpaque()))
+        // gpu-next renders into the CAMetalLayer through MoltenVK; retained through teardown.
+        var widVal = Int64(Int(bitPattern: Unmanaged.passUnretained(metalLayer).toOpaque()))
         let windowStatus = mpv_set_option(handle, "wid", MPV_FORMAT_INT64, &widVal)
         guard windowStatus >= 0 else {
             initializationFailed(operation: "wid", code: windowStatus)
             return
         }
-        // Disable composite OSD before hwdec setup: native tvOS controls own subtitles.
-        for (name, value) in [("vo", "avfoundation"),
-                              ("avfoundation-composite-osd", "no"),
+        // Same video output as the phone. target-colorspace-hint asks libplacebo to
+        // output in the source's colorspace (PQ/HLG) once the display has switched to HDR.
+        for (name, value) in [("vo", "gpu-next"), ("gpu-api", "vulkan"), ("gpu-context", "moltenvk"),
                               ("target-colorspace-hint", "yes")] {
             let status = mpv_set_option_string(handle, name, value)
             guard status >= 0 else {
@@ -320,11 +286,10 @@ class MPVViewController: UIViewController {
         mpv_set_option_string(handle, "demuxer-readahead-secs", "30")
         mpv_set_option_string(handle, "audio-buffer", "1.0")
 
-        // The pinned 0.41.0-av tvOS library contains AudioUnit, NOT the AVFoundation
-        // audio backend available in the phone's MPVKit 1.0.0 build. Its native
-        // AVFoundation VIDEO output is independent of audio. Check option acceptance;
-        // actual output initialization is reported by current-ao and driver warnings.
-        let audioOutputStatus = mpv_set_option_string(handle, "ao", "audiounit")
+        // Prefer AVFoundation audio (as on the phone): it avoids AudioUnit's channel-layout
+        // query that fails on some HDMI routes. AudioUnit remains the fallback. Check option
+        // acceptance; actual output initialization is reported by current-ao.
+        let audioOutputStatus = mpv_set_option_string(handle, "ao", "avfoundation,audiounit")
         guard audioOutputStatus >= 0 else {
             initializationFailed(operation: "ao", code: audioOutputStatus)
             return
@@ -362,6 +327,9 @@ class MPVViewController: UIViewController {
         mpv_observe_property(handle, 0, "current-ao", MPV_FORMAT_STRING)
         // Which decoder mpv actually selected ("videotoolbox" = HW, "no"/empty = software).
         mpv_observe_property(handle, 0, "hwdec-current", MPV_FORMAT_STRING)
+        // Decoded colorimetry only exists once the first frame is out, well after
+        // FILE_LOADED, so HDR display switching waits for this instead.
+        mpv_observe_property(handle, 0, "video-params/gamma", MPV_FORMAT_STRING)
 
         // Retain self for the callback's lifetime (released in teardown()). The callback fires
         // on mpv's own thread, so self must outlive the installed callback.
@@ -465,7 +433,6 @@ class MPVViewController: UIViewController {
     private func loadFile(_ url: URL) {
         guard mpv != nil else { return }   // re-bound to the live handle inside mpvQueue below
         pendingExternalSubtitles = subtitles ?? []
-        videoRecovery.invalidate()
         timelineUpdateGate.reset()
         // Clear buffered-ahead state so a looped/next file doesn't flash the prior buffer.
         cacheAheadSec = 0
@@ -565,7 +532,6 @@ class MPVViewController: UIViewController {
     private func onFileLoaded() {
         guard let handle = mpv else { return }
 
-        detectAndApplyHDR(handle: handle)
         // Reconcile mute with current main-thread state even if preplay ended while
         // the asynchronous load was in flight. Reused cores must clear mute too.
         DispatchQueue.main.async { [weak self] in
@@ -595,10 +561,15 @@ class MPVViewController: UIViewController {
                 guard let self, !self.isMpvStopped, Date() > self.ignoreTimeUpdatesUntil,
                       self.timelineUpdateGate.shouldUpdate(at: CACurrentMediaTime()) else { return }
                 // UI progress does not need a SwiftUI redraw for every decoded frame.
-                // Keep AVFoundation's main-thread presentation work free of that churn.
                 self.playbackState.currentTime = val
                 self.playbackState.bufferedTime = val + self.cacheAheadSec
             }
+
+        case "video-params/gamma":
+            guard prop.format == MPV_FORMAT_STRING,
+                  let cString = prop.data?.assumingMemoryBound(to: UnsafePointer<CChar>?.self).pointee,
+                  let handle = mpv else { break }
+            if !String(cString: cString).isEmpty { detectAndApplyHDR(handle: handle) }
 
         case "demuxer-cache-duration":
             guard prop.format == MPV_FORMAT_DOUBLE,
@@ -700,9 +671,8 @@ class MPVViewController: UIViewController {
         }
     }
 
-    /// Enumerate tracks. MUST be called on `mpvQueue` (never the main thread): this MPVKit
-    /// build's vo=avfoundation does work on the main thread, so a synchronous mpv_* call from
-    /// main can deadlock against the video output while it holds mpv's core lock.
+    /// Enumerate tracks. MUST be called on `mpvQueue` (never the main thread): synchronous
+    /// mpv_* calls wait on mpv's core lock and would stall the UI.
     private func updateTracks() {
         dispatchPrecondition(condition: .notOnQueue(.main))
         guard let handle = mpv else { return }
@@ -806,6 +776,16 @@ class MPVViewController: UIViewController {
 
         DispatchQueue.main.async { [weak self] in
             self?.applyDisplayCriteria(mode, fps: Float(fps))
+        }
+        // HDR check: once frames flow, report what mpv decoded and what it outputs.
+        mpvQueue.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, let handle = self.mpv, !self.isMpvStopped else { return }
+            func params(_ prefix: String) -> String {
+                ["primaries", "gamma"].map { self.stringProperty(handle, "\(prefix)/\($0)") ?? "?" }
+                    .joined(separator: "/")
+            }
+            print("[MPV] video output=\(self.stringProperty(handle, "current-vo") ?? "nil") "
+                  + "source=\(params("video-params")) target=\(params("video-target-params")) display=\(mode)")
         }
     }
 
@@ -935,7 +915,7 @@ class MPVViewController: UIViewController {
 
     private func togglePlayPause() {
         // Use cached state (kept current by the "pause" property observer) instead of querying
-        // mpv synchronously — a main-thread mpv_* call can deadlock against vo=avfoundation.
+        // mpv synchronously, which would block the main thread on mpv's core lock.
         setPlaybackPaused(playbackState.isPlaying)
     }
 
@@ -1167,17 +1147,6 @@ class MPVViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(onApplicationActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
-        if #available(tvOS 17.0, *) {
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(onVideoRendererRequiresFlush),
-                name: AVSampleBufferVideoRenderer.requiresFlushToResumeDecodingDidChangeNotification,
-                object: displayLayer.sampleBufferRenderer)
-        } else {
-            NotificationCenter.default.addObserver(
-                self, selector: #selector(onVideoRendererRequiresFlush),
-                name: .AVSampleBufferDisplayLayerRequiresFlushToResumeDecodingDidChange,
-                object: displayLayer)
-        }
         NotificationCenter.default.addObserver(
             self, selector: #selector(onControlNotification(_:)),
             name: WebSocketServer.controlCommand, object: nil)
@@ -1374,7 +1343,6 @@ class MPVViewController: UIViewController {
     func teardown() {
         guard !isMpvStopped else { return }
         isMpvStopped = true
-        videoRecovery.stop()
         lateSubtitleDownloads.values.forEach { $0.cancel() }
         lateSubtitleDownloads.removeAll()
         lateSubtitleSelectionID = nil
@@ -1406,9 +1374,8 @@ class MPVViewController: UIViewController {
         mpv = nil
 
         // Serialize destruction after pending commands without blocking the main thread.
-        // AVFoundation cleanup may itself need the main thread. Keep the output layer
-        // alive until mpv has released the native window pointer.
-        let outputLayer = displayLayer
+        // Keep the output layer alive until mpv has released the native window pointer.
+        let outputLayer = metalLayer
         mpvQueue.async {
             mpv_terminate_destroy(handle)
             stagedSubtitles.forEach { try? FileManager.default.removeItem(at: $0) }
@@ -1416,14 +1383,6 @@ class MPVViewController: UIViewController {
         }
 
         resetDisplayCriteria()
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if #available(tvOS 17.0, *) {
-                self.displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
-            } else {
-                self.displayLayer.flushAndRemoveImage()
-            }
-        }
     }
 
     /// Balances the `passRetained(self)` from `setupMPV`. Called exactly once during teardown.
@@ -1431,5 +1390,13 @@ class MPVViewController: UIViewController {
         guard let ptr = callbackSelfPtr else { return }
         callbackSelfPtr = nil
         Unmanaged<MPVViewController>.fromOpaque(ptr).release()
+    }
+}
+
+/// MoltenVK can request a 1x1 drawable during presentation; keep the real viewport.
+private final class MPVMetalLayer: CAMetalLayer {
+    override var drawableSize: CGSize {
+        get { super.drawableSize }
+        set { if newValue.width > 1 && newValue.height > 1 { super.drawableSize = newValue } }
     }
 }
