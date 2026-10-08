@@ -249,8 +249,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     'wav',
   };
 
-  bool get _chromePinned =>
-      _menusOpen > 0 || _playlistDrawerOpen || _scrubbing;
+  bool get _chromePinned => _menusOpen > 0 || _playlistDrawerOpen || _scrubbing;
   bool get _playing => PlayerChromePolicy.isPlaying(_player.state);
 
   void _applyChrome({bool? playing}) {
@@ -1155,188 +1154,189 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                             () => _mainDragging = false),
                                         onDragDone: _onMainDrop,
                                         child: Stack(
-                                            fit: StackFit.expand,
-                                            children: [
-                                              // Video is always in the tree (Offstage) so
-                                              // mpv is never torn down on screen switch.
-                                              Positioned.fill(
-                                                child: Offstage(
-                                                  offstage: !_showingVideo ||
-                                                      !hasMedia ||
-                                                      screenMirroring,
-                                                  child: Container(
-                                                    color: Colors.black,
-                                                    child:
-                                                        MediaPresentationSurface(
-                                                      controller: _player,
-                                                      controlsVisible: _chromeVisible,
-                                                    ),
+                                          fit: StackFit.expand,
+                                          children: [
+                                            // Video is always in the tree (Offstage) so
+                                            // mpv is never torn down on screen switch.
+                                            Positioned.fill(
+                                              child: Offstage(
+                                                offstage: !_showingVideo ||
+                                                    !hasMedia ||
+                                                    screenMirroring,
+                                                child: Container(
+                                                  color: Colors.black,
+                                                  child:
+                                                      MediaPresentationSurface(
+                                                    controller: _player,
+                                                    controlsVisible:
+                                                        _chromeVisible,
                                                   ),
                                                 ),
                                               ),
-                                              // Tap / double-tap video (not controls).
-                                              // Below overlays so buttons/menus keep hits.
-                                              if (_showingVideo && hasMedia)
-                                                Positioned.fill(
-                                                  child: Listener(
-                                                    behavior: HitTestBehavior
-                                                        .translucent,
-                                                    onPointerDown: (event) {
-                                                      if (event.buttons !=
-                                                          kPrimaryButton) {
-                                                        return;
-                                                      }
-                                                      _onVideoSurfaceClick();
-                                                    },
-                                                  ),
+                                            ),
+                                            // Tap / double-tap video (not controls).
+                                            // Below overlays so buttons/menus keep hits.
+                                            if (_showingVideo && hasMedia)
+                                              Positioned.fill(
+                                                child: Listener(
+                                                  behavior: HitTestBehavior
+                                                      .translucent,
+                                                  onPointerDown: (event) {
+                                                    if (event.buttons !=
+                                                        kPrimaryButton) {
+                                                      return;
+                                                    }
+                                                    _onVideoSurfaceClick();
+                                                  },
                                                 ),
-                                              if (!_showingVideo &&
-                                                  !screenMirroring)
-                                                Positioned.fill(
-                                                    child: _buildScreen()),
-                                              if (screenMirroring)
-                                                Positioned.fill(
-                                                  child: ScreenMirrorSurface(
-                                                    receiver:
-                                                        _server.screenMirror,
-                                                  ),
+                                              ),
+                                            if (!_showingVideo &&
+                                                !screenMirroring)
+                                              Positioned.fill(
+                                                  child: _buildScreen()),
+                                            if (screenMirroring)
+                                              Positioned.fill(
+                                                child: ScreenMirrorSurface(
+                                                  receiver:
+                                                      _server.screenMirror,
                                                 ),
-                                              if (_showingVideo &&
-                                                  hasMedia &&
-                                                  _showStats.value &&
-                                                  _player.currentMediaKind ==
-                                                      MediaKind.video &&
-                                                  _player.engine is MpvEngine)
-                                                Positioned(
-                                                  top: 16,
-                                                  left: 16,
-                                                  child: StatsOverlay(
-                                                    engine: _player.engine
-                                                        as MpvEngine,
-                                                    player: _player,
-                                                  ),
+                                              ),
+                                            if (_showingVideo &&
+                                                hasMedia &&
+                                                _showStats.value &&
+                                                _player.currentMediaKind ==
+                                                    MediaKind.video &&
+                                                _player.engine is MpvEngine)
+                                              Positioned(
+                                                top: 16,
+                                                left: 16,
+                                                child: StatsOverlay(
+                                                  engine: _player.engine
+                                                      as MpvEngine,
+                                                  player: _player,
                                                 ),
-                                              if (_showingVideo && hasMedia)
-                                                Positioned(
-                                                  left: 0,
-                                                  right: 0,
-                                                  bottom: 0,
-                                                  child: _PlayerControlsBar(
-                                                    player: _player,
-                                                    store: widget.store,
-                                                    visible: _chromeVisible,
-                                                    showQueueControls: hasQueue,
-                                                    onTogglePlaylist: () {
-                                                      setState(() =>
-                                                          _playlistDrawerOpen =
-                                                              !_playlistDrawerOpen);
-                                                      _applyChrome();
-                                                    },
-                                                    playlistOpen:
-                                                        _playlistDrawerOpen,
-                                                    onMenuOpened: () {
-                                                      setState(
-                                                          () => _menusOpen++);
-                                                      _applyChrome();
-                                                    },
-                                                    onMenuClosed: () {
-                                                      setState(
-                                                        () => _menusOpen =
-                                                            (_menusOpen - 1)
-                                                                .clamp(0, 99),
-                                                      );
-                                                      _applyChrome();
-                                                    },
-                                                    onScrubbing: (value) {
-                                                      _scrubbing = value;
-                                                      _applyChrome();
-                                                    },
-                                                    isFullScreen: _isFullScreen,
-                                                    onToggleFullScreen:
-                                                        _toggleFullScreen,
-                                                    onToggleProxy: () async {
-                                                      final wasProxied = _player
-                                                          .isCurrentItemProxied;
-                                                      final switched =
-                                                          await _player
-                                                              .toggleProxy();
-                                                      if (switched && mounted) {
-                                                        _showOsd(wasProxied
-                                                            ? 'Direct playback'
-                                                            : 'Proxied playback');
-                                                      }
-                                                    },
-                                                  ),
+                                              ),
+                                            if (_showingVideo && hasMedia)
+                                              Positioned(
+                                                left: 0,
+                                                right: 0,
+                                                bottom: 0,
+                                                child: _PlayerControlsBar(
+                                                  player: _player,
+                                                  store: widget.store,
+                                                  visible: _chromeVisible,
+                                                  showQueueControls: hasQueue,
+                                                  onTogglePlaylist: () {
+                                                    setState(() =>
+                                                        _playlistDrawerOpen =
+                                                            !_playlistDrawerOpen);
+                                                    _applyChrome();
+                                                  },
+                                                  playlistOpen:
+                                                      _playlistDrawerOpen,
+                                                  onMenuOpened: () {
+                                                    setState(
+                                                        () => _menusOpen++);
+                                                    _applyChrome();
+                                                  },
+                                                  onMenuClosed: () {
+                                                    setState(
+                                                      () => _menusOpen =
+                                                          (_menusOpen - 1)
+                                                              .clamp(0, 99),
+                                                    );
+                                                    _applyChrome();
+                                                  },
+                                                  onScrubbing: (value) {
+                                                    _scrubbing = value;
+                                                    _applyChrome();
+                                                  },
+                                                  isFullScreen: _isFullScreen,
+                                                  onToggleFullScreen:
+                                                      _toggleFullScreen,
+                                                  onToggleProxy: () async {
+                                                    final wasProxied = _player
+                                                        .isCurrentItemProxied;
+                                                    final switched =
+                                                        await _player
+                                                            .toggleProxy();
+                                                    if (switched && mounted) {
+                                                      _showOsd(wasProxied
+                                                          ? 'Direct playback'
+                                                          : 'Proxied playback');
+                                                    }
+                                                  },
                                                 ),
-                                              if (_showingVideo &&
-                                                  hasQueue &&
-                                                  _playlistDrawerOpen)
-                                                Positioned(
-                                                  right: 0,
-                                                  top: 0,
-                                                  bottom: 0,
-                                                  width: 360,
-                                                  child: _PlaylistDrawer(
-                                                    player: _player,
-                                                    onClose: () {
-                                                      setState(() =>
-                                                          _playlistDrawerOpen =
-                                                              false);
-                                                      _applyChrome();
-                                                    },
-                                                  ),
+                                              ),
+                                            if (_showingVideo &&
+                                                hasQueue &&
+                                                _playlistDrawerOpen)
+                                              Positioned(
+                                                right: 0,
+                                                top: 0,
+                                                bottom: 0,
+                                                width: 360,
+                                                child: _PlaylistDrawer(
+                                                  player: _player,
+                                                  onClose: () {
+                                                    setState(() =>
+                                                        _playlistDrawerOpen =
+                                                            false);
+                                                    _applyChrome();
+                                                  },
                                                 ),
-                                              // Title scrim along the top — same
-                                              // visibility as the controls bar, so
-                                              // the title is reachable in fullscreen.
-                                              if (_showingVideo && hasMedia)
-                                                Positioned(
-                                                  left: 0,
-                                                  right: 0,
-                                                  top: 0,
-                                                  child: _TitleOverlay(
-                                                    player: _player,
-                                                    visible: _chromeVisible,
-                                                  ),
+                                              ),
+                                            // Title scrim along the top — same
+                                            // visibility as the controls bar, so
+                                            // the title is reachable in fullscreen.
+                                            if (_showingVideo && hasMedia)
+                                              Positioned(
+                                                left: 0,
+                                                right: 0,
+                                                top: 0,
+                                                child: _TitleOverlay(
+                                                  player: _player,
+                                                  visible: _chromeVisible,
                                                 ),
-                                              // Pre-play screen for casts with
-                                              // metadata; sits above everything.
-                                              if (_showingVideo &&
-                                                  _prePlayItem != null)
-                                                Positioned.fill(
-                                                  child: PrePlayOverlay(
-                                                    key: ValueKey(
-                                                        _prePlayItem!.url),
-                                                    item: _prePlayItem!,
-                                                    onStart: _dismissPrePlay,
-                                                  ),
+                                              ),
+                                            // Pre-play screen for casts with
+                                            // metadata; sits above everything.
+                                            if (_showingVideo &&
+                                                _prePlayItem != null)
+                                              Positioned.fill(
+                                                child: PrePlayOverlay(
+                                                  key: ValueKey(
+                                                      _prePlayItem!.url),
+                                                  item: _prePlayItem!,
+                                                  onStart: _dismissPrePlay,
                                                 ),
-                                              if (_osdMessage != null)
-                                                PlaybackOsd(
-                                                    message: _osdMessage!),
-                                              if (_mainDragging)
-                                                Positioned.fill(
-                                                  child: _MainDropOverlay(
-                                                    targetName: _sender
-                                                            .isConnected
-                                                        ? _sender.activeTv?.name
-                                                        : null,
-                                                  ),
+                                              ),
+                                            if (_osdMessage != null)
+                                              PlaybackOsd(
+                                                  message: _osdMessage!),
+                                            if (_mainDragging)
+                                              Positioned.fill(
+                                                child: _MainDropOverlay(
+                                                  targetName: _sender
+                                                          .isConnected
+                                                      ? _sender.activeTv?.name
+                                                      : null,
                                                 ),
-                                              if (_stillWatching.isPrompting)
-                                                Positioned.fill(
-                                                  child: StillWatchingPrompt(
-                                                    remainingSeconds:
-                                                        _stillWatching
-                                                            .remainingSeconds,
-                                                    title: _player.currentTitle,
-                                                    onContinue: () => unawaited(
-                                                        _stillWatching
-                                                            .continueWatching()),
-                                                  ),
+                                              ),
+                                            if (_stillWatching.isPrompting)
+                                              Positioned.fill(
+                                                child: StillWatchingPrompt(
+                                                  remainingSeconds:
+                                                      _stillWatching
+                                                          .remainingSeconds,
+                                                  title: _player.currentTitle,
+                                                  onContinue: () => unawaited(
+                                                      _stillWatching
+                                                          .continueWatching()),
                                                 ),
-                                            ],
-                                          ),
+                                              ),
+                                          ],
+                                        ),
                                       ),
                                     ),
                                   ],

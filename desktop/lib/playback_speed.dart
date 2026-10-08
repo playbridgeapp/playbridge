@@ -22,8 +22,8 @@ double nearestPlaybackSpeed(double rate) {
 double stepPlaybackSpeed(double current, int direction) {
   if (direction == 0) return nearestPlaybackSpeed(current);
   final index = _playbackSpeedIndex(current);
-  final next = (index + (direction > 0 ? 1 : -1))
-      .clamp(0, playbackSpeeds.length - 1);
+  final next =
+      (index + (direction > 0 ? 1 : -1)).clamp(0, playbackSpeeds.length - 1);
   return playbackSpeeds[next];
 }
 
