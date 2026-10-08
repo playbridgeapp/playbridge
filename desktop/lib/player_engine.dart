@@ -212,6 +212,12 @@ abstract class PlayerEngine extends ChangeNotifier {
   /// Apply [rate]. Engines that cannot change speed ignore this.
   Future<void> setPlaybackRate(double rate) async {}
 
+  /// Fit / Zoom / Fill. Engines that cannot scale ignore this.
+  Future<void> setVideoScaling(String mode) async {}
+
+  /// Subtitle cue offset in milliseconds. Engines that cannot delay ignore this.
+  Future<void> setSubtitleDelayMs(int delayMs) async {}
+
   /// Engine-agnostic track lists for the phone remote. Default: none.
   List<TrackInfo> get audioTrackInfos => const [];
   List<TrackInfo> get subtitleTrackInfos => const [];

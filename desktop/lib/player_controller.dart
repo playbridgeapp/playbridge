@@ -6,6 +6,8 @@ import 'package:uuid/uuid.dart';
 import 'media_kind.dart';
 import 'playback_speed.dart';
 import 'player_engine.dart';
+import 'subtitle_delay.dart';
+import 'video_scaling.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
 import 'engines/playback_request_preparer.dart';
@@ -130,6 +132,7 @@ class PlayerController extends ChangeNotifier {
         await _engine.seek(currentPos);
       }
       await _engine.setPlaybackRate(_playbackRate);
+      await _applyPictureSettings();
 
       if (!wasPlaying) {
         await _engine.pause();
@@ -247,6 +250,53 @@ class PlayerController extends ChangeNotifier {
   /// New items always start at 1x. Reloads of the same item keep [playbackRate].
   Future<void> _resetPlaybackRateForNewMedia() => setPlaybackRate(1.0);
 
+  VideoScalingMode _videoScaling = VideoScalingMode.fit;
+  int _subtitleDelayMs = 0;
+
+  VideoScalingMode get videoScaling => _videoScaling;
+  int get subtitleDelayMs => _subtitleDelayMs;
+
+  /// True when a real subtitle track (not Off) is selected.
+  bool get subtitleActive {
+    try {
+      final id = track.subtitle.id;
+      return id is String && id.isNotEmpty && id != 'no' && id != 'auto';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> setVideoScaling(VideoScalingMode mode) async {
+    final changed = mode != _videoScaling;
+    _videoScaling = mode;
+    if (changed) notifyListeners();
+    await _engine.setVideoScaling(videoScalingId(mode));
+  }
+
+  Future<void> cycleVideoScaling() =>
+      setVideoScaling(nextVideoScalingMode(_videoScaling));
+
+  Future<void> _resetVideoScalingForNewMedia() =>
+      setVideoScaling(VideoScalingMode.fit);
+
+  Future<void> _applyPictureSettings() async {
+    await _engine.setVideoScaling(videoScalingId(_videoScaling));
+    await _engine.setSubtitleDelayMs(_subtitleDelayMs);
+  }
+
+  Future<void> setSubtitleDelayMs(int delayMs) async {
+    final clamped = clampSubtitleDelayMs(delayMs);
+    final changed = clamped != _subtitleDelayMs;
+    _subtitleDelayMs = clamped;
+    if (changed) notifyListeners();
+    await _engine.setSubtitleDelayMs(clamped);
+  }
+
+  Future<void> adjustSubtitleDelayMs(int deltaMs) =>
+      setSubtitleDelayMs(_subtitleDelayMs + deltaMs);
+
+  Future<void> resetSubtitleDelay() => setSubtitleDelayMs(0);
+
   dynamic get tracks => _engine.tracks;
   dynamic get track => _engine.track;
   Future<void> setAudioTrack(dynamic t) => _engine.setAudioTrack(t);
@@ -343,6 +393,7 @@ class PlayerController extends ChangeNotifier {
     }
     notifyListeners();
     try {
+      await _resetVideoScalingForNewMedia();
       await _openCurrentItem();
     } finally {
       _opening = false;
@@ -777,6 +828,7 @@ class PlayerController extends ChangeNotifier {
         );
         await _engine.setVolume(currentVolume);
         await _engine.setPlaybackRate(_playbackRate);
+        await _applyPictureSettings();
 
         var retries = 0;
         while (_engine.durationMs <= 0 && retries < 40) {
@@ -861,6 +913,7 @@ class PlayerController extends ChangeNotifier {
     _queue[_currentIndex] = preparedItem;
     await _engine.open(preparedItem);
     await _engine.setPlaybackRate(_playbackRate);
+    await _applyPictureSettings();
   }
 
   /// Seamlessly switches the current item between direct ↔ proxied playback.
@@ -1041,6 +1094,7 @@ class PlayerController extends ChangeNotifier {
         play: wasPlaying,
       );
       await _engine.setPlaybackRate(_playbackRate);
+      await _applyPictureSettings();
     } catch (error) {
       if (_currentIndex == itemIndex &&
           identical(_queue[itemIndex], replacement)) {
@@ -1053,6 +1107,7 @@ class PlayerController extends ChangeNotifier {
             play: wasPlaying,
           );
           await _engine.setPlaybackRate(_playbackRate);
+          await _applyPictureSettings();
           if (currentPos > 0) {
             await _engine.seek(Duration(milliseconds: currentPos));
           }

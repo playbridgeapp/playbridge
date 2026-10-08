@@ -30,6 +30,8 @@ import 'pairing_store.dart';
 import 'pair_screen.dart';
 import 'playback_osd.dart';
 import 'playback_speed.dart';
+import 'subtitle_delay.dart';
+import 'video_scaling.dart';
 import 'player_chrome_policy.dart';
 import 'player_control_visibility.dart';
 import 'player_controller.dart';
@@ -150,6 +152,18 @@ class SpeedDownIntent extends Intent {
 
 class SpeedUpIntent extends Intent {
   const SpeedUpIntent();
+}
+
+class CycleScalingIntent extends Intent {
+  const CycleScalingIntent();
+}
+
+class SubtitleDelayMinusIntent extends Intent {
+  const SubtitleDelayMinusIntent();
+}
+
+class SubtitleDelayPlusIntent extends Intent {
+  const SubtitleDelayPlusIntent();
 }
 
 class StatsToggleIntent extends Intent {
@@ -788,6 +802,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showOsd('Volume ${(next * 100).round()}%');
   }
 
+  void _cycleVideoScaling() {
+    if (_player.currentMediaKind != MediaKind.video) return;
+    final next = nextVideoScalingMode(_player.videoScaling);
+    unawaited(_player.setVideoScaling(next));
+    _showOsd(videoScalingLabel(next));
+  }
+
+  void _nudgeSubtitleDelay(int deltaMs) {
+    if (!_player.subtitleActive) return;
+    final next = clampSubtitleDelayMs(_player.subtitleDelayMs + deltaMs);
+    unawaited(_player.setSubtitleDelayMs(next));
+    _showOsd(subtitleDelayLabel(next));
+  }
+
   void _stepPlaybackSpeed(int direction) {
     final kind = _player.currentMediaKind;
     if (_player.queue.isEmpty || kind == null || kind == MediaKind.image) {
@@ -956,6 +984,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const SpeedDownIntent(),
             const SingleActivator(LogicalKeyboardKey.bracketRight):
                 const SpeedUpIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyZ):
+                const CycleScalingIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyG):
+                const SubtitleDelayMinusIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyH):
+                const SubtitleDelayPlusIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
@@ -1007,6 +1041,25 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               SpeedUpIntent: CallbackAction<SpeedUpIntent>(
                 onInvoke: (_) {
                   _stepPlaybackSpeed(1);
+                  return null;
+                },
+              ),
+              CycleScalingIntent: CallbackAction<CycleScalingIntent>(
+                onInvoke: (_) {
+                  _cycleVideoScaling();
+                  return null;
+                },
+              ),
+              SubtitleDelayMinusIntent:
+                  CallbackAction<SubtitleDelayMinusIntent>(
+                onInvoke: (_) {
+                  _nudgeSubtitleDelay(-subtitleDelayFineMs);
+                  return null;
+                },
+              ),
+              SubtitleDelayPlusIntent: CallbackAction<SubtitleDelayPlusIntent>(
+                onInvoke: (_) {
+                  _nudgeSubtitleDelay(subtitleDelayFineMs);
                   return null;
                 },
               ),
@@ -2049,6 +2102,12 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                                 ),
                               ),
                             ),
+                          if (vis.playbackSettings)
+                            _PlaybackSettingsButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
                         ],
                         if (vis.proxyToggle)
                           IconButton(
@@ -2476,6 +2535,198 @@ class _SpeedMenuButton extends StatelessWidget {
             child: Text(playbackSpeedLabel(rate)),
           ),
       ],
+    );
+  }
+}
+
+// ─── Playback settings (scaling + subtitle delay) ─────────────────────────────
+
+class _PlaybackSettingsButton extends StatelessWidget {
+  const _PlaybackSettingsButton({
+    required this.player,
+    required this.onOpened,
+    required this.onClosed,
+  });
+
+  final PlayerController player;
+  final VoidCallback onOpened;
+  final VoidCallback onClosed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Picture & subtitle sync',
+      icon: const Icon(Icons.tune),
+      onPressed: () async {
+        onOpened();
+        await showDialog<void>(
+          context: context,
+          barrierColor: Colors.black54,
+          builder: (ctx) => _PlaybackSettingsDialog(player: player),
+        );
+        onClosed();
+      },
+    );
+  }
+}
+
+class _PlaybackSettingsDialog extends StatelessWidget {
+  const _PlaybackSettingsDialog({required this.player});
+
+  final PlayerController player;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: player,
+      builder: (context, _) {
+        final scaling = player.videoScaling;
+        final delay = player.subtitleDelayMs;
+        final subOn = player.subtitleActive;
+        return Dialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.tune, size: 18, color: Colors.white54),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Playback settings',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                    ],
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4, bottom: 8),
+                    child: Text(
+                      'Picture',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white54,
+                      ),
+                    ),
+                  ),
+                  for (final mode in videoScalingModes)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        scaling == mode
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        size: 18,
+                        color: scaling == mode ? Colors.tealAccent : null,
+                      ),
+                      title: Text(videoScalingLabel(mode)),
+                      subtitle: Text(
+                        videoScalingDescription(mode),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.white54,
+                        ),
+                      ),
+                      onTap: () => unawaited(player.setVideoScaling(mode)),
+                    ),
+                  if (subOn) ...[
+                    const Padding(
+                      padding: EdgeInsets.only(top: 12, bottom: 8),
+                      child: Text(
+                        'Subtitle delay',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white54,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      subtitleDelayLabel(delay),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: delay == 0 ? Colors.white : Colors.tealAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player
+                                  .adjustSubtitleDelayMs(-subtitleDelayFineMs),
+                            ),
+                            child: const Text('−100ms'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player.adjustSubtitleDelayMs(subtitleDelayFineMs),
+                            ),
+                            child: const Text('+100ms'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player.adjustSubtitleDelayMs(
+                                  -subtitleDelayCoarseMs),
+                            ),
+                            child: const Text('−1s'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player
+                                  .adjustSubtitleDelayMs(subtitleDelayCoarseMs),
+                            ),
+                            child: const Text('+1s'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (delay != 0)
+                      TextButton(
+                        onPressed: () => unawaited(player.resetSubtitleDelay()),
+                        child: const Text('Reset'),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

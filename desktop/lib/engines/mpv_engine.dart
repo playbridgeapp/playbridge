@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import '../stream_proxy_server.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
+import '../subtitle_delay.dart';
+import '../video_scaling.dart';
 import 'hls_master_resolver.dart';
 import 'playlist_materializer.dart';
 
@@ -170,6 +172,50 @@ class MpvEngine extends PlayerEngine {
 
   @override
   Future<void> setPlaybackRate(double rate) => player.setRate(rate);
+
+  VideoScalingMode _videoScaling = VideoScalingMode.fit;
+  int _subtitleDelayMs = 0;
+
+  @override
+  Future<void> setVideoScaling(String mode) async {
+    _videoScaling = parseVideoScalingMode(mode);
+    await _applyVideoScaling();
+  }
+
+  @override
+  Future<void> setSubtitleDelayMs(int delayMs) async {
+    _subtitleDelayMs = clampSubtitleDelayMs(delayMs);
+    await _applySubtitleDelay();
+  }
+
+  Future<void> _applyVideoScaling() async {
+    final native = player.platform;
+    if (native is! NativePlayer) return;
+    final props = videoScalingProperties(_videoScaling);
+    try {
+      await native.setProperty('video-aspect-method', 'container');
+      await native.setProperty('video-unscaled', 'no');
+      await native.setProperty('keepaspect', props.keepaspect);
+      await native.setProperty(
+          'video-aspect-override', props.videoAspectOverride);
+      await native.setProperty('panscan', props.panscan);
+    } catch (e) {
+      debugPrint('[mpv] video scaling failed: $e');
+    }
+  }
+
+  Future<void> _applySubtitleDelay() async {
+    final native = player.platform;
+    if (native is! NativePlayer) return;
+    try {
+      await native.setProperty(
+        'sub-delay',
+        subtitleDelayMpvSeconds(_subtitleDelayMs),
+      );
+    } catch (e) {
+      debugPrint('[mpv] subtitle delay failed: $e');
+    }
+  }
 
   @override
   Tracks get tracks => player.state.tracks;
@@ -446,6 +492,8 @@ class MpvEngine extends PlayerEngine {
     _playingSince = null;
     if (play) await player.play();
     unawaited(_reapplyTrackPrefs());
+    unawaited(_applyVideoScaling());
+    unawaited(_applySubtitleDelay());
   }
 
   @override
