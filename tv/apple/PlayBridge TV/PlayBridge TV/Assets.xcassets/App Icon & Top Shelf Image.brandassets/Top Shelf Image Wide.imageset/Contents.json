@@ -7,7 +7,8 @@
     },
     {
       "idiom" : "tv",
-      "scale" : "2x"
+      "scale" : "2x",
+      "filename" : "banner_wide@2x.png"
     }
   ],
   "info" : {

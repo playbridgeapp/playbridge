@@ -8,6 +8,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **MPV uses standard LGPL MPVKit 1.0.0** (same as the phone) instead of the GPL `mpv-ios/MPVKit` 0.41.0-av fork: `gpu-next` video, AVFoundation audio. The local AudioUnit patch is removed.
 - **No more CocoaPods**: SwiftProtobuf comes from Swift Package Manager; open `PlayBridge TV.xcodeproj`.
 - Settings has an **About** section with the privacy policy address and app version.
+- Minimum tvOS lowered from 26.4 to 17.0.
+- Added @2x Top Shelf images for Apple TV 4K.
 
 ### Fixed
 - MPV now switches the display to HDR10/HLG for HDR files; previously the mode was chosen before mpv knew the colorimetry, so HDR played in SDR mode.

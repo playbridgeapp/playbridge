@@ -152,7 +152,7 @@ The following items cannot be confirmed from source code and must be completed i
 - Complete the Content Rights declaration accurately.
 - Confirm EU Digital Services Act trader status if distributing in the EU.
 - Complete export-compliance questions.
-- Add review notes, test content, and any receiver setup required to exercise the app. Include the background keep-alive and website-bridge explanations from High-risk App Review areas.
+- Add review notes, test content, and any receiver setup required to exercise the app. Include the background keep-alive and website-bridge explanations from High-risk App Review areas. Draft text for the review notes, the multicast entitlement request, App Privacy and export compliance is in [`app-store-submission-drafts.md`](app-store-submission-drafts.md).
 - Upload a distribution-signed archive and run App Store validation.
 
 ### Export compliance
