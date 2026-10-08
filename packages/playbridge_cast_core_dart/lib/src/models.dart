@@ -188,6 +188,7 @@ final class PlaybackStatus {
   });
 
   final PlaybackState state;
+
   /// A fresh volume capability, if supplied by the native status response.
   final bool? volumeSupported;
   final Duration position;
