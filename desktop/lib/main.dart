@@ -219,6 +219,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   /// longer listens to the player directly (see build), so real transitions
   /// (queue, state, index) trigger a setState here instead.
   (bool, int, String, int)? _lastCoarse;
+  bool? _lastChromePlaying;
+  // (playbackId, index) whose first frame has played; chrome stays up before.
+  (String?, int)? _startedItem;
+  // Playback state before the first click of a possible double-click.
+  bool? _clickWasPlaying;
+  bool _fullScreenOnRelease = false;
 
   // Pre-play screen state: the item being introduced, and the volume to
   // restore once playback starts (video buffers muted behind the overlay).
@@ -277,12 +283,15 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool get _chromePinned => _menusOpen > 0 || _playlistDrawerOpen || _scrubbing;
   bool get _playing => PlayerChromePolicy.isPlaying(_player.state);
+  (String?, int) get _currentItem => (_player.playbackId, _player.currentIndex);
+  bool get _started => _startedItem == _currentItem;
 
   void _applyChrome({bool? playing}) {
     if (!mounted) return;
     final visible = PlayerChromePolicy.resolve(
       playing: playing ?? _playing,
       pinned: _chromePinned,
+      started: _started,
     ).visible;
     if (visible != _chromeVisible) {
       setState(() => _chromeVisible = visible);
@@ -639,12 +648,19 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       _player.state,
       _player.currentIndex,
     );
+    if (hasMedia &&
+        !_started &&
+        _player.state == 'playing' &&
+        !_player.isOpening) {
+      _startedItem = _currentItem;
+    }
+    final chromePlaying = _playing && _started;
+    if (chromePlaying != _lastChromePlaying) {
+      _lastChromePlaying = chromePlaying;
+      _applyChrome();
+    }
     if (coarse != _lastCoarse) {
-      final playingChanged = _lastCoarse == null ||
-          PlayerChromePolicy.isPlaying(_lastCoarse!.$3) !=
-              PlayerChromePolicy.isPlaying(coarse.$3);
       _lastCoarse = coarse;
-      if (playingChanged) _applyChrome();
       if (mounted) setState(() {});
     }
 
@@ -844,12 +860,27 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   void _onVideoSurfaceClick() {
     if (_surfaceClick.isDouble(DateTime.now())) {
-      _togglePlayPause(withOsd: false);
-      final entering = !_isFullScreen;
-      unawaited(_toggleFullScreen());
-      _showOsd(entering ? 'Fullscreen' : 'Windowed');
+      // Restore the pre-click state explicitly: the engine may not have
+      // reported the first click's pause yet, so toggling again could pause
+      // twice.
+      final wasPlaying = _clickWasPlaying;
+      _clickWasPlaying = null;
+      if (wasPlaying == true) {
+        unawaited(_player.resume());
+        _applyChrome(playing: true);
+      } else if (wasPlaying == false) {
+        unawaited(_player.pause());
+        _applyChrome(playing: false);
+      }
+      // Toggle on release: the fullscreen animation would swallow this
+      // click's mouse-up, leaving Flutter thinking the button is still held
+      // and dropping the next click.
+      _fullScreenOnRelease = true;
       return;
     }
+    final state = _player.state;
+    _clickWasPlaying =
+        state == 'paused' ? false : PlayerChromePolicy.isPlaying(state);
     _togglePlayPause();
   }
 
@@ -1330,6 +1361,23 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     }
                                                     _onVideoSurfaceClick();
                                                   },
+                                                  onPointerUp: (_) {
+                                                    if (!_fullScreenOnRelease) {
+                                                      return;
+                                                    }
+                                                    _fullScreenOnRelease =
+                                                        false;
+                                                    final entering =
+                                                        !_isFullScreen;
+                                                    unawaited(
+                                                        _toggleFullScreen());
+                                                    _showOsd(entering
+                                                        ? 'Fullscreen'
+                                                        : 'Windowed');
+                                                  },
+                                                  onPointerCancel: (_) =>
+                                                      _fullScreenOnRelease =
+                                                          false,
                                                 ),
                                               ),
                                             if (!_showingVideo &&

@@ -1,5 +1,7 @@
 /// Show/hide rules for the desktop player chrome, matching Android TV:
 /// visible only while paused or pinned; playing hides it immediately.
+/// Until the first frame plays (opening / initial buffering) it stays up so
+/// a stalled start never leaves the user without controls.
 class PlayerChromePolicy {
   const PlayerChromePolicy({required this.visible});
 
@@ -14,6 +16,7 @@ class PlayerChromePolicy {
   static PlayerChromePolicy resolve({
     required bool playing,
     required bool pinned,
+    bool started = true,
   }) =>
-      PlayerChromePolicy(visible: pinned || !playing);
+      PlayerChromePolicy(visible: pinned || !started || !playing);
 }
