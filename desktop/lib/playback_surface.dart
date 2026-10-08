@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'player_controller.dart';
 import 'engines/mpv_engine.dart';
+import 'video_scaling.dart';
 
 const _kSubtitleBottomDefault = 24.0;
 const _kSubtitleBottomWithControls = 138.0; // clears ~114px controls bar
@@ -21,6 +22,7 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
   VideoController? _mpvVideo;
   MpvEngine? _boundEngine;
   late bool _mask;
+  late VideoScalingMode _scaling;
 
   bool get _shouldMask =>
       widget.controller.queue.isEmpty || widget.controller.isOpening;
@@ -29,6 +31,7 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
   void initState() {
     super.initState();
     _mask = _shouldMask;
+    _scaling = widget.controller.videoScaling;
     _initMpv();
     widget.controller.addListener(_onControllerChange);
   }
@@ -39,8 +42,12 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
     // texture for those ticks disrupts frame presentation on Linux, so rebuild
     // only when the stale-frame mask actually needs to change.
     final nextMask = _shouldMask;
-    if (mounted && nextMask != _mask) {
-      setState(() => _mask = nextMask);
+    final nextScaling = widget.controller.videoScaling;
+    if (mounted && (nextMask != _mask || nextScaling != _scaling)) {
+      setState(() {
+        _mask = nextMask;
+        _scaling = nextScaling;
+      });
     }
   }
 
@@ -85,6 +92,7 @@ class _PlaybackSurfaceState extends State<PlaybackSurface> {
           duration: const Duration(milliseconds: 150),
           builder: (context, bottomPad, _) => Video(
             controller: _mpvVideo!,
+            fit: videoScalingBoxFit(_scaling),
             controls: NoVideoControls,
             subtitleViewConfiguration: SubtitleViewConfiguration(
               padding: EdgeInsets.fromLTRB(16, 0, 16, bottomPad),

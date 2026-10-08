@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../stream_proxy_server.dart';
 import 'package:media_kit/media_kit.dart';
 import '../player_engine.dart';
+import '../subtitle_delay.dart';
 import 'hls_master_resolver.dart';
 import 'playlist_materializer.dart';
 
@@ -171,6 +172,27 @@ class MpvEngine extends PlayerEngine {
   @override
   Future<void> setPlaybackRate(double rate) => player.setRate(rate);
 
+  int _subtitleDelayMs = 0;
+
+  @override
+  Future<void> setSubtitleDelayMs(int delayMs) async {
+    _subtitleDelayMs = clampSubtitleDelayMs(delayMs);
+    await _applySubtitleDelay();
+  }
+
+  Future<void> _applySubtitleDelay() async {
+    final native = player.platform;
+    if (native is! NativePlayer) return;
+    try {
+      await native.setProperty(
+        'sub-delay',
+        subtitleDelayMpvSeconds(_subtitleDelayMs),
+      );
+    } catch (e) {
+      debugPrint('[mpv] subtitle delay failed: $e');
+    }
+  }
+
   @override
   Tracks get tracks => player.state.tracks;
   @override
@@ -186,6 +208,17 @@ class MpvEngine extends PlayerEngine {
   String? _preferredAudioLang;
   String? _preferredSubLang;
   bool _subsOff = false;
+
+  /// Restore persisted language prefs before the next item enumerates tracks.
+  void seedTrackPrefs({
+    String? audioLang,
+    String? subLang,
+    bool subsOff = false,
+  }) {
+    _preferredAudioLang = audioLang;
+    _preferredSubLang = subLang;
+    _subsOff = subsOff;
+  }
 
   @override
   Future<void> setAudioTrack(dynamic t) async {
@@ -446,6 +479,7 @@ class MpvEngine extends PlayerEngine {
     _playingSince = null;
     if (play) await player.play();
     unawaited(_reapplyTrackPrefs());
+    unawaited(_applySubtitleDelay());
   }
 
   @override

@@ -28,9 +28,13 @@ import 'native_host_installer.dart';
 import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
+import 'playback_clock.dart';
 import 'playback_osd.dart';
 import 'playback_speed.dart';
+import 'subtitle_delay.dart';
+import 'video_scaling.dart';
 import 'player_chrome_policy.dart';
+import 'player_control_visibility.dart';
 import 'player_controller.dart';
 import 'player_surface_click.dart';
 import 'player_engine.dart';
@@ -39,6 +43,8 @@ import 'send_to_tv_screen.dart';
 import 'receiver_server.dart';
 import 'screen_mirror_surface.dart';
 import 'settings_screen.dart';
+import 'skip_segment.dart';
+import 'skip_segment_fetcher.dart';
 import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
 import 'engines/tv_cast_media_preparer.dart';
@@ -151,6 +157,18 @@ class SpeedUpIntent extends Intent {
   const SpeedUpIntent();
 }
 
+class CycleScalingIntent extends Intent {
+  const CycleScalingIntent();
+}
+
+class SubtitleDelayMinusIntent extends Intent {
+  const SubtitleDelayMinusIntent();
+}
+
+class SubtitleDelayPlusIntent extends Intent {
+  const SubtitleDelayPlusIntent();
+}
+
 class StatsToggleIntent extends Intent {
   const StatsToggleIntent();
 }
@@ -232,6 +250,14 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool _mainDragging = false;
 
+  final _skipFetcher = SkipSegmentFetcher();
+  List<SkipSegment> _skipSegments = const [];
+  SkipSegment? _lastSkipped;
+  String? _skipItemKey;
+  int _skipFetchGen = 0;
+  int _seekRepeatCount = 0;
+  LogicalKeyboardKey? _seekRepeatKey;
+
   static const _mediaExts = {
     'mp4',
     'm4v',
@@ -261,6 +287,60 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (visible != _chromeVisible) {
       setState(() => _chromeVisible = visible);
     }
+  }
+
+  SkipAutoPrefs get _skipAutoPrefs => SkipAutoPrefs(
+        intro: widget.store.autoSkipIntro,
+        recap: widget.store.autoSkipRecap,
+        outro: widget.store.autoSkipOutro,
+      );
+
+  void _syncSkipSegments() {
+    QueueItem? item;
+    if (_player.queue.isNotEmpty &&
+        _player.currentIndex >= 0 &&
+        _player.currentIndex < _player.queue.length) {
+      item = _player.queue[_player.currentIndex];
+    }
+    final key = item == null
+        ? null
+        : '${item.imdbId}|${item.tmdbId}|${item.season}|${item.episode}|${item.url}';
+    if (key == _skipItemKey) return;
+    _skipItemKey = key;
+    _lastSkipped = null;
+    _skipSegments = const [];
+    if (item == null ||
+        !skipFetchAllowed(
+          imdbId: item.imdbId,
+          tmdbId: item.tmdbId,
+          season: item.season,
+          episode: item.episode,
+        )) {
+      return;
+    }
+    final gen = ++_skipFetchGen;
+    unawaited(_skipFetcher
+        .fetch(
+      provider: widget.store.skipSegmentsProvider,
+      imdbId: item.imdbId,
+      tmdbId: item.tmdbId,
+      season: item.season,
+      episode: item.episode,
+      introDbApiKey: widget.store.introDbApiKey,
+    )
+        .then((segments) {
+      if (!mounted || gen != _skipFetchGen) return;
+      setState(() => _skipSegments = segments);
+    }));
+  }
+
+  void _performSkip(SkipSegment segment) {
+    if (_lastSkipped == segment) return;
+    _lastSkipped = segment;
+    final target = skipTargetMs(segment, _player.durationMs);
+    unawaited(_player.seek(Duration(milliseconds: target)));
+    _showOsd(skipButtonLabel(segment.type));
+    setState(() {});
   }
 
   @override
@@ -549,6 +629,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
 
     _hadMedia = hasMedia;
+    _syncSkipSegments();
 
     // Coarse shell rebuild on real transitions only (the root builder doesn't
     // listen to the player; per-frame position ticks stay out of the shell).
@@ -787,6 +868,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     _showOsd('Volume ${(next * 100).round()}%');
   }
 
+  void _cycleVideoScaling() {
+    if (_player.currentMediaKind != MediaKind.video) return;
+    final next = nextVideoScalingMode(_player.videoScaling);
+    unawaited(_player.setVideoScaling(next));
+    _showOsd(videoScalingLabel(next));
+  }
+
+  void _nudgeSubtitleDelay(int deltaMs) {
+    if (!_player.subtitleActive) return;
+    final next = clampSubtitleDelayMs(_player.subtitleDelayMs + deltaMs);
+    unawaited(_player.setSubtitleDelayMs(next));
+    _showOsd(subtitleDelayLabel(next));
+  }
+
   void _stepPlaybackSpeed(int direction) {
     final kind = _player.currentMediaKind;
     if (_player.queue.isEmpty || kind == null || kind == MediaKind.image) {
@@ -942,10 +1037,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
           shortcuts: {
             const SingleActivator(LogicalKeyboardKey.space):
                 const PlayPauseIntent(),
-            const SingleActivator(LogicalKeyboardKey.arrowRight):
-                const SeekForwardIntent(),
-            const SingleActivator(LogicalKeyboardKey.arrowLeft):
-                const SeekBackwardIntent(),
+
             const SingleActivator(LogicalKeyboardKey.arrowUp):
                 const VolumeUpIntent(),
             const SingleActivator(LogicalKeyboardKey.arrowDown):
@@ -955,6 +1047,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const SpeedDownIntent(),
             const SingleActivator(LogicalKeyboardKey.bracketRight):
                 const SpeedUpIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyZ):
+                const CycleScalingIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyG):
+                const SubtitleDelayMinusIntent(),
+            const SingleActivator(LogicalKeyboardKey.keyH):
+                const SubtitleDelayPlusIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
@@ -1009,6 +1107,25 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                   return null;
                 },
               ),
+              CycleScalingIntent: CallbackAction<CycleScalingIntent>(
+                onInvoke: (_) {
+                  _cycleVideoScaling();
+                  return null;
+                },
+              ),
+              SubtitleDelayMinusIntent:
+                  CallbackAction<SubtitleDelayMinusIntent>(
+                onInvoke: (_) {
+                  _nudgeSubtitleDelay(-subtitleDelayFineMs);
+                  return null;
+                },
+              ),
+              SubtitleDelayPlusIntent: CallbackAction<SubtitleDelayPlusIntent>(
+                onInvoke: (_) {
+                  _nudgeSubtitleDelay(subtitleDelayFineMs);
+                  return null;
+                },
+              ),
               StatsToggleIntent: CallbackAction<StatsToggleIntent>(
                 onInvoke: (_) {
                   _showStats.value = !_showStats.value;
@@ -1034,6 +1151,31 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               onKeyEvent: (_, event) {
                 if (event is KeyDownEvent && !_stillWatching.isPrompting) {
                   _stillWatching.recordUserActivity();
+                }
+                final left = event.logicalKey == LogicalKeyboardKey.arrowLeft;
+                final right = event.logicalKey == LogicalKeyboardKey.arrowRight;
+                if (left || right) {
+                  if (event is KeyUpEvent) {
+                    _seekRepeatCount = 0;
+                    _seekRepeatKey = null;
+                    return KeyEventResult.ignored;
+                  }
+                  if (event is KeyDownEvent || event is KeyRepeatEvent) {
+                    if (event is KeyDownEvent ||
+                        _seekRepeatKey != event.logicalKey) {
+                      _seekRepeatCount = 0;
+                      _seekRepeatKey = event.logicalKey;
+                    } else {
+                      _seekRepeatCount++;
+                    }
+                    final step = seekStepMs(_seekRepeatCount);
+                    final label = step >= 50000 ? '50s' : '10s';
+                    _seekBy(
+                      left ? -step : step,
+                      osd: left ? '≪ $label' : '≫ $label',
+                    );
+                    return KeyEventResult.handled;
+                  }
                 }
                 return KeyEventResult.ignored;
               },
@@ -1297,6 +1439,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                 child: _TitleOverlay(
                                                   player: _player,
                                                   visible: _chromeVisible,
+                                                ),
+                                              ),
+                                            if (_showingVideo &&
+                                                hasMedia &&
+                                                _prePlayItem == null)
+                                              Positioned(
+                                                right: 24,
+                                                bottom: 120,
+                                                child: _SkipSegmentButton(
+                                                  player: _player,
+                                                  segments: _skipSegments,
+                                                  lastSkipped: _lastSkipped,
+                                                  autoPrefs: _skipAutoPrefs,
+                                                  onSkip: _performSkip,
                                                 ),
                                               ),
                                             // Pre-play screen for casts with
@@ -1744,6 +1900,60 @@ class _StatusBar extends StatelessWidget {
   }
 }
 
+class _SkipSegmentButton extends StatelessWidget {
+  const _SkipSegmentButton({
+    required this.player,
+    required this.segments,
+    required this.lastSkipped,
+    required this.autoPrefs,
+    required this.onSkip,
+  });
+
+  final PlayerController player;
+  final List<SkipSegment> segments;
+  final SkipSegment? lastSkipped;
+  final SkipAutoPrefs autoPrefs;
+  final ValueChanged<SkipSegment> onSkip;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: player,
+      builder: (context, _) {
+        final active = activeSkipSegment(
+          segments: segments,
+          positionMs: player.positionMs,
+          lastSkipped: lastSkipped,
+        );
+        if (active == null) return const SizedBox.shrink();
+        if (autoPrefs.enabledFor(active.type)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => onSkip(active));
+          return const SizedBox.shrink();
+        }
+        return Material(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(6),
+          child: InkWell(
+            onTap: () => onSkip(active),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Text(
+                skipButtonLabel(active.type),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 // ─── Player controls bar ─────────────────────────────────────────────────────
 
 /// Auto-hiding title scrim along the top of the video — mirrors the controls
@@ -1877,6 +2087,15 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     final keepCompactMusicProgress = mediaKind == MediaKind.audio;
     final barVisible = widget.visible || keepCompactMusicProgress;
     final showExpandedControls = widget.visible;
+    final vis = PlayerControlVisibility.resolve(
+      realAudioCount: realTrackCount(p.tracks.audio),
+      realSubtitleCount: realTrackCount(p.tracks.subtitle),
+      queueLength: p.queue.length,
+      isLinux: Platform.isLinux,
+      hasMedia: hasMedia,
+      isVideo: mediaKind == MediaKind.video,
+      isImage: isImage,
+    );
 
     return IgnorePointer(
       ignoring: !barVisible,
@@ -1952,7 +2171,7 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         SizedBox(
                           width: 56,
                           child: Text(
-                            _fmt(Duration(milliseconds: p.durationMs)),
+                            formatRemainingClock(pos.toInt(), p.durationMs),
                             style: const TextStyle(
                                 fontSize: 12, color: Colors.white70),
                           ),
@@ -2002,29 +2221,31 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         const Spacer(),
                         if (p.engineType == EngineType.mpvInternal &&
                             !isImage) ...[
-                          if (Platform.isLinux && mediaKind == MediaKind.video)
+                          if (vis.videoRenderer)
                             _VideoOutputMenuButton(
                               player: p,
                               onOpened: widget.onMenuOpened,
                               onClosed: widget.onMenuClosed,
                             ),
-                          _AudioMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
-                          if (mediaKind == MediaKind.video)
+                          if (vis.audioMenu)
+                            _AudioMenuButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
+                          if (vis.subtitleMenu)
                             _SubtitleMenuButton(
                               player: p,
                               onOpened: widget.onMenuOpened,
                               onClosed: widget.onMenuClosed,
                             ),
-                          _SpeedMenuButton(
-                            player: p,
-                            enabled: hasMedia,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
+                          if (vis.speedMenu)
+                            _SpeedMenuButton(
+                              player: p,
+                              enabled: hasMedia,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
                           if ((p.playbackRate - 1.0).abs() > 0.001)
                             Padding(
                               padding: const EdgeInsets.only(right: 4),
@@ -2037,24 +2258,30 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                                 ),
                               ),
                             ),
+                          if (vis.playbackSettings)
+                            _PlaybackSettingsButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
                         ],
-                        IconButton(
-                          tooltip: p.isCurrentItemProxied
-                              ? 'Switch to direct playback'
-                              : 'Route through proxy',
-                          icon: Icon(
-                            p.isCurrentItemProxied
-                                ? Icons.shield
-                                : Icons.shield_outlined,
-                            color: p.isCurrentItemProxied
-                                ? Colors.tealAccent
-                                : null,
-                          ),
-                          onPressed:
-                              hasMedia && !isImage && !p.proxyToggleInProgress
-                                  ? widget.onToggleProxy
+                        if (vis.proxyToggle)
+                          IconButton(
+                            tooltip: p.isCurrentItemProxied
+                                ? 'Switch to direct playback'
+                                : 'Route through proxy',
+                            icon: Icon(
+                              p.isCurrentItemProxied
+                                  ? Icons.shield
+                                  : Icons.shield_outlined,
+                              color: p.isCurrentItemProxied
+                                  ? Colors.tealAccent
                                   : null,
-                        ),
+                            ),
+                            onPressed: p.proxyToggleInProgress
+                                ? null
+                                : widget.onToggleProxy,
+                          ),
                         if (widget.showQueueControls)
                           IconButton(
                             tooltip: widget.playlistOpen
@@ -2067,20 +2294,17 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                             ),
                             onPressed: widget.onTogglePlaylist,
                           ),
-                        if (!isImage)
+                        if (vis.externalPlayer)
                           IconButton(
                             tooltip: 'Play in external player (mpv/VLC)',
                             icon: const Icon(Icons.open_in_new),
-                            onPressed: hasMedia
-                                ? () async {
-                                    if (p.state == 'playing') {
-                                      p.pause();
-                                    }
-                                    final currentItem = p.queue[p.currentIndex];
-                                    await _openInExternalPlayer(
-                                        context, currentItem);
-                                  }
-                                : null,
+                            onPressed: () async {
+                              if (p.state == 'playing') {
+                                p.pause();
+                              }
+                              final currentItem = p.queue[p.currentIndex];
+                              await _openInExternalPlayer(context, currentItem);
+                            },
                           ),
                         IconButton(
                           tooltip: widget.isFullScreen
@@ -2467,6 +2691,198 @@ class _SpeedMenuButton extends StatelessWidget {
             child: Text(playbackSpeedLabel(rate)),
           ),
       ],
+    );
+  }
+}
+
+// ─── Playback settings (scaling + subtitle delay) ─────────────────────────────
+
+class _PlaybackSettingsButton extends StatelessWidget {
+  const _PlaybackSettingsButton({
+    required this.player,
+    required this.onOpened,
+    required this.onClosed,
+  });
+
+  final PlayerController player;
+  final VoidCallback onOpened;
+  final VoidCallback onClosed;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: 'Picture & subtitle sync',
+      icon: const Icon(Icons.tune),
+      onPressed: () async {
+        onOpened();
+        await showDialog<void>(
+          context: context,
+          barrierColor: Colors.black54,
+          builder: (ctx) => _PlaybackSettingsDialog(player: player),
+        );
+        onClosed();
+      },
+    );
+  }
+}
+
+class _PlaybackSettingsDialog extends StatelessWidget {
+  const _PlaybackSettingsDialog({required this.player});
+
+  final PlayerController player;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: player,
+      builder: (context, _) {
+        final scaling = player.videoScaling;
+        final delay = player.subtitleDelayMs;
+        final subOn = player.subtitleActive;
+        return Dialog(
+          backgroundColor: const Color(0xFF1A1A1A),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 380),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Icon(Icons.tune, size: 18, color: Colors.white54),
+                      const SizedBox(width: 8),
+                      const Expanded(
+                        child: Text(
+                          'Playback settings',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                    ],
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4, bottom: 8),
+                    child: Text(
+                      'Picture',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white54,
+                      ),
+                    ),
+                  ),
+                  for (final mode in videoScalingModes)
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        scaling == mode
+                            ? Icons.radio_button_checked
+                            : Icons.radio_button_off,
+                        size: 18,
+                        color: scaling == mode ? Colors.tealAccent : null,
+                      ),
+                      title: Text(videoScalingLabel(mode)),
+                      subtitle: Text(
+                        videoScalingDescription(mode),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Colors.white54,
+                        ),
+                      ),
+                      onTap: () => unawaited(player.setVideoScaling(mode)),
+                    ),
+                  if (subOn) ...[
+                    const Padding(
+                      padding: EdgeInsets.only(top: 12, bottom: 8),
+                      child: Text(
+                        'Subtitle delay',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white54,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      subtitleDelayLabel(delay),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        color: delay == 0 ? Colors.white : Colors.tealAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player
+                                  .adjustSubtitleDelayMs(-subtitleDelayFineMs),
+                            ),
+                            child: const Text('−100ms'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player.adjustSubtitleDelayMs(subtitleDelayFineMs),
+                            ),
+                            child: const Text('+100ms'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player.adjustSubtitleDelayMs(
+                                  -subtitleDelayCoarseMs),
+                            ),
+                            child: const Text('−1s'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => unawaited(
+                              player
+                                  .adjustSubtitleDelayMs(subtitleDelayCoarseMs),
+                            ),
+                            child: const Text('+1s'),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (delay != 0)
+                      TextButton(
+                        onPressed: () => unawaited(player.resetSubtitleDelay()),
+                        child: const Text('Reset'),
+                      ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
