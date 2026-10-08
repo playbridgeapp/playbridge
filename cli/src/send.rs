@@ -2918,17 +2918,16 @@ async fn cast_to_target(
                 castv2::SessionLaunchStrategy::ForceRelaunch,
             )
             .await?;
-            let (inferred_content_type, stream_type) = castv2::media_format(media_url);
-            let media_session_id = castv2::load_media(
+            let media_session_id = castv2::load_media_with_options(
                 &mut details,
                 media_url,
-                content_type.or(Some(inferred_content_type)),
-                stream_type,
-                Some(media_title),
-                art_url,
-                start_seconds,
-                None,
-                None,
+                castv2::LoadMediaOptions {
+                    content_type,
+                    title: Some(media_title),
+                    art_url,
+                    start_seconds,
+                    ..Default::default()
+                },
             )
             .await
             .map_err(|error| error.to_string())?;

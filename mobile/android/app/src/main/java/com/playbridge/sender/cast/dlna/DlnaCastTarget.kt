@@ -73,6 +73,7 @@ class DlnaCastTarget(
         // SOAP/connection failures are control errors. Generic STOPPED is not enough to
         // distinguish an incompatible stream from normal renderer behavior.
         try {
+            DlnaProtocolInfo.preflight(avTransport.controlUrl, dlnaMimeType(media))
             try {
                 avTransport.setAvTransportUri(loadUrl, metadata = dlnaLoadMetadata(media, loadUrl))
             } catch (error: DlnaActionFailure) {
@@ -82,13 +83,23 @@ class DlnaCastTarget(
                         Log.i(TAG, "TV rejected continuous screen mirror; trying live HLS")
                         avTransport.setAvTransportUri(
                             hlsUrl,
-                            metadata = dlnaMediaDidl(hlsUrl, media.title ?: "Screen mirror", "application/x-mpegURL"),
+                            metadata = buildDlnaDidl(
+                                hlsUrl,
+                                media.title ?: "Screen mirror",
+                                "application/x-mpegURL",
+                                durationMs = 0L,
+                                byteSeek = false,
+                            ),
                         )
                         loadUrl = hlsUrl
                         currentProxyUrl = hlsUrl
                     }
                     shouldRetryHlsWithoutMetadata(media, error) -> {
                         Log.i(TAG, "TV rejected HLS metadata; retrying URI without metadata")
+                        avTransport.setAvTransportUri(loadUrl)
+                    }
+                    shouldRetryWithoutMetadata(media, error) -> {
+                        Log.i(TAG, "TV rejected DIDL metadata; retrying URI without metadata")
                         avTransport.setAvTransportUri(loadUrl)
                     }
                     else -> throw error
@@ -305,21 +316,41 @@ internal fun shouldRetryHlsWithoutMetadata(media: MediaItem, error: DlnaActionFa
         error.actionName == "SetAVTransportURI" &&
         error.upnpCode == "501"
 
-internal fun dlnaLoadMetadata(media: MediaItem, url: String): String = when {
-    media.isScreenMirror -> dlnaMediaDidl(url, media.title ?: "Screen mirror", "video/mp2t")
-    isDlnaHlsMedia(media) -> dlnaMediaDidl(url, media.title ?: "Video", "application/x-mpegURL")
-    else -> ""
+internal fun shouldRetryWithoutMetadata(media: MediaItem, error: DlnaActionFailure): Boolean =
+    shouldRetryWithoutMetadata(error.actionName, error.upnpCode, isDlnaHlsMedia(media), media.isScreenMirror)
+
+internal fun dlnaLoadMetadata(media: MediaItem, url: String): String = buildDlnaDidl(
+    url = url,
+    title = media.title?.takeIf(String::isNotBlank) ?: if (media.isScreenMirror) "Screen mirror" else "Video",
+    mimeType = dlnaMimeType(media),
+    durationMs = media.durationMs,
+    byteSeek = !media.streamType.equals("LIVE", ignoreCase = true) && !media.isScreenMirror,
+)
+
+internal fun dlnaMimeType(media: MediaItem): String {
+    if (media.isScreenMirror) return "video/mpeg"
+    media.mimeType?.substringBefore(';')?.trim()?.takeIf(String::isNotEmpty)?.let { return it }
+    val extension = media.url.substringBefore('?').substringBefore('#').substringAfterLast('.', "").lowercase()
+    return when (extension) {
+        "m3u8" -> "application/x-mpegURL"
+        "mp4", "m4v" -> "video/mp4"
+        "webm" -> "video/webm"
+        "mkv" -> "video/x-matroska"
+        "mov" -> "video/quicktime"
+        "mpg", "mpeg" -> "video/mpeg"
+        "mp3" -> "audio/mpeg"
+        "m4a" -> "audio/mp4"
+        "aac" -> "audio/aac"
+        "flac" -> "audio/flac"
+        "wav" -> "audio/wav"
+        "jpg", "jpeg" -> "image/jpeg"
+        "png" -> "image/png"
+        "gif" -> "image/gif"
+        "webp" -> "image/webp"
+        else -> "video/mp4"
+    }
 }
 
 private fun isDlnaHlsMedia(media: MediaItem): Boolean =
     media.mimeType?.contains("mpegurl", ignoreCase = true) == true ||
         media.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true)
-
-private fun dlnaMediaDidl(url: String, title: String, mimeType: String): String {
-    fun xml(value: String): String = value
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-    return """<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="playbridge-media" parentID="0" restricted="1"><dc:title>${xml(title)}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:${xml(mimeType)}:*">${xml(url)}</res></item></DIDL-Lite>"""
-}

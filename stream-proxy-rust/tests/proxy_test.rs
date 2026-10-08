@@ -129,6 +129,7 @@ async fn embedded_server_serves_scoped_local_file_ranges() {
     let response = client
         .get(&media.url)
         .header(header::RANGE.as_str(), "bytes=2-5")
+        .header("GetContentFeatures.DLNA.ORG", "1")
         .send()
         .await
         .unwrap();
@@ -142,7 +143,31 @@ async fn embedded_server_serves_scoped_local_file_ranges() {
             .unwrap(),
         "bytes 2-5/10"
     );
+    assert_eq!(response.headers()["transfermode.dlna.org"], "Streaming");
+    assert_eq!(
+        response.headers()["realtimeinfo.dlna.org"],
+        "DLNA.ORG_TLAG=*"
+    );
+    assert_eq!(
+        response.headers()["contentfeatures.dlna.org"],
+        "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    );
     assert_eq!(response.bytes().await.unwrap().as_ref(), b"2345");
+    let response = client
+        .head(&media.url)
+        .header("getcontentFeatures.dlna.org", "1")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["transfermode.dlna.org"], "Streaming");
+    assert_eq!(
+        response.headers()["contentfeatures.dlna.org"],
+        "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    );
+    assert!(response.bytes().await.unwrap().is_empty());
+    let response = client.get(&media.url).send().await.unwrap();
+    assert!(!response.headers().contains_key("contentfeatures.dlna.org"));
 
     assert!(server.service().revoke(&media.id));
     assert_eq!(
@@ -288,16 +313,26 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
     );
 
     let client = reqwest::Client::new();
-    let master_body = client
+    let master_response = client
         .get(&registered.url)
+        .header("getcontentFeatures.dlna.org", "1")
         .send()
         .await
         .unwrap()
         .error_for_status()
-        .unwrap()
-        .text()
-        .await
         .unwrap();
+    assert_eq!(
+        master_response.headers()["transfermode.dlna.org"],
+        "Interactive"
+    );
+    assert_eq!(
+        master_response.headers()["contentfeatures.dlna.org"],
+        "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    );
+    assert!(!master_response
+        .headers()
+        .contains_key("realtimeinfo.dlna.org"));
+    let master_body = master_response.text().await.unwrap();
     assert!(master_body.contains("AUTOSELECT=YES"));
     let child_url = master_body
         .lines()
@@ -386,6 +421,7 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
         .any(|(key, value)| key == "uri" && value.ends_with("/000.jpg?session=test")));
     let segment_response = client
         .get(segment_url)
+        .header("getcontentFeatures.dlna.org", "1")
         .send()
         .await
         .unwrap()
@@ -398,6 +434,32 @@ async fn extensionless_hls_children_stay_on_the_header_preserving_proxy() {
             .and_then(|value| value.to_str().ok()),
         Some("video/mp2t")
     );
+    assert_eq!(
+        segment_response.headers()["transfermode.dlna.org"],
+        "Streaming"
+    );
+    assert_eq!(
+        segment_response.headers()["realtimeinfo.dlna.org"],
+        "DLNA.ORG_TLAG=*"
+    );
+    assert_eq!(
+        segment_response.headers()["contentfeatures.dlna.org"],
+        "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    );
+    let head = client
+        .head(segment_url)
+        .header("GETCONTENTFEATURES.DLNA.ORG", "1")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_eq!(head.headers()["transfermode.dlna.org"], "Streaming");
+    assert_eq!(
+        head.headers()["contentfeatures.dlna.org"],
+        "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+    );
+    assert!(head.bytes().await.unwrap().is_empty());
     assert_eq!(
         segment_response.bytes().await.unwrap().as_ref(),
         b"G-transport-stream-segment"

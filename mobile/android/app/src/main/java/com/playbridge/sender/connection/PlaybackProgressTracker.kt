@@ -317,6 +317,14 @@ class PlaybackProgressTracker(
         } else {
             PlayingItem(tmdbId, "movie", null, null, meta.title)
         }
+        if (status?.failure is com.playbridge.sender.cast.googlecast.GoogleCastPlaybackFailedException) {
+            // Receiver decode/fetch failure is not completion, even if the last reported
+            // position was near the end. Clear the completion candidate before any later item switch.
+            dlnaLastObservedPosMs = 0L
+            dlnaLastObservedDurMs = 0L
+            dlnaThresholdArmed = false
+            return
+        }
 
         // Item changed (queue advance or a new cast) — judge the previous one, exactly
         // like the native playlist-advance rule.

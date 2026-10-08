@@ -8,6 +8,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.xmlpull.v1.XmlPullParser
 import java.net.URI
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Fetches and parses a UPnP device-description document to locate the
@@ -21,6 +22,7 @@ class DeviceDescription(private val http: OkHttpClient) {
         val udn: String?,
         val avTransportControlUrl: String?,
         val renderingControlControlUrl: String?,
+        val connectionManagerControlUrl: String? = null,
     ) {
         /** Usable as a target only if it exposes an AVTransport control URL. */
         val isUsable: Boolean get() = avTransportControlUrl != null
@@ -58,6 +60,7 @@ class DeviceDescription(private val http: OkHttpClient) {
         var svcControl: String? = null
         var avControl: String? = null
         var rcControl: String? = null
+        var connectionManagerControl: String? = null
 
         var currentTag: String? = null
         var event = parser.eventType
@@ -85,6 +88,7 @@ class DeviceDescription(private val http: OkHttpClient) {
                         when {
                             type.contains("AVTransport", true) && svcControl != null -> avControl = svcControl
                             type.contains("RenderingControl", true) && svcControl != null -> rcControl = svcControl
+                            type.contains("ConnectionManager", true) && svcControl != null -> connectionManagerControl = svcControl
                         }
                         inService = false
                     }
@@ -96,13 +100,18 @@ class DeviceDescription(private val http: OkHttpClient) {
 
         // controlURL may be relative; resolve against <URLBase> when present, else the doc URL.
         val base = urlBase?.takeIf { it.isNotBlank() } ?: location
-        return Renderer(
+        val renderer = Renderer(
             friendlyName = friendlyName ?: "Unknown renderer",
             location = location,
             udn = udn,
             avTransportControlUrl = avControl?.let { resolve(base, it) },
             renderingControlControlUrl = rcControl?.let { resolve(base, it) },
+            connectionManagerControlUrl = connectionManagerControl?.let { resolve(base, it) },
         )
+        renderer.avTransportControlUrl?.let { avUrl ->
+            renderer.connectionManagerControlUrl?.let { cmUrl -> connectionManagerUrls[avUrl] = cmUrl }
+        }
+        return renderer
     }
 
     private fun resolve(base: String, ref: String): String =
@@ -114,5 +123,8 @@ class DeviceDescription(private val http: OkHttpClient) {
 
     companion object {
         private const val TAG = "DeviceDescription"
+        private val connectionManagerUrls = ConcurrentHashMap<String, String>()
+
+        internal fun connectionManagerUrl(avTransportUrl: String): String? = connectionManagerUrls[avTransportUrl]
     }
 }

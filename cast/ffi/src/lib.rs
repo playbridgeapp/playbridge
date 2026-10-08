@@ -154,6 +154,7 @@ enum SessionCommand {
         art_url: Option<String>,
         #[serde(default)]
         start_seconds: f64,
+        duration_seconds: Option<Box<f64>>,
         stream_type: Option<String>,
         hls_segment_format: Option<String>,
         hls_video_segment_format: Option<String>,
@@ -241,6 +242,7 @@ struct SessionCapabilities {
     playback_control: bool,
     seek: bool,
     status: bool,
+    volume: bool,
     receiver_app_available: Option<bool>,
 }
 
@@ -283,6 +285,8 @@ struct SessionPlaybackStatus {
     state: &'static str,
     position_seconds: f64,
     duration_seconds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    volume_supported: Option<bool>,
 }
 
 pub struct CastSession {
@@ -523,6 +527,9 @@ fn session_worker(
         playback_control: true,
         seek: target.protocol != SessionProtocol::Roku,
         status: true,
+        volume: receiver
+            .as_ref()
+            .is_some_and(ReceiverSession::supports_volume),
         receiver_app_available: (target.protocol == SessionProtocol::Roku)
             .then_some(roku_receiver_app)
             .flatten(),
@@ -576,7 +583,7 @@ fn session_worker(
                                 request_id: None,
                                 operation: maintenance_event_operation(reason),
                                 message: error.to_string(),
-                                reason,
+                                reason: session_error_reason(&error),
                             },
                             &cancelled,
                         );
@@ -617,7 +624,7 @@ fn session_worker(
                 request_id: Some(request_id),
                 operation,
                 message: error.to_string(),
-                reason: finish_reason,
+                reason: session_error_reason(&error),
             },
         };
         if !send_session_event(&events, event, &cancelled) {
@@ -651,6 +658,13 @@ fn session_finish_reason(error: &CastError) -> Option<&'static str> {
         CastError::ReceiverSessionUnresponsive => Some("session_unresponsive"),
         CastError::Transport(_) => Some("connection_lost"),
         _ => None,
+    }
+}
+
+fn session_error_reason(error: &CastError) -> Option<&'static str> {
+    match error {
+        CastError::ReceiverPlaybackError => Some("playback_error"),
+        _ => session_finish_reason(error),
     }
 }
 
@@ -787,6 +801,7 @@ async fn execute_session_command(
                 content_type,
                 art_url,
                 start_seconds,
+                duration_seconds,
                 stream_type,
                 hls_segment_format,
                 hls_video_segment_format,
@@ -804,6 +819,7 @@ async fn execute_session_command(
                     content_type: content_type.clone(),
                     art_url: art_url.clone(),
                     start_seconds: *start_seconds,
+                    duration_seconds: duration_seconds.as_deref().copied(),
                     stream_type: stream_type.clone(),
                     hls_segment_format: hls_segment_format.clone(),
                     hls_video_segment_format: hls_video_segment_format.clone(),
@@ -871,6 +887,7 @@ async fn execute_session_command(
                     state: playback_state_name(status.state),
                     position_seconds: status.position_seconds,
                     duration_seconds: status.duration_seconds,
+                    volume_supported: Some(receiver_mut(receiver)?.supports_volume()),
                 }))
             }
             SessionCommand::Disconnect { .. } => Ok(None),
@@ -880,7 +897,18 @@ async fn execute_session_command(
             }
         }
     };
-    match tokio::time::timeout(operation_timeout, operation).await {
+    let command_timeout = if target.protocol == SessionProtocol::Dlna
+        && matches!(command, SessionCommand::Load { .. })
+    {
+        // 8s description + 3s preflight + four 8s SetURI attempts
+        // (initial/transport/transition/metadata) + 8s Stop + 8s Play = 59s.
+        // Description is fetched during connection; allow 5s margin and keep
+        // Dart's DLNA load deadline in sync with this full sequence budget.
+        operation_timeout.max(Duration::from_secs(64))
+    } else {
+        operation_timeout
+    };
+    match tokio::time::timeout(command_timeout, operation).await {
         Ok(result) => result,
         Err(_) if target.protocol == SessionProtocol::GoogleCast => {
             Err(CastError::ReceiverSessionUnresponsive)
@@ -1554,6 +1582,10 @@ mod android_jni {
 }
 
 #[cfg(test)]
+#[path = "../../core/tests/support/tls.rs"]
+mod test_tls;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1618,6 +1650,29 @@ mod tests {
     }
 
     #[test]
+    fn load_duration_is_optional_and_preserves_json_compatibility() {
+        for (json, expected) in [
+            (
+                r#"{"command":"load","request_id":"1","url":"http://sender/video.mp4"}"#,
+                None,
+            ),
+            (
+                r#"{"command":"load","request_id":"1","url":"http://sender/video.mp4","duration_seconds":3661.5}"#,
+                Some(3661.5),
+            ),
+        ] {
+            let command: SessionCommand = serde_json::from_str(json).unwrap();
+            let SessionCommand::Load {
+                duration_seconds, ..
+            } = command
+            else {
+                panic!("expected load");
+            };
+            assert_eq!(duration_seconds.as_deref().copied(), expected);
+        }
+    }
+
+    #[test]
     fn session_commands_require_scalar_request_ids() {
         let valid: SessionCommand = serde_json::from_str(
             r#"{"command":"seek","request_id":"seek-1","position_seconds":12.5}"#,
@@ -1657,11 +1712,136 @@ mod tests {
             command_finish_reason(&CastError::ReceiverSessionUnresponsive),
             Some("session_unresponsive"),
         );
+        assert_eq!(
+            command_finish_reason(&CastError::ReceiverPlaybackError),
+            None
+        );
+        assert_eq!(
+            session_error_reason(&CastError::ReceiverPlaybackError),
+            Some("playback_error")
+        );
         assert_eq!(maintenance_event_operation(None), "maintenance");
         assert_eq!(
             maintenance_event_operation(Some("connection_lost")),
             "connection",
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_media_emits_one_error_across_maintenance_and_caller_polls_until_next_load() {
+        use playbridge_cast_core::castv2::{
+            CastMessage, NS_MEDIA, NS_RECEIVER, RECEIVER_ID, SENDER_ID,
+        };
+        use std::sync::atomic::AtomicUsize;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let acceptor = test_tls::localhost_acceptor();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let failed_polls = Arc::new(AtomicUsize::new(0));
+        let receiver_polls = failed_polls.clone();
+        let server = tokio::spawn(async move {
+            let (tcp, _) = listener.accept().await.unwrap();
+            let mut stream = acceptor.accept(tcp).await.unwrap();
+            let mut loads = 0;
+            while let Ok(len) = stream.read_u32().await {
+                assert!(len <= 1024 * 1024);
+                let mut body = vec![0; len as usize];
+                stream.read_exact(&mut body).await.unwrap();
+                let message = CastMessage::decode(&body).unwrap();
+                let request: Value = serde_json::from_str(&message.payload_utf8).unwrap();
+                let payload = match (message.namespace.as_str(), request["type"].as_str()) {
+                    (NS_RECEIVER, Some("GET_STATUS")) => serde_json::json!({
+                        "type": "RECEIVER_STATUS", "requestId": request["requestId"],
+                        "status": {"applications": [{"appId": DEFAULT_MEDIA_RECEIVER_APP_ID,
+                            "transportId": "transport", "sessionId": "session"}]}
+                    }),
+                    (NS_MEDIA, Some("LOAD" | "GET_STATUS")) => {
+                        if request["type"] == "LOAD" {
+                            loads += 1;
+                        } else if loads > 0 {
+                            receiver_polls.fetch_add(1, Ordering::SeqCst);
+                        }
+                        // Every LOAD deliberately reuses mediaSessionId 42.
+                        let status = if loads == 0 {
+                            serde_json::json!([])
+                        } else {
+                            serde_json::json!([{"playerState": "IDLE", "idleReason": "ERROR", "mediaSessionId": 42}])
+                        };
+                        serde_json::json!({"type": "MEDIA_STATUS", "requestId": request["requestId"], "status": status})
+                    }
+                    _ => continue,
+                };
+                let mut reply =
+                    CastMessage::new(SENDER_ID, &message.namespace, payload.to_string());
+                reply.source_id = RECEIVER_ID.into();
+                let body = reply.encode();
+                stream.write_u32(body.len() as u32).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+                stream.flush().await.unwrap();
+            }
+            assert_eq!(loads, 2);
+        });
+        let target: SessionTarget = serde_json::from_value(serde_json::json!({
+            "protocol": "google_cast", "addresses": ["127.0.0.1"], "port": port
+        }))
+        .unwrap();
+        let session = CastSession::start(target, 5000).unwrap();
+        let next_json = |wait_ms| {
+            serde_json::to_value(session.next_event(wait_ms).expect("expected session event"))
+                .unwrap()
+        };
+        assert_eq!(next_json(7000)["event"], "connected");
+        let load = |request_id| {
+            serde_json::from_value(serde_json::json!({
+            "command": "load", "request_id": request_id, "url": "https://example.test/movie.mp4", "stream_type": "BUFFERED"
+        })).unwrap()
+        };
+        assert!(session.submit(load("load-1")));
+        assert_eq!(next_json(5000)["event"], "operation");
+
+        // The first failed-item poll comes from the real five-second maintenance loop.
+        let first_error = next_json(7000);
+        assert_eq!(first_error["event"], "error");
+        assert_eq!(first_error["reason"], "playback_error");
+        assert!(first_error.get("request_id").is_none());
+        for id in ["status-1", "status-2"] {
+            assert!(session.submit(SessionCommand::Status {
+                request_id: Value::from(id)
+            }));
+            let status = next_json(5000);
+            assert_eq!(status["event"], "status");
+            assert_eq!(status["request_id"], id);
+            assert_eq!(status["status"]["state"], "stopped");
+        }
+        // A second maintenance poll must complete without emitting another error.
+        assert!(session.next_event(6000).is_none());
+        assert!(failed_polls.load(Ordering::SeqCst) >= 4);
+
+        assert!(session.submit(load("load-2")));
+        assert_eq!(next_json(5000)["event"], "operation");
+        assert!(session.submit(SessionCommand::Status {
+            request_id: Value::from("status-3")
+        }));
+        let new_error = next_json(5000);
+        assert_eq!(new_error["event"], "error");
+        assert_eq!(new_error["reason"], "playback_error");
+        assert_eq!(new_error["request_id"], "status-3");
+        assert!(session.submit(SessionCommand::Status {
+            request_id: Value::from("status-4")
+        }));
+        let status = next_json(5000);
+        assert_eq!(status["event"], "status");
+        assert_eq!(status["status"]["state"], "stopped");
+        assert!(session.submit(SessionCommand::Disconnect {
+            request_id: Value::from("disconnect")
+        }));
+        assert_eq!(next_json(5000)["event"], "operation");
+        assert_eq!(next_json(5000)["reason"], "disconnected");
+        tokio::time::timeout(Duration::from_secs(3), server)
+            .await
+            .unwrap()
+            .unwrap();
     }
 
     #[test]
@@ -1700,10 +1880,12 @@ mod tests {
                 state: "playing",
                 position_seconds: 3.5,
                 duration_seconds: 10.0,
+                volume_supported: Some(false),
             },
         };
         let json = serde_json::to_value(event).unwrap();
         assert_eq!(json["event"], "status");
+        assert_eq!(json["status"]["volume_supported"], false);
         assert_eq!(json["request_id"], 42);
         assert_eq!(json["status"]["state"], "playing");
         assert_eq!(json["status"]["position_seconds"], 3.5);

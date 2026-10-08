@@ -65,6 +65,15 @@ void main() {
     );
   });
 
+  test('duration remains optional in the load JSON contract', () {
+    const unknown = MediaRequest(url: 'http://sender/movie.mp4');
+    expect(unknown.toJson().containsKey('duration_seconds'), isFalse);
+    const known = MediaRequest(
+        url: 'http://sender/movie.mp4',
+        duration: Duration(milliseconds: 3661500));
+    expect(known.toJson()['duration_seconds'], 3661.5);
+  });
+
   test('serializes Google Cast media metadata and resume position', () {
     const media = MediaRequest(
       url: 'https://example.test/movie.m3u8',
@@ -125,8 +134,14 @@ void main() {
     expect(connected.protocol, ReceiverProtocol.roku);
     expect(connected.capabilities.load, isTrue);
     expect(connected.capabilities.seek, isFalse);
+    expect(connected.capabilities.volume, isFalse);
     expect(connected.capabilities.receiverAppAvailable, isFalse);
     expect(connected.receiverApplicationId, isNull);
+  });
+
+  test('decodes optional volume capability', () {
+    expect(SessionCapabilities.fromJson({'volume': true}).volume, isTrue);
+    expect(SessionCapabilities.fromJson({}).volume, isFalse);
   });
 
   test('decodes status with fractional seconds', () {
@@ -146,6 +161,30 @@ void main() {
     expect(event.status.state, PlaybackState.playing);
     expect(event.status.position, const Duration(milliseconds: 12250));
     expect(event.status.durationSeconds, 90.5);
+  });
+
+  test('decodes optional status volume refresh and stopped/finished separately',
+      () {
+    for (final state in ['stopped', 'finished']) {
+      final status = PlaybackStatus.fromJson({
+        'state': state,
+        'volume_supported': false,
+      });
+      expect(status.state.name, state);
+      expect(status.volumeSupported, isFalse);
+    }
+    expect(
+        PlaybackStatus.fromJson({'state': 'playing'}).volumeSupported, isNull);
+  });
+
+  test('playback errors do not invalidate the receiver session', () {
+    final error = CastSessionEvent.fromJsonString(
+      '{"event":"error","request_id":"status-1","operation":"status",'
+      '"message":"Google Cast receiver reported a playback error",'
+      '"reason":"playback_error"}',
+    ) as CastSessionError;
+    expect(error.playbackFailed, isTrue);
+    expect(error.endsSession, isFalse);
   });
 
   test('decodes correlated and connection errors', () {

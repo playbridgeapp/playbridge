@@ -101,6 +101,37 @@ class ExternalScreenMirrorTest {
     }
 
     @Test
+    fun `DLNA headers are added to continuous and HLS media responses`() {
+        val requestHeaders = mapOf("GETCONTENTFEATURES.DLNA.ORG" to "1")
+        val continuous = String(MirrorHttpResponse.streamingTs(requestHeaders), Charsets.US_ASCII)
+        assertTrue(continuous.contains("Content-Type: video/mpeg\r\n"))
+        assertTrue(continuous.contains("transferMode.dlna.org: Streaming\r\n"))
+        assertTrue(continuous.contains("realTimeInfo.dlna.org: DLNA.ORG_TLAG=*\r\n"))
+        assertTrue(continuous.contains("contentFeatures.dlna.org: DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n"))
+
+        val playlist = String(
+            MirrorHttpResponse.bytes("application/x-mpegURL", byteArrayOf(), headOnly = true, requestHeaders = requestHeaders),
+            Charsets.US_ASCII,
+        )
+        assertTrue(playlist.contains("transferMode.dlna.org: Interactive\r\n"))
+        assertFalse(playlist.contains("realTimeInfo.dlna.org"))
+        assertTrue(playlist.contains("contentFeatures.dlna.org: DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000\r\n"))
+
+        val segment = String(
+            MirrorHttpResponse.bytes("video/mp2t", byteArrayOf(), headOnly = false, requestHeaders = requestHeaders),
+            Charsets.US_ASCII,
+        )
+        assertTrue(segment.contains("transferMode.dlna.org: Streaming\r\n"))
+        assertTrue(segment.contains("realTimeInfo.dlna.org: DLNA.ORG_TLAG=*\r\n"))
+    }
+
+    @Test
+    fun `HEAD does not attach a continuous live reader`() {
+        assertFalse(shouldAttachContinuousReader("HEAD"))
+        assertTrue(shouldAttachContinuousReader("GET"))
+    }
+
+    @Test
     fun `continuous client backlog is byte bounded`() {
         val buffer = MirrorClientBuffer(capacityBytes = 5)
 

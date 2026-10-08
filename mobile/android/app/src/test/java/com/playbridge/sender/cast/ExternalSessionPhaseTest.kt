@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast
 
+import com.playbridge.sender.cast.googlecast.GoogleCastPlaybackFailedException
 import com.playbridge.sender.cast.googlecast.GoogleCastReceiverEndedException
 import com.playbridge.sender.cast.googlecast.GoogleCastSessionUnresponsiveException
 import com.playbridge.sender.cast.googlecast.googleCastSessionErrorEndsSession
@@ -84,6 +85,7 @@ class ExternalSessionPhaseTest {
         assertEquals(false, googleCastSessionErrorEndsSession(""))
         assertEquals(true, googleCastSessionErrorEndsSession("connection_lost"))
         assertEquals(true, googleCastSessionErrorEndsSession("receiver_ended"))
+        assertEquals(false, googleCastSessionErrorEndsSession("playback_error"))
     }
 
     @Test
@@ -100,6 +102,7 @@ class ExternalSessionPhaseTest {
             true,
             googleCastStatusErrorEndsSession(GoogleCastSessionUnresponsiveException()),
         )
+        assertEquals(false, googleCastStatusErrorEndsSession(GoogleCastPlaybackFailedException()))
         assertEquals(false, googleCastStatusFailuresRequireFreshSession(2))
         assertEquals(true, googleCastStatusFailuresRequireFreshSession(3))
     }

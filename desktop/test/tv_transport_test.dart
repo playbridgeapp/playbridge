@@ -4,6 +4,23 @@ import 'package:playbridge_desktop/tv_discovery.dart';
 import 'package:playbridge_desktop/tv_transport.dart';
 
 void main() {
+  test('Rust volume commands require advertised support and exclude Roku', () {
+    const supported = rust.SessionCapabilities(
+        load: true,
+        playbackControl: true,
+        seek: true,
+        status: true,
+        volume: true);
+    const unsupported = rust.SessionCapabilities(
+        load: true, playbackControl: true, seek: true, status: true);
+    expect(rustTransportSupportsVolume(TvProtocol.dlna, supported), isTrue);
+    expect(
+        rustTransportSupportsVolume(TvProtocol.googleCast, supported), isTrue);
+    expect(rustTransportSupportsVolume(TvProtocol.roku, supported), isFalse);
+    expect(rustTransportSupportsVolume(TvProtocol.dlna, unsupported), isFalse);
+    expect(rustTransportSupportsVolume(TvProtocol.googleCast, null), isFalse);
+  });
+
   group('TvTransportFactory', () {
     test('creates correct transport type for each protocol', () {
       final pbTransport = TvTransportFactory.create(TvProtocol.playBridge);
@@ -147,7 +164,7 @@ void main() {
     expect(isGoogleCastRestartableSessionError(connectionLost), isTrue);
   });
 
-  test('publishes only terminal session errors as global errors', () {
+  test('publishes terminal session and playback errors as global errors', () {
     const statusTimeout = rust.CastSessionError(
       requestId: 'status-1',
       operation: 'status',
@@ -167,6 +184,35 @@ void main() {
     expect(shouldPublishGlobalCastSessionError(statusTimeout), isFalse);
     expect(shouldPublishGlobalCastSessionError(maintenanceWarning), isFalse);
     expect(shouldPublishGlobalCastSessionError(connectionLost), isTrue);
+  });
+
+  test('publishes playback failure while keeping the receiver reusable', () {
+    const error = rust.CastSessionError(
+      requestId: 'status-1',
+      operation: 'status',
+      message: 'Google Cast receiver reported a playback error',
+      reason: 'playback_error',
+    );
+    expect(shouldPublishGlobalCastSessionError(error), isTrue);
+    expect(error.endsSession, isFalse);
+    expect(isGoogleCastRestartableSessionError(error), isFalse);
+  });
+
+  test('status volume capability overrides the connection snapshot', () {
+    const capabilities = rust.SessionCapabilities(
+      load: true,
+      playbackControl: true,
+      seek: true,
+      status: true,
+      volume: true,
+    );
+    expect(rustTransportSupportsVolume(TvProtocol.googleCast, capabilities),
+        isTrue);
+    expect(
+      rustTransportSupportsVolume(TvProtocol.googleCast, capabilities,
+          volumeSupported: false),
+      isFalse,
+    );
   });
 
   test('delays initial Cast status and backs off after timeouts', () {

@@ -13,6 +13,8 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.content.getSystemService
+import com.playbridge.sender.cast.dlna.dlnaResponseHeaders
+import com.playbridge.sender.cast.dlna.requestsDlnaContentFeatures
 import com.playbridge.shared.logging.runCatchingLogged
 import java.io.BufferedInputStream
 import java.io.BufferedReader
@@ -40,7 +42,8 @@ import kotlinx.coroutines.launch
 /**
  * Owns the phone-side capture used by third-party receivers. One H.264/MPEG-TS
  * producer feeds both a live HLS view for Google Cast and a continuous TS view
- * for DLNA; capture is never duplicated.
+ * for DLNA; capture is never duplicated. The program always includes AAC audio,
+ * using a silent track when device playback cannot be captured.
  */
 class ExternalScreenMirrorCoordinator(
     private val context: Context,
@@ -260,12 +263,12 @@ class ExternalScreenMirrorCoordinator(
                 }
             },
             onAudioError = { error ->
-                Log.w(TAG, "Device audio capture unavailable; continuing video-only", error)
+                Log.w(TAG, "Device audio capture unavailable; sending silent AAC", error)
                 mainHandler.post {
                     if (captureGeneration == generation && _state.value.isActive) {
                         _state.value = _state.value.copy(
                             audioStatus = ScreenMirrorCoordinator.AudioStatus.UNAVAILABLE,
-                            audioMessage = "Device audio is unavailable. Mirroring video only.",
+                            audioMessage = SILENT_AUDIO_MESSAGE,
                         )
                     }
                 }
@@ -273,10 +276,10 @@ class ExternalScreenMirrorCoordinator(
         )
         encoder = localEncoder
         transportHasAudio = localEncoder.hasAudio
-        if (options.deviceAudio && !localEncoder.hasAudio) {
+        if (options.deviceAudio && !localEncoder.playbackAudioActive) {
             _state.value = _state.value.copy(
                 audioStatus = ScreenMirrorCoordinator.AudioStatus.UNAVAILABLE,
-                audioMessage = "Device audio is unavailable. Mirroring video only.",
+                audioMessage = SILENT_AUDIO_MESSAGE,
             )
         }
         val pacer = MirrorFramePacer(
@@ -398,15 +401,18 @@ class ExternalScreenMirrorCoordinator(
             socket.soTimeout = REQUEST_TIMEOUT_MS
             val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.US_ASCII))
             val requestLine = reader.readLine().orEmpty()
-            var header: String?
-            do {
-                header = reader.readLine()
-            } while (!header.isNullOrEmpty())
-            val request = requestLine.split(' ')
-            val method = request.getOrNull(0)
-            val path = request.getOrNull(1)?.substringBefore('?')
+            val headerLines = buildList {
+                while (true) {
+                    val header = reader.readLine() ?: break
+                    if (header.isEmpty()) break
+                    add(header)
+                }
+            }
+            val request = parseMirrorHttpRequest(requestLine, headerLines)
+            val method = request.method
+            val path = request.path
             when {
-                method == "OPTIONS" && path?.startsWith(basePath) == true ->
+                method == "OPTIONS" && path.startsWith(basePath) ->
                     respond(socket, MirrorHttpResponse.options())
                 method !in setOf("GET", "HEAD") ->
                     respond(socket, MirrorHttpResponse.empty(405, "Method Not Allowed", allow = true))
@@ -415,27 +421,45 @@ class ExternalScreenMirrorCoordinator(
                     if (manifest == null) {
                         respond(socket, MirrorHttpResponse.empty(503, "Stream Not Ready"))
                     } else {
-                        respond(socket, MirrorHttpResponse.bytes("application/x-mpegURL", manifest, method == "HEAD"))
+                        respond(
+                            socket,
+                            MirrorHttpResponse.bytes(
+                                MIRROR_HLS_PLAYLIST_MIME,
+                                manifest,
+                                headOnly = method == "HEAD",
+                                requestHeaders = request.headers,
+                            ),
+                        )
                     }
                 }
                 path == "$basePath/stream.ts" -> {
-                    if (method == "HEAD") {
-                        respond(socket, MirrorHttpResponse.streamingTs())
-                    } else {
+                    // HEAD is only a probe. Attaching a reader here would occupy a client
+                    // slot and, on a single-reader hub, make the following GET fail.
+                    if (shouldAttachContinuousReader(method)) {
                         val output = socket.getOutputStream()
-                        output.write(MirrorHttpResponse.streamingTs())
+                        output.write(MirrorHttpResponse.streamingTs(request.headers))
                         output.flush()
                         socket.soTimeout = 0
                         hub.addContinuousClient(socket)
+                    } else {
+                        respond(socket, MirrorHttpResponse.streamingTs(request.headers))
                     }
                 }
-                path?.startsWith("$basePath/segment-") == true && path.endsWith(".ts") -> {
+                path.startsWith("$basePath/segment-") && path.endsWith(".ts") -> {
                     val id = path.substringAfterLast("segment-").substringBefore(".ts").toLongOrNull()
                     val bytes = id?.let(hub::segment)
                     if (bytes == null) {
                         respond(socket, MirrorHttpResponse.empty(404, "Not Found"))
                     } else {
-                        respond(socket, MirrorHttpResponse.bytes("video/mp2t", bytes, method == "HEAD"))
+                        respond(
+                            socket,
+                            MirrorHttpResponse.bytes(
+                                MIRROR_HLS_SEGMENT_MIME,
+                                bytes,
+                                headOnly = method == "HEAD",
+                                requestHeaders = request.headers,
+                            ),
+                        )
                     }
                 }
                 else -> respond(socket, MirrorHttpResponse.empty(404, "Not Found"))
@@ -455,7 +479,40 @@ class ExternalScreenMirrorCoordinator(
         private const val STARTUP_TIMEOUT_MS = 15_000L
         private const val FRAME_RATE = 24
         private const val REQUEST_TIMEOUT_MS = 5_000
+        private const val SILENT_AUDIO_MESSAGE =
+            "Device audio is unavailable. A silent audio track is being sent."
     }
+}
+
+/** HEAD must not take a live reader. Only a GET is attached to the hub. */
+internal fun shouldAttachContinuousReader(method: String): Boolean = method == "GET"
+
+internal data class MirrorHttpRequest(
+    val method: String,
+    val path: String,
+    val headers: Map<String, String>,
+)
+
+internal fun parseMirrorHttpRequest(requestLine: String, headerLines: List<String>): MirrorHttpRequest {
+    val parts = requestLine.split(' ')
+    return MirrorHttpRequest(
+        method = parts.getOrNull(0).orEmpty(),
+        path = parts.getOrNull(1)?.substringBefore('?').orEmpty(),
+        headers = parseMirrorHttpHeaders(headerLines),
+    )
+}
+
+internal fun parseMirrorHttpHeaders(headerLines: List<String>): Map<String, String> {
+    val headers = LinkedHashMap<String, String>(headerLines.size)
+    for (line in headerLines) {
+        if (line.isEmpty()) continue
+        val colon = line.indexOf(':')
+        if (colon <= 0) continue
+        val name = line.substring(0, colon).trim().lowercase()
+        if (name.isEmpty()) continue
+        headers[name] = line.substring(colon + 1).trim()
+    }
+    return headers
 }
 
 internal fun shouldHandleExternalMirrorCallback(
@@ -489,7 +546,11 @@ internal fun buildMirrorHlsManifest(segments: List<MirrorHlsSegment>): ByteArray
 internal fun mirrorTransportReady(requiredHlsSegments: Int, segmentCount: Int, tsJoinReady: Boolean): Boolean =
     if (requiredHlsSegments > 0) segmentCount >= requiredHlsSegments else tsJoinReady
 
-/** Reads the recorder pipe once and exposes bounded HLS and continuous-TS views. */
+/**
+ * Reads the recorder pipe once and copies each chunk into a per-client queue.
+ * Concurrent continuous GETs each get a full copy, so a second GET is accepted.
+ * HEAD never registers a client. This is not a single-reader lease.
+ */
 private class LiveMpegTsHub(
     private val input: BufferedInputStream,
     private val executor: ExecutorService,
@@ -637,6 +698,10 @@ internal class MirrorClientBuffer(private val capacityBytes: Int) {
     }
 }
 
+internal const val MIRROR_CONTINUOUS_TS_MIME = "video/mpeg"
+internal const val MIRROR_HLS_PLAYLIST_MIME = "application/x-mpegURL"
+internal const val MIRROR_HLS_SEGMENT_MIME = "video/mp2t"
+
 internal object MirrorHttpResponse {
     private const val CORS =
         "Access-Control-Allow-Origin: *\r\n" +
@@ -644,10 +709,15 @@ internal object MirrorHttpResponse {
             "Access-Control-Allow-Headers: Range, Content-Type\r\n" +
             "Access-Control-Expose-Headers: Content-Type, Content-Length\r\n"
 
-    fun streamingTs(): ByteArray = headers("video/mp2t", contentLength = null)
+    fun streamingTs(requestHeaders: Map<String, String> = emptyMap()): ByteArray =
+        headers(MIRROR_CONTINUOUS_TS_MIME, contentLength = null, requestHeaders)
 
-    fun bytes(contentType: String, body: ByteArray, headOnly: Boolean): ByteArray =
-        headers(contentType, body.size) + if (headOnly) ByteArray(0) else body
+    fun bytes(
+        contentType: String,
+        body: ByteArray,
+        headOnly: Boolean,
+        requestHeaders: Map<String, String> = emptyMap(),
+    ): ByteArray = headers(contentType, body.size, requestHeaders) + if (headOnly) ByteArray(0) else body
 
     fun options(): ByteArray = (
         "HTTP/1.1 204 No Content\r\n" + CORS +
@@ -661,11 +731,21 @@ internal object MirrorHttpResponse {
         append("Content-Length: 0\r\nConnection: close\r\n\r\n")
     }.toByteArray(Charsets.US_ASCII)
 
-    private fun headers(contentType: String, contentLength: Int?): ByteArray = buildString {
+    private fun headers(
+        contentType: String,
+        contentLength: Int?,
+        requestHeaders: Map<String, String>,
+    ): ByteArray = buildString {
         append("HTTP/1.1 200 OK\r\n")
         append("Content-Type: $contentType\r\n")
         append("Cache-Control: no-cache, no-store\r\n")
         append(CORS)
+        val requestedFeatures = requestsDlnaContentFeatures(
+            requestHeaders.entries.map { (name, value) -> name to value },
+        )
+        dlnaResponseHeaders(contentType, requestedFeatures, byteSeek = false).forEach { (name, value) ->
+            append(name).append(": ").append(value).append("\r\n")
+        }
         if (contentLength != null) append("Content-Length: $contentLength\r\n")
         append("Connection: close\r\n\r\n")
     }.toByteArray(Charsets.US_ASCII)

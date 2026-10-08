@@ -52,6 +52,8 @@ pub enum CastError {
 
     #[error("Google Cast receiver application stopped responding")]
     ReceiverSessionUnresponsive,
+    #[error("Google Cast receiver reported a playback error")]
+    ReceiverPlaybackError,
     #[error("pairing cryptography failed")]
     Crypto,
 }

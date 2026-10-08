@@ -83,6 +83,53 @@ class MediaCodecMpegTsEncoderTest {
     }
 
     @Test
+    fun `silent audio plan always advertises an audio pid in the PMT`() {
+        val plan = mirrorAudioPlan(
+            deviceAudioRequested = false,
+            playbackCaptureApiAvailable = true,
+            playbackCapturePrepared = false,
+        )
+        assertEquals(MirrorAudioPlan.SILENT, plan)
+        assertEquals(
+            MirrorAudioPlan.SILENT,
+            mirrorAudioPlan(
+                deviceAudioRequested = true,
+                playbackCaptureApiAvailable = false,
+                playbackCapturePrepared = false,
+            ),
+        )
+        assertEquals(
+            MirrorAudioPlan.SILENT,
+            mirrorAudioPlan(
+                deviceAudioRequested = true,
+                playbackCaptureApiAvailable = true,
+                playbackCapturePrepared = false,
+            ),
+        )
+        assertEquals(
+            MirrorAudioPlan.PLAYBACK,
+            mirrorAudioPlan(
+                deviceAudioRequested = true,
+                playbackCaptureApiAvailable = true,
+                playbackCapturePrepared = true,
+            ),
+        )
+        assertTrue(mirrorTransportIncludesAudio(plan))
+
+        val output = ByteArrayOutputStream()
+        val muxer = H264MpegTsMuxer(output, includeAudio = mirrorTransportIncludesAudio(plan))
+        muxer.writeAccessUnit(decodableKeyframe(marker = 0x11), presentationTimeUs = 0, keyFrame = true)
+        muxer.writeAudioAccessUnit(silentAacAdtsFrame(), presentationTimeUs = 0)
+
+        val packets = output.toByteArray().asList().chunked(TS_PACKET_BYTES)
+        val pmt = packets.first { it.pid() == PMT_PID }
+        assertEquals(0x0f, pmt[22].toInt() and 0xff)
+        assertTrue(packets.any { it.pid() == AUDIO_PID })
+        assertEquals(21_333, silentAacFrameDurationUs())
+        assertEquals(42_666L, silentAudioPresentationTimeUs(2))
+    }
+
+    @Test
     fun `adts header describes aac lc stereo at 48 khz`() {
         val frame = adtsFrame(byteArrayOf(0x11, 0x22, 0x33), sampleRate = 48_000, channelCount = 2)
 

@@ -23,11 +23,20 @@ bool isGoogleCastRestartableSessionError(Object error) =>
 
 @visibleForTesting
 bool shouldPublishGlobalCastSessionError(rust.CastSessionError error) =>
-    error.endsSession;
+    error.endsSession || error.playbackFailed;
 
 @visibleForTesting
 bool googleCastStatusFailuresRequireFreshSession(int consecutiveFailures) =>
     consecutiveFailures >= 3;
+
+@visibleForTesting
+bool rustTransportSupportsVolume(
+  TvProtocol protocol,
+  rust.SessionCapabilities? capabilities, {
+  bool? volumeSupported,
+}) =>
+    protocol != TvProtocol.roku &&
+    (volumeSupported ?? capabilities?.volume) == true;
 
 /// Abstract transport contract for interacting with a target TV/receiver
 /// (PlayBridge WebSockets, DLNA UPnP, Roku ECP, etc.).
@@ -45,6 +54,9 @@ abstract class TvTransport {
 
   /// Credentials emitted when authenticated or paired.
   Stream<TvCredentials> get credentials;
+
+  /// Last failure for the current cast attempt, available before it returns.
+  String? get lastError => null;
 
   /// Last capabilities reported by the receiver probe.
   Map<String, dynamic> get capabilities => const {};
@@ -188,6 +200,7 @@ class RustCastTransport extends TvTransport {
   rust.CastCoreLibrary? _core;
   rust.CastSession? _session;
   rust.SessionCapabilities? _capabilities;
+  bool? _volumeSupported;
   StreamSubscription<rust.CastSessionEvent>? _eventSub;
   Timer? _pollTimer;
   bool _polling = false;
@@ -197,6 +210,10 @@ class RustCastTransport extends TvTransport {
   DiscoveredTv? _selectedTv;
   bool _receiverEnded = false;
   int _loadIntentGeneration = 0;
+  String? _lastError;
+
+  @override
+  String? get lastError => _lastError;
   Future<void> _operationTail = Future<void>.value();
 
   final _state = StreamController<SenderConnectionState>.broadcast();
@@ -226,6 +243,7 @@ class RustCastTransport extends TvTransport {
           'playbackControl': value.playbackControl,
           'seek': value.seek,
           'status': value.status,
+          'volume': _volumeSupported ?? value.volume,
           if (value.receiverAppAvailable != null)
             'receiverAppAvailable': value.receiverAppAvailable,
         },
@@ -240,6 +258,7 @@ class RustCastTransport extends TvTransport {
     String? expectedPin,
   }) async {
     _loadIntentGeneration++;
+    _lastError = null;
     _selectedTv = tv;
     _receiverEnded = false;
     await _connectSession(
@@ -287,6 +306,7 @@ class RustCastTransport extends TvTransport {
       _session = session;
       final connected = await session.connected;
       _capabilities = connected.capabilities;
+      _volumeSupported = connected.capabilities.volume;
       _eventSub = session.events.listen(
         (event) => _onSessionEvent(session, event),
         onError: (Object error, StackTrace stackTrace) {
@@ -322,6 +342,7 @@ class RustCastTransport extends TvTransport {
 
   @override
   Future<bool> castVideo(PlayPayload video) {
+    _lastError = null;
     final loadGeneration = ++_loadIntentGeneration;
     return _serializeOperation(() => _castVideo(
           video,
@@ -452,6 +473,11 @@ class RustCastTransport extends TvTransport {
   Future<bool> _sendControl(String command) async {
     final session = _session;
     if (!isConnected || session == null) return false;
+    if ((command == 'volume_up' || command == 'volume_down') &&
+        !rustTransportSupportsVolume(protocol, _capabilities,
+            volumeSupported: _volumeSupported)) {
+      return false;
+    }
     try {
       if (command.startsWith('seek_to:')) {
         if (_capabilities?.seek == false) return false;
@@ -481,6 +507,10 @@ class RustCastTransport extends TvTransport {
               position: Duration.zero,
               duration: Duration.zero,
             ));
+          case 'volume_up':
+            await session.adjustVolume(0.05);
+          case 'volume_down':
+            await session.adjustVolume(-0.05);
           case 'seek_forward':
             await session.relativeSeek(forward: true);
           case 'seek_back':
@@ -512,6 +542,7 @@ class RustCastTransport extends TvTransport {
   ) {
     switch (event) {
       case rust.CastSessionStatus(:final status):
+        _volumeSupported = status.volumeSupported ?? _volumeSupported;
         _emitStatus(status);
         if (status.state == rust.PlaybackState.stopped ||
             status.state == rust.PlaybackState.finished) {
@@ -519,7 +550,10 @@ class RustCastTransport extends TvTransport {
         }
       case rust.CastSessionError():
         final error = event;
-        if (shouldPublishGlobalCastSessionError(error)) {
+        if (error.playbackFailed) {
+          _stopPolling();
+          _emitError(error.operation ?? 'playback', error.message);
+        } else if (shouldPublishGlobalCastSessionError(error)) {
           final receiverApplicationInvalid =
               error.receiverEnded || error.sessionUnresponsive;
           _receiverEnded = _receiverEnded || receiverApplicationInvalid;
@@ -553,6 +587,7 @@ class RustCastTransport extends TvTransport {
     if (!identical(_session, session)) return;
     _session = null;
     _capabilities = null;
+    _volumeSupported = null;
     _stopPolling();
     _receiverEnded = _receiverEnded || receiverEnded;
     if (protocol == TvProtocol.googleCast && _selectedTv != null) {
@@ -662,12 +697,14 @@ class RustCastTransport extends TvTransport {
   }
 
   void _emitError(String operation, Object error) {
+    _lastError =
+        error is rust.CastSessionError ? error.message : error.toString();
     debugPrint('[tv-transport] ${protocol.label} $operation failed: $error');
     if (!_messages.isClosed) {
       _messages.add(jsonEncode({
         'type': 'error',
         'operation': operation,
-        'message': error.toString(),
+        'message': _lastError,
       }));
     }
   }
@@ -687,6 +724,7 @@ class RustCastTransport extends TvTransport {
     final session = _session;
     _session = null;
     _capabilities = null;
+    _volumeSupported = null;
     if (session != null && !session.isDisposed) {
       try {
         await session.disconnect();

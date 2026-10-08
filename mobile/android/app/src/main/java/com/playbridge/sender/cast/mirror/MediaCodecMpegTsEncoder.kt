@@ -12,7 +12,11 @@ import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Surface-input H.264 encoder with a small MPEG-TS muxer for low-latency mirroring. */
+/**
+ * Surface-input H.264 encoder with a small MPEG-TS muxer for external mirroring.
+ * The program always includes AAC. Device playback is used when capture starts;
+ * otherwise a silent AAC-LC track is muxed so DLNA renderers can play the stream.
+ */
 internal class MediaCodecMpegTsEncoder(
     width: Int,
     height: Int,
@@ -30,12 +34,18 @@ internal class MediaCodecMpegTsEncoder(
     private val closed = AtomicBoolean(false)
     private val muxer: H264MpegTsMuxer
     private val audioEncoder: PlaybackAudioMpegTsEncoder?
+    @Volatile private var silentAudio: SilentAacMpegTsFeeder? = null
     private val drainThread = Thread(::drain, "PlayBridgeMirrorEncoder").apply { isDaemon = true }
     private var codecConfig = ByteArray(0)
     private var lastSyncRequestNs = 0L
 
     val inputSurface: Surface
-    val hasAudio: Boolean get() = audioEncoder != null
+
+    /** True when the MPEG-TS program map includes an audio elementary stream. */
+    val hasAudio: Boolean = true
+
+    /** True when device playback, not silence, is feeding that audio stream. */
+    val playbackAudioActive: Boolean get() = audioEncoder != null
 
     init {
         require(width > 0 && height > 0)
@@ -53,22 +63,38 @@ internal class MediaCodecMpegTsEncoder(
         }
         codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
         inputSurface = codec.createInputSurface()
-        val audioCandidate = if (deviceAudio) {
+        val playbackApiAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val audioCandidate = if (deviceAudio && playbackApiAvailable) {
             PlaybackAudioMpegTsEncoder.create(
                 projection = projection,
                 onFrame = { accessUnit, presentationTimeUs ->
                     muxer.writeAudioAccessUnit(accessUnit, presentationTimeUs)
                 },
                 onActive = onAudioActive,
-                onError = onAudioError,
+                onError = { error ->
+                    onAudioError(error)
+                    // prepare() reports before start(). Init installs silence in that case.
+                    if (running.get()) startSilentAudio()
+                },
             )
         } else {
             null
         }
         val audio = audioCandidate?.takeIf { it.prepare() }
         if (audio == null) audioCandidate?.close()
-        muxer = H264MpegTsMuxer(output, includeAudio = audio != null)
         audioEncoder = audio
+        val plan = mirrorAudioPlan(
+            deviceAudioRequested = deviceAudio,
+            playbackCaptureApiAvailable = playbackApiAvailable,
+            playbackCapturePrepared = audio != null,
+        )
+        muxer = H264MpegTsMuxer(
+            output,
+            includeAudio = mirrorTransportIncludesAudio(plan),
+        )
+        if (plan == MirrorAudioPlan.SILENT) {
+            silentAudio = SilentAacMpegTsFeeder(muxer)
+        }
     }
 
     fun start() {
@@ -77,10 +103,13 @@ internal class MediaCodecMpegTsEncoder(
         lastSyncRequestNs = System.nanoTime()
         drainThread.start()
         audioEncoder?.start()
+        silentAudio?.start()
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        val feeder = synchronized(this) { silentAudio }
+        feeder?.close()
         audioEncoder?.close()
         running.set(false)
         if (drainThread.isAlive && Thread.currentThread() !== drainThread) {
@@ -91,6 +120,14 @@ internal class MediaCodecMpegTsEncoder(
         runCatching { codec.release() }
         runCatching { inputSurface.release() }
         runCatching { output.close() }
+    }
+
+    @Synchronized
+    private fun startSilentAudio() {
+        if (closed.get() || silentAudio != null) return
+        val feeder = SilentAacMpegTsFeeder(muxer)
+        silentAudio = feeder
+        if (running.get()) feeder.start()
     }
 
     private fun drain() {
@@ -213,7 +250,11 @@ private fun ByteArray.hasParameterSets(): Boolean {
     return false
 }
 
-/** Minimal single-program MPEG-TS muxer for H.264 video and optional AAC audio. */
+/**
+ * Minimal single-program MPEG-TS muxer for H.264 video and optional AAC audio.
+ * When audio is included, every keyframe repeats PAT and PMT with the audio PID
+ * so a renderer can join mid-stream.
+ */
 internal class H264MpegTsMuxer(
     private val output: OutputStream,
     private val includeAudio: Boolean = false,
