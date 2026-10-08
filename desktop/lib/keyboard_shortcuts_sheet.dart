@@ -16,6 +16,7 @@ class _KeyboardShortcutsDialog extends StatelessWidget {
     ('Space', 'Play / pause'),
     ('← / →', 'Seek −10s / +10s'),
     ('↑ / ↓', 'Volume up / down'),
+    ('[ / ]', 'Playback speed down / up'),
     ('F', 'Toggle fullscreen'),
     ('I', 'Playback stats & proxy status overlay'),
     ('?', 'This shortcuts list'),

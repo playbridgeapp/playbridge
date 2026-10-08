@@ -112,7 +112,7 @@ class MediaSessionBridge {
         'status': status,
         'positionMs': _player.positionMs.clamp(0, 1 << 30),
         'durationMs': _player.durationMs.clamp(0, 1 << 30),
-        'speed': 1.0,
+        'speed': _player.playbackRate,
       }).catchError((e) {
         debugPrint('[media-session] mac update: $e');
       }),
@@ -312,6 +312,7 @@ class _PluginAdapter implements MediaSessionAdapter {
           status: status,
           position:
               Duration(milliseconds: _player.positionMs.clamp(0, 1 << 30)),
+          speed: _player.playbackRate,
         ),
       )
           .catchError((Object e) {

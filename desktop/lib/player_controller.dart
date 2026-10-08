@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import 'media_kind.dart';
+import 'playback_speed.dart';
 import 'player_engine.dart';
 import 'engines/mpv_engine.dart';
 import 'pairing_store.dart';
@@ -128,6 +129,7 @@ class PlayerController extends ChangeNotifier {
       if (currentPos > Duration.zero) {
         await _engine.seek(currentPos);
       }
+      await _engine.setPlaybackRate(_playbackRate);
 
       if (!wasPlaying) {
         await _engine.pause();
@@ -223,6 +225,27 @@ class PlayerController extends ChangeNotifier {
       : _engine.durationMs;
   double get volume => _engine.volume;
   bool get hardwareVideoOutput => store?.hardwareVideoOutput ?? true;
+
+  double _playbackRate = 1.0;
+
+  /// Offered-ladder rate currently applied (1.0 after every new item).
+  double get playbackRate => _playbackRate;
+
+  /// Snap [rate] onto the TV speed list and apply it to the engine.
+  Future<void> setPlaybackRate(double rate) async {
+    final snapped = nearestPlaybackSpeed(rate);
+    final changed = snapped != _playbackRate;
+    _playbackRate = snapped;
+    if (changed) notifyListeners();
+    await _engine.setPlaybackRate(snapped);
+  }
+
+  /// One step slower (`direction < 0`) or faster. No-op at the ends.
+  Future<void> stepPlaybackRate(int direction) =>
+      setPlaybackRate(stepPlaybackSpeed(_playbackRate, direction));
+
+  /// New items always start at 1x. Reloads of the same item keep [playbackRate].
+  Future<void> _resetPlaybackRateForNewMedia() => setPlaybackRate(1.0);
 
   dynamic get tracks => _engine.tracks;
   dynamic get track => _engine.track;
@@ -490,6 +513,7 @@ class PlayerController extends ChangeNotifier {
     resetImageTransform(notify: false);
     if (item.mediaKind == MediaKind.image) {
       await _engine.stop();
+      await _resetPlaybackRateForNewMedia();
       _imagePositionMs = 0;
       _imageDurationMs = (item.displayDurationMs ?? 0).clamp(0, 86400000);
       _imagePlaying = _imageDurationMs > 0;
@@ -502,6 +526,7 @@ class PlayerController extends ChangeNotifier {
     _imageDurationMs = 0;
     _imagePlaying = false;
     await _engine.open(item);
+    await _resetPlaybackRateForNewMedia();
     unawaited(_applyStartPosition());
     var retries = 0;
     while (_engine.durationMs <= 0 && retries < 40) {
@@ -751,6 +776,7 @@ class PlayerController extends ChangeNotifier {
           play: wasPlaying,
         );
         await _engine.setVolume(currentVolume);
+        await _engine.setPlaybackRate(_playbackRate);
 
         var retries = 0;
         while (_engine.durationMs <= 0 && retries < 40) {
@@ -834,6 +860,7 @@ class PlayerController extends ChangeNotifier {
     if (_currentIndex < 0 || _currentIndex >= _queue.length) return;
     _queue[_currentIndex] = preparedItem;
     await _engine.open(preparedItem);
+    await _engine.setPlaybackRate(_playbackRate);
   }
 
   /// Seamlessly switches the current item between direct ↔ proxied playback.
@@ -1013,6 +1040,7 @@ class PlayerController extends ChangeNotifier {
         0,
         play: wasPlaying,
       );
+      await _engine.setPlaybackRate(_playbackRate);
     } catch (error) {
       if (_currentIndex == itemIndex &&
           identical(_queue[itemIndex], replacement)) {
@@ -1024,6 +1052,7 @@ class PlayerController extends ChangeNotifier {
             0,
             play: wasPlaying,
           );
+          await _engine.setPlaybackRate(_playbackRate);
           if (currentPos > 0) {
             await _engine.seek(Duration(milliseconds: currentPos));
           }
