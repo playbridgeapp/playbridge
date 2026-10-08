@@ -13,6 +13,9 @@ class _FakeEngine extends PlayerEngine {
   int positionMsValue = 0;
   int? lastSeekMs;
   int durationMsValue = 1000;
+  double playbackRateValue = 1.0;
+  int rateSetCount = 0;
+  bool resetRateOnOpen = false;
   bool lastOpenPlay = true;
   int failuresRemaining = 0;
   Duration openDelay = Duration.zero;
@@ -36,10 +39,20 @@ class _FakeEngine extends PlayerEngine {
   Future<void> setSubtitleTrack(dynamic t) async {}
 
   @override
+  double get playbackRate => playbackRateValue;
+
+  @override
+  Future<void> setPlaybackRate(double rate) async {
+    rateSetCount++;
+    playbackRateValue = rate;
+  }
+
+  @override
   Future<void> open(QueueItem item) async {
     if (openDelay > Duration.zero) await Future<void>.delayed(openDelay);
     openCount++;
     lastOpenPlay = true;
+    if (resetRateOnOpen) playbackRateValue = 1.0;
     if (failuresRemaining > 0) {
       failuresRemaining--;
       throw StateError('open failed');
@@ -58,6 +71,7 @@ class _FakeEngine extends PlayerEngine {
     openCount++;
     lastOpenIndex = startIndex;
     lastOpenPlay = play;
+    if (resetRateOnOpen) playbackRateValue = 1.0;
     if (failuresRemaining > 0) {
       failuresRemaining--;
       throw StateError('open failed');
@@ -482,5 +496,55 @@ void main() {
 
     expect(c.currentIndex, -1);
     expect(c.queue, isEmpty);
+  });
+
+  test('applies a snapped playback rate and steps the TV ladder', () async {
+    final engine = _FakeEngine();
+    final c = PlayerController(engineForTest: engine);
+    await c.playItem(item(1));
+    final setsAfterLoad = engine.rateSetCount;
+    expect(c.playbackRate, 1.0);
+    expect(engine.playbackRateValue, 1.0);
+    expect(setsAfterLoad, greaterThan(0));
+
+    await c.setPlaybackRate(1.3);
+    expect(c.playbackRate, 1.25);
+    expect(engine.playbackRateValue, 1.25);
+
+    await c.stepPlaybackRate(1);
+    expect(c.playbackRate, 1.5);
+    await c.stepPlaybackRate(-1);
+    expect(c.playbackRate, 1.25);
+  });
+
+  test('resets playback rate to 1x when a new item loads', () async {
+    final engine = _FakeEngine();
+    final c = PlayerController(engineForTest: engine);
+    await c.playPlaylist([item(1), item(2)], 0);
+    await c.setPlaybackRate(1.75);
+
+    await c.next();
+    expect(c.playbackRate, 1.0);
+    expect(engine.playbackRateValue, 1.0);
+
+    await c.setPlaybackRate(2.0);
+    await c.playItem(item(3));
+    expect(c.playbackRate, 1.0);
+    expect(engine.playbackRateValue, 1.0);
+  });
+
+  test('keeps the current rate when the same item is reopened', () async {
+    await StreamProxyServer.instance.start();
+    final engine = _FakeEngine()..resetRateOnOpen = true;
+    final c = PlayerController(engineForTest: engine);
+    await c.playItem(
+      QueueItem(url: 'https://example.com/stream.m3u8', title: 'Stream'),
+    );
+    await c.setPlaybackRate(1.5);
+
+    expect(await c.toggleProxy(), isTrue);
+    expect(engine.openCount, greaterThan(1));
+    expect(c.playbackRate, 1.5);
+    expect(engine.playbackRateValue, 1.5);
   });
 }

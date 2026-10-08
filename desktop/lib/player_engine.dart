@@ -206,6 +206,12 @@ abstract class PlayerEngine extends ChangeNotifier {
   Future<void> setAudioTrack(dynamic t);
   Future<void> setSubtitleTrack(dynamic t);
 
+  /// Current playback rate. 1.0 is normal speed.
+  double get playbackRate => 1.0;
+
+  /// Apply [rate]. Engines that cannot change speed ignore this.
+  Future<void> setPlaybackRate(double rate) async {}
+
   /// Engine-agnostic track lists for the phone remote. Default: none.
   List<TrackInfo> get audioTrackInfos => const [];
   List<TrackInfo> get subtitleTrackInfos => const [];

@@ -60,6 +60,7 @@ class MpvEngine extends PlayerEngine {
       player.stream.duration.listen((_) => notifyListeners()),
       player.stream.buffering.listen((_) => notifyListeners()),
       player.stream.volume.listen((_) => notifyListeners()),
+      player.stream.rate.listen((_) => notifyListeners()),
       player.stream.completed.listen((done) {
         if (done) onCompleted?.call();
         notifyListeners();
@@ -163,6 +164,12 @@ class MpvEngine extends PlayerEngine {
   int get durationMs => player.state.duration.inMilliseconds;
   @override
   double get volume => player.state.volume / 100.0;
+
+  @override
+  double get playbackRate => player.state.rate;
+
+  @override
+  Future<void> setPlaybackRate(double rate) => player.setRate(rate);
 
   @override
   Tracks get tracks => player.state.tracks;

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageFilter, PlatformDispatcher;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart';
@@ -28,7 +29,10 @@ import 'now_casting_screen.dart';
 import 'pairing_store.dart';
 import 'pair_screen.dart';
 import 'playback_osd.dart';
+import 'playback_speed.dart';
+import 'player_chrome_policy.dart';
 import 'player_controller.dart';
+import 'player_surface_click.dart';
 import 'player_engine.dart';
 import 'preplay_overlay.dart';
 import 'send_to_tv_screen.dart';
@@ -139,6 +143,14 @@ class VolumeDownIntent extends Intent {
   const VolumeDownIntent();
 }
 
+class SpeedDownIntent extends Intent {
+  const SpeedDownIntent();
+}
+
+class SpeedUpIntent extends Intent {
+  const SpeedUpIntent();
+}
+
 class StatsToggleIntent extends Intent {
   const StatsToggleIntent();
 }
@@ -207,19 +219,17 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   // switch; both mutate this notifier and the change is persisted via the store.
   late final ValueNotifier<bool> _showStats;
 
-  // Controls visibility for the video overlay
-  bool _videoHovered = false;
+  // Controls visibility: paused or pinned (menu / playlist / scrub).
+  bool _chromeVisible = false;
   int _menusOpen = 0;
   bool _playlistDrawerOpen = false;
-  Timer? _hideTimer;
-  static const _autoHide = Duration(seconds: 2);
+  bool _scrubbing = false;
+  final _surfaceClick = PlayerSurfaceClick();
 
   /// Center OSD (pause / seek / volume); cleared by [_osdTimer].
   String? _osdMessage;
   Timer? _osdTimer;
 
-  /// Debounces single-tap play/pause so double-tap fullscreen isn't stolen.
-  Timer? _tapTimer;
   bool _mainDragging = false;
 
   static const _mediaExts = {
@@ -239,20 +249,19 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     'wav',
   };
 
-  void _markActive() {
-    if (!_videoHovered) setState(() => _videoHovered = true);
-    _hideTimer?.cancel();
-    _hideTimer = Timer(_autoHide, () {
-      if (!mounted) return;
-      if (_menusOpen > 0 || _playlistDrawerOpen) return;
-      setState(() => _videoHovered = false);
-    });
-  }
+  bool get _chromePinned =>
+      _menusOpen > 0 || _playlistDrawerOpen || _scrubbing;
+  bool get _playing => PlayerChromePolicy.isPlaying(_player.state);
 
-  void _markInactive() {
-    _hideTimer?.cancel();
-    if (_menusOpen > 0 || _playlistDrawerOpen) return;
-    if (_videoHovered) setState(() => _videoHovered = false);
+  void _applyChrome({bool? playing}) {
+    if (!mounted) return;
+    final visible = PlayerChromePolicy.resolve(
+      playing: playing ?? _playing,
+      pinned: _chromePinned,
+    ).visible;
+    if (visible != _chromeVisible) {
+      setState(() => _chromeVisible = visible);
+    }
   }
 
   @override
@@ -551,7 +560,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       _player.currentIndex,
     );
     if (coarse != _lastCoarse) {
+      final playingChanged = _lastCoarse == null ||
+          PlayerChromePolicy.isPlaying(_lastCoarse!.$3) !=
+              PlayerChromePolicy.isPlaying(coarse.$3);
       _lastCoarse = coarse;
+      if (playingChanged) _applyChrome();
       if (mounted) setState(() {});
     }
 
@@ -740,11 +753,24 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   void _togglePlayPause({bool withOsd = true}) {
     if (_player.state == 'playing') {
       unawaited(_player.pause());
+      _applyChrome(playing: false);
       if (withOsd) _showOsd('Paused');
     } else if (_player.state == 'paused' || _player.state == 'buffering') {
       unawaited(_player.resume());
+      _applyChrome(playing: true);
       if (withOsd) _showOsd('Play');
     }
+  }
+
+  void _onVideoSurfaceClick() {
+    if (_surfaceClick.isDouble(DateTime.now())) {
+      _togglePlayPause(withOsd: false);
+      final entering = !_isFullScreen;
+      unawaited(_toggleFullScreen());
+      _showOsd(entering ? 'Fullscreen' : 'Windowed');
+      return;
+    }
+    _togglePlayPause();
   }
 
   void _seekBy(int deltaMs, {required String osd}) {
@@ -760,6 +786,16 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     final next = (_player.volume + delta).clamp(0.0, 1.0);
     unawaited(_player.setVolume(next));
     _showOsd('Volume ${(next * 100).round()}%');
+  }
+
+  void _stepPlaybackSpeed(int direction) {
+    final kind = _player.currentMediaKind;
+    if (_player.queue.isEmpty || kind == null || kind == MediaKind.image) {
+      return;
+    }
+    final next = stepPlaybackSpeed(_player.playbackRate, direction);
+    unawaited(_player.setPlaybackRate(next));
+    _showOsd(playbackSpeedLabel(next));
   }
 
   /// Drop files/URLs onto the main surface: cast if a TV is linked, else play here.
@@ -830,9 +866,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
   @override
   void dispose() {
     _memoryDiagnostics.dispose();
-    _hideTimer?.cancel();
     _osdTimer?.cancel();
-    _tapTimer?.cancel();
     _keyboardFocusNode.dispose();
     windowManager.removeListener(this);
     _player.removeListener(_handlePlayerChange);
@@ -917,6 +951,11 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                 const VolumeUpIntent(),
             const SingleActivator(LogicalKeyboardKey.arrowDown):
                 const VolumeDownIntent(),
+            // mpv convention: `[` slower, `]` faster.
+            const SingleActivator(LogicalKeyboardKey.bracketLeft):
+                const SpeedDownIntent(),
+            const SingleActivator(LogicalKeyboardKey.bracketRight):
+                const SpeedUpIntent(),
             const SingleActivator(LogicalKeyboardKey.keyI):
                 const StatsToggleIntent(),
             const SingleActivator(LogicalKeyboardKey.keyF):
@@ -956,6 +995,18 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
               VolumeDownIntent: CallbackAction<VolumeDownIntent>(
                 onInvoke: (_) {
                   _nudgeVolume(-0.05);
+                  return null;
+                },
+              ),
+              SpeedDownIntent: CallbackAction<SpeedDownIntent>(
+                onInvoke: (_) {
+                  _stepPlaybackSpeed(-1);
+                  return null;
+                },
+              ),
+              SpeedUpIntent: CallbackAction<SpeedUpIntent>(
+                onInvoke: (_) {
+                  _stepPlaybackSpeed(1);
                   return null;
                 },
               ),
@@ -1103,11 +1154,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                         onDragExited: (_) => setState(
                                             () => _mainDragging = false),
                                         onDragDone: _onMainDrop,
-                                        child: MouseRegion(
-                                          onEnter: (_) => _markActive(),
-                                          onExit: (_) => _markInactive(),
-                                          onHover: (_) => _markActive(),
-                                          child: Stack(
+                                        child: Stack(
                                             fit: StackFit.expand,
                                             children: [
                                               // Video is always in the tree (Offstage) so
@@ -1122,10 +1169,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                     child:
                                                         MediaPresentationSurface(
                                                       controller: _player,
-                                                      controlsVisible:
-                                                          _videoHovered ||
-                                                              _playlistDrawerOpen ||
-                                                              _menusOpen > 0,
+                                                      controlsVisible: _chromeVisible,
                                                     ),
                                                   ),
                                                 ),
@@ -1134,30 +1178,15 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                               // Below overlays so buttons/menus keep hits.
                                               if (_showingVideo && hasMedia)
                                                 Positioned.fill(
-                                                  child: GestureDetector(
+                                                  child: Listener(
                                                     behavior: HitTestBehavior
                                                         .translucent,
-                                                    onTap: () {
-                                                      _markActive();
-                                                      // Wait out a possible double-tap.
-                                                      _tapTimer?.cancel();
-                                                      _tapTimer = Timer(
-                                                        const Duration(
-                                                            milliseconds: 220),
-                                                        () =>
-                                                            _togglePlayPause(),
-                                                      );
-                                                    },
-                                                    onDoubleTap: () {
-                                                      _tapTimer?.cancel();
-                                                      _markActive();
-                                                      final entering =
-                                                          !_isFullScreen;
-                                                      unawaited(
-                                                          _toggleFullScreen());
-                                                      _showOsd(entering
-                                                          ? 'Fullscreen'
-                                                          : 'Windowed');
+                                                    onPointerDown: (event) {
+                                                      if (event.buttons !=
+                                                          kPrimaryButton) {
+                                                        return;
+                                                      }
+                                                      _onVideoSurfaceClick();
                                                     },
                                                   ),
                                                 ),
@@ -1195,26 +1224,33 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   child: _PlayerControlsBar(
                                                     player: _player,
                                                     store: widget.store,
-                                                    visible: _videoHovered ||
-                                                        _playlistDrawerOpen ||
-                                                        _menusOpen > 0,
+                                                    visible: _chromeVisible,
                                                     showQueueControls: hasQueue,
-                                                    onTogglePlaylist: () =>
-                                                        setState(
-                                                      () => _playlistDrawerOpen =
-                                                          !_playlistDrawerOpen,
-                                                    ),
+                                                    onTogglePlaylist: () {
+                                                      setState(() =>
+                                                          _playlistDrawerOpen =
+                                                              !_playlistDrawerOpen);
+                                                      _applyChrome();
+                                                    },
                                                     playlistOpen:
                                                         _playlistDrawerOpen,
-                                                    onMenuOpened: () =>
-                                                        setState(
-                                                            () => _menusOpen++),
-                                                    onMenuClosed: () =>
-                                                        setState(
-                                                      () => _menusOpen =
-                                                          (_menusOpen - 1)
-                                                              .clamp(0, 99),
-                                                    ),
+                                                    onMenuOpened: () {
+                                                      setState(
+                                                          () => _menusOpen++);
+                                                      _applyChrome();
+                                                    },
+                                                    onMenuClosed: () {
+                                                      setState(
+                                                        () => _menusOpen =
+                                                            (_menusOpen - 1)
+                                                                .clamp(0, 99),
+                                                      );
+                                                      _applyChrome();
+                                                    },
+                                                    onScrubbing: (value) {
+                                                      _scrubbing = value;
+                                                      _applyChrome();
+                                                    },
                                                     isFullScreen: _isFullScreen,
                                                     onToggleFullScreen:
                                                         _toggleFullScreen,
@@ -1242,11 +1278,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   width: 360,
                                                   child: _PlaylistDrawer(
                                                     player: _player,
-                                                    onClose: () => setState(
-                                                      () =>
+                                                    onClose: () {
+                                                      setState(() =>
                                                           _playlistDrawerOpen =
-                                                              false,
-                                                    ),
+                                                              false);
+                                                      _applyChrome();
+                                                    },
                                                   ),
                                                 ),
                                               // Title scrim along the top — same
@@ -1259,9 +1296,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   top: 0,
                                                   child: _TitleOverlay(
                                                     player: _player,
-                                                    visible: _videoHovered ||
-                                                        _playlistDrawerOpen ||
-                                                        _menusOpen > 0,
+                                                    visible: _chromeVisible,
                                                   ),
                                                 ),
                                               // Pre-play screen for casts with
@@ -1302,7 +1337,6 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                 ),
                                             ],
                                           ),
-                                        ),
                                       ),
                                     ),
                                   ],
@@ -1792,6 +1826,7 @@ class _PlayerControlsBar extends StatefulWidget {
     required this.playlistOpen,
     required this.onMenuOpened,
     required this.onMenuClosed,
+    required this.onScrubbing,
     required this.isFullScreen,
     required this.onToggleFullScreen,
     required this.onToggleProxy,
@@ -1805,6 +1840,7 @@ class _PlayerControlsBar extends StatefulWidget {
   final bool playlistOpen;
   final VoidCallback onMenuOpened;
   final VoidCallback onMenuClosed;
+  final ValueChanged<bool> onScrubbing;
   final bool isFullScreen;
   final VoidCallback onToggleFullScreen;
   final Future<void> Function() onToggleProxy;
@@ -1894,13 +1930,19 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                                 max: hasDuration ? dur : 1,
                                 value: pos,
                                 onChanged: hasDuration && !isImage
-                                    ? (v) => setState(() => _dragValue = v)
+                                    ? (v) {
+                                        if (_dragValue == null) {
+                                          widget.onScrubbing(true);
+                                        }
+                                        setState(() => _dragValue = v);
+                                      }
                                     : null,
                                 onChangeEnd: hasDuration && !isImage
                                     ? (v) {
                                         p.seek(
                                             Duration(milliseconds: v.toInt()));
                                         setState(() => _dragValue = null);
+                                        widget.onScrubbing(false);
                                       }
                                     : null,
                               ),
@@ -1976,6 +2018,24 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                               player: p,
                               onOpened: widget.onMenuOpened,
                               onClosed: widget.onMenuClosed,
+                            ),
+                          _SpeedMenuButton(
+                            player: p,
+                            enabled: hasMedia,
+                            onOpened: widget.onMenuOpened,
+                            onClosed: widget.onMenuClosed,
+                          ),
+                          if ((p.playbackRate - 1.0).abs() > 0.001)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4),
+                              child: Text(
+                                playbackSpeedChip(p.playbackRate),
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.tealAccent,
+                                ),
+                              ),
                             ),
                         ],
                         IconButton(
@@ -2366,6 +2426,46 @@ class _VideoOutputMenuButton extends StatelessWidget {
           checked: hardware,
           child: const Text('Hardware renderer'),
         ),
+      ],
+    );
+  }
+}
+
+// ─── Playback speed menu ──────────────────────────────────────────────────────
+
+class _SpeedMenuButton extends StatelessWidget {
+  const _SpeedMenuButton({
+    required this.player,
+    required this.enabled,
+    required this.onOpened,
+    required this.onClosed,
+  });
+
+  final PlayerController player;
+  final bool enabled;
+  final VoidCallback onOpened;
+  final VoidCallback onClosed;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = player.playbackRate;
+    return PopupMenuButton<double>(
+      tooltip: 'Playback speed',
+      icon: const Icon(Icons.speed),
+      enabled: enabled,
+      onOpened: onOpened,
+      onCanceled: onClosed,
+      onSelected: (rate) {
+        onClosed();
+        unawaited(player.setPlaybackRate(rate));
+      },
+      itemBuilder: (context) => [
+        for (final rate in playbackSpeeds)
+          CheckedPopupMenuItem<double>(
+            value: rate,
+            checked: rate == current,
+            child: Text(playbackSpeedLabel(rate)),
+          ),
       ],
     );
   }
