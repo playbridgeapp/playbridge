@@ -1,22 +1,11 @@
+import 'package:flutter/painting.dart';
+
 /// Picture scaling offered by the desktop player. Matches Android TV
 /// (`MediaSettingsPanel` Fit / Zoom / Fill).
 enum VideoScalingMode {
   fit,
   zoom,
   fill,
-}
-
-/// mpv properties for [mode], ported from `MpvPlayerEngine.setVideoScale`.
-class VideoScalingProperties {
-  const VideoScalingProperties({
-    required this.keepaspect,
-    required this.panscan,
-    required this.videoAspectOverride,
-  });
-
-  final String keepaspect;
-  final String panscan;
-  final String videoAspectOverride;
 }
 
 const videoScalingModes = VideoScalingMode.values;
@@ -58,25 +47,9 @@ VideoScalingMode parseVideoScalingMode(String? raw) {
 VideoScalingMode nextVideoScalingMode(VideoScalingMode current) =>
     videoScalingModes[(current.index + 1) % videoScalingModes.length];
 
-VideoScalingProperties videoScalingProperties(VideoScalingMode mode) {
-  switch (mode) {
-    case VideoScalingMode.fill:
-      return const VideoScalingProperties(
-        keepaspect: 'no',
-        panscan: '0',
-        videoAspectOverride: 'no',
-      );
-    case VideoScalingMode.zoom:
-      return const VideoScalingProperties(
-        keepaspect: 'yes',
-        panscan: '1',
-        videoAspectOverride: 'no',
-      );
-    case VideoScalingMode.fit:
-      return const VideoScalingProperties(
-        keepaspect: 'yes',
-        panscan: '0',
-        videoAspectOverride: 'no',
-      );
-  }
-}
+/// media_kit [Video] scales the mpv texture itself; panscan/keepaspect do not.
+BoxFit videoScalingBoxFit(VideoScalingMode mode) => switch (mode) {
+      VideoScalingMode.fit => BoxFit.contain,
+      VideoScalingMode.zoom => BoxFit.cover,
+      VideoScalingMode.fill => BoxFit.fill,
+    };
