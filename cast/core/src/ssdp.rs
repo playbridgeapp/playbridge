@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
+    io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     time::{Duration, Instant},
 };
 
-use tokio::{net::UdpSocket, sync::mpsc, time};
+use socket2::{Domain, Protocol, Socket, Type};
+use tokio::{net::UdpSocket, sync::mpsc, task::JoinSet, time};
 
 use crate::Result;
 
@@ -99,31 +101,56 @@ impl DiscoverySession {
         config: &DiscoveryConfig,
         events: mpsc::Sender<DiscoveryHit>,
     ) -> Result<()> {
-        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)).await?;
-        socket.set_multicast_ttl_v4(config.ttl)?;
+        let sockets = search_sockets(config.ttl)?;
         let destination = SocketAddrV4::new(Ipv4Addr::new(239, 255, 255, 250), 1900);
 
+        let mut sent = false;
+        let mut last_failure = None;
         for _ in 0..config.repeats.max(1) {
             for target in targets(&config.protocols) {
-                socket
-                    .send_to(&m_search(target, config.mx_seconds), destination)
-                    .await?;
+                let packet = m_search(target, config.mx_seconds);
+                for socket in &sockets {
+                    match socket.send_to(&packet, destination).await {
+                        Ok(_) => sent = true,
+                        Err(failure) => last_failure = Some(failure),
+                    }
+                }
             }
         }
+        if !sent && let Some(failure) = last_failure {
+            return Err(failure.into());
+        }
+
+        let (packet_sender, mut packets) = mpsc::channel::<(Vec<u8>, SocketAddr)>(64);
+        let mut readers = JoinSet::new();
+        for socket in sockets {
+            let packet_sender = packet_sender.clone();
+            readers.spawn(async move {
+                let mut buffer = [0_u8; 8192];
+                while let Ok((length, source)) = socket.recv_from(&mut buffer).await {
+                    if packet_sender
+                        .send((buffer[..length].to_vec(), source))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+        drop(packet_sender);
 
         let deadline = Instant::now() + config.timeout;
-        let mut buffer = [0_u8; 8192];
         let mut hits = HashMap::<(DiscoveryProtocol, String), DiscoveryHit>::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break;
             }
-            let received = time::timeout(remaining, socket.recv_from(&mut buffer)).await;
-            let Ok(Ok((length, source))) = received else {
+            let Ok(Some((packet, source))) = time::timeout(remaining, packets.recv()).await else {
                 break;
             };
-            if let Some(hit) = parse_response(&buffer[..length], source) {
+            if let Some(hit) = parse_response(&packet, source) {
                 let key = (hit.protocol, hit.location.clone());
                 if let std::collections::hash_map::Entry::Vacant(entry) = hits.entry(key) {
                     entry.insert(hit.clone());
@@ -131,8 +158,51 @@ impl DiscoverySession {
                 }
             }
         }
+        readers.abort_all();
         Ok(())
     }
+}
+
+/// Opens one search socket per LAN interface. A full-tunnel VPN usually owns
+/// the multicast route, so a socket left to the routing table sends every
+/// M-SEARCH into the tunnel and never reaches renderers on the local network.
+/// Falls back to the default route when no interface can be pinned.
+fn search_sockets(ttl: u32) -> io::Result<Vec<UdpSocket>> {
+    let mut sockets: Vec<_> = lan_ipv4_addresses()
+        .into_iter()
+        .filter_map(|address| multicast_socket(Some(address), ttl).ok())
+        .collect();
+    if sockets.is_empty() {
+        sockets.push(multicast_socket(None, ttl)?);
+    }
+    Ok(sockets)
+}
+
+fn lan_ipv4_addresses() -> Vec<Ipv4Addr> {
+    let mut addresses = Vec::new();
+    for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+        // Point-to-point links are VPN or cellular tunnels, never the LAN.
+        if !interface.is_oper_up() || interface.is_loopback() || interface.is_p2p() {
+            continue;
+        }
+        if let if_addrs::IfAddr::V4(address) = interface.addr
+            && !addresses.contains(&address.ip)
+        {
+            addresses.push(address.ip);
+        }
+    }
+    addresses
+}
+
+fn multicast_socket(interface: Option<Ipv4Addr>, ttl: u32) -> io::Result<UdpSocket> {
+    let socket = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
+    if let Some(interface) = interface {
+        socket.set_multicast_if_v4(&interface)?;
+    }
+    socket.set_multicast_ttl_v4(ttl)?;
+    socket.set_nonblocking(true)?;
+    socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0).into())?;
+    UdpSocket::from_std(socket.into())
 }
 
 fn targets(protocols: &[DiscoveryProtocol]) -> Vec<&'static str> {
