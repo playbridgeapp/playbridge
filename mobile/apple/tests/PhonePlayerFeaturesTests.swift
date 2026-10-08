@@ -115,6 +115,64 @@ final class PhoneSenderServices {
         controls.setSuspended(false); try await settle(); precondition(!controls.visible)
         controls.reveal(); controls.stop(); try await settle(); precondition(controls.visible)
         print("PASS shared auto-hide timer, pause/buffering, scrubbing/sheets, VoiceOver, touch lock/unlock and lifecycle cancellation")
+
+        let hidden = PhonePlayerControls(hideDelayNanoseconds: 20_000_000)
+        hidden.update(playing: true, buffering: false, voiceOver: false)
+        try await settle(); precondition(!hidden.visible)
+        let generation = hidden.hideGeneration
+        hidden.touchChrome(from: .surfaceGesture)
+        hidden.setScrubbing(true, source: .surfaceGesture)
+        hidden.setScrubbing(false, source: .surfaceGesture)
+        precondition(!hidden.visible && hidden.hideGeneration == generation, "Gesture seeks must not reveal or extend the bars")
+        hidden.update(playing: false, buffering: false, voiceOver: false)
+        precondition(hidden.visible)
+        let held = hidden.hideGeneration
+        hidden.touchChrome(from: .surfaceGesture)
+        precondition(hidden.visible && hidden.hideGeneration == held, "A gesture must not force-hide bars that are already up")
+        hidden.touchChrome(from: .transport); precondition(hidden.visible)
+        hidden.setScrubbing(true); precondition(hidden.visible, "The slider scrub still reveals")
+        print("PASS gesture seeks leave chrome alone; transport and slider scrubs still reveal")
+
+        precondition(PhonePlayerScrub.fullWidthSeconds == 100)
+        let size = CGSize(width: 400, height: 800)
+        let center = CGPoint(x: 200, y: 400)
+        let playing = PhonePlayerScrub.Gate(duration: 2700, locked: false, voiceOver: false)
+        precondition(PhonePlayerScrub.decide(start: center, translation: CGSize(width: 8, height: 0), viewSize: size, position: 754, gate: playing) == .pending)
+        precondition(PhonePlayerScrub.decide(start: center, translation: CGSize(width: 10, height: 20), viewSize: size, position: 754, gate: playing) == .ignore)
+        precondition(PhonePlayerScrub.decide(start: CGPoint(x: PhonePlayerScrub.edgeMargin - 1, y: 400), translation: CGSize(width: 80, height: 0), viewSize: size, position: 754, gate: playing) == .ignore)
+        precondition(PhonePlayerScrub.decide(start: CGPoint(x: size.width - PhonePlayerScrub.edgeMargin + 1, y: 400), translation: CGSize(width: -80, height: 0), viewSize: size, position: 754, gate: playing) == .ignore)
+        precondition(PhonePlayerScrub.decide(start: CGPoint(x: 200, y: size.height - PhonePlayerScrub.homeIndicatorMargin + 1), translation: CGSize(width: 80, height: 0), viewSize: size, position: 754, gate: playing) == .ignore)
+        precondition(PhonePlayerScrub.decide(start: center, translation: CGSize(width: 80, height: 0), viewSize: size, position: 754, gate: PhonePlayerScrub.Gate(duration: 0, locked: false, voiceOver: false)) == .ignore)
+        precondition(PhonePlayerScrub.decide(start: center, translation: CGSize(width: 80, height: 0), viewSize: size, position: 754, gate: PhonePlayerScrub.Gate(duration: 2700, locked: true, voiceOver: false)) == .ignore)
+        precondition(PhonePlayerScrub.decide(start: center, translation: CGSize(width: 80, height: 0), viewSize: size, position: 754, gate: PhonePlayerScrub.Gate(duration: 2700, locked: false, voiceOver: true)) == .ignore)
+        guard case .scrub(let sample) = PhonePlayerScrub.decide(start: center, translation: CGSize(width: 60, height: 4), viewSize: size, position: 754, gate: playing) else {
+            preconditionFailure("A horizontal drag must scrub")
+        }
+        precondition(sample.offsetLabel == "+0:15" && sample.timeLabel == "12:49 / 45:00" && abs(sample.target - 769) < 0.001)
+        let full = PhonePlayerScrub.preview(translationX: 400, viewWidth: 400, position: 10, duration: 45)!
+        precondition(full.target == 45 && full.offsetLabel == "+0:35" && full.timeLabel == "0:45 / 0:45")
+        let capped = PhonePlayerScrub.preview(translationX: -400, viewWidth: 400, position: 30, duration: 3600)!
+        precondition(capped.target == 0 && capped.offsetLabel == "-0:30" && capped.timeLabel == "0:00 / 1:00:00")
+        let forward = PhonePlayerScrub.preview(translationX: 200, viewWidth: 400, position: 754, duration: 2700)!
+        precondition(forward.offsetLabel == "+0:50" && forward.timeLabel == "13:24 / 45:00")
+        precondition(PhonePlayerScrub.formatSigned(15) == "+0:15" && PhonePlayerScrub.formatSigned(-90) == "-1:30" && PhonePlayerScrub.formatSigned(3661) == "+1:01:01")
+        precondition(PhonePlayerScrub.commit(sample, ended: false) == nil && PhonePlayerScrub.commit(sample, ended: true) == sample)
+        precondition(PhonePlayerScrub.tickStep == 2)
+        precondition([0.0, 1.9, 2, 3.9, 4].map(PhonePlayerScrub.tickBucket) == [0, 0, 1, 1, 2])
+        precondition([4.0, 2, 1.9, -1.9, -2].map(PhonePlayerScrub.tickBucket) == [2, 1, 0, 0, -1], "Reversing across a boundary must retick")
+        precondition(PhonePlayerScrub.hapticTicks(previousBucket: 1, offset: 1.5, target: 40, duration: 100, heldClamp: nil) == 1)
+        let pinned = PhonePlayerScrub.preview(translationX: -400, viewWidth: 400, position: 12, duration: 3600)!
+        let stillPinned = PhonePlayerScrub.preview(translationX: -800, viewWidth: 400, position: 12, duration: 3600)!
+        precondition(pinned.target == 0 && stillPinned.offset == pinned.offset)
+        precondition(PhonePlayerScrub.tickBucket(offset: pinned.offset) == PhonePlayerScrub.tickBucket(offset: stillPinned.offset))
+        precondition(PhonePlayerScrub.hapticTicks(previousBucket: PhonePlayerScrub.tickBucket(offset: pinned.offset), offset: stillPinned.offset, target: stillPinned.target, duration: 3600, heldClamp: .start) == 0, "A pinned clamp must not keep ticking")
+        precondition(PhonePlayerScrub.clampEdgeArrival(target: 0, duration: 100, held: nil) == .start)
+        precondition(PhonePlayerScrub.clampEdgeArrival(target: 0, duration: 100, held: .start) == nil)
+        precondition(PhonePlayerScrub.clampEdgeArrival(target: 8, duration: 100, held: .start) == nil)
+        precondition(PhonePlayerScrub.clampEdgeArrival(target: 0, duration: 100, held: nil) == .start)
+        precondition(PhonePlayerScrub.clampEdgeArrival(target: 100, duration: 100, held: nil) == .end)
+        precondition(PhonePlayerScrub.clampEdgeArrival(target: 100, duration: 100, held: .end) == nil)
+        print("PASS swipe-scrub qualification, clamping, overlay formatting, ticks and cancel")
     }
     // Well above the 20 ms hide delay so slow CI runners settle too.
     static func settle() async throws { try await Task.sleep(nanoseconds: 400_000_000) }

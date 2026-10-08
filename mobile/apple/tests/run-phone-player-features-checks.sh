@@ -7,7 +7,7 @@ trap 'rm -rf "$work"' EXIT
 swiftc -parse-as-library \
   "$phone/Network/PhonePlayerPreferences.swift" "$phone/Network/PhonePlaybackEngine.swift" \
   "$phone/Network/StreamRouteService.swift" "$phone/Network/PlaybackSession.swift" \
-  "$phone/UI/PhonePlayerControls.swift" \
+  "$phone/UI/PhonePlayerControls.swift" "$phone/UI/PhonePlayerScrub.swift" \
   "$repo_root/mobile/apple/tests/TestPhonePlaybackEngine.swift" \
   "$repo_root/mobile/apple/tests/PhonePlayerFeaturesTests.swift" -o "$work/check"
 "$work/check"
