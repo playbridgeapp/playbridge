@@ -42,6 +42,8 @@ import 'send_to_tv_screen.dart';
 import 'receiver_server.dart';
 import 'screen_mirror_surface.dart';
 import 'settings_screen.dart';
+import 'skip_segment.dart';
+import 'skip_segment_fetcher.dart';
 import 'single_instance_coordinator.dart';
 import 'stream_proxy_server.dart';
 import 'engines/tv_cast_media_preparer.dart';
@@ -247,6 +249,12 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
 
   bool _mainDragging = false;
 
+  final _skipFetcher = SkipSegmentFetcher();
+  List<SkipSegment> _skipSegments = const [];
+  SkipSegment? _lastSkipped;
+  String? _skipItemKey;
+  int _skipFetchGen = 0;
+
   static const _mediaExts = {
     'mp4',
     'm4v',
@@ -276,6 +284,60 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     if (visible != _chromeVisible) {
       setState(() => _chromeVisible = visible);
     }
+  }
+
+  SkipAutoPrefs get _skipAutoPrefs => SkipAutoPrefs(
+        intro: widget.store.autoSkipIntro,
+        recap: widget.store.autoSkipRecap,
+        outro: widget.store.autoSkipOutro,
+      );
+
+  void _syncSkipSegments() {
+    QueueItem? item;
+    if (_player.queue.isNotEmpty &&
+        _player.currentIndex >= 0 &&
+        _player.currentIndex < _player.queue.length) {
+      item = _player.queue[_player.currentIndex];
+    }
+    final key = item == null
+        ? null
+        : '${item.imdbId}|${item.tmdbId}|${item.season}|${item.episode}|${item.url}';
+    if (key == _skipItemKey) return;
+    _skipItemKey = key;
+    _lastSkipped = null;
+    _skipSegments = const [];
+    if (item == null ||
+        !skipFetchAllowed(
+          imdbId: item.imdbId,
+          tmdbId: item.tmdbId,
+          season: item.season,
+          episode: item.episode,
+        )) {
+      return;
+    }
+    final gen = ++_skipFetchGen;
+    unawaited(_skipFetcher
+        .fetch(
+      provider: widget.store.skipSegmentsProvider,
+      imdbId: item.imdbId,
+      tmdbId: item.tmdbId,
+      season: item.season,
+      episode: item.episode,
+      introDbApiKey: widget.store.introDbApiKey,
+    )
+        .then((segments) {
+      if (!mounted || gen != _skipFetchGen) return;
+      setState(() => _skipSegments = segments);
+    }));
+  }
+
+  void _performSkip(SkipSegment segment) {
+    if (_lastSkipped == segment) return;
+    _lastSkipped = segment;
+    final target = skipTargetMs(segment, _player.durationMs);
+    unawaited(_player.seek(Duration(milliseconds: target)));
+    _showOsd(skipButtonLabel(segment.type));
+    setState(() {});
   }
 
   @override
@@ -564,6 +626,7 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
     }
 
     _hadMedia = hasMedia;
+    _syncSkipSegments();
 
     // Coarse shell rebuild on real transitions only (the root builder doesn't
     // listen to the player; per-frame position ticks stay out of the shell).
@@ -1353,6 +1416,20 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
                                                   visible: _chromeVisible,
                                                 ),
                                               ),
+                                            if (_showingVideo &&
+                                                hasMedia &&
+                                                _prePlayItem == null)
+                                              Positioned(
+                                                right: 24,
+                                                bottom: 120,
+                                                child: _SkipSegmentButton(
+                                                  player: _player,
+                                                  segments: _skipSegments,
+                                                  lastSkipped: _lastSkipped,
+                                                  autoPrefs: _skipAutoPrefs,
+                                                  onSkip: _performSkip,
+                                                ),
+                                              ),
                                             // Pre-play screen for casts with
                                             // metadata; sits above everything.
                                             if (_showingVideo &&
@@ -1795,6 +1872,60 @@ class _StatusBar extends StatelessWidget {
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return h > 0 ? '$h:$m:$s' : '$m:$s';
+  }
+}
+
+class _SkipSegmentButton extends StatelessWidget {
+  const _SkipSegmentButton({
+    required this.player,
+    required this.segments,
+    required this.lastSkipped,
+    required this.autoPrefs,
+    required this.onSkip,
+  });
+
+  final PlayerController player;
+  final List<SkipSegment> segments;
+  final SkipSegment? lastSkipped;
+  final SkipAutoPrefs autoPrefs;
+  final ValueChanged<SkipSegment> onSkip;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: player,
+      builder: (context, _) {
+        final active = activeSkipSegment(
+          segments: segments,
+          positionMs: player.positionMs,
+          lastSkipped: lastSkipped,
+        );
+        if (active == null) return const SizedBox.shrink();
+        if (autoPrefs.enabledFor(active.type)) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => onSkip(active));
+          return const SizedBox.shrink();
+        }
+        return Material(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(6),
+          child: InkWell(
+            onTap: () => onSkip(active),
+            borderRadius: BorderRadius.circular(6),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Text(
+                skipButtonLabel(active.type),
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 }
 

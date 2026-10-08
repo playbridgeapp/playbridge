@@ -5,6 +5,18 @@ import 'package:playbridge_desktop/pairing_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('skip-segment prefs default off and persist', () async {
+    SharedPreferences.setMockInitialValues({});
+    final store = await PairingStore.load();
+    expect(store.skipSegmentsProvider, 'both');
+    expect(store.autoSkipIntro, isFalse);
+    await store.setSkipSegmentsProvider('theintrodb');
+    await store.setAutoSkipIntro(true);
+    final reloaded = await PairingStore.load();
+    expect(reloaded.skipSegmentsProvider, 'theintrodb');
+    expect(reloaded.autoSkipIntro, isTrue);
+  });
+
   test('HLS quality preselection defaults off and persists changes', () async {
     SharedPreferences.setMockInitialValues({});
     final store = await PairingStore.load();

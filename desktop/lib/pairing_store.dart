@@ -67,6 +67,11 @@ class PairingStore {
   static const _kStillWatchingResponseSec = 'pb.still_watching_response_sec';
   static const _kReceiverPort = 'pb.receiver_port';
   static const _kHardwareVideoOutput = 'pb.hardware_video_output';
+  static const _kSkipSegmentsProvider = 'pb.skip_segments_provider';
+  static const _kAutoSkipIntro = 'pb.auto_skip_intro';
+  static const _kAutoSkipRecap = 'pb.auto_skip_recap';
+  static const _kAutoSkipOutro = 'pb.auto_skip_outro';
+  static const _kIntroDbApiKey = 'pb.introdb_api_key';
 
   static const int defaultReceiverPort = 8765;
 
@@ -154,6 +159,36 @@ class PairingStore {
 
   Future<void> setHardwareVideoOutput(bool value) =>
       _prefs.setBool(_kHardwareVideoOutput, value);
+
+  /// `both` (default), `introdb`, or `theintrodb`.
+  String get skipSegmentsProvider {
+    final saved = _prefs.getString(_kSkipSegmentsProvider);
+    if (saved == 'introdb' || saved == 'theintrodb' || saved == 'both') {
+      return saved!;
+    }
+    return 'both';
+  }
+
+  Future<void> setSkipSegmentsProvider(String value) => _prefs.setString(
+        _kSkipSegmentsProvider,
+        value == 'introdb' || value == 'theintrodb' ? value : 'both',
+      );
+
+  bool get autoSkipIntro => _prefs.getBool(_kAutoSkipIntro) ?? false;
+  Future<void> setAutoSkipIntro(bool value) =>
+      _prefs.setBool(_kAutoSkipIntro, value);
+
+  bool get autoSkipRecap => _prefs.getBool(_kAutoSkipRecap) ?? false;
+  Future<void> setAutoSkipRecap(bool value) =>
+      _prefs.setBool(_kAutoSkipRecap, value);
+
+  bool get autoSkipOutro => _prefs.getBool(_kAutoSkipOutro) ?? false;
+  Future<void> setAutoSkipOutro(bool value) =>
+      _prefs.setBool(_kAutoSkipOutro, value);
+
+  String get introDbApiKey => _prefs.getString(_kIntroDbApiKey) ?? '';
+  Future<void> setIntroDbApiKey(String value) =>
+      _prefs.setString(_kIntroDbApiKey, value);
 
   StreamProxyMode get streamProxyMode {
     final index = _prefs.getInt(_kStreamProxyMode) ?? StreamProxyMode.off.index;

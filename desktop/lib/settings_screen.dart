@@ -288,6 +288,82 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             _Tile(
+              icon: Icons.skip_next,
+              title: 'Skip-segment provider',
+              subtitle:
+                  'Intro/recap/outro buttons for titles with IMDb or TMDB ids.',
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.06),
+                  border: Border.all(color: Colors.white12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: widget.store.skipSegmentsProvider,
+                    borderRadius: BorderRadius.circular(10),
+                    dropdownColor: const Color(0xFF202126),
+                    icon: const Icon(Icons.expand_more, size: 18),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    onChanged: (v) async {
+                      if (v == null) return;
+                      await widget.store.setSkipSegmentsProvider(v);
+                      if (mounted) setState(() {});
+                    },
+                    items: const [
+                      DropdownMenuItem(
+                          value: 'both', child: Text('Both providers')),
+                      DropdownMenuItem(
+                          value: 'introdb', child: Text('IntroDB')),
+                      DropdownMenuItem(
+                          value: 'theintrodb', child: Text('TheIntroDB')),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            _Tile(
+              icon: Icons.fast_forward,
+              title: 'Auto-skip intro',
+              subtitle: 'Jump intro segments without showing the Skip button.',
+              trailing: Switch(
+                value: widget.store.autoSkipIntro,
+                onChanged: (v) async {
+                  await widget.store.setAutoSkipIntro(v);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            _Tile(
+              icon: Icons.fast_forward,
+              title: 'Auto-skip recap',
+              subtitle: 'Jump recap segments without showing the Skip button.',
+              trailing: Switch(
+                value: widget.store.autoSkipRecap,
+                onChanged: (v) async {
+                  await widget.store.setAutoSkipRecap(v);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            _Tile(
+              icon: Icons.fast_forward,
+              title: 'Auto-skip outro',
+              subtitle: 'Jump outro/credits without showing the Skip button.',
+              trailing: Switch(
+                value: widget.store.autoSkipOutro,
+                onChanged: (v) async {
+                  await widget.store.setAutoSkipOutro(v);
+                  if (mounted) setState(() {});
+                },
+              ),
+            ),
+            _Tile(
               icon: Icons.keyboard,
               title: 'Keyboard shortcuts',
               subtitle: 'Space, arrows, F, I, and gestures — press ? anytime.',
