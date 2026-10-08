@@ -1,0 +1,16 @@
+PlayBridge TV uses the standard MPVKit 1.0.0 product.
+MPVKit bundles libmpv, FFmpeg and supporting media libraries.
+The standard MPVKit source and bundle are documented as LGPL-3.0;
+supporting libraries retain their respective copyrights and licenses.
+The MPVKit-GPL product is not linked by the TV app.
+
+MPVKit source and build scripts:
+https://github.com/mpvkit/MPVKit/tree/1.0.0
+Revision: 288527dffbc6d3e63cce147fc7b520c64a791603
+
+Dependency source and version references:
+https://github.com/mpvkit/MPVKit/blob/1.0.0/Package.swift
+https://github.com/mpvkit/MPVKit/tree/1.0.0/Sources/BuildScripts
+
+See the bundled MPVKit-LICENSE.txt and the PlayBridge repository's
+THIRD_PARTY_LICENSES.md for notices and source availability.

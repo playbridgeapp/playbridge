@@ -101,6 +101,3 @@ jobs:
 
       - name: TV receiver review
         run: bash tv/apple/tests/run-receiver-review-checks.sh
-
-      - name: TV MPV AudioUnit fallback
-        run: python3 tv/apple/tests/run-mpv-audio-unit-checks.py

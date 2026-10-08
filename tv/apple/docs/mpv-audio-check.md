@@ -1,63 +1,47 @@
-# MPV audio: phone vs TV
+# MPV audio and video output on Apple TV
 
-## Verified dependency and implementation differences
+## Current stack
+
+The Apple TV and the iPhone link the same dependency and the same output
+configuration:
 
 | | iPhone local playback | Apple TV MPV |
 |---|---|---|
-| Package | `mpvkit/MPVKit` **1.0.0**, SPM | `mpv-ios/MPVKit` **0.41.0-av**, CocoaPods |
-| Embedded libmpv version string | `mpv v0.41.0-dirty` | `mpv v0.41.0-dirty` |
-| Requested audio output | `avfoundation,audiounit` | `audiounit` |
-| Compiled audio outputs relevant here | AVFoundation and AudioUnit | AudioUnit only |
-| Video output | `gpu-next`/MoltenVK | Native `avfoundation` |
-| App audio session | Playback/movie mode, default local routing policy | Playback/movie mode; now default routing policy instead of long-form audio |
+| Package | `mpvkit/MPVKit` **1.0.0**, SPM, standard (LGPL) product | Same |
+| Requested audio output | `avfoundation,audiounit` | Same |
+| Video output | `gpu-next` / Vulkan via MoltenVK | Same, plus `target-colorspace-hint=yes` |
+| App audio session | Playback/movie mode, default routing policy | Same |
 
-The package version numbers do **not** mean libmpv 1.0 vs libmpv 0.41. Both
-archives report the same base mpv version; build patches/backends differ.
-The requested phone audio list prefers AVFoundation but falls back to
-AudioUnit; device `current-ao` identifies what actually initialized.
+The TV previously used the `mpv-ios/MPVKit` **0.41.0-av** fork through
+CocoaPods: GPL with nonfree FFmpeg components, native `vo=avfoundation`
+video, and AudioUnit-only audio. That fork needed a locally rebuilt AudioUnit
+driver, because the HDMI channel-layout query failed with
+`kAudioUnitErr_InvalidProperty` (-10879) and audio never started. AVFoundation
+audio does not make that query, so the patch, its tests and its build tooling
+have been removed along with the fork.
 
-Evidence is from the phone
-`PlayBridge Phone.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved`,
-the TV Podfile/installed manifest, both playback implementations, and `nm`/
-version strings from the installed standard-phone iOS archive and pinned TV
-arm64 archive. The phone package includes
-`Sources/BuildScripts/patch/libmpv/0003-enable-avfoundation-ao-tvos.patch`.
+## Device verification (October 2026)
 
-TV `vo=avfoundation` is a **video** backend, not an audio backend. Setting
-`ao=avfoundation` cannot enable code missing from the installed library.
-The standard 1.0.0 tvOS archive has AVFoundation audio but lacks the fork's
-native AVFoundation **video** output; blindly swapping dependencies would
-change the rendering/HDR path and is not an audio-only fix. No dependency
-migration has been made.
+On an Apple TV 4K (3rd generation, A15) over HDMI, a 2160p HEVC Dolby Vision /
+HDR10 remux with DTS-HD 5.1 audio:
 
-## Confirmed initialization failure and targeted patch
+- `[MPV] audio output=avfoundation`, audible on the HDMI route.
+- `[MPV] hwdec-current: videotoolbox`.
+- `[MPV] video output=gpu-next source=bt.2020/pq target=bt.2020/pq display=hdr10`;
+  the TV switched to HDR and colours were correct.
+- Smooth playback, and video resumed after returning from the Home Screen.
 
-Device logs identify `kAudioUnitErr_InvalidProperty` (-10879) when the AudioUnit
-driver queries the HDMI channel layout, followed by audio initialization failure.
-The subsequent `selectedAudio=no` is a consequence of that failure, not evidence
-that the user selected mute. The session route reports 32 channels, but that
-count alone does not identify a valid speaker map or prove the cable is faulty.
-
-The pinned driver now has a [source-built fallback](../native/mpv-audiounit/README.md):
-for this unsupported property on PCM, request stereo instead of aborting. Valid
-multichannel queries remain unchanged. The fix is installed by `pod install`;
-there is no library-version or video-output change. Host tests reproduce the
-original failure and exercise the patched code with API doubles under sanitizers.
-The user confirmed restored audible playback on the previously failing Apple TV
-HDMI route. Broader route/multichannel coverage remains a separate device check.
+mpv plays the HDR10 base layer of Dolby Vision files; the display switches to
+HDR10, not Dolby Vision.
 
 ## Further device coverage
 
-The earlier per-item audio/mute reset and default routing-policy change did
-not alone resolve the silence. The AudioUnit patch above did; do not confuse
-session configuration with the confirmed initialization fix.
+Still to test: AAC stereo MP4/HLS in both engines, HLG content, SDR after HDR
+(the display should return to SDR), multichannel PCM routes, preplay
+mute/unmute, audio-track changes and queue transitions.
 
-Test a known-audio MP4/HLS in both engines, preplay mute/unmute, audio-track
-changes, queue transitions and representative HDMI/multichannel routes.
-For further failures, share only Debug `[MPV audio-session]` lines and
-AudioUnit initialization/start warnings. Do not share stream URLs,
-authentication headers or cookies. Generic port types omit device names/IDs;
-system volume may not reflect an external HDMI receiver.
-
-The CityHall AV1 sample has no audio track. Unsigned builds and host tests
-cannot verify audible playback on the Apple TV.
+For failures, share only Debug `[MPV audio-session]`, `[MPV] audio output`,
+`[MPV] video output` and `hwdec-current` lines. Do not share stream URLs,
+authentication headers or cookies: the Debug `[DebugNetwork]` lines print the
+full request URL. Generic port types omit device names/IDs; system volume may
+not reflect an external HDMI receiver.

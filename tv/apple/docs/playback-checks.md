@@ -27,10 +27,10 @@ mpv 0.38+ insertion-index argument), avoiding a transient track change in
 the outgoing item. It explicitly applies preplay mute both ways. Remembered track names are restored after discovery;
 volume is not reset. Audio session activation errors are no longer swallowed. The TV MPV session
 uses the same default routing policy as AVPlayer rather than long-form
-audio routing. The confirmed silence fix is the targeted AudioUnit layout
-fallback described in [mpv-audio-check.md](mpv-audio-check.md).
-This addresses possible state leaks, not a certified fix for every audio codec
-or output route.
+audio routing. MPV requests AVFoundation audio first, which fixed the HDMI
+silence caused by the old fork's AudioUnit-only driver; see
+[mpv-audio-check.md](mpv-audio-check.md). This is not a certified fix for
+every audio codec or output route.
 
 For a Debug run, share `[MPV audio-session]`, audio-output initialization
 warnings and audio-session errors, not network headers. Session samples
@@ -56,8 +56,9 @@ unique to PlayBridge. The user chose to stop the investigation; further
 speculative AV1 tuning is deprioritized unless new profiling evidence or a
 concrete upstream fix gives reason to revisit it.
 
-MPV always uses native AVFoundation video. The AV1-only GPU experiment,
-refresh override and performance sampling were removed. AV1 on the tested A15
+These observations were made with the old fork's native AVFoundation video
+output. MPV now renders with `gpu-next`, like the phone; 4K HEVC HDR played
+smoothly on the same A15, but AV1 has not been retested. AV1 on the A15
 remains software/best-effort; prefer H.264/HEVC when available. Host checks do
 not certify playback smoothness.
 
@@ -69,7 +70,8 @@ bash tv/apple/tests/run-progress-webhook-checks.sh
 cd protocol && ruby scripts/check-spec.rb
 ```
 
-Build Debug and Release from the tvOS CocoaPods workspace. Generic unsigned
+Build Debug and Release from `PlayBridge TV.xcodeproj` (Swift Package Manager
+only; there is no CocoaPods workspace). Generic unsigned
 builds validate compilation/linking, not signing, installation or audible
 playback. The old VLC proxy test runner no longer exists because that
 production path no longer exists.

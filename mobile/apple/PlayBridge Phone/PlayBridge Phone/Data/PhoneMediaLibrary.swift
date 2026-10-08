@@ -9,12 +9,10 @@ import ImageIO
 final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeObserver {
     @Published private(set) var imported: [PhoneMedia] = []
     @Published private(set) var photos: [PhoneMedia] = []
-    @Published private(set) var downloads: [PhoneMedia] = []
     @Published private(set) var authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     @Published private(set) var isScanning = false
     @Published var error: String?
     let directory: URL
-    private var downloadURLs: [String: URL] = [:]
     private var scanGeneration = UUID()
     /// PhotoKit fetch snapshots are immutable while a detached scan reads them.
     private struct PhotoScanResult: @unchecked Sendable {
@@ -24,7 +22,7 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
     private var photoFetchResult: PHFetchResult<PHAsset>?
     private var photoScanTask: Task<PhotoScanResult?, Never>?
     private var observing = false
-    var items: [PhoneMedia] { imported + photos + downloads }
+    var items: [PhoneMedia] { imported + photos }
     private var indexURL: URL { directory.appendingPathComponent("index.json") }
 
     init(directory: URL? = nil) {
@@ -128,21 +126,8 @@ final class PhoneMediaLibrary: NSObject, ObservableObject, PHPhotoLibraryChangeO
             isScanning = false
         }
     }
-    func refreshDownloads(_ records: [BrowserDownload]) {
-        downloadURLs = [:]
-        downloads = records.compactMap { record in
-            guard record.state == "Complete", let url = record.fileURL, let kind = PhoneMedia.Kind.classify(url) else { return nil }
-            let id = "download:" + record.id.uuidString
-            downloadURLs[id] = url
-            let values = try? url.resourceValues(forKeys: [.creationDateKey, .fileSizeKey])
-            return PhoneMedia(id: id, title: url.deletingPathExtension().lastPathComponent, kind: kind,
-                source: .download, addedAt: values?.creationDate ?? .distantPast, filename: url.lastPathComponent,
-                bytes: values?.fileSize.map(Int64.init))
-        }
-    }
     func item(_ id: String) -> PhoneMedia? { items.first { $0.id == id } }
     func localURL(_ item: PhoneMedia) -> URL? {
-        if item.source == .download { return downloadURLs[item.id] }
         guard item.source == .imported, let filename = item.filename, UUID(uuidString: item.id) != nil else { return nil }
         return directory.appendingPathComponent(item.id).appendingPathComponent((filename as NSString).lastPathComponent)
     }

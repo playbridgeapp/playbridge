@@ -1,6 +1,6 @@
 ---
 name: playbridge-apple
-description: Work on PlayBridge's native Apple phone and Apple TV applications. Use for SwiftUI, WebKit, AVPlayer/MPVKit playback, website playback bridges, Xcode/SPM/CocoaPods, Bonjour, Keychain, TLS pinning, or Apple protocol consumers under mobile/apple/ or tv/apple/.
+description: Work on PlayBridge's native Apple phone and Apple TV applications. Use for SwiftUI, WebKit, AVPlayer/MPVKit playback, website playback bridges, Xcode/SPM, Bonjour, Keychain, TLS pinning, or Apple protocol consumers under mobile/apple/ or tv/apple/.
 ---
 
 # PlayBridge Apple
@@ -8,7 +8,7 @@ description: Work on PlayBridge's native Apple phone and Apple TV applications. 
 ## Establish ownership
 
 - Treat `mobile/apple/` and `tv/apple/` as separate Xcode projects with shared product behavior but no shared build root.
-- The phone uses Swift Package Manager for pinned standard MPVKit; open `mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj`. The TV uses its separate CocoaPods workspace. Do not transplant the TV's dependencies into the phone project.
+- Both apps use Swift Package Manager and pin the same standard (LGPL) MPVKit 1.0.0 product; never link MPVKit-GPL. Open `mobile/apple/PlayBridge Phone/PlayBridge Phone.xcodeproj` or `tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj`. There is no CocoaPods workspace. The TV renders with `vo=gpu-next` and switches the display to HDR from mpv's decoded `video-params`.
 - Phone Google Cast/DLNA adapters use optional Cast Core ABI v2 in `Network/GoogleCastSession.swift`. Discovery/controller and receiver UI are implemented, but transport availability depends on the XCFramework. Ordinary phone source builds must keep working without it linked; do not confuse that optional dependency with required MPVKit.
 - Keep one Apple specialist by default. Split phone and TV work only for substantial, non-overlapping implementations.
 - Load `playbridge-protocol` when JSON envelopes, pairing, authentication, or generated Swift bindings change.
@@ -85,10 +85,10 @@ build checks compilation/linking; it does not install the app or validate signin
 From `tv/apple/PlayBridge TV/`:
 
 ```bash
-xcodebuild -workspace "PlayBridge TV.xcworkspace" -scheme "PlayBridge TV" -configuration Debug -destination 'generic/platform=tvOS' build
+xcodebuild -project "PlayBridge TV.xcodeproj" -scheme "PlayBridge TV" -configuration Debug -destination 'generic/platform=tvOS' build
 ```
 
-Report simulator, SDK, signing, or CocoaPods limitations explicitly; do not treat an unavailable Apple toolchain as successful verification.
+Report simulator, SDK, signing, or package-resolution limitations explicitly; do not treat an unavailable Apple toolchain as successful verification.
 
 For Google Cast adapter or native ABI work, build the optional XCFramework from
 the repository root with `sh cast/build-apple.sh`, then build the phone target

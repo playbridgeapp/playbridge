@@ -53,7 +53,7 @@ struct DeviceConnectionSheet: View { var body: some View { Text("Fixture connect
         window = UIWindow(frame: UIScreen.main.bounds)
         window?.rootViewController = UIViewController(); window?.makeKeyAndVisible()
         Task { @MainActor in
-            do { try await run(); print("PASS: media library persistence, classification, import, collections, downloads and UI") }
+            do { try await run(); print("PASS: media library persistence, classification, import, collections and UI") }
             catch { print("FAIL: \(error)"); exit(1) }
             exit(0)
         }
@@ -103,11 +103,6 @@ struct DeviceConnectionSheet: View { var body: some View { Text("Fixture connect
         let legacy = Data("{\"id\":\"00000000-0000-0000-0000-000000000001\",\"title\":\"Legacy\",\"url\":\"https://example.test/file\",\"headers\":{},\"order\":0}".utf8)
         let decoded = try JSONDecoder().decode(CollectionItem.self, from: legacy)
         try check(decoded.libraryItemID == nil, "Legacy collection migration failed")
-        let download = BrowserDownload(); download.fileURL = original
-        library.refreshDownloads([download])
-        try check(library.downloads.count == 1 && library.downloads[0].kind == .image, "Completed download missing")
-        download.state = "Downloading"; library.refreshDownloads([download])
-        try check(library.downloads.isEmpty, "Partial download shown as media")
         for (name, kind) in [("film.mkv", PhoneMedia.Kind.video), ("image.heic", .image), ("song.flac", .audio)] {
             try check(PhoneMedia.Kind.classify(URL(fileURLWithPath: name)) == kind, "Media classification failed")
         }

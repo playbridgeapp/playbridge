@@ -21,9 +21,7 @@ Gradle root project: **PlayBridgeTV** (`tv/android/settings.gradle.kts`, modules
 ## Build — tvOS
 
 ```bash
-cd "tv/apple/PlayBridge TV"
-pod install
-open "PlayBridge TV.xcworkspace"   # build & run from Xcode
+open "tv/apple/PlayBridge TV/PlayBridge TV.xcodeproj"   # build & run from Xcode
 ```
 
 The prebuilt native player libraries live in [`android/player/app/libs/`](android/player/app/libs/).

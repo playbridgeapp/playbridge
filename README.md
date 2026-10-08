@@ -250,7 +250,7 @@ phone browser. Source: [`web/site/static/cast-demo/`](web/site/static/cast-demo/
 
 - **Android apps**: Android Studio, JDK 17+ (the phone Gradle toolchain resolves JDK 21), Android SDK 37
 - **Desktop**: Flutter SDK (Dart `^3.6`) and libmpv
-- **Apple TV**: Xcode with CocoaPods (see [tv/](tv/))
+- **Apple TV**: Xcode; dependencies resolve through Swift Package Manager (see [tv/](tv/))
 - **Browser Extension**: Node.js and `pnpm`
 - **Rust Core & Proxy**: Rust 1.91+ (`cargo`; required by current workspace `Cargo.lock`)
 

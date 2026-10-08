@@ -24,12 +24,13 @@ entitlement for SSDP multicast on physical iOS devices:
 https://developer.apple.com/news/?id=0oi77447
 
 The existing target does not have this entitlement. Request approval for the app
-identifier, enable it in the provisioning profile, then set the phone target's
-Code Signing Entitlements to `../config/DLNAMulticast.entitlements` (relative to
-`mobile/apple/PlayBridge Phone`). The template is supplied but not enabled by
-default, so existing provisioning profiles remain usable. The app also needs
-Local Network permission. Until provisioned, automatic SSDP discovery is not
-verified/expected on physical iPhones; manual URL connection uses unicast HTTP.
+identifier, enable it in the provisioning profile, then set
+`PB_MULTICAST_ENTITLEMENT = YES` in `PlayBridge Phone/MulticastEntitlement.xcconfig`
+(or pass it to `xcodebuild`). That signs with `config/DLNAMulticast.entitlements`
+and compiles SSDP discovery in. It defaults to `NO` so existing provisioning
+profiles remain usable; device builds then skip SSDP scans and point users to
+manual connection, which uses unicast HTTP. Simulator builds always scan. The app
+also needs Local Network permission.
 
 ## Verification
 

@@ -5,7 +5,6 @@ struct CollectionDetailScreen: View {
 
     @EnvironmentObject private var vm: ConnectionViewModel
     @EnvironmentObject private var library: PhoneMediaLibrary
-    @EnvironmentObject private var browser: BrowserStore
     @EnvironmentObject private var collections: CollectionsStore
 
     @State private var showAdd = false
@@ -58,7 +57,7 @@ struct CollectionDetailScreen: View {
             }
         }
         .sheet(item: $localItem) { item in PhoneMediaDetail(item: item) }
-        .task { library.refreshDownloads(browser.downloads.items); library.refreshPhotos() }
+        .task { library.refreshPhotos() }
         .sheet(isPresented: $showAdd) {
             AddManualItemSheet(collectionId: collectionId)
         }

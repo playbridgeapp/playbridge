@@ -86,6 +86,22 @@ struct SettingsView: View {
                         .foregroundColor(Theme.accent)
                     }
                 }
+
+                // tvOS has no browser to open links, so the policy URL is shown for reading.
+                Section("About") {
+                    HStack {
+                        Text("Privacy Policy")
+                        Spacer()
+                        Text("playbridge.app/privacy").foregroundColor(.gray)
+                    }
+                    .focusable()
+                    HStack {
+                        Text("Version")
+                        Spacer()
+                        Text(appVersionLabel).foregroundColor(.gray)
+                    }
+                    .focusable()
+                }
             }
             .listStyle(.grouped)
         }
@@ -97,6 +113,13 @@ struct SettingsView: View {
                 stillWatchingResponseSeconds = StillWatchingController.defaultResponseSeconds
             }
         }
+    }
+
+    private var appVersionLabel: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
     }
 
     private var stillWatchingThresholdLabel: String {

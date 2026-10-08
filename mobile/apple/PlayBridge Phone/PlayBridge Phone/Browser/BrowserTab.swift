@@ -704,9 +704,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             return
         }
         if action.shouldPerformDownload {
-            present(BrowserPrompt(title: "Download file?", message: "Save this file to PlayBridge Downloads?", acceptLabel: "Download") { accepted, _ in
+            confirmDownload(filename: nil, url: url, bytes: -1) { accepted in
                 decisionHandler(accepted ? .download : .cancel, preferences)
-            })
+            }
             return
         }
         if action.targetFrame?.isMainFrame == true, redirectBridgedAppNavigation(action.request) {
@@ -772,9 +772,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             }
             return
         }
-        present(BrowserPrompt(title: "Download file?", message: "This file can be saved to Downloads and exported to Files.", acceptLabel: "Download") { accepted, _ in
+        confirmDownload(filename: response.response.suggestedFilename, url: response.response.url,
+                        bytes: response.response.expectedContentLength) { accepted in
             decisionHandler(accepted ? .download : .cancel)
-        })
+        }
     }
     func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
         onDownload?(download, webView)
@@ -817,6 +818,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         present(BrowserPrompt(title: frame.request.url?.host ?? "Website", message: prompt, defaultText: defaultText ?? "") { accepted, text in completionHandler(accepted ? text : nil) })
     }
 
+    /// Safari-style confirmation for files a website sends: name the file, its size and source.
+    private func confirmDownload(filename: String?, url: URL?, bytes: Int64, _ decide: @escaping (Bool) -> Void) {
+        let name = BrowserDownloads.safeFilename(filename ?? url?.lastPathComponent ?? "")
+        let size = bytes > 0 ? ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) : nil
+        let detail = [size, url?.host].compactMap { $0 }.joined(separator: " from ")
+        let message = (detail.isEmpty ? "" : detail + ". ") + "It will appear in Downloads, where you can save it to Files."
+        present(BrowserPrompt(title: "Download “\(name)”?", message: message, acceptLabel: "Download") { accepted, _ in decide(accepted) })
+    }
+
     /// Custom long-press menu for links (replaces the default Safari menu), mirroring
     /// the Android browser's link options.
     func webView(_ webView: WKWebView,
@@ -839,17 +849,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             let copy = UIAction(title: "Copy Link", image: UIImage(systemName: "doc.on.doc")) { _ in
                 UIPasteboard.general.url = url
             }
-            let download = UIAction(title: "Download Link", image: UIImage(systemName: "arrow.down.circle")) { [weak self] _ in
-                guard let self, BrowserSitePolicy.origin(url) != nil else { return }
-                self.present(BrowserPrompt(title: "Download file?", message: "Save the linked file to Downloads?", acceptLabel: "Download") { [weak self] accepted, _ in
-                    guard let self, accepted else { return }
-                    self.webView.startDownload(using: URLRequest(url: url)) { [weak self] download in
-                        guard let self else { download.cancel { _ in }; return }
-                        self.onDownload?(download, self.webView)
-                    }
-                })
-            }
-            return UIMenu(title: url.absoluteString, children: [cast, newTab, bgTab, copy, download])
+            return UIMenu(title: url.absoluteString, children: [cast, newTab, bgTab, copy])
         }
         completionHandler(config)
     }

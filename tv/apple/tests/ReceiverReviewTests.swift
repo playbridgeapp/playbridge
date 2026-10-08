@@ -177,30 +177,6 @@ struct ReceiverReviewTests {
         assert(engineDefaults.string(forKey: "preferredPlayer") == nil)
         print("PASS: two engines/capabilities/menu targets and idempotent legacy VLC-to-MPV preference/command migration")
 
-        var videoRecovery = MPVVideoRecoveryState()
-        assert(videoRecovery.begin(rendererNeedsFlush: false) == nil)
-        videoRecovery.enterBackground()
-        assert(videoRecovery.begin(rendererNeedsFlush: true) == nil)
-        videoRecovery.becomeActive()
-        let firstRecovery = videoRecovery.begin(rendererNeedsFlush: false)!
-        assert(videoRecovery.begin(rendererNeedsFlush: true) == nil)
-        videoRecovery.enterBackground()
-        assert(!videoRecovery.finish(firstRecovery))
-        videoRecovery.becomeActive()
-        let secondRecovery = videoRecovery.begin(rendererNeedsFlush: false)!
-        assert(videoRecovery.finish(secondRecovery))
-        assert(!videoRecovery.finish(secondRecovery))
-        assert(videoRecovery.begin(rendererNeedsFlush: false) == nil)
-        let failedRendererRecovery = videoRecovery.begin(rendererNeedsFlush: true)!
-        videoRecovery.invalidate() // Item changed while flush was pending.
-        assert(!videoRecovery.finish(failedRendererRecovery))
-        let finalRecovery = videoRecovery.begin(rendererNeedsFlush: true)!
-        videoRecovery.stop()
-        assert(!videoRecovery.finish(finalRecovery))
-        videoRecovery.becomeActive()
-        assert(videoRecovery.begin(rendererNeedsFlush: true) == nil)
-        print("PASS: native MPV video recovery deduplicates flushes and rejects background/item/teardown completions")
-
         var reusedAudioOptions = ["aid": "3", "mute": "yes", "volume": "75"]
         for (name, value) in MPVAudioPolicy.loadOptions(isPreBuffering: false) { reusedAudioOptions[name] = value }
         assert(reusedAudioOptions["aid"] == "auto" && reusedAudioOptions["mute"] == "no")
