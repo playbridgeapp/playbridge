@@ -31,6 +31,7 @@ import 'pair_screen.dart';
 import 'playback_osd.dart';
 import 'playback_speed.dart';
 import 'player_chrome_policy.dart';
+import 'player_control_visibility.dart';
 import 'player_controller.dart';
 import 'player_surface_click.dart';
 import 'player_engine.dart';
@@ -1877,6 +1878,15 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
     final keepCompactMusicProgress = mediaKind == MediaKind.audio;
     final barVisible = widget.visible || keepCompactMusicProgress;
     final showExpandedControls = widget.visible;
+    final vis = PlayerControlVisibility.resolve(
+      realAudioCount: realTrackCount(p.tracks.audio),
+      realSubtitleCount: realTrackCount(p.tracks.subtitle),
+      queueLength: p.queue.length,
+      isLinux: Platform.isLinux,
+      hasMedia: hasMedia,
+      isVideo: mediaKind == MediaKind.video,
+      isImage: isImage,
+    );
 
     return IgnorePointer(
       ignoring: !barVisible,
@@ -2002,29 +2012,31 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                         const Spacer(),
                         if (p.engineType == EngineType.mpvInternal &&
                             !isImage) ...[
-                          if (Platform.isLinux && mediaKind == MediaKind.video)
+                          if (vis.videoRenderer)
                             _VideoOutputMenuButton(
                               player: p,
                               onOpened: widget.onMenuOpened,
                               onClosed: widget.onMenuClosed,
                             ),
-                          _AudioMenuButton(
-                            player: p,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
-                          if (mediaKind == MediaKind.video)
+                          if (vis.audioMenu)
+                            _AudioMenuButton(
+                              player: p,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
+                          if (vis.subtitleMenu)
                             _SubtitleMenuButton(
                               player: p,
                               onOpened: widget.onMenuOpened,
                               onClosed: widget.onMenuClosed,
                             ),
-                          _SpeedMenuButton(
-                            player: p,
-                            enabled: hasMedia,
-                            onOpened: widget.onMenuOpened,
-                            onClosed: widget.onMenuClosed,
-                          ),
+                          if (vis.speedMenu)
+                            _SpeedMenuButton(
+                              player: p,
+                              enabled: hasMedia,
+                              onOpened: widget.onMenuOpened,
+                              onClosed: widget.onMenuClosed,
+                            ),
                           if ((p.playbackRate - 1.0).abs() > 0.001)
                             Padding(
                               padding: const EdgeInsets.only(right: 4),
@@ -2038,23 +2050,23 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                               ),
                             ),
                         ],
-                        IconButton(
-                          tooltip: p.isCurrentItemProxied
-                              ? 'Switch to direct playback'
-                              : 'Route through proxy',
-                          icon: Icon(
-                            p.isCurrentItemProxied
-                                ? Icons.shield
-                                : Icons.shield_outlined,
-                            color: p.isCurrentItemProxied
-                                ? Colors.tealAccent
-                                : null,
-                          ),
-                          onPressed:
-                              hasMedia && !isImage && !p.proxyToggleInProgress
-                                  ? widget.onToggleProxy
+                        if (vis.proxyToggle)
+                          IconButton(
+                            tooltip: p.isCurrentItemProxied
+                                ? 'Switch to direct playback'
+                                : 'Route through proxy',
+                            icon: Icon(
+                              p.isCurrentItemProxied
+                                  ? Icons.shield
+                                  : Icons.shield_outlined,
+                              color: p.isCurrentItemProxied
+                                  ? Colors.tealAccent
                                   : null,
-                        ),
+                            ),
+                            onPressed: p.proxyToggleInProgress
+                                ? null
+                                : widget.onToggleProxy,
+                          ),
                         if (widget.showQueueControls)
                           IconButton(
                             tooltip: widget.playlistOpen
@@ -2067,20 +2079,17 @@ class _PlayerControlsBarState extends State<_PlayerControlsBar> {
                             ),
                             onPressed: widget.onTogglePlaylist,
                           ),
-                        if (!isImage)
+                        if (vis.externalPlayer)
                           IconButton(
                             tooltip: 'Play in external player (mpv/VLC)',
                             icon: const Icon(Icons.open_in_new),
-                            onPressed: hasMedia
-                                ? () async {
-                                    if (p.state == 'playing') {
-                                      p.pause();
-                                    }
-                                    final currentItem = p.queue[p.currentIndex];
-                                    await _openInExternalPlayer(
-                                        context, currentItem);
-                                  }
-                                : null,
+                            onPressed: () async {
+                              if (p.state == 'playing') {
+                                p.pause();
+                              }
+                              final currentItem = p.queue[p.currentIndex];
+                              await _openInExternalPlayer(context, currentItem);
+                            },
                           ),
                         IconButton(
                           tooltip: widget.isFullScreen
