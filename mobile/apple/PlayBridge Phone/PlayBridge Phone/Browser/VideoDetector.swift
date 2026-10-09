@@ -180,11 +180,13 @@ final class VideoDetector: ObservableObject {
         }
     }
     
-    /// Headers the receiver's player can't use / shouldn't be forwarded (port of the Kotlin
-    /// PLAYER_SKIP_HEADERS intent).
-    private static let skipHeaders: Set<String> = [
-        "host", "connection", "accept-encoding", "content-length",
-        "upgrade-insecure-requests", "range",
+    /// Headers the receiver's player can't use / shouldn't be forwarded (mirrors
+    /// Android VideoDetector.PLAYER_SKIP_HEADERS and Desktop _playerSkipHeaders).
+    static let skipHeaders: Set<String> = [
+        "range", "accept-encoding", "host", "connection", "content-length",
+        "sec-fetch-dest", "sec-fetch-mode", "sec-fetch-site", "sec-fetch-storage-access",
+        "sec-gpc", "sec-ch-ua", "sec-ch-ua-mobile", "sec-ch-ua-platform",
+        "priority", "upgrade-insecure-requests", "te", "pragma",
     ]
     private static let fallbackUA =
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"

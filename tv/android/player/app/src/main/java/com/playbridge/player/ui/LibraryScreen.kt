@@ -40,6 +40,7 @@ import coil3.request.ImageRequest
 import coil3.request.crossfade
 import com.playbridge.player.data.HistoryStore
 import com.playbridge.player.data.PlaybackHistoryItem
+import com.playbridge.player.player.resumePosition
 import com.playbridge.player.ui.theme.ThemedDialog
 import kotlinx.coroutines.launch
 
@@ -49,12 +50,8 @@ internal data class LibrarySections(
     val favorites: List<PlaybackHistoryItem>,
 )
 
-internal fun resumePositionForHistoryItem(item: PlaybackHistoryItem): Long? = item.position
-    .takeIf {
-        item.duration > 0L &&
-            it >= 30_000L &&
-            it * 100L < item.duration * 95L
-    }
+internal fun resumePositionForHistoryItem(item: PlaybackHistoryItem): Long? =
+    resumePosition(item.position, item.duration)
 
 internal fun historyThumbnailCacheKey(item: PlaybackHistoryItem): String =
     "${item.thumbnailUrl}#${item.thumbnailRevision}"

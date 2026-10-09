@@ -8,15 +8,10 @@ import com.playbridge.sender.cast.HlsSegmentHints
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONObject
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
-import java.net.URLEncoder
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -278,41 +273,7 @@ class StreamRouteService(
         if (media.url.startsWith("data:")) {
             throw StreamRouteException("Data URIs cannot use Via proxy — use Via phone")
         }
-        val base = settings.remoteBaseUrl.trimEnd('/')
-        val token = URLEncoder.encode(settings.remotePassword, Charsets.UTF_8.name())
-        val registerUrl = "$base/register?token=$token"
-        val bodyJson = JSONObject().apply {
-            put("url", media.url)
-            media.contentType?.takeIf { it.isNotBlank() }?.let { put("content_type", it) }
-            put("headers", JSONObject().also { h ->
-                media.headers.orEmpty().forEach { (k, v) -> h.put(k, v) }
-            })
-        }
-        val request = Request.Builder()
-            .url(registerUrl)
-            .post(bodyJson.toString().toRequestBody(JSON_MEDIA))
-            .header("Content-Type", "application/json")
-            .build()
-        httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw StreamRouteException(
-                    "Remote proxy register failed: HTTP ${response.code}",
-                )
-            }
-            val text = response.body?.string().orEmpty()
-            val json = JSONObject(text)
-            val proxyUrl = json.optString("proxy_url").ifBlank {
-                json.optString("encrypted_url")
-            }
-            if (proxyUrl.isBlank()) {
-                throw StreamRouteException("Remote proxy returned no URL")
-            }
-            return PackagedMedia(
-                url = proxyUrl,
-                contentType = media.contentType,
-                headers = null,
-            )
-        }
+        return RemoteProxyClient.register(httpClient, media, settings)
     }
 
     private fun writePlaylistTemp(body: String): File {
@@ -359,10 +320,11 @@ class StreamRouteService(
 
     companion object {
         private const val TAG = "StreamRouteService"
-        private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
         private fun defaultClient(): OkHttpClient =
             OkHttpClient.Builder()
+                .followRedirects(false)
+                .followSslRedirects(false)
                 .connectTimeout(15, TimeUnit.SECONDS)
                 .readTimeout(30, TimeUnit.SECONDS)
                 .build()

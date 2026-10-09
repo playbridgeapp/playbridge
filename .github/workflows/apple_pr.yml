@@ -66,6 +66,9 @@ jobs:
       - name: Google Cast controller
         run: bash mobile/apple/tests/run-google-cast-checks.sh
 
+      - name: Local file ranges
+        run: bash mobile/apple/tests/run-local-file-range-checks.sh
+
       - name: Cast history
         run: bash mobile/apple/tests/run-cast-history-checks.sh
 

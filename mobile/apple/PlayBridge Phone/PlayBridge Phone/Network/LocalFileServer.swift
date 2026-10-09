@@ -99,21 +99,31 @@ final class LocalFileServer {
         let requestLine = lines.first ?? ""
         let method = requestLine.split(separator: " ").first.map(String.init) ?? "GET"
 
-        // Parse an optional Range header (bytes=start-end).
-        var start: Int64 = 0
-        var end: Int64 = fileSize - 1
-        var isPartial = false
+        // Parse an optional Range header (bytes=start-end) matching stream-proxy-rust.
+        var rangeHeaderValue: String?
         for line in lines.dropFirst() where line.lowercased().hasPrefix("range:") {
-            let spec = line.dropFirst("range:".count).trimmingCharacters(in: .whitespaces)
-            guard spec.hasPrefix("bytes=") else { continue }
-            let comps = spec.dropFirst("bytes=".count).split(separator: "-", omittingEmptySubsequences: false)
-            if let first = comps.first, let s = Int64(first) { start = s; isPartial = true }
-            if comps.count >= 2, let e = Int64(comps[1]) { end = e }
+            rangeHeaderValue = line.dropFirst("range:".count).trimmingCharacters(in: .whitespaces)
+            break
         }
-        if start < 0 || start >= fileSize { start = 0; isPartial = false }
-        if end >= fileSize { end = fileSize - 1 }
-        if end < start { end = fileSize - 1 }
-        let length = end - start + 1
+
+        let start: Int64
+        let end: Int64
+        let isPartial: Bool
+
+        if let rangeHeaderValue {
+            guard let parsed = Self.parseByteRange(rangeHeaderValue, total: fileSize) else {
+                sendRangeNotSatisfiable(conn, fileSize: fileSize)
+                return
+            }
+            start = parsed.start
+            end = parsed.end
+            isPartial = true
+        } else {
+            start = 0
+            end = max(0, fileSize - 1)
+            isPartial = false
+        }
+        let length = fileSize == 0 ? 0 : (end - start + 1)
 
         var head = ""
         if isPartial {
@@ -129,9 +139,17 @@ final class LocalFileServer {
 
         conn.send(content: Data(head.utf8), completion: .contentProcessed { [weak self] err in
             if err != nil { conn.cancel(); return }
-            if method == "HEAD" { conn.cancel(); return }
+            if method == "HEAD" || length == 0 { conn.cancel(); return }
             self?.streamFile(conn, fileURL: fileURL, offset: start, remaining: length)
         })
+    }
+
+    private func sendRangeNotSatisfiable(_ conn: NWConnection, fileSize: Int64) {
+        var head = "HTTP/1.1 416 Range Not Satisfiable\r\n"
+        head += "Content-Range: bytes */\(fileSize)\r\n"
+        head += "Content-Length: 0\r\n"
+        head += "Connection: close\r\n\r\n"
+        conn.send(content: Data(head.utf8), completion: .contentProcessed { _ in conn.cancel() })
     }
 
     private func streamFile(_ conn: NWConnection, fileURL: URL, offset: Int64, remaining: Int64) {
@@ -209,5 +227,56 @@ final class LocalFileServer {
             ptr = iface.ifa_next
         }
         return address
+    }
+
+    /// Match stream-proxy-rust parse_byte_range:
+    /// - "bytes=" prefix required
+    /// - multi-ranges (containing ',') or total == 0 return nil (-> 416)
+    /// - suffix "bytes=-N": last N bytes (max(0, total - N)..<total)
+    /// - start-only "bytes=N-": if start >= total -> nil (-> 416), else N..<(total - 1)
+    /// - start-end "bytes=S-E": clamped end = min(E, total - 1); if S > end -> nil (-> 416)
+    /// - invalid numbers / garbage -> nil (-> 416)
+    static func parseByteRange(_ value: String, total: Int64) -> (start: Int64, end: Int64)? {
+        guard value.hasPrefix("bytes=") else { return nil }
+        let raw = value.dropFirst("bytes=".count)
+        if raw.contains(",") || total <= 0 {
+            return nil
+        }
+        guard let dashIndex = raw.firstIndex(of: "-") else {
+            return nil
+        }
+        let startPart = raw[..<dashIndex]
+        let endPart = raw[raw.index(after: dashIndex)...]
+
+        if startPart.isEmpty {
+            guard let suffix = Int64(endPart), suffix > 0 else {
+                return nil
+            }
+            let clamped = min(suffix, total)
+            let start = total - clamped
+            return (start, total - 1)
+        }
+
+        guard let start = Int64(startPart), start >= 0 else {
+            return nil
+        }
+        if start >= total {
+            return nil
+        }
+
+        let end: Int64
+        if endPart.isEmpty {
+            end = total - 1
+        } else {
+            guard let parsedEnd = Int64(endPart) else {
+                return nil
+            }
+            end = min(parsedEnd, total - 1)
+        }
+
+        guard start <= end else {
+            return nil
+        }
+        return (start, end)
     }
 }

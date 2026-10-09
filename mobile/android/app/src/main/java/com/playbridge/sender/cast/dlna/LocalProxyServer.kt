@@ -43,6 +43,7 @@ class LocalProxyServer(
             val headers: Map<String, String>,
             val mime: String?,
             val factsScope: String? = null,
+            val credentialUrl: String = url,
         ) : Entry
         data class Local(val uri: Uri, val mime: String?) : Entry
     }
@@ -207,7 +208,7 @@ class LocalProxyServer(
             }
             thread(isDaemon = true) {
                 // Per-connection. A renderer disconnect is expected; warn would flood segment logs.
-                runCatching { handle(socket) }.onFailure { Log.d(TAG, "conn ended: ${it.message}") }
+                runCatching { handle(socket) }.onFailure { Log.d(TAG, "connection ended") }
             }
         }
     }
@@ -263,10 +264,10 @@ class LocalProxyServer(
         val wantPlaylist = isLikelyPlaylistMeta(entry.mime, null, entry.url)
         val upstream = try {
             openUpstream(entry, range, retries = if (wantPlaylist) 3 else 1)
-        } catch (e: Exception) {
-            Log.w(TAG, "upstream open failed: ${e.message}")
-            if (serveStalePlaylistIfAny(token, out, "open failed: ${e.message}", requestContentFeatures)) return
-            writeError(out, 502, "Upstream error: ${e.message}")
+        } catch (_: Exception) {
+            Log.w(TAG, "upstream open failed")
+            if (serveStalePlaylistIfAny(token, out, "open failed", requestContentFeatures)) return
+            writeError(out, 502, "Upstream unavailable")
             return
         }
         try {
@@ -299,12 +300,13 @@ class LocalProxyServer(
                 val bodyText = runCatching { String(bodyBytes, Charsets.UTF_8) }.getOrNull().orEmpty()
                 val looksLikeHls = bodyText.trimStart().startsWith("#EXTM3U")
                 if (looksLikeHls) {
-                    Log.d(TAG, "playlist HTTP ${upstream.code} ($ctype) bytes=${bodyBytes.size}")
+                    Log.d(TAG, "playlist HTTP ${upstream.code} bytes=${bodyBytes.size}")
                     val rewritten = rewritePlaylist(
                         bodyText,
                         finalUrl,
                         entry.headers,
                         entry.factsScope,
+                        entry.credentialUrl,
                     ).toByteArray()
                     lastGoodPlaylist[token] = CachedPlaylist(System.currentTimeMillis(), rewritten)
                     writeBufferedResponse(
@@ -324,7 +326,7 @@ class LocalProxyServer(
                 if (serveStalePlaylistIfAny(
                         token,
                         out,
-                        "HTTP ${upstream.code} ct=$ctype bytes=${bodyBytes.size}",
+                        "HTTP ${upstream.code} bytes=${bodyBytes.size}",
                         requestContentFeatures,
                     )
                 ) {
@@ -332,7 +334,7 @@ class LocalProxyServer(
                 }
                 Log.w(
                     TAG,
-                    "upstream HTTP ${upstream.code} ct=$ctype bytes=${bodyBytes.size} " +
+                    "upstream HTTP ${upstream.code} bytes=${bodyBytes.size} " +
                         "keys=${entry.headers.keys.joinToString()} (not #EXTM3U)",
                 )
                 writeError(
@@ -405,15 +407,15 @@ class LocalProxyServer(
         range: String?,
         retries: Int = 1,
     ): UpstreamResponse {
-        fun connect(headers: Map<String, String>): UpstreamResponse {
-            val conn = (URL(entry.url).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true
+        fun connectOnce(url: String, headers: Map<String, String>): UpstreamResponse {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = false
                 connectTimeout = 30_000
                 readTimeout = 45_000
                 requestMethod = "GET"
                 useCaches = false
                 doInput = true
-                headers.forEach { (k, v) ->
+                LocalProxyHeaderPolicy.forTarget(headers, url, entry.credentialUrl).forEach { (k, v) ->
                     if (k.equals("Range", ignoreCase = true)) return@forEach
                     // Per-header on the per-request path; restricted names are expected.
                     runCatching { setRequestProperty(k, v) }
@@ -443,16 +445,28 @@ class LocalProxyServer(
                 contentType = conn.contentType,
                 contentLength = conn.contentLengthLong,
                 contentRange = conn.getHeaderField("Content-Range"),
-                finalUrl = conn.url?.toString() ?: entry.url,
+                location = conn.getHeaderField("Location"),
+                finalUrl = conn.url?.toString() ?: url,
                 inputStream = stream,
                 connection = conn,
             )
         }
 
-        val minimal = entry.headers.filterKeys { k ->
-            val lk = k.lowercase()
-            lk == "user-agent" || lk == "referer" || lk == "cookie" || lk == "authorization"
-        }.toMutableMap()
+        fun connect(headers: Map<String, String>): UpstreamResponse {
+            var url = entry.url
+            repeat(20) {
+                val response = connectOnce(url, headers)
+                if (response.code !in listOf(301, 302, 303, 307, 308)) return response
+                val location = response.location ?: return response
+                val next = runCatching { URL(URL(url), location) }.getOrNull()
+                if (next == null || next.protocol.lowercase() !in listOf("http", "https")) return response
+                response.close()
+                url = next.toString()
+            }
+            throw java.io.IOException("Too many upstream redirects")
+        }
+
+        val minimal = LocalProxyHeaderPolicy.minimalRetryHeaders(entry.headers).toMutableMap()
         if (minimal.keys.none { it.equals("User-Agent", ignoreCase = true) }) {
             minimal["User-Agent"] = DEFAULT_UA
         }
@@ -486,6 +500,7 @@ class LocalProxyServer(
         val contentType: String?,
         val contentLength: Long,
         val contentRange: String?,
+        val location: String?,
         val finalUrl: String,
         val inputStream: InputStream?,
         private val connection: HttpURLConnection,
@@ -647,41 +662,22 @@ class LocalProxyServer(
             writeStatus(out, 404, "Not Found")
             return
         }
-        val total = pfd.statSize
-        val mime = entry.mime ?: resolver.getType(entry.uri) ?: "video/mp4"
-        val r = parseRange(range, total)
-
-        val sb = StringBuilder()
-        val start: Long
-        val length: Long
-        if (r == null) {
-            start = 0L
-            length = total
-            sb.append("HTTP/1.1 200 OK\r\n").append("Content-Type: $mime\r\n")
-            if (total >= 0) sb.append("Content-Length: $total\r\n")
-        } else {
-            start = r.first
-            val end = r.second
-            length = end - start + 1
-            sb.append("HTTP/1.1 206 Partial Content\r\n").append("Content-Type: $mime\r\n")
-            sb.append("Content-Range: bytes $start-$end/$total\r\n")
-            sb.append("Content-Length: $length\r\n")
-        }
-        sb.append("Accept-Ranges: bytes\r\n")
-        appendDlnaHeaders(sb, mime, requestContentFeatures, byteSeek = true)
-        sb.append("Connection: close\r\n\r\n")
-        out.write(sb.toString().toByteArray())
-
-        if (method == "HEAD") {
-            pfd.close()
+        pfd.use {
+            val total = pfd.statSize
+            val mime = entry.mime ?: resolver.getType(entry.uri) ?: "video/mp4"
+            val response = LocalFileResponse.forRequest(range, total)
+            writeHead(
+                out, response.code, response.reason, mime, response.length, response.contentRange,
+                requestContentFeatures, byteSeek = total >= 0,
+            )
+            if (method == "HEAD" || response.code == 416) return
+            ParcelFileDescriptor.AutoCloseInputStream(pfd).use { fis ->
+                if (response.start > 0) fis.channel.position(response.start)
+                if (response.length < 0) fis.copyTo(out, 64 * 1024)
+                else copyExactly(fis, out, response.length)
+            }
             out.flush()
-            return
         }
-        ParcelFileDescriptor.AutoCloseInputStream(pfd).use { fis ->
-            if (start > 0) fis.channel.position(start)
-            if (r == null) fis.copyTo(out, 64 * 1024) else copyExactly(fis, out, length)
-        }
-        out.flush()
     }
 
     /** Rewrite every URL in an m3u8 to a proxy URL so headers reach all sub-requests. */
@@ -690,6 +686,7 @@ class LocalProxyServer(
         baseUrl: String,
         headers: Map<String, String>,
         factsScope: String?,
+        credentialUrl: String,
     ): String {
         // A master playlist has no media facts; only its media-playlist response updates scope.
         parseHlsMediaFacts(body)?.let { facts ->
@@ -709,9 +706,9 @@ class LocalProxyServer(
                 line.isBlank() -> line
                 line.startsWith("#") ->
                     uriAttr.replace(line) { m ->
-                        "URI=\"${proxify(m.groupValues[1], baseUrl, headers, factsScope)}\""
+                        "URI=\"${proxify(m.groupValues[1], baseUrl, headers, factsScope, credentialUrl)}\""
                     }
-                else -> proxify(line, baseUrl, headers, factsScope)
+                else -> proxify(line, baseUrl, headers, factsScope, credentialUrl)
             }
         }
     }
@@ -721,6 +718,7 @@ class LocalProxyServer(
         baseUrl: String,
         headers: Map<String, String>,
         factsScope: String?,
+        credentialUrl: String,
     ): String {
         val abs = resolve(baseUrl, ref)
         val pathOnly = abs.substringBefore('?').lowercase()
@@ -736,8 +734,8 @@ class LocalProxyServer(
             pathOnly.endsWith(".key") -> "application/octet-stream"
             else -> null
         }
-        // headers already filtered (inherited from the parent playlist registration)
-        return register(Entry.Remote(abs, headers, mime, factsScope), guessExt(abs, mime))
+        // Retain original session headers; scope them at each fetch, even through nested playlists.
+        return register(Entry.Remote(abs, headers, mime, factsScope, credentialUrl), guessExt(abs, mime))
     }
 
     private fun resolve(base: String, ref: String): String =
@@ -746,18 +744,6 @@ class LocalProxyServer(
         } else {
             runCatching { URI(base).resolve(ref).toString() }.getOrDefault(ref)
         }
-
-    private fun parseRange(range: String?, total: Long): Pair<Long, Long>? {
-        if (range == null || total <= 0) return null
-        val m = Regex("bytes=(\\d*)-(\\d*)").find(range) ?: return null
-        val s = m.groupValues[1]
-        val e = m.groupValues[2]
-        if (s.isEmpty()) return null
-        val start = s.toLong()
-        val end = if (e.isNotEmpty()) e.toLong().coerceAtMost(total - 1) else total - 1
-        if (start > end) return null
-        return start to end
-    }
 
     private fun copyExactly(input: InputStream, out: OutputStream, count: Long) {
         val buf = ByteArray(64 * 1024)
