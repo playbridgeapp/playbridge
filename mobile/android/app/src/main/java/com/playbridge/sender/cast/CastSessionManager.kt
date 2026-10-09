@@ -1056,6 +1056,8 @@ class CastSessionManager(
         persistBaseRoute("this")
         _route.value = Route.External(device.endpointKey, device.name)
         externalStatusJob = scope.launch {
+            var notifiedPlaybackFailureEpoch: Long? = null
+            var notifiedPlaybackFailureWithoutEpoch = false
             target.status().collect { status ->
                 if (_externalTarget.value !== target) return@collect
                 val generation = externalLoadGeneration
@@ -1069,6 +1071,18 @@ class CastSessionManager(
                     return@collect
                 }
                 _externalStatus.value = status
+                if (target.kind == TargetKind.GOOGLE_CAST &&
+                    status.failure is com.playbridge.sender.cast.googlecast.GoogleCastPlaybackFailedException
+                ) {
+                    val epoch = status.loadEpoch
+                    if (epoch != null && epoch != notifiedPlaybackFailureEpoch) {
+                        notifiedPlaybackFailureEpoch = epoch
+                        _castNotices.tryEmit("The TV couldn't play this media")
+                    } else if (epoch == null && !notifiedPlaybackFailureWithoutEpoch) {
+                        notifiedPlaybackFailureWithoutEpoch = true
+                        _castNotices.tryEmit("The TV couldn't play this media")
+                    }
+                }
                 observeExternalLease(status)
                 castAttemptDiagnostics.markPlayback(activeExternalAttemptId, status.state, status.failure)
                 if (externalScreenMirrorCoordinator.state.value.isActive) {

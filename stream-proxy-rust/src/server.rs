@@ -121,7 +121,8 @@ impl ProxyService {
                 "/media/*path",
                 get(local_file_handler).head(local_file_handler),
             )
-            .layer(cors);
+            .layer(cors)
+            .layer(middleware::from_fn(dlna_media_headers));
         management
             .route("/health", get(health_handler))
             .route("/ping", get(health_handler))
@@ -292,6 +293,57 @@ impl ProxyService {
     pub fn clear(&self) {
         self.state.session_manager.clear();
         self.state.file_grants.clear();
+    }
+}
+
+async fn dlna_media_headers(request: Request<Body>, next: Next) -> Response {
+    let wants_features = request
+        .headers()
+        .get("getcontentFeatures.dlna.org")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() == "1");
+    let mut response = next.run(request).await;
+    apply_dlna_headers(response.headers_mut(), wants_features);
+    response
+}
+
+fn apply_dlna_headers(headers: &mut HeaderMap, wants_features: bool) {
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let streaming = mime.starts_with("video/") || mime.starts_with("audio/");
+    headers.insert(
+        "transfermode.dlna.org",
+        HeaderValue::from_static(if streaming {
+            "Streaming"
+        } else {
+            "Interactive"
+        }),
+    );
+    headers.remove("realtimeinfo.dlna.org");
+    if streaming {
+        headers.insert(
+            "realtimeinfo.dlna.org",
+            HeaderValue::from_static("DLNA.ORG_TLAG=*"),
+        );
+    }
+    // Replace upstream profiles/flags while preserving the served seek capability.
+    headers.remove("contentfeatures.dlna.org");
+    if wants_features {
+        let seekable = headers
+            .get(header::ACCEPT_RANGES)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
+        headers.insert(
+            "contentfeatures.dlna.org",
+            HeaderValue::from_static(if seekable {
+                "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+            } else {
+                "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+            }),
+        );
     }
 }
 
@@ -1385,6 +1437,45 @@ fn mime_for(path: &str) -> &'static str {
 mod manifest_sniff_tests {
     use super::*;
     use bytes::Bytes;
+
+    #[test]
+    fn dlna_headers_follow_mime_and_served_ranges() {
+        for (mime, ranges, mode, features, realtime) in [
+            ("video/mp4", true, "Streaming", "01", true),
+            ("audio/flac", false, "Streaming", "00", true),
+            ("video/mpeg", false, "Streaming", "00", true),
+            ("image/png", true, "Interactive", "01", false),
+            (
+                "application/vnd.apple.mpegurl",
+                false,
+                "Interactive",
+                "00",
+                false,
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+            if ranges {
+                headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+            }
+            headers.insert(
+                "contentfeatures.dlna.org",
+                HeaderValue::from_static("DLNA.ORG_FLAGS=upstream"),
+            );
+            apply_dlna_headers(&mut headers, true);
+            assert_eq!(headers["transfermode.dlna.org"], mode);
+            assert_eq!(
+                headers["contentfeatures.dlna.org"],
+                format!("DLNA.ORG_OP={features};DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000")
+            );
+            assert_eq!(headers.contains_key("realtimeinfo.dlna.org"), realtime);
+            if realtime {
+                assert_eq!(headers["realtimeinfo.dlna.org"], "DLNA.ORG_TLAG=*");
+            }
+            apply_dlna_headers(&mut headers, false);
+            assert!(!headers.contains_key("contentfeatures.dlna.org"));
+        }
+    }
 
     fn response(body: Body) -> UpstreamResponse {
         UpstreamResponse {

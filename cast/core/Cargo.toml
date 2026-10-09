@@ -48,6 +48,7 @@ tokio-native-tls = "0.3"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [dev-dependencies]
+rcgen = "0.14"
 wiremock = "0.6"
 
 [[example]]

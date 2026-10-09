@@ -10,6 +10,9 @@ import 'package:playbridge_desktop/tv_transport.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _RecordingTransport implements TvTransport {
+  @override
+  String? get lastError => null;
+
   PlayPayload? video;
   PlaylistPayload? playlist;
   PlayPayload? queued;

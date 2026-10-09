@@ -30,6 +30,9 @@ final class _BridgeFiles extends IOOverrides {
 }
 
 class _Transport implements TvTransport {
+  @override
+  String? get lastError => null;
+
   int loads = 0;
 
   @override

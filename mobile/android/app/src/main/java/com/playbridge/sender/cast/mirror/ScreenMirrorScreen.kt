@@ -56,6 +56,7 @@ fun ScreenMirrorScreen(
     val capabilities by webSocketClient.tvCapabilitiesState.collectAsState()
     val route by castSessionManager.route.collectAsState()
     val session by castSessionManager.sessionState.collectAsState()
+    val externalSelected = route is CastSessionManager.Route.External
     var qualityId by rememberSaveable { mutableStateOf(ScreenMirrorCoordinator.Quality.DEFAULT.id) }
     var deviceAudioEnabled by rememberSaveable {
         mutableStateOf(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
@@ -80,13 +81,16 @@ fun ScreenMirrorScreen(
     val audioPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) {
             pendingOptions = pendingOptions?.copy(deviceAudio = false)
-            audioNotice = "Audio permission was not granted. Mirroring will continue with video only."
+            audioNotice = if (externalSelected) {
+                "Audio permission was not granted. External mirroring includes a silent audio track."
+            } else {
+                "Audio permission was not granted. Mirroring will continue with video only."
+            }
         }
         projectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
     val connected = connection is WebSocketClient.ConnectionState.Connected
     val nativeSupported = capabilities.screenMirrorWebRtc
-    val externalSelected = route is CastSessionManager.Route.External
     val externalSupported = externalSelected &&
         session.targetKind in setOf(
             com.playbridge.sender.cast.TargetKind.GOOGLE_CAST,
@@ -143,10 +147,13 @@ fun ScreenMirrorScreen(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Device audio", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        "Share audio played by compatible apps. Microphone audio is never sent."
-                    } else {
-                        "Requires Android 10 or newer. This device will mirror video only."
+                    when {
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q ->
+                            "Share audio played by compatible apps. Microphone audio is never sent."
+                        externalSelected ->
+                            "Requires Android 10 or newer for device audio. External mirroring includes a silent audio track."
+                        else ->
+                            "Requires Android 10 or newer. This device will mirror video only."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

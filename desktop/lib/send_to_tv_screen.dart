@@ -449,7 +449,12 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
   /// Cast one or more files (single → one item, several → a playlist).
   Future<void> _castFiles(List<File> files) async {
     final ok = await controller.castLocalFiles(files);
-    if (!ok) _snack('Could not cast — is a TV still connected?');
+    if (!ok) {
+      final detail = controller.lastCastError?.trim();
+      _snack(detail != null && detail.isNotEmpty
+          ? 'Could not cast: ${detail.length > 200 ? '${detail.substring(0, 197)}…' : detail}'
+          : 'Could not cast — is a TV still connected?');
+    }
   }
 
   void _snack(String message) {

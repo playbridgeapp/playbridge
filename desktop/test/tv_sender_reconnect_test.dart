@@ -56,6 +56,29 @@ void main() {
     return (sender: sender, transport: transport, saved: saved, store: store);
   }
 
+  testWidgets('failed DLNA loads preserve renderer error and success clears it',
+      (tester) async {
+    final h = await make(
+      protocol: TvProtocol.dlna,
+      retainProxyUrls: (_) async => StreamProxyLease(() {}),
+    );
+    await h.sender.reconnect(h.saved);
+    await tester.pump();
+    h.transport.lastError =
+        'UPnP SetAVTransportURI error 714: Illegal MIME-type';
+    expect(
+        await h.sender.castPlaylist(PlaylistPayload(
+            items: [PlayPayload(url: 'http://sender/movie.avi')])),
+        isFalse);
+    expect(h.sender.lastCastError, contains('714: Illegal MIME-type'));
+    h.transport.acceptsLoads = true;
+    expect(
+        await h.sender.castPlaylist(PlaylistPayload(
+            items: [PlayPayload(url: 'http://sender/movie.mp4')])),
+        isTrue);
+    expect(h.sender.lastCastError, isNull);
+  });
+
   for (final playlist in [false, true]) {
     testWidgets(
         'Google Cast relaunch during ${playlist ? 'playlist' : 'video'} keeps incoming lease',
@@ -474,6 +497,9 @@ void main() {
 }
 
 class _FakeTransport implements TvTransport {
+  @override
+  String? lastError;
+
   _FakeTransport(this.protocol);
 
   @override

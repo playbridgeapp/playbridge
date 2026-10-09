@@ -50,6 +50,7 @@ internal data class RustCastPlaybackStatus(
     val state: String,
     val positionSeconds: Double,
     val durationSeconds: Double,
+    val volumeSupported: Boolean? = null,
 )
 
 internal sealed class GoogleCastSessionInvalidException(message: String) :
@@ -65,6 +66,10 @@ internal class GoogleCastSessionUnresponsiveException : GoogleCastSessionInvalid
 
 internal class GoogleCastConnectionLostException : GoogleCastSessionInvalidException(
     "Google Cast receiver connection was lost",
+)
+
+internal class GoogleCastPlaybackFailedException : IllegalStateException(
+    "The TV couldn't play this media",
 )
 
 internal class GoogleCastLocalNetworkUnavailableException(message: String) :
@@ -86,6 +91,7 @@ class GoogleCastNotReadyException(message: String = "Google Cast receiver is not
 internal class RustCastSessionClient(
     private val scope: CoroutineScope,
     private val attemptId: Int,
+    private val onPlaybackError: (GoogleCastPlaybackFailedException) -> Unit = {},
 ) {
     private val requestIds = AtomicLong(1)
     private val pending = ConcurrentHashMap<String, CompletableDeferred<JSONObject>>()
@@ -219,6 +225,7 @@ internal class RustCastSessionClient(
             state = status.optString("state", "unknown"),
             positionSeconds = status.optDouble("position_seconds", 0.0),
             durationSeconds = status.optDouble("duration_seconds", 0.0),
+            volumeSupported = status.optNullableBoolean("volume_supported"),
         )
     }
 
@@ -340,6 +347,12 @@ internal class RustCastSessionClient(
                         )
                         if (requestId != null) {
                             pending.remove(requestId)?.completeExceptionally(error)
+                        } else if (error is GoogleCastPlaybackFailedException) {
+                            runCatching { onPlaybackError(error) }
+                                .onFailure { callbackError ->
+                                    Log.w(TAG, "$tracePrefix playback-error callback failed", callbackError)
+                                }
+                            trace("receiver playback failed; keeping session ready")
                         } else if (googleCastSessionErrorEndsSession(reason)) {
                             isReady = false
                             connected.completeExceptionally(error)
@@ -445,6 +458,7 @@ internal class RustCastSessionClient(
             RECEIVER_ENDED_REASON -> GoogleCastReceiverEndedException()
             SESSION_UNRESPONSIVE_REASON -> GoogleCastSessionUnresponsiveException()
             CONNECTION_LOST_REASON -> GoogleCastConnectionLostException()
+            GOOGLE_CAST_PLAYBACK_ERROR_REASON -> GoogleCastPlaybackFailedException()
             LOCAL_NETWORK_UNREACHABLE_REASON -> GoogleCastLocalNetworkUnavailableException(
                 event.optString(
                     "message",
@@ -465,6 +479,9 @@ internal class RustCastSessionClient(
             ?.toString()
             ?.takeIf { it.isNotBlank() }
 
+    private fun JSONObject.optNullableBoolean(name: String): Boolean? =
+        if (!has(name) || isNull(name)) null else optBoolean(name)
+
     private fun JSONObject.putIfNotNull(name: String, value: Any?): JSONObject {
         if (value != null) put(name, value)
         return this
@@ -484,8 +501,10 @@ internal class RustCastSessionClient(
     }
 }
 
+internal const val GOOGLE_CAST_PLAYBACK_ERROR_REASON = "playback_error"
+
 internal fun googleCastSessionErrorEndsSession(reason: String?): Boolean =
-    !reason.isNullOrBlank()
+    !reason.isNullOrBlank() && reason != GOOGLE_CAST_PLAYBACK_ERROR_REASON
 
 internal fun googleCastStatusErrorEndsSession(error: Throwable): Boolean =
     error is GoogleCastSessionInvalidException

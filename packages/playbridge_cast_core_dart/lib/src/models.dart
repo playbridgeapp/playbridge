@@ -97,6 +97,7 @@ final class MediaRequest {
     this.contentType,
     this.artUrl,
     this.start = Duration.zero,
+    this.duration,
     this.streamType,
     this.hlsSegmentFormat,
     this.hlsVideoSegmentFormat,
@@ -108,6 +109,7 @@ final class MediaRequest {
   final String? contentType;
   final String? artUrl;
   final Duration start;
+  final Duration? duration;
   final String? streamType;
   final String? hlsSegmentFormat;
   final String? hlsVideoSegmentFormat;
@@ -121,6 +123,9 @@ final class MediaRequest {
         if (start != Duration.zero)
           'start_seconds':
               start.inMicroseconds / Duration.microsecondsPerSecond,
+        if (duration != null)
+          'duration_seconds':
+              duration!.inMicroseconds / Duration.microsecondsPerSecond,
         if (streamType != null) 'stream_type': streamType,
         if (hlsSegmentFormat != null) 'hls_segment_format': hlsSegmentFormat,
         if (hlsVideoSegmentFormat != null)
@@ -134,6 +139,7 @@ final class SessionCapabilities {
     required this.playbackControl,
     required this.seek,
     required this.status,
+    this.volume = false,
     this.receiverAppAvailable,
   });
 
@@ -141,6 +147,7 @@ final class SessionCapabilities {
   final bool playbackControl;
   final bool seek;
   final bool status;
+  final bool volume;
   final bool? receiverAppAvailable;
 
   factory SessionCapabilities.fromJson(Map<String, Object?> json) =>
@@ -149,6 +156,7 @@ final class SessionCapabilities {
         playbackControl: json['playback_control'] as bool? ?? false,
         seek: json['seek'] as bool? ?? false,
         status: json['status'] as bool? ?? false,
+        volume: json['volume'] as bool? ?? false,
         receiverAppAvailable: json['receiver_app_available'] as bool?,
       );
 }
@@ -176,9 +184,13 @@ final class PlaybackStatus {
     required this.state,
     required this.position,
     required this.duration,
+    this.volumeSupported,
   });
 
   final PlaybackState state;
+
+  /// A fresh volume capability, if supplied by the native status response.
+  final bool? volumeSupported;
   final Duration position;
   final Duration duration;
 
@@ -189,6 +201,7 @@ final class PlaybackStatus {
 
   factory PlaybackStatus.fromJson(Map<String, Object?> json) => PlaybackStatus(
         state: PlaybackState.fromWire(json['state'] as String?),
+        volumeSupported: json['volume_supported'] as bool?,
         position: _secondsToDuration(json['position_seconds']),
         duration: _secondsToDuration(json['duration_seconds']),
       );
@@ -297,13 +310,15 @@ final class CastSessionError extends CastSessionEvent implements Exception {
   final String message;
   final String? reason;
 
+  bool get playbackFailed => reason == 'playback_error';
   bool get receiverEnded => reason == 'receiver_ended';
   bool get sessionUnresponsive => reason == 'session_unresponsive';
   bool get connectionLost => reason == 'connection_lost';
 
   /// A request-less error with one of these reasons is followed by a finished
   /// event and invalidates the native worker. Request-less maintenance errors
-  /// deliberately carry no reason and leave the session usable.
+  /// deliberately carry no reason and leave the session usable. Playback errors
+  /// carry playback_error and also leave the receiver session usable.
   bool get endsSession =>
       receiverEnded || sessionUnresponsive || connectionLost;
 

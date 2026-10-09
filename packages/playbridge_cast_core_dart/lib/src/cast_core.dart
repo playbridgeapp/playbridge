@@ -91,6 +91,7 @@ final class CastCoreLibrary {
         handle,
         timeout,
         pollInterval,
+        endpoint.protocol,
       );
     } finally {
       calloc.free(target);
@@ -162,6 +163,7 @@ final class CastSession implements Finalizable {
     this._handle,
     this._operationTimeout,
     Duration pollInterval,
+    this._protocol,
   ) : _finalizer = NativeFinalizer(_bindings.sessionFreePointer.cast()) {
     _finalizer.attach(this, _handle, detach: this);
     _connected.future.ignore();
@@ -171,6 +173,7 @@ final class CastSession implements Finalizable {
   final NativeBindings _bindings;
   final Pointer<Void> _handle;
   final Duration _operationTimeout;
+  final ReceiverProtocol _protocol;
   final NativeFinalizer _finalizer;
   final Completer<CastSessionConnected> _connected = Completer();
   final StreamController<CastSessionEvent> _events =
@@ -208,6 +211,13 @@ final class CastSession implements Finalizable {
 
   Future<PlaybackStatus> status() => _submit<PlaybackStatus>('status');
   Future<void> disconnect() => _operation('disconnect');
+
+  Future<void> adjustVolume(double delta) {
+    if (!delta.isFinite || delta < -1 || delta > 1) {
+      throw ArgumentError.value(delta, 'delta', 'must be between -1 and 1');
+    }
+    return _operation('adjust_volume', {'delta': delta});
+  }
 
   Future<void> _operation(
     String operation, [
@@ -254,7 +264,13 @@ final class CastSession implements Finalizable {
 
     return completer.future
         .timeout(
-          _operationTimeout + const Duration(seconds: 1),
+          // Matches the native DLNA load budget, including compatibility retries.
+          (_protocol == ReceiverProtocol.dlna &&
+                      operation == 'load' &&
+                      _operationTimeout < const Duration(seconds: 64)
+                  ? const Duration(seconds: 64)
+                  : _operationTimeout) +
+              const Duration(seconds: 1),
           onTimeout: () => throw CastSessionError(
             requestId: requestId,
             operation: operation,

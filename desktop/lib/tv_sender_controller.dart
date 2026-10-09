@@ -205,6 +205,10 @@ class TvSenderController extends ChangeNotifier {
   /// Last browser playback/load error (cleared on successful playback).
   String? get lastBrowserError => _lastBrowserError;
 
+  /// Failure detail from the last local file cast attempt.
+  String? _lastCastError;
+  String? get lastCastError => _lastCastError;
+
   bool get castRouteThroughProxy => _identity.castRouteThroughProxy;
 
   Future<void> setCastRouteThroughProxy(bool value) async {
@@ -511,6 +515,7 @@ class TvSenderController extends ChangeNotifier {
   }
 
   Future<bool> castPlaylist(PlaylistPayload playlist) async {
+    _lastCastError = null;
     final outgoing = PlaylistPayload()..mergeFromMessage(playlist);
     final items = playlist.items.map(_withHistoryPreference).toList();
     outgoing.items
@@ -532,6 +537,7 @@ class TvSenderController extends ChangeNotifier {
       rethrow;
     }
     if (!ok || generation != _proxyLeaseGeneration) {
+      if (!ok) _lastCastError = _transport.lastError;
       lease.close();
       return false;
     }
@@ -862,53 +868,62 @@ class TvSenderController extends ChangeNotifier {
   /// playlist (how single videos are sent anyway). Returns false if no TV is
   /// connected, no file exists, or no LAN address is reachable.
   Future<bool> castLocalFiles(List<File> files, {List<String>? titles}) async {
-    final active = _activeTv;
-    if (active == null || !isConnected) return false;
+    _lastCastError = null;
+    try {
+      final active = _activeTv;
+      if (active == null || !isConnected) return false;
 
-    final present = files.where((f) => f.existsSync()).toList(growable: false);
-    if (present.isEmpty) return false;
+      final present =
+          files.where((f) => f.existsSync()).toList(growable: false);
+      if (present.isEmpty) return false;
 
-    final host = await _localLanIp(active.host);
-    if (host == null) return false;
+      final host = await _localLanIp(active.host);
+      if (host == null) return false;
 
-    final items = <PlayPayload>[];
-    for (var i = 0; i < present.length; i++) {
-      final file = present[i];
-      final filename = file.uri.pathSegments.isNotEmpty
-          ? file.uri.pathSegments.last
-          : 'video';
-      final registration = await StreamProxyServer.instance.registerFile(
-        file.path,
-        host: host,
-      );
-      final payload = PlayPayload()..url = registration.url;
-      final label =
-          (titles != null && i < titles.length && titles[i].isNotEmpty)
-              ? titles[i]
-              : filename;
-      if (label.isNotEmpty) payload.title = label;
-      items.add(payload);
+      final items = <PlayPayload>[];
+      for (var i = 0; i < present.length; i++) {
+        final file = present[i];
+        final filename = file.uri.pathSegments.isNotEmpty
+            ? file.uri.pathSegments.last
+            : 'video';
+        final registration = await StreamProxyServer.instance.registerFile(
+          file.path,
+          host: host,
+        );
+        final payload = PlayPayload()..url = registration.url;
+        final label =
+            (titles != null && i < titles.length && titles[i].isNotEmpty)
+                ? titles[i]
+                : filename;
+        if (label.isNotEmpty) payload.title = label;
+        items.add(payload);
+      }
+      if (items.isEmpty) return false;
+
+      final ok = await castPlaylist(PlaylistPayload(items: items));
+      if (!ok) _lastCastError = _transport.lastError;
+      if (ok) {
+        // Optimistic now-casting snapshot; refined by the TV's status /
+        // playlist_status echoes.
+        _castingTitle = items.length == 1
+            ? (items.first.hasTitle() ? items.first.title : null)
+            : '${items.length} items';
+        _castPlaylist = [
+          for (var i = 0; i < items.length; i++)
+            (
+              index: i,
+              title: items[i].hasTitle() ? items[i].title : 'Item ${i + 1}'
+            ),
+        ];
+        _castIndex = 0;
+        notifyListeners();
+      }
+      return ok;
+    } on Object catch (error) {
+      _lastCastError =
+          error is CastSessionError ? error.message : error.toString();
+      return false;
     }
-    if (items.isEmpty) return false;
-
-    final ok = await castPlaylist(PlaylistPayload(items: items));
-    if (ok) {
-      // Optimistic now-casting snapshot; refined by the TV's status /
-      // playlist_status echoes.
-      _castingTitle = items.length == 1
-          ? (items.first.hasTitle() ? items.first.title : null)
-          : '${items.length} items';
-      _castPlaylist = [
-        for (var i = 0; i < items.length; i++)
-          (
-            index: i,
-            title: items[i].hasTitle() ? items[i].title : 'Item ${i + 1}'
-          ),
-      ];
-      _castIndex = 0;
-      notifyListeners();
-    }
-    return ok;
   }
 
   /// Picks a local IPv4 the TV can reach — preferring an address on the TV's

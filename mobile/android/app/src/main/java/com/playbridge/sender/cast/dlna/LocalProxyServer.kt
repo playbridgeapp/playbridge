@@ -199,12 +199,16 @@ class LocalProxyServer(
         val path = parts[1]
 
         var range: String? = null
+        var requestContentFeatures = false
         while (true) {
             val line = reader.readLine() ?: break
             if (line.isEmpty()) break
             val idx = line.indexOf(':')
-            if (idx > 0 && line.substring(0, idx).equals("Range", true)) {
-                range = line.substring(idx + 1).trim()
+            if (idx > 0) {
+                val name = line.substring(0, idx).trim()
+                val value = line.substring(idx + 1).trim()
+                if (name.equals("Range", true)) range = value
+                if (name.equals("getcontentFeatures.dlna.org", true) && value == "1") requestContentFeatures = true
             }
         }
 
@@ -218,8 +222,8 @@ class LocalProxyServer(
         val token = path.trimStart('/').substringBefore('.').substringBefore('?')
         when (val entry = entries[token]) {
             null -> writeStatus(out, 404, "Not Found")
-            is Entry.Remote -> serveRemote(token, entry, method, range, out)
-            is Entry.Local -> serveLocal(entry, method, range, out)
+            is Entry.Remote -> serveRemote(token, entry, method, range, requestContentFeatures, out)
+            is Entry.Local -> serveLocal(entry, method, range, requestContentFeatures, out)
         }
     }
 
@@ -228,6 +232,7 @@ class LocalProxyServer(
         entry: Entry.Remote,
         method: String,
         range: String?,
+        requestContentFeatures: Boolean,
         out: OutputStream,
     ) {
         val wantPlaylist = isLikelyPlaylistMeta(entry.mime, null, entry.url)
@@ -235,7 +240,7 @@ class LocalProxyServer(
             openUpstream(entry, range, retries = if (wantPlaylist) 3 else 1)
         } catch (e: Exception) {
             Log.w(TAG, "upstream open failed: ${e.message}")
-            if (serveStalePlaylistIfAny(token, out, "open failed: ${e.message}")) return
+            if (serveStalePlaylistIfAny(token, out, "open failed: ${e.message}", requestContentFeatures)) return
             writeError(out, 502, "Upstream error: ${e.message}")
             return
         }
@@ -251,6 +256,8 @@ class LocalProxyServer(
                     mime = entry.mime ?: ctype ?: "video/mp4",
                     contentLength = contentLength,
                     contentRange = upstream.contentRange,
+                    requestContentFeatures = requestContentFeatures,
+                    byteSeek = !isLiveStream,
                 )
                 return
             }
@@ -276,6 +283,8 @@ class LocalProxyServer(
                         reason = "OK",
                         contentType = "application/vnd.apple.mpegurl",
                         body = rewritten,
+                        requestContentFeatures = requestContentFeatures,
+                        byteSeek = !isLiveStream,
                         extraHeaders = listOf("Cache-Control: no-cache"),
                     )
                     return
@@ -286,6 +295,7 @@ class LocalProxyServer(
                         token,
                         out,
                         "HTTP ${upstream.code} ct=$ctype bytes=${bodyBytes.size}",
+                        requestContentFeatures,
                     )
                 ) {
                     return
@@ -315,6 +325,8 @@ class LocalProxyServer(
                 contentLength = contentLength,
                 contentRange = upstream.contentRange,
                 input = upstream.inputStream,
+                requestContentFeatures = requestContentFeatures,
+                byteSeek = !isLiveStream,
             )
         } finally {
             upstream.close()
@@ -322,7 +334,12 @@ class LocalProxyServer(
     }
 
     /** Serve last successfully rewritten playlist if fresh enough (live resilience). */
-    private fun serveStalePlaylistIfAny(token: String, out: OutputStream, why: String): Boolean {
+    private fun serveStalePlaylistIfAny(
+        token: String,
+        out: OutputStream,
+        why: String,
+        requestContentFeatures: Boolean,
+    ): Boolean {
         val cached = lastGoodPlaylist[token] ?: return false
         val age = System.currentTimeMillis() - cached.atMs
         if (age > STALE_PLAYLIST_MAX_AGE_MS) return false
@@ -333,6 +350,8 @@ class LocalProxyServer(
             reason = "OK",
             contentType = "application/vnd.apple.mpegurl",
             body = cached.body,
+            requestContentFeatures = requestContentFeatures,
+            byteSeek = !isLiveStream,
             extraHeaders = listOf("Cache-Control: no-cache", "X-PlayBridge-Stale: 1"),
         )
         return true
@@ -473,12 +492,15 @@ class LocalProxyServer(
         contentLength: Long,
         contentRange: String?,
         input: InputStream?,
+        requestContentFeatures: Boolean,
+        byteSeek: Boolean,
     ) {
         val sb = StringBuilder("HTTP/1.1 $code $reason\r\n")
         sb.append("Content-Type: $mime\r\n")
         if (contentLength >= 0) sb.append("Content-Length: $contentLength\r\n")
         contentRange?.let { sb.append("Content-Range: $it\r\n") }
-        sb.append("Accept-Ranges: bytes\r\n")
+        if (byteSeek) sb.append("Accept-Ranges: bytes\r\n")
+        appendDlnaHeaders(sb, mime, requestContentFeatures, byteSeek)
         appendCorsHeaders(sb)
         sb.append("Connection: close\r\n\r\n")
         out.write(sb.toString().toByteArray())
@@ -500,13 +522,16 @@ class LocalProxyServer(
         contentType: String,
         body: ByteArray,
         contentRange: String? = null,
+        requestContentFeatures: Boolean,
+        byteSeek: Boolean,
         extraHeaders: List<String> = emptyList(),
     ) {
         val sb = StringBuilder("HTTP/1.1 $code $reason\r\n")
         sb.append("Content-Type: $contentType\r\n")
         sb.append("Content-Length: ${body.size}\r\n")
         contentRange?.let { sb.append("Content-Range: $it\r\n") }
-        sb.append("Accept-Ranges: bytes\r\n")
+        if (byteSeek) sb.append("Accept-Ranges: bytes\r\n")
+        appendDlnaHeaders(sb, contentType, requestContentFeatures, byteSeek)
         appendCorsHeaders(sb)
         extraHeaders.forEach { sb.append(it).append("\r\n") }
         sb.append("Connection: close\r\n\r\n")
@@ -522,16 +547,30 @@ class LocalProxyServer(
         mime: String,
         contentLength: Long,
         contentRange: String?,
+        requestContentFeatures: Boolean,
+        byteSeek: Boolean,
     ) {
         val sb = StringBuilder("HTTP/1.1 $code $reason\r\n")
         sb.append("Content-Type: $mime\r\n")
         if (contentLength >= 0) sb.append("Content-Length: $contentLength\r\n")
         contentRange?.let { sb.append("Content-Range: $it\r\n") }
-        sb.append("Accept-Ranges: bytes\r\n")
+        if (byteSeek) sb.append("Accept-Ranges: bytes\r\n")
+        appendDlnaHeaders(sb, mime, requestContentFeatures, byteSeek)
         appendCorsHeaders(sb)
         sb.append("Connection: close\r\n\r\n")
         out.write(sb.toString().toByteArray())
         out.flush()
+    }
+
+    private fun appendDlnaHeaders(
+        sb: StringBuilder,
+        mimeType: String,
+        requestContentFeatures: Boolean,
+        byteSeek: Boolean,
+    ) {
+        dlnaResponseHeaders(mimeType, requestContentFeatures, byteSeek).forEach { (name, value) ->
+            sb.append(name).append(": ").append(value).append("\r\n")
+        }
     }
 
     private fun appendCorsHeaders(sb: StringBuilder) {
@@ -566,7 +605,13 @@ class LocalProxyServer(
         out.flush()
     }
 
-    private fun serveLocal(entry: Entry.Local, method: String, range: String?, out: OutputStream) {
+    private fun serveLocal(
+        entry: Entry.Local,
+        method: String,
+        range: String?,
+        requestContentFeatures: Boolean,
+        out: OutputStream,
+    ) {
         val pfd = resolver.openFileDescriptor(entry.uri, "r")
         if (pfd == null) {
             writeStatus(out, 404, "Not Found")
@@ -592,7 +637,9 @@ class LocalProxyServer(
             sb.append("Content-Range: bytes $start-$end/$total\r\n")
             sb.append("Content-Length: $length\r\n")
         }
-        sb.append("Accept-Ranges: bytes\r\n").append("Connection: close\r\n\r\n")
+        sb.append("Accept-Ranges: bytes\r\n")
+        appendDlnaHeaders(sb, mime, requestContentFeatures, byteSeek = true)
+        sb.append("Connection: close\r\n\r\n")
         out.write(sb.toString().toByteArray())
 
         if (method == "HEAD") {

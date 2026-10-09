@@ -24,6 +24,7 @@ pub struct MediaRequest {
     pub content_type: Option<String>,
     pub art_url: Option<String>,
     pub start_seconds: f64,
+    pub duration_seconds: Option<f64>,
     pub stream_type: Option<String>,
     pub hls_segment_format: Option<String>,
     pub hls_video_segment_format: Option<String>,
@@ -38,22 +39,89 @@ impl MediaRequest {
             content_type: None,
             art_url: None,
             start_seconds: 0.0,
+            duration_seconds: None,
             stream_type: None,
             hls_segment_format: None,
             hls_video_segment_format: None,
         }
     }
 
+    fn dlna_content_type(&self) -> &str {
+        self.content_type
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| castv2::media_format(&self.url).0)
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+    }
+
+    fn dlna_allows_empty_metadata_retry(&self) -> bool {
+        let generated = self
+            .metadata
+            .as_deref()
+            .is_none_or(|metadata| metadata.trim().is_empty());
+        let stream_type = self
+            .stream_type
+            .as_deref()
+            .unwrap_or_else(|| castv2::media_format(&self.url).1);
+        let path = self
+            .url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        generated
+            && !stream_type.eq_ignore_ascii_case("LIVE")
+            && !self
+                .dlna_content_type()
+                .to_ascii_lowercase()
+                .contains("mpegurl")
+            && !path.ends_with(".m3u8")
+            && !path.ends_with(".m3u")
+    }
+
     fn dlna_metadata(&self) -> String {
-        if let Some(metadata) = &self.metadata {
+        if let Some(metadata) = &self.metadata
+            && !metadata.trim().is_empty()
+        {
             return metadata.clone();
         }
         let title = self.title.as_deref().unwrap_or("PlayBridge media");
-        let content_type = castv2::media_format(&self.url).0;
+        let content_type = self.dlna_content_type();
+        let category = content_type.split('/').next().unwrap_or_default();
+        let class = match category.to_ascii_lowercase().as_str() {
+            "audio" => "object.item.audioItem.musicTrack",
+            "image" => "object.item.imageItem.photo",
+            _ => "object.item.videoItem",
+        };
+        let stream_type = self
+            .stream_type
+            .as_deref()
+            .unwrap_or_else(|| castv2::media_format(&self.url).1);
+        let features = if stream_type.eq_ignore_ascii_case("LIVE") {
+            "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+        } else {
+            "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+        };
+        let duration = self
+            .duration_seconds
+            .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
+            .map(|seconds| {
+                let seconds = seconds as u64;
+                format!(
+                    r#" duration="{}:{:02}:{:02}""#,
+                    seconds / 3600,
+                    (seconds / 60) % 60,
+                    seconds % 60
+                )
+            })
+            .unwrap_or_default();
         format!(
-            r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="0" restricted="1"><dc:title>{}</dc:title><upnp:class>object.item.videoItem</upnp:class><res protocolInfo="http-get:*:{}:*">{}</res></item></DIDL-Lite>"#,
+            r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/"><item id="0" parentID="0" restricted="1"><dc:title>{}</dc:title><upnp:class>{class}</upnp:class><res protocolInfo="http-get:*:{}:{features}"{duration}>{}</res></item></DIDL-Lite>"#,
             escape_xml(title),
-            content_type,
+            escape_xml(content_type),
             escape_xml(&self.url),
         )
     }
@@ -88,6 +156,7 @@ pub struct GoogleCastSession {
     details: CastSessionDetails,
     request_ids: RequestIdGenerator,
     volume_level: Option<(f32, Instant)>,
+    playback_error_reported: bool,
 }
 
 impl ReceiverSession {
@@ -141,17 +210,21 @@ impl ReceiverSession {
             details,
             request_ids: RequestIdGenerator::new(),
             volume_level: None,
+            playback_error_reported: false,
         }))
     }
 
     pub async fn connect_dlna(location: &str, media: &MediaRequest) -> Result<Self> {
         let renderer = timeout(Renderer::load(location), "DLNA renderer connection").await??;
-        timeout(
-            renderer.set_media_uri(&media.url, &media.dlna_metadata()),
-            "DLNA media load",
-        )
-        .await??;
-        timeout(renderer.play(), "DLNA play").await??;
+        renderer.preflight(media.dlna_content_type()).await?;
+        renderer
+            .set_media_uri_with_metadata_fallback(
+                &media.url,
+                &media.dlna_metadata(),
+                media.dlna_allows_empty_metadata_retry(),
+            )
+            .await?;
+        renderer.play().await?;
         Ok(Self::Dlna(renderer))
     }
 
@@ -185,8 +258,13 @@ impl ReceiverSession {
                     .await
             }
             Self::Dlna(renderer) => {
+                renderer.preflight(media.dlna_content_type()).await?;
                 renderer
-                    .set_media_uri(&media.url, &media.dlna_metadata())
+                    .set_media_uri_with_metadata_fallback(
+                        &media.url,
+                        &media.dlna_metadata(),
+                        media.dlna_allows_empty_metadata_retry(),
+                    )
                     .await?;
                 renderer.play().await
             }
@@ -288,6 +366,14 @@ impl ReceiverSession {
         }
     }
 
+    pub fn supports_volume(&self) -> bool {
+        match self {
+            Self::GoogleCast(session) => !session.details.receiver_volume.fixed,
+            Self::Dlna(renderer) => renderer.supports_volume(),
+            _ => false,
+        }
+    }
+
     pub async fn set_volume(&mut self, level: f32) -> Result<()> {
         match self {
             Self::GoogleCast(session) => session.set_volume(level).await,
@@ -309,9 +395,7 @@ impl ReceiverSession {
                     })
                     .await
             }
-            Self::Dlna(_) => Err(CastError::Protocol(
-                "DLNA volume control is not available for this session".into(),
-            )),
+            Self::Dlna(renderer) => renderer.set_volume(level).await,
         }
     }
 
@@ -320,6 +404,13 @@ impl ReceiverSession {
     pub async fn adjust_volume(&mut self, delta: f32) -> Result<()> {
         match self {
             Self::GoogleCast(session) => session.adjust_volume(delta).await,
+            Self::Dlna(renderer) => {
+                if !delta.is_finite() {
+                    return Err(CastError::Protocol("volume delta must be finite".into()));
+                }
+                let current = renderer.volume().await?;
+                renderer.set_volume((current + delta).clamp(0.0, 1.0)).await
+            }
             _ => Err(CastError::Protocol(
                 "relative volume is only supported by Google Cast".into(),
             )),
@@ -428,20 +519,26 @@ impl ReceiverSession {
 impl GoogleCastSession {
     async fn load(&mut self, media: &MediaRequest) -> Result<()> {
         let _ = self.ensure_receiver_application_active().await?;
-        let inferred = castv2::media_format(&media.url);
-        castv2::load_media(
+        // A new LOAD gets one playback error even if the receiver reuses its mediaSessionId.
+        self.playback_error_reported = false;
+        castv2::load_media_with_options(
             &mut self.details,
             &media.url,
-            media.content_type.as_deref().or(Some(inferred.0)),
-            media.stream_type.as_deref().unwrap_or(inferred.1),
-            media.title.as_deref(),
-            media.art_url.as_deref(),
-            media.start_seconds,
-            media.hls_segment_format.as_deref(),
-            media.hls_video_segment_format.as_deref(),
+            castv2::LoadMediaOptions {
+                content_type: media.content_type.as_deref(),
+                stream_type: media.stream_type.as_deref(),
+                title: media.title.as_deref(),
+                art_url: media.art_url.as_deref(),
+                start_seconds: media.start_seconds,
+                duration_seconds: media.duration_seconds,
+                hls_segment_format: media.hls_segment_format.as_deref(),
+                hls_video_segment_format: media.hls_video_segment_format.as_deref(),
+            },
         )
         .await
         .map_err(map_google_cast_load_error)?;
+        // LOAD can receive a fresh receiver volume snapshot while awaiting its reply.
+        self.volume_level = None;
         Ok(())
     }
 
@@ -497,25 +594,37 @@ impl GoogleCastSession {
             .await
             .map_err(CastError::Transport)
     }
+    fn require_volume_control(&self) -> Result<()> {
+        if self.details.receiver_volume.fixed {
+            return Err(CastError::Protocol(
+                "Google Cast volume control is unsupported".into(),
+            ));
+        }
+        Ok(())
+    }
     async fn set_volume(&mut self, level: f32) -> Result<()> {
+        self.require_volume_control()?;
         let level = level.clamp(0.0, 1.0);
         self.receiver_command(json!({ "type": "SET_VOLUME", "volume": { "level": level } }))
             .await?;
+        self.details.receiver_volume.level = Some(level);
         self.volume_level = Some((level, Instant::now()));
         Ok(())
     }
     async fn adjust_volume(&mut self, delta: f32) -> Result<()> {
+        self.require_volume_control()?;
         // Reuse our last successfully sent level during a continuous gesture.
         // Query the receiver again after the gesture goes quiet so hardware
         // remote changes are respected on the next swipe.
         let current = match self.volume_level {
             Some((level, updated)) if updated.elapsed() < Duration::from_secs(1) => level,
-            _ => self
-                .ensure_receiver_application_active()
-                .await?
-                .ok_or_else(|| {
+            _ => {
+                let level = self.ensure_receiver_application_active().await?;
+                self.require_volume_control()?;
+                level.ok_or_else(|| {
                     CastError::Protocol("Google Cast receiver did not report its volume".into())
-                })?,
+                })?
+            }
         };
         self.set_volume((current + delta).clamp(0.0, 1.0)).await
     }
@@ -597,7 +706,15 @@ impl GoogleCastSession {
             if application.transport_id != self.details.transport_id || !session_matches {
                 return Err(CastError::ReceiverSessionEnded);
             }
-            return Ok(receiver_volume_level(&payload));
+            self.update_receiver_volume(&payload);
+            return Ok(self.details.receiver_volume.level);
+        }
+    }
+
+    fn update_receiver_volume(&mut self, payload: &serde_json::Value) {
+        self.details.receiver_volume.update(payload);
+        if let Some(level) = self.details.receiver_volume.level {
+            self.volume_level = Some((level, Instant::now()));
         }
     }
 
@@ -627,6 +744,7 @@ impl GoogleCastSession {
                 let payload: serde_json::Value = serde_json::from_str(&message.payload_utf8)
                     .map_err(|error| CastError::Protocol(error.to_string()))?;
                 if payload["type"] == "RECEIVER_STATUS" {
+                    self.update_receiver_volume(&payload);
                     let current =
                         castv2::matching_receiver_application(&payload, &self.details.app_id);
                     if current.as_ref().is_none_or(|application| {
@@ -671,8 +789,18 @@ impl GoogleCastSession {
                     if let Some(id) = status["mediaSessionId"].as_i64() {
                         self.details.media_session_id = Some(id);
                     }
+                    let state = match google_cast_playback_state(status) {
+                        Err(CastError::ReceiverPlaybackError) if self.playback_error_reported => {
+                            PlaybackState::Stopped
+                        }
+                        Err(CastError::ReceiverPlaybackError) => {
+                            self.playback_error_reported = true;
+                            return Err(CastError::ReceiverPlaybackError);
+                        }
+                        state => state?,
+                    };
                     return Ok(PlaybackStatus {
-                        state: state_from_text(status["playerState"].as_str().unwrap_or("")),
+                        state,
                         position_seconds: status["currentTime"].as_f64().unwrap_or(0.0),
                         duration_seconds: status["media"]["duration"].as_f64().unwrap_or(0.0),
                     });
@@ -682,9 +810,16 @@ impl GoogleCastSession {
     }
 }
 
-fn receiver_volume_level(payload: &serde_json::Value) -> Option<f32> {
-    let level = payload["status"]["volume"]["level"].as_f64()?;
-    (level.is_finite() && (0.0..=1.0).contains(&level)).then_some(level as f32)
+fn google_cast_playback_state(status: &serde_json::Value) -> Result<PlaybackState> {
+    let state = status["playerState"].as_str().unwrap_or("");
+    if state.eq_ignore_ascii_case("idle") {
+        match status["idleReason"].as_str() {
+            Some("ERROR") => return Err(CastError::ReceiverPlaybackError),
+            Some("CANCELLED" | "INTERRUPTED") => return Ok(PlaybackState::Stopped),
+            _ => return Ok(PlaybackState::Finished),
+        }
+    }
+    Ok(state_from_text(state))
 }
 
 fn map_google_cast_load_error(error: castv2::LoadMediaError) -> CastError {
@@ -784,23 +919,252 @@ mod tests {
         assert_eq!(state_from_text("paused_playback"), PlaybackState::Paused);
     }
     #[test]
-    fn receiver_volume_requires_a_valid_reported_level() {
+    fn google_cast_idle_reasons_distinguish_completion_stop_and_error() {
+        for reason in [None, Some("FINISHED")] {
+            let state =
+                google_cast_playback_state(&json!({"playerState": "IDLE", "idleReason": reason}))
+                    .unwrap();
+            assert_eq!(state, PlaybackState::Finished);
+        }
+        for reason in ["CANCELLED", "INTERRUPTED"] {
+            assert_eq!(
+                google_cast_playback_state(&json!({"playerState": "IDLE", "idleReason": reason}))
+                    .unwrap(),
+                PlaybackState::Stopped
+            );
+        }
+        let error = google_cast_playback_state(&json!({"playerState": "IDLE", "idleReason": "ERROR", "url": "https://example.test/secret"})).unwrap_err();
+        assert!(matches!(error, CastError::ReceiverPlaybackError));
         assert_eq!(
-            receiver_volume_level(&json!({"status": {"volume": {"level": 0.12}}})),
-            Some(0.12)
+            error.to_string(),
+            "Google Cast receiver reported a playback error"
         );
         assert_eq!(
-            receiver_volume_level(&json!({"status": {"volume": {"muted": true}}})),
-            None
-        );
-        assert_eq!(
-            receiver_volume_level(&json!({"status": {"volume": {"level": 1.5}}})),
-            None
+            google_cast_playback_state(&json!({"playerState": "PLAYING", "idleReason": "ERROR"}))
+                .unwrap(),
+            PlaybackState::Playing
         );
     }
+
+    async fn test_google_cast_session(
+        port: u16,
+        fixed: bool,
+        level: Option<f32>,
+    ) -> ReceiverSession {
+        ReceiverSession::GoogleCast(GoogleCastSession {
+            details: CastSessionDetails {
+                channel: castv2::CastChannel::connect("127.0.0.1", port)
+                    .await
+                    .unwrap(),
+                app_id: DEFAULT_MEDIA_RECEIVER_APP_ID.into(),
+                transport_id: "transport".into(),
+                session_id: "session".into(),
+                media_session_id: None,
+                receiver_volume: castv2::ReceiverVolume { level, fixed },
+            },
+            request_ids: RequestIdGenerator::new(),
+            volume_level: None,
+            playback_error_reported: false,
+        })
+    }
+
+    #[tokio::test]
+    async fn idle_status_uses_playback_error_path_and_refreshes_volume_capability() {
+        let (port, task) = castv2::test_support::receiver(|mut receiver| async move {
+            let status = receiver.request(NS_RECEIVER, "GET_STATUS").await;
+            receiver.send(NS_RECEIVER, json!({"type": "RECEIVER_STATUS", "requestId": status["requestId"], "status": {"applications": [{"appId": DEFAULT_MEDIA_RECEIVER_APP_ID, "transportId": "transport", "sessionId": "session"}]}})).await;
+            let media = receiver.request(NS_MEDIA, "GET_STATUS").await;
+            // Receiver updates can also arrive while waiting for a MEDIA_STATUS.
+            receiver.send(NS_RECEIVER, json!({"type": "RECEIVER_STATUS", "status": {"applications": [{"appId": DEFAULT_MEDIA_RECEIVER_APP_ID, "transportId": "transport", "sessionId": "session"}], "volume": {"controlType": "fixed"}}})).await;
+            receiver.send(NS_MEDIA, json!({"type": "MEDIA_STATUS", "requestId": media["requestId"], "status": [{"playerState": "IDLE", "idleReason": "ERROR", "mediaSessionId": 42, "media": {"contentId": "https://example.test/secret"}}]})).await;
+        }).await;
+        let mut session = test_google_cast_session(port, false, Some(0.4)).await;
+        assert!(matches!(
+            session.status().await.unwrap_err(),
+            CastError::ReceiverPlaybackError
+        ));
+        assert!(!session.supports_volume());
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn playback_error_is_reported_once_per_load_with_or_without_media_session_id() {
+        for media_session_id in [Some(42), None] {
+            let (port, task) = castv2::test_support::receiver(move |mut receiver| async move {
+                let application = json!({"applications": [{"appId": DEFAULT_MEDIA_RECEIVER_APP_ID, "transportId": "transport", "sessionId": "session"}]});
+                for _ in 0..2 {
+                    let status = receiver.request(NS_RECEIVER, "GET_STATUS").await;
+                    receiver.send(NS_RECEIVER, json!({"type": "RECEIVER_STATUS", "requestId": status["requestId"], "status": application})).await;
+                    let load = receiver.request(NS_MEDIA, "LOAD").await;
+                    // Deliberately reuse the same ID on the second LOAD.
+                    receiver.send(NS_MEDIA, json!({"type": "MEDIA_STATUS", "requestId": load["requestId"], "status": [{"mediaSessionId": 42}]})).await;
+                    for _ in 0..3 {
+                        let status = receiver.request(NS_RECEIVER, "GET_STATUS").await;
+                        receiver.send(NS_RECEIVER, json!({"type": "RECEIVER_STATUS", "requestId": status["requestId"], "status": application})).await;
+                        let media = receiver.request(NS_MEDIA, "GET_STATUS").await;
+                        receiver.send(NS_MEDIA, json!({"type": "MEDIA_STATUS", "requestId": media["requestId"], "status": [{"playerState": "IDLE", "idleReason": "ERROR", "mediaSessionId": media_session_id, "currentTime": 12.5, "media": {"duration": 100}}]})).await;
+                    }
+                }
+            }).await;
+            let mut session = test_google_cast_session(port, false, None).await;
+            let media = MediaRequest::new("https://example.test/movie.mp4");
+            for _ in 0..2 {
+                session.load(&media).await.unwrap();
+                assert!(matches!(
+                    session.status().await.unwrap_err(),
+                    CastError::ReceiverPlaybackError
+                ));
+                for _ in 0..2 {
+                    let status = session.status().await.unwrap();
+                    assert_eq!(status.state, PlaybackState::Stopped);
+                    assert_eq!(status.position_seconds, 12.5);
+                    assert_eq!(status.duration_seconds, 100.0);
+                }
+            }
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_receiver_volume_is_unsupported_and_sends_no_commands() {
+        let (port, task) = castv2::test_support::receiver(|mut receiver| async move {
+            receiver.expect_no_request().await;
+        })
+        .await;
+        let mut session = test_google_cast_session(port, true, Some(0.4)).await;
+        assert!(!session.supports_volume());
+        for result in [
+            session.set_volume(0.5).await,
+            session.adjust_volume(0.05).await,
+        ] {
+            assert!(result.unwrap_err().to_string().contains("unsupported"));
+        }
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn muted_receiver_without_level_adjusts_from_last_known_level() {
+        let (port, task) = castv2::test_support::receiver(|mut receiver| async move {
+            let status = receiver.request(NS_RECEIVER, "GET_STATUS").await;
+            receiver.send(NS_RECEIVER, json!({"type": "RECEIVER_STATUS", "requestId": status["requestId"], "status": {"applications": [{"appId": DEFAULT_MEDIA_RECEIVER_APP_ID, "transportId": "transport", "sessionId": "session"}], "volume": {"muted": true}}})).await;
+            let volume = receiver.request(NS_RECEIVER, "SET_VOLUME").await;
+            assert!((volume["volume"]["level"].as_f64().unwrap() - 0.45).abs() < 0.0001);
+        }).await;
+        let mut session = test_google_cast_session(port, false, Some(0.4)).await;
+        session.adjust_volume(0.05).await.unwrap();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn receiver_status_can_disable_volume_before_adjustment() {
+        let (port, task) = castv2::test_support::receiver(|mut receiver| async move {
+            let status = receiver.request(NS_RECEIVER, "GET_STATUS").await;
+            receiver.send(NS_RECEIVER, json!({"type": "RECEIVER_STATUS", "requestId": status["requestId"], "status": {"applications": [{"appId": DEFAULT_MEDIA_RECEIVER_APP_ID, "transportId": "transport", "sessionId": "session"}], "volume": {"controlType": "fixed"}}})).await;
+            receiver.expect_no_request().await;
+        }).await;
+        let mut session = test_google_cast_session(port, false, None).await;
+        assert!(session.supports_volume());
+        assert!(
+            session
+                .adjust_volume(0.05)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
+        assert!(!session.supports_volume());
+        task.await.unwrap();
+    }
+
     #[test]
     fn formats_dlna_seek_time() {
         assert_eq!(format_dlna_time(3661.9), "01:01:01");
+    }
+
+    #[test]
+    fn dlna_metadata_uses_mime_class_features_and_duration() {
+        for (mime, class) in [
+            ("video/quicktime", "object.item.videoItem"),
+            ("audio/flac", "object.item.audioItem.musicTrack"),
+            ("image/png", "object.item.imageItem.photo"),
+        ] {
+            let mut media = MediaRequest::new("http://example.test/unknown");
+            media.content_type = Some(format!("{mime}; charset=utf-8"));
+            media.duration_seconds = Some(3661.9);
+            let metadata = media.dlna_metadata();
+            assert!(metadata.contains(&format!("<upnp:class>{class}</upnp:class>")));
+            assert!(metadata.contains(&format!("http-get:*:{mime}:DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000")));
+            assert!(metadata.contains("duration=\"1:01:01\""));
+            assert!(metadata.contains("DLNA.ORG_FLAGS=01700000000000000000000000000000"));
+            assert!(!metadata.contains("DLNA.ORG_PN"));
+            roxmltree::Document::parse(&metadata).unwrap();
+        }
+    }
+
+    #[test]
+    fn dlna_omits_nonpositive_duration() {
+        let mut media = MediaRequest::new("http://example.test/movie.mp4");
+        for duration in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            media.duration_seconds = Some(duration);
+            assert!(!media.dlna_metadata().contains("duration="));
+        }
+    }
+
+    #[test]
+    fn empty_metadata_retry_only_applies_to_generated_non_live_non_hls_media() {
+        let mut media = MediaRequest::new("http://example.test/movie.mp4");
+        assert!(media.dlna_allows_empty_metadata_retry());
+        media.metadata = Some("<DIDL-Lite/>".into());
+        assert!(!media.dlna_allows_empty_metadata_retry());
+        media.metadata = Some(String::new());
+        assert!(media.dlna_allows_empty_metadata_retry());
+        media.stream_type = Some("LIVE".into());
+        assert!(!media.dlna_allows_empty_metadata_retry());
+        for url in [
+            "http://example.test/live.ts",
+            "http://example.test/master.m3u8",
+            "http://example.test/master.m3u",
+        ] {
+            let mut media = MediaRequest::new(url);
+            assert!(!media.dlna_allows_empty_metadata_retry());
+            media.stream_type = Some("BUFFERED".into());
+            assert_eq!(
+                media.dlna_allows_empty_metadata_retry(),
+                url.ends_with(".ts")
+            );
+        }
+        let mut media = MediaRequest::new("http://example.test/extensionless");
+        media.stream_type = Some("BUFFERED".into());
+        media.content_type = Some("application/vnd.apple.mpegurl".into());
+        assert!(!media.dlna_allows_empty_metadata_retry());
+    }
+
+    #[test]
+    fn dlna_live_and_unknown_duration_metadata() {
+        for url in [
+            "http://example.test/live.m3u8",
+            "http://example.test/live.ts",
+        ] {
+            let mut media = MediaRequest::new(url);
+            media.metadata = Some(String::new());
+            let metadata = media.dlna_metadata();
+            assert!(metadata.contains(
+                "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
+            ));
+            assert!(!metadata.contains("duration="));
+            media.stream_type = Some("BUFFERED".into());
+            assert!(media.dlna_metadata().contains("DLNA.ORG_OP=01"));
+        }
+        let mut media = MediaRequest::new("http://example.test/mirror");
+        media.content_type = Some("video/mpeg".into());
+        media.stream_type = Some("LIVE".into());
+        media.duration_seconds = Some(f64::NAN);
+        assert!(
+            media
+                .dlna_metadata()
+                .contains("http-get:*:video/mpeg:DLNA.ORG_OP=00")
+        );
+        assert!(!media.dlna_metadata().contains("duration="));
     }
 
     #[test]

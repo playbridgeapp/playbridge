@@ -52,7 +52,7 @@ class GoogleCastTarget(
     override val name: String = device.name
     override val kind: TargetKind = TargetKind.GOOGLE_CAST
 
-    override val capabilities: Set<Capability> = setOf(
+    private val baseCapabilities = setOf(
         Capability.LOAD,
         Capability.PLAY_PAUSE,
         Capability.SEEK,
@@ -61,6 +61,12 @@ class GoogleCastTarget(
         Capability.NOW_PLAYING,
         Capability.SCREEN_MIRROR,
     )
+
+    @Volatile
+    private var volumeSupported: Boolean? = null
+
+    override val capabilities: Set<Capability>
+        get() = if (volumeSupported == false) baseCapabilities - Capability.VOLUME else baseCapabilities
 
     private val connectionMutex = Mutex()
     private val monitorLock = Any()
@@ -79,6 +85,9 @@ class GoogleCastTarget(
 
     @Volatile
     private var receiverEnded = false
+
+    @Volatile
+    private var playbackFailure: GoogleCastPlaybackFailedException? = null
 
     /** Initial selection is CLI-like: never inherit an unknown receiver-app session. */
     @Volatile
@@ -123,7 +132,10 @@ class GoogleCastTarget(
         }
 
         val attempt = ++connectionAttempt
-        val replacement = RustCastSessionClient(scope, attempt)
+        lateinit var replacement: RustCastSessionClient
+        replacement = RustCastSessionClient(scope, attempt) { error ->
+            if (client === replacement) reportPlaybackFailure(error)
+        }
         client = replacement
         val startedAt = SystemClock.elapsedRealtime()
         Log.d(
@@ -194,7 +206,12 @@ class GoogleCastTarget(
         // Otherwise its late PLAYING/ERROR could be mistaken for this load.
         stopMonitoring()
         activeLoadEpoch = media.loadEpoch
-        _status.value = PlaybackStatus(PlaybackState.BUFFERING, loadEpoch = media.loadEpoch)
+        playbackFailure = null
+        _status.value = PlaybackStatus(
+            PlaybackState.BUFFERING,
+            loadEpoch = media.loadEpoch,
+            volumeSupported = volumeSupported,
+        )
         Log.d(
             TAG,
             "LOAD requested target=${device.name} source=${mediaEndpoint(media.url)} " +
@@ -334,11 +351,13 @@ class GoogleCastTarget(
     }
 
     override suspend fun setVolume(percent: Int) {
+        if (volumeSupported == false) return
         val level = (percent / 100f).coerceIn(0f, 1f)
         withContext(Dispatchers.IO) { requireReadyClient().setVolume(level) }
     }
 
     suspend fun adjustVolume(delta: Float) {
+        if (volumeSupported == false) return
         val connectedClient = ensureConnected() ?: return
         val level = (connectedClient.volume + delta).coerceIn(0f, 1f)
         withContext(Dispatchers.IO) { connectedClient.setVolume(level) }
@@ -423,10 +442,14 @@ class GoogleCastTarget(
                 val mapped = mapState(status.state)
                 val positionMs = (status.positionSeconds * 1000).toLong()
                 val durationMs = (status.durationSeconds * 1000).toLong()
+                status.volumeSupported?.let { volumeSupported = it }
+                val failure = playbackFailure
                 _status.value = PlaybackStatus(
-                    state = mapped,
+                    state = if (failure == null) mapped else PlaybackState.ERROR,
                     positionMs = positionMs,
                     durationMs = durationMs,
+                    failure = failure,
+                    volumeSupported = volumeSupported,
                     loadEpoch = observedLoadEpoch,
                 )
                 if (_status.value.state != lastLoggedState) {
@@ -443,6 +466,10 @@ class GoogleCastTarget(
                 delay(POLL_INTERVAL_MS)
             } catch (error: CancellationException) {
                 throw error
+            } catch (error: GoogleCastPlaybackFailedException) {
+                reportPlaybackFailure(error)
+                consecutiveStatusFailures = 0
+                delay(POLL_INTERVAL_MS)
             } catch (error: GoogleCastReceiverEndedException) {
                 Log.i(
                     TAG,
@@ -505,6 +532,16 @@ class GoogleCastTarget(
                 reconnectDelayMs = nextReconnectDelay(reconnectDelayMs)
             }
         }
+    }
+
+    private fun reportPlaybackFailure(error: GoogleCastPlaybackFailedException) {
+        playbackFailure = error
+        _status.value = PlaybackStatus(
+            state = PlaybackState.ERROR,
+            failure = error,
+            volumeSupported = volumeSupported,
+            loadEpoch = activeLoadEpoch,
+        )
     }
 
     private suspend fun discardClient(failedClient: RustCastSessionClient) {

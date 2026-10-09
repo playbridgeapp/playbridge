@@ -148,6 +148,8 @@ data class PlaybackStatus(
     val failure: Throwable? = null,
     /** Load that produced this snapshot. Null is reserved for target/session state outside a load. */
     val loadEpoch: Long? = null,
+    /** Receiver-reported volume support; null means the receiver has not reported a capability. */
+    val volumeSupported: Boolean? = null,
 )
 
 enum class PlaybackState { IDLE, BUFFERING, PLAYING, PAUSED, STOPPED, ERROR }
