@@ -43,6 +43,17 @@ pub struct JsonCastSession {
 }
 
 impl JsonCastSession {
+    #[cfg(test)]
+    pub(crate) fn for_test(root: PathBuf, id: &str) -> Self {
+        let dir = root.join(id);
+        fs::create_dir_all(&dir).unwrap();
+        Self {
+            root,
+            dir,
+            id: id.to_owned(),
+        }
+    }
+
     pub(crate) fn root_path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
         let mut path = PathBuf::from(home);
