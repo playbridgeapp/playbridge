@@ -2113,7 +2113,7 @@ dependencies = [
 
 [[package]]
 name = "playbridge-cast-cli"
-version = "0.3.1"
+version = "0.15.0"
 dependencies = [
  "base64",
  "crossterm",
