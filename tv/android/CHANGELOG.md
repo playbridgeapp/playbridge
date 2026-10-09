@@ -21,6 +21,15 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Diagnostics**: Serve logs only over the paired encrypted connection.
 - **Re-pairing**: Rotate credentials for an existing sender and revoke its previous token.
 
+## GeckoView Plugin [0.15.0] — 2026-10-09 (versionCode 213)
+
+### Changed
+- **Release train**: Align TV Browser's version with the other PlayBridge products.
+
+### Fixed
+- **Browser continuity**: Pause media when the browser goes into the background and resume the browser session when returning.
+- **Navigation state**: Track the current URL, close cleanly with Back/Home, and preserve the replacement player's active state when switching out of browser mode.
+
 ## Player [0.13.1] — 2026-08-29 (versionCode 229)
 
 ### Fixed
