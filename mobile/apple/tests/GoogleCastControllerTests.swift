@@ -43,16 +43,36 @@ final class FakeCastSession: GoogleCastSessionTransport {
         precondition(ExternalReceiverDevice.parse(serviceName: "bad", addresses: ["192.0.2.1"], port: 65536, txt: [:]) == nil)
         let native = FakeCastSession()
         let controller = GoogleCastController(native: native)
+        precondition(!controller.isDLNASession)
+        precondition(controller.operationTimeout(for: "load") == 25)
+        precondition(controller.operationTimeout(for: "status") == 25)
+        precondition(controller.operationTimeout(for: "play") == 25)
+
+        let dlnaDevice = ExternalReceiverDevice(id: "dlna-1", name: "DLNA TV", addresses: ["192.0.2.2"], port: 1400, model: "SmartTV", receiverProtocol: "dlna")
+        let dlnaController = GoogleCastController(native: FakeCastSession())
+        dlnaController.connect(dlnaDevice)
+        precondition(dlnaController.isDLNASession)
+        precondition(dlnaController.operationTimeout(for: "load") == 85)
+        precondition(dlnaController.operationTimeout(for: "status") == 30)
+        precondition(dlnaController.operationTimeout(for: "play") == 20)
+        precondition(dlnaController.operationTimeout(for: "pause") == 20)
+        dlnaController.disconnect()
+        precondition(!dlnaController.isDLNASession)
+
         var receiverEndedCount = 0
         controller.onReceiverEnded = { receiverEndedCount += 1 }
         controller.connect(device)
         await wait { native.startCount == 1 }
+        precondition(!controller.isDLNASession)
+        precondition(controller.operationTimeout(for: "load") == 25)
         do {
             try await controller.load(url: URL(string: "https://example.test/video.mp4")!, title: nil, contentType: nil)
             fatalError("Load accepted before readiness")
         } catch { precondition(native.last("load") == nil) }
         native.emit(["event": "connected", "protocol": "google_cast"])
         await wait { controller.state.isConnected }
+        precondition(!controller.isDLNASession)
+        precondition(controller.operationTimeout(for: "load") == 25)
         let load = Task { try await controller.load(url: URL(string: "https://example.test/video.m3u8")!, title: "Fixture", contentType: "application/x-mpegURL") }
         await wait { native.last("load") != nil }
         let command = native.last("load")!

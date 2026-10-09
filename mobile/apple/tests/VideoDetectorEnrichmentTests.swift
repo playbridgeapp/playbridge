@@ -193,6 +193,42 @@ struct VideoDetectorEnrichmentTests {
                      "Image trimming must not evict playable video")
         mediaDetector.clear()
 
+        let testVideo = DetectedVideo(
+            url: "https://media.example/test.m3u8",
+            detectedBy: "test",
+            headers: [
+                "Range": "bytes=0-100",
+                "accept-encoding": "gzip",
+                "Host": "example.com",
+                "connection": "keep-alive",
+                "Content-Length": "100",
+                "Sec-Fetch-Dest": "video",
+                "sec-fetch-mode": "cors",
+                "SEC-FETCH-SITE": "same-origin",
+                "sec-fetch-storage-access": "active",
+                "sec-gpc": "1",
+                "sec-ch-ua": "\"Chromium\";v=\"120\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"macOS\"",
+                "Priority": "u=1",
+                "Upgrade-Insecure-Requests": "1",
+                "TE": "trailers",
+                "Pragma": "no-cache",
+                "X-Custom-Header": "custom-value",
+                "Authorization": "Bearer test",
+            ],
+            kind: .mp4
+        )
+        let filtered = VideoDetector.mediaHeaders(for: testVideo)
+        precondition(filtered["X-Custom-Header"] == "custom-value")
+        precondition(filtered["Authorization"] == "Bearer test")
+        precondition(filtered["User-Agent"] != nil)
+        for header in VideoDetector.skipHeaders {
+            precondition(!filtered.keys.contains(where: { $0.caseInsensitiveCompare(header) == .orderedSame }),
+                         "Header \(header) must be stripped")
+        }
+        precondition(filtered.count == 3)
+
         print("PASS: eager enrichment, subtitle body/disposition upgrades, deduplication, concurrency, navigation invalidation and detector teardown")
     }
 }

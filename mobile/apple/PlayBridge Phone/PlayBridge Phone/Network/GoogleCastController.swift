@@ -76,12 +76,28 @@ final class GoogleCastController: ObservableObject {
     private var mediaEpoch = UUID().uuidString
     private var statusEpochs: [String: String] = [:]
     private var device: ExternalReceiverDevice?
+    private var sessionProtocol: String?
     private var title: String?
     private var receiverAppAvailable: Bool?
     private var pending: [String: CheckedContinuation<[String: Any], Error>] = [:]
     private var deadlines: [String: DispatchWorkItem] = [:]
     private var connectDeadline: DispatchWorkItem?
     private var statusPoll: DispatchWorkItem?
+
+    var isDLNASession: Bool {
+        sessionProtocol == "dlna" || device?.isDLNA == true
+    }
+
+    func operationTimeout(for command: String?) -> TimeInterval {
+        if isDLNASession {
+            switch command {
+            case "load": return 85
+            case "status": return 30
+            default: return 20
+            }
+        }
+        return 25
+    }
 
     init(native: GoogleCastSessionTransport = GoogleCastNativeSession()) {
         worker = GoogleCastWorker(native: native)
@@ -93,6 +109,7 @@ final class GoogleCastController: ObservableObject {
     func connect(_ device: ExternalReceiverDevice) {
         disconnect()
         self.device = device
+        self.sessionProtocol = device.protocolID
         state = .connecting
         let current = generation
         worker.connect(device, generation: current)
@@ -115,6 +132,7 @@ final class GoogleCastController: ObservableObject {
         title = nil
         receiverAppAvailable = nil
         device = nil
+        sessionProtocol = nil
     }
 
     private func terminate(_ message: String) {
@@ -199,7 +217,8 @@ final class GoogleCastController: ObservableObject {
                         self?.complete(id, result: .failure(StreamRoutingError.message("The receiver did not respond. Try again or reconnect.")))
                     }
                     deadlines[id] = deadline
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 25, execute: deadline)
+                    let timeout = self.operationTimeout(for: payload["command"] as? String)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
                     worker.submit(payload, generation: generation)
                 }
             }
@@ -226,6 +245,9 @@ final class GoogleCastController: ObservableObject {
         case "connected":
             guard let device, state == .connecting else { return }
             connectDeadline?.cancel()
+            if let proto = (event["protocol"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !proto.isEmpty {
+                sessionProtocol = proto
+            }
             receiverAppAvailable = (event["capabilities"] as? [String: Any])?["receiver_app_available"] as? Bool
             let name = (event["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? device.name
             state = .connected(serverName: name, secure: false)

@@ -138,9 +138,9 @@ class ProgressManager(
         return try {
             val history = historyStore.history.first()
             val item = history.find { it.url == url }
-            if (item != null && item.position > 5000 && item.position < (item.duration - 5000)) {
-                Log.i(TAG, "Resuming from history: ${item.position}ms")
-                seek(item.position)
+            item?.let { resumePosition(it.position, it.duration) }?.let { position ->
+                Log.i(TAG, "Resuming from history: ${position}ms")
+                seek(position)
             }
             item
         } catch (e: Exception) {
