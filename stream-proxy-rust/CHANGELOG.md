@@ -5,6 +5,26 @@ All notable changes to the `stream-proxy-rust` project will be documented in thi
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2026-10-09
+
+### Added
+- **Embedded phone proxying**: Support Android-hosted upstream requests and authorized local-file registrations for phone casting.
+- **Scoped playback resources**: Register media and subtitle resources for the lifetime of their playback session.
+
+### Changed
+- **Playlist handling**: Inspect response bodies before treating HLS hints as playlists, and preserve segment, key, initialization-map and byte-range semantics across rewrites.
+- **Deployment defaults**: Require an explicitly configured password for Compose deployments and run the container as an unprivileged user.
+
+### Fixed
+- **Stream continuity**: Deduplicate HLS prefetches, preserve range headers, retain active resources through retries and release abandoned playback registrations.
+- **DLNA compatibility**: Return renderer-compatible media and content-feature headers for proxied playback.
+- **Container startup**: Correct the container user setup and Rust toolchain requirements so standalone images build and start reliably.
+
+### Security
+- **Origin-scoped credentials**: Keep cookies, authorization and custom credentials on the original media origin, including redirects; reduce cross-origin browser context to origin-only values.
+- **Private-network access**: Bind media capabilities to their authorized session and enforce exact-origin grants and checked DNS addresses for private-network requests.
+- **Proxy authentication**: Reject empty or default deployment passwords and remove the preset Compose password.
+
 ## [0.1.1] - 2026-07-27
 
 ### Fixed
