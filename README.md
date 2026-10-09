@@ -8,12 +8,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/playbridgeapp/playbridge/releases?q=phone&expanded=true"><img src="https://img.shields.io/badge/Phone-releases-3DDC84?logo=android&logoColor=white" alt="Phone releases"></a>
-  <a href="https://github.com/playbridgeapp/playbridge/releases?q=tv-player&expanded=true"><img src="https://img.shields.io/badge/TV%20Player-releases-3DDC84?logo=android&logoColor=white" alt="TV Player releases"></a>
-  <a href="https://github.com/playbridgeapp/playbridge/releases?q=geckoview&expanded=true"><img src="https://img.shields.io/badge/TV%20Browser-releases-3DDC84?logo=firefoxbrowser&logoColor=white" alt="TV Browser releases"></a>
-  <a href="https://github.com/playbridgeapp/playbridge/releases?q=desktop&expanded=true"><img src="https://img.shields.io/badge/Desktop-releases-0078D4?logo=flutter&logoColor=white" alt="Desktop releases"></a>
-  <a href="https://github.com/playbridgeapp/playbridge/releases?q=cli+NOT+desktop&expanded=true"><img src="https://img.shields.io/badge/CLI-releases-555555?logo=rust&logoColor=white" alt="CLI releases"></a>
-  <a href="https://github.com/playbridgeapp/playbridge/releases?q=extension&expanded=true"><img src="https://img.shields.io/badge/Extension-releases-FF7139?logo=firefoxbrowser&logoColor=white" alt="Extension releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=5c9b2f&expanded=true"><img src="https://img.shields.io/badge/Phone-releases-3DDC84?logo=android&logoColor=white" alt="Phone releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=8d2a1c&expanded=true"><img src="https://img.shields.io/badge/TV%20Player-releases-3DDC84?logo=android&logoColor=white" alt="TV Player releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=3e7f9a&expanded=true"><img src="https://img.shields.io/badge/TV%20Browser-releases-3DDC84?logo=firefoxbrowser&logoColor=white" alt="TV Browser releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=1a4b6c&expanded=true"><img src="https://img.shields.io/badge/Desktop-releases-0078D4?logo=flutter&logoColor=white" alt="Desktop releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=7b2c9a&expanded=true"><img src="https://img.shields.io/badge/CLI-releases-555555?logo=rust&logoColor=white" alt="CLI releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=9f2d8e&expanded=true"><img src="https://img.shields.io/badge/Extension-releases-FF7139?logo=firefoxbrowser&logoColor=white" alt="Extension releases"></a>
 </p>
 
 <p align="center">
