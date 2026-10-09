@@ -3,6 +3,26 @@
 All notable changes to the phone app (`com.playbridge.sender`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.0] — 2026-10-09 (versionCode 228)
+
+### Added
+- **Bridged Apps**: Save websites as isolated app shortcuts, edit their names and home URLs, and reorder dashboard tiles. Approved sites can choose playback destinations and manage linked episode queues.
+- **Browser setup and detection**: Fullscreen onboarding with optional uBlock setup, configurable media detection, and refreshed browser menus, cast picker and edge controls.
+- **FOSS plugins**: Use opt-in Nuvio plugins from both the Library and approved Bridged Apps.
+
+### Changed
+- **Casting controls**: Support receiver-owned queues, attaching subtitles during playback, private casts without receiver history, and playback progress callbacks for native senders.
+
+### Fixed
+- **Browser continuity**: Restore tabs lazily, preserve Bridged App sessions and input focus, and return reliably between Browser, Dashboard and Remote.
+- **Playback and discovery**: Reduce probe storms and memory pressure; improve stream thumbnails, HLS parsing, DLNA discovery/playback and Google Cast reconnects.
+- **Resume and file serving**: Preserve page-cast resume positions and correctly serve suffix ranges, invalid-range responses and HEAD requests for local files.
+
+### Security
+- **Website and extension approval**: Isolate page integrations, bind linked sessions to their owning page, and require native approval for extension installation and permissions with overlay-touch protection.
+- **Proxy credentials**: Scope credentials to the original media origin, restrict private-network access to approved media, reject unsafe remote registration URLs and redirects, and bound registration responses.
+- **Diagnostics**: Fetch TV logs only through the paired encrypted connection and redact sensitive destination and media details.
+
 ## [0.13.4] — 2026-08-31 (versionCode 227)
 
 ### Fixed
