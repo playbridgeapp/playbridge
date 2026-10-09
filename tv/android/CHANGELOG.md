@@ -3,18 +3,23 @@
 Covers both APKs in this tree: the **player** (`com.playbridge.player`) and the **GeckoView plugin** (`com.playbridge.geckoview.plugin`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## Player [0.14.0] — 2026-09-12 (versionCode 230)
+## Player [0.15.0] — 2026-10-09 (versionCode 231)
 
 ### Added
-- **Standby wake**: Request the screen turn on for incoming PlayBridge pairing requests and playback on supported Android TV devices, then keep the Connect screen visible for the exact pairing result.
+- **Standby wake**: Wake supported TVs for incoming pairing and playback, keeping Connect visible for the exact pairing result.
+- **Queue controls**: Receiver-owned playlists, late subtitle attachment and playback progress callbacks for native senders.
+
+### Changed
+- **Private casts**: Honor the sender's preference to skip receiver history and resume records.
+- **Resume behavior**: Match the Library's resume rule: at least thirty seconds played and less than 95% complete, with a known duration.
 
 ### Fixed
-- **Pairing navigation reliability**: Keep Connect selected after a pairing denial, timeout, or stale completion, including when another sender remains connected.
-- **Pairing responsiveness**: Remove the receiver-side pairing launch cooldown so a new request is handled immediately.
+- **Pairing navigation**: Handle requests immediately and keep Connect selected after denial, timeout or stale completion, even with another sender connected.
 
 ### Security
-- **Re-pairing credential rotation**: Replace the existing device record and
-  revoke its previous token when the same stable sender identity pairs again.
+- **Browser scripts**: Require on-TV approval before user scripts run, show the paired phone name and keep broad site-access warnings visible.
+- **Diagnostics**: Serve logs only over the paired encrypted connection.
+- **Re-pairing**: Rotate credentials for an existing sender and revoke its previous token.
 
 ## Player [0.13.1] — 2026-08-29 (versionCode 229)
 
