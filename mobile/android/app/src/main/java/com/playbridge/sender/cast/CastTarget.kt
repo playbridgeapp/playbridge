@@ -8,11 +8,11 @@ import com.playbridge.sender.model.TvDevice
  * A transport-agnostic playback target — the seam that lets the cast sheet,
  * now-playing UI, and transport controls drive playback without knowing whether
  * the receiver is PlayBridge's own APK (over WebSocket) or a third-party
- * DLNA/UPnP renderer (over SOAP + the local proxy).
+ * DLNA/UPnP renderer (over a Rust session + the local proxy).
  *
  * Implementations:
  *  - `NativeCastTarget` — wraps the existing WS path (full capabilities).
- *  - `DlnaCastTarget`   — wraps AVTransport + [LocalProxyServer] (reduced set).
+ *  - `DlnaCastTarget`   — wraps the Rust DLNA session + [LocalProxyServer] (reduced set).
  *
  * This is the foundation for future non-APK targets (Chromecast, AirPlay) too.
  */
@@ -31,7 +31,7 @@ interface CastTarget {
     /** Load media and begin playback from the start (the cast hand-off). */
     suspend fun load(media: MediaItem)
 
-    /** Resume from the current position (does NOT reload — see DLNA AVTransport semantics). */
+    /** Resume from the current position (does NOT reload the current media). */
     suspend fun play()
 
     suspend fun pause()
@@ -44,9 +44,8 @@ interface CastTarget {
     suspend fun setVolume(percent: Int)
 
     /**
-     * Playback status. Native targets push it (over WS); DLNA targets poll
-     * `GetPositionInfo`/`GetTransportInfo`. Cold flow — polling/listeners stop
-     * when collection is cancelled.
+     * Playback status. Native targets push it (over WS); external targets poll their
+     * session. Cold flow — polling/listeners stop when collection is cancelled.
      */
     fun status(): Flow<PlaybackStatus>
 

@@ -32,6 +32,10 @@ data class InAppContent(
     val title: String?,
 )
 
+internal fun isExternalPlaybackFailure(status: com.playbridge.sender.cast.PlaybackStatus?): Boolean =
+    status?.failure is com.playbridge.sender.cast.googlecast.GoogleCastPlaybackFailedException ||
+        status?.failure is com.playbridge.sender.cast.dlna.DlnaActionFailure
+
 /**
  * Automatic watch-progress tracking (PROGRESS_TRACKING_PLAN.md, P1).
  *
@@ -317,9 +321,9 @@ class PlaybackProgressTracker(
         } else {
             PlayingItem(tmdbId, "movie", null, null, meta.title)
         }
-        if (status?.failure is com.playbridge.sender.cast.googlecast.GoogleCastPlaybackFailedException) {
-            // Receiver decode/fetch failure is not completion, even if the last reported
-            // position was near the end. Clear the completion candidate before any later item switch.
+        if (isExternalPlaybackFailure(status)) {
+            // Receiver/action failures are not completion, even if the last reported position
+            // was near the end. Clear the candidate before any later item switch.
             dlnaLastObservedPosMs = 0L
             dlnaLastObservedDurMs = 0L
             dlnaThresholdArmed = false

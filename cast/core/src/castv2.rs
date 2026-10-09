@@ -11,8 +11,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 #[cfg(target_os = "android")]
-use std::os::fd::AsRawFd;
-#[cfg(target_os = "android")]
 use tokio::net::TcpSocket;
 
 const CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -546,7 +544,7 @@ async fn connect_tcp_on_android_network(
                 "Failed to create Chromecast socket for {endpoint}: {error}"
             ))
         })?;
-        bind_socket_to_android_network(&socket, network_handle).map_err(|error| {
+        crate::net::bind_android_network(&socket, network_handle).map_err(|error| {
             AndroidNetworkConnectError::Bind(format!(
                 "Failed to bind Chromecast socket to the Android local network: {error}. A VPN may be preventing local-network access"
             ))
@@ -562,21 +560,6 @@ async fn connect_tcp_on_android_network(
         }
     }
     Err(AndroidNetworkConnectError::Connect(last_error))
-}
-
-#[cfg(target_os = "android")]
-fn bind_socket_to_android_network(socket: &TcpSocket, network_handle: u64) -> std::io::Result<()> {
-    #[link(name = "android")]
-    unsafe extern "C" {
-        fn android_setsocknetwork(network: u64, fd: std::os::raw::c_int) -> std::os::raw::c_int;
-    }
-
-    let result = unsafe { android_setsocknetwork(network_handle, socket.as_raw_fd()) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
 }
 
 pub async fn send_stop_session(channel: &mut CastChannel, session_id: &str) -> Result<(), String> {

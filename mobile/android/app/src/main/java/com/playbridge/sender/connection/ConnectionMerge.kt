@@ -31,8 +31,6 @@ object ConnectionMerge {
             wssPort = match.wssPort,
             logsPort = match.logsPort,
             descriptionUrl = match.descriptionUrl,
-            controlUrl = match.controlUrl,
-            renderingControlUrl = match.renderingControlUrl,
         )
     }
 

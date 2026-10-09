@@ -16,14 +16,16 @@ use playbridge_cast_core::{
     CastError,
     castv2::{DEFAULT_MEDIA_RECEIVER_APP_ID, SessionLaunchStrategy},
     roku::{DEFAULT_ECP_PORT, RokuClient},
-    session::{MediaRequest, PlaybackState, ReceiverSession},
-    upnp::Renderer,
+    session::{DLNA_LOAD_TIMEOUT, MediaRequest, PlaybackState, ReceiverSession},
+    upnp::{ActionFailure, Renderer, is_transport_failure},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 uniffi::setup_scaffolding!();
 
+#[cfg(test)]
+mod dlna_tests;
 mod receiver_runtime;
 #[cfg(any(
     feature = "sender-services",
@@ -116,9 +118,29 @@ struct SessionTarget {
     port: Option<u16>,
     location: Option<String>,
     application_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_network_handle")]
     network_handle: Option<u64>,
     #[serde(default)]
     launch_policy: SessionLaunchPolicy,
+}
+
+// Java network handles are signed longs; preserve their opaque 64-bit pattern
+// while continuing to accept the unsigned values used by existing consumers.
+fn deserialize_network_handle<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<u64>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Handle {
+        Unsigned(u64),
+        Signed(i64),
+    }
+    Ok(
+        Option::<Handle>::deserialize(deserializer)?.map(|handle| match handle {
+            Handle::Unsigned(value) => value,
+            Handle::Signed(value) => value as u64,
+        }),
+    )
 }
 
 impl SessionTarget {
@@ -143,6 +165,14 @@ impl SessionTarget {
 }
 
 #[derive(Debug, Deserialize)]
+struct DlnaLoadOptions {
+    #[serde(default)]
+    is_screen_mirror: bool,
+    fallback_url: Option<String>,
+    fallback_content_type: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 enum SessionCommand {
     Load {
@@ -158,6 +188,13 @@ enum SessionCommand {
         stream_type: Option<String>,
         hls_segment_format: Option<String>,
         hls_video_segment_format: Option<String>,
+        #[serde(flatten)]
+        dlna: Box<DlnaLoadOptions>,
+    },
+    MediaFacts {
+        request_id: Value,
+        is_live: Option<bool>,
+        duration_seconds: Option<f64>,
     },
     Play {
         request_id: Value,
@@ -199,6 +236,7 @@ impl SessionCommand {
     fn request_id(&self) -> &Value {
         match self {
             Self::Load { request_id, .. }
+            | Self::MediaFacts { request_id, .. }
             | Self::Play { request_id }
             | Self::Pause { request_id }
             | Self::Stop { request_id }
@@ -215,6 +253,7 @@ impl SessionCommand {
     fn operation(&self) -> &'static str {
         match self {
             Self::Load { .. } => "load",
+            Self::MediaFacts { .. } => "media_facts",
             Self::Play { .. } => "play",
             Self::Pause { .. } => "pause",
             Self::Stop { .. } => "stop",
@@ -272,6 +311,8 @@ enum SessionEvent {
         message: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        upnp: Option<ActionFailure>,
     },
     Finished {
         reason: &'static str,
@@ -285,6 +326,7 @@ struct SessionPlaybackStatus {
     state: &'static str,
     position_seconds: f64,
     duration_seconds: f64,
+    is_live: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     volume_supported: Option<bool>,
 }
@@ -480,6 +522,7 @@ fn session_worker(
                     operation: "connect",
                     message: message.clone(),
                     reason: None,
+                    upnp: None,
                 },
                 &cancelled,
             );
@@ -507,6 +550,7 @@ fn session_worker(
                     operation: "connect",
                     message: message.clone(),
                     reason,
+                    upnp: None,
                 },
                 &cancelled,
             );
@@ -552,6 +596,7 @@ fn session_worker(
         return;
     }
 
+    let mut consecutive_dlna_transport_failures = 0;
     let mut last_maintenance = std::time::Instant::now();
     let finish_reason = loop {
         if cancelled.load(Ordering::Acquire) {
@@ -584,6 +629,7 @@ fn session_worker(
                                 operation: maintenance_event_operation(reason),
                                 message: error.to_string(),
                                 reason: session_error_reason(&error),
+                                upnp: upnp_error(&error),
                             },
                             &cancelled,
                         );
@@ -607,8 +653,13 @@ fn session_worker(
             &command,
             operation_timeout,
         ));
-        let finish_reason = result.as_ref().err().and_then(command_finish_reason);
-        // Every command has just exercised the receiver connection, even when the
+        let finish_reason = command_result_finish_reason(
+            target.protocol,
+            operation,
+            &result,
+            &mut consecutive_dlna_transport_failures,
+        );
+        // Network commands have just exercised the receiver connection, even when the
         // receiver returned a request-scoped error. Starting maintenance immediately
         // after a timeout would block the next queued command behind a second full
         // status timeout and can create a self-sustaining timeout cascade.
@@ -625,6 +676,7 @@ fn session_worker(
                 operation,
                 message: error.to_string(),
                 reason: session_error_reason(&error),
+                upnp: upnp_error(&error),
             },
         };
         if !send_session_event(&events, event, &cancelled) {
@@ -664,6 +716,7 @@ fn session_finish_reason(error: &CastError) -> Option<&'static str> {
 fn session_error_reason(error: &CastError) -> Option<&'static str> {
     match error {
         CastError::ReceiverPlaybackError => Some("playback_error"),
+        CastError::UpnpAction(_) => Some("action_failed"),
         _ => session_finish_reason(error),
     }
 }
@@ -687,6 +740,34 @@ fn command_finish_reason(error: &CastError) -> Option<&'static str> {
     session_finish_reason(error)
 }
 
+fn upnp_error(error: &CastError) -> Option<ActionFailure> {
+    match error {
+        CastError::UpnpAction(failure) => Some(failure.as_ref().clone()),
+        _ => None,
+    }
+}
+
+fn command_result_finish_reason(
+    protocol: SessionProtocol,
+    operation: &str,
+    result: &Result<Option<SessionPlaybackStatus>, CastError>,
+    consecutive_transport_failures: &mut u8,
+) -> Option<&'static str> {
+    if protocol != SessionProtocol::Dlna {
+        return result.as_ref().err().and_then(command_finish_reason);
+    }
+    if operation == "media_facts" {
+        return None;
+    }
+    if result.as_ref().err().is_some_and(is_transport_failure) {
+        *consecutive_transport_failures += 1;
+        (*consecutive_transport_failures >= 3).then_some("connection_lost")
+    } else {
+        *consecutive_transport_failures = 0;
+        None
+    }
+}
+
 async fn connect_target(
     target: &SessionTarget,
     operation_timeout: Duration,
@@ -702,10 +783,13 @@ async fn connect_target(
     match target.protocol {
         SessionProtocol::Dlna => {
             let location = target.location.as_deref().expect("target was validated");
-            let renderer = tokio::time::timeout(operation_timeout, Renderer::load(location))
-                .await
-                .map_err(|_| "DLNA connection timed out".to_owned())?
-                .map_err(|error| error.to_string())?;
+            let renderer = tokio::time::timeout(
+                operation_timeout,
+                Renderer::load_on_network(location, target.network_handle),
+            )
+            .await
+            .map_err(|_| "DLNA connection timed out".to_owned())?
+            .map_err(|error| error.to_string())?;
             let name = Some(renderer.friendly_name().to_owned());
             Ok((Some(ReceiverSession::Dlna(renderer)), None, name, None))
         }
@@ -805,6 +889,7 @@ async fn execute_session_command(
                 stream_type,
                 hls_segment_format,
                 hls_video_segment_format,
+                dlna,
                 ..
             } => {
                 if url.trim().is_empty() {
@@ -823,6 +908,9 @@ async fn execute_session_command(
                     stream_type: stream_type.clone(),
                     hls_segment_format: hls_segment_format.clone(),
                     hls_video_segment_format: hls_video_segment_format.clone(),
+                    is_screen_mirror: dlna.is_screen_mirror,
+                    fallback_url: dlna.fallback_url.clone(),
+                    fallback_content_type: dlna.fallback_content_type.clone(),
                 };
                 if target.protocol == SessionProtocol::Roku && roku_receiver_app != Some(true) {
                     return Err(CastError::Protocol(
@@ -834,6 +922,14 @@ async fn execute_session_command(
                     .ok_or_else(|| CastError::Protocol("receiver is not connected".to_owned()))?
                     .load(&media)
                     .await?;
+                Ok(None)
+            }
+            SessionCommand::MediaFacts {
+                is_live,
+                duration_seconds,
+                ..
+            } => {
+                receiver_mut(receiver)?.media_facts(*is_live, *duration_seconds)?;
                 Ok(None)
             }
             SessionCommand::Play { .. } => {
@@ -887,6 +983,7 @@ async fn execute_session_command(
                     state: playback_state_name(status.state),
                     position_seconds: status.position_seconds,
                     duration_seconds: status.duration_seconds,
+                    is_live: status.is_live,
                     volume_supported: Some(receiver_mut(receiver)?.supports_volume()),
                 }))
             }
@@ -900,11 +997,7 @@ async fn execute_session_command(
     let command_timeout = if target.protocol == SessionProtocol::Dlna
         && matches!(command, SessionCommand::Load { .. })
     {
-        // 8s description + 3s preflight + four 8s SetURI attempts
-        // (initial/transport/transition/metadata) + 8s Stop + 8s Play = 59s.
-        // Description is fetched during connection; allow 5s margin and keep
-        // Dart's DLNA load deadline in sync with this full sequence budget.
-        operation_timeout.max(Duration::from_secs(64))
+        operation_timeout.max(DLNA_LOAD_TIMEOUT)
     } else {
         operation_timeout
     };
@@ -913,6 +1006,9 @@ async fn execute_session_command(
         Err(_) if target.protocol == SessionProtocol::GoogleCast => {
             Err(CastError::ReceiverSessionUnresponsive)
         }
+        Err(_) if target.protocol == SessionProtocol::Dlna => Err(
+            playbridge_cast_core::upnp::action_timeout(command.operation()),
+        ),
         Err(_) => Err(CastError::Protocol(format!(
             "{} timed out",
             command.operation()
@@ -1851,6 +1947,7 @@ mod tests {
             operation: "load",
             message: CastError::ReceiverSessionEnded.to_string(),
             reason: Some("receiver_ended"),
+            upnp: None,
         };
         let json = serde_json::to_value(event).unwrap();
         assert_eq!(json["event"], "error");
@@ -1880,6 +1977,7 @@ mod tests {
                 state: "playing",
                 position_seconds: 3.5,
                 duration_seconds: 10.0,
+                is_live: false,
                 volume_supported: Some(false),
             },
         };

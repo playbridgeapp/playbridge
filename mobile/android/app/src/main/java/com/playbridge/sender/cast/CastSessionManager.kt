@@ -3,10 +3,8 @@ package com.playbridge.sender.cast
 import android.content.Context
 import android.util.Log
 import com.playbridge.sender.cast.browser.BrowserCastTarget
-import com.playbridge.sender.cast.dlna.AvTransportClient
 import com.playbridge.sender.cast.dlna.DlnaCastTarget
 import com.playbridge.sender.cast.dlna.DlnaProxyHolder
-import com.playbridge.sender.cast.dlna.RenderingControlClient
 import com.playbridge.sender.cast.googlecast.GoogleCastTarget
 import com.playbridge.sender.cast.proxy.BrowserStreamRoute
 import com.playbridge.sender.cast.proxy.StreamProxySettingsStore
@@ -1170,17 +1168,15 @@ class CastSessionManager(
 
     /** Select a DLNA renderer as the active cast target (drops any native session). */
     fun selectDlnaTarget(device: TvDevice): Boolean {
-        val controlUrl = device.controlUrl ?: return false
+        val location = device.descriptionUrl ?: return false
         val target = DlnaCastTarget(
-            id = device.uuid,
-            name = device.name,
-            avTransport = AvTransportClient(controlUrl, DlnaProxyHolder.httpClient),
-            renderingControl = device.renderingControlUrl?.let {
-                RenderingControlClient(it, DlnaProxyHolder.httpClient)
-            },
+            device = device,
+            descriptionUrl = location,
+            context = context,
             proxy = DlnaProxyHolder.proxy(context),
         )
         selectExternalTarget(device, target)
+        target.connectReady()
         return true
     }
 
@@ -1336,7 +1332,7 @@ class CastSessionManager(
             is RokuCastTarget -> target.sendKeypress(if (up) "VolumeUp" else "VolumeDown")
             is DlnaCastTarget -> scope.launch {
                 suspendRunCatchingLogged(TAG, "DLNA volume adjustment failed") {
-                    target.adjustVolume(if (up) 5 else -5)
+                    target.adjustVolume(if (up) 0.05f else -0.05f)
                 }
             }
             is BrowserCastTarget -> scope.launch {

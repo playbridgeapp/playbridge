@@ -40,12 +40,8 @@ data class ReceiverEndpoint(
     val port: Int? = null,
     val wssPort: Int? = null,
     val logsPort: Int? = null,
-    /** SSDP/UPnP device-description document used for re-enrichment and Rust sessions. */
+    /** SSDP/UPnP device-description document passed to the Rust DLNA session. */
     val descriptionUrl: String? = null,
-    /** Protocol playback-control endpoint (DLNA AVTransport today). */
-    val controlUrl: String? = null,
-    /** Optional DLNA RenderingControl endpoint. */
-    val renderingControlUrl: String? = null,
 ) {
     val protocol: CastProtocol get() = key.protocol
     val preferredAddress: String? get() = addresses.firstOrNull()

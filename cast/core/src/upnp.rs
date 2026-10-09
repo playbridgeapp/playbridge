@@ -1,14 +1,100 @@
 use std::collections::HashMap;
 
-use reqwest::{Client, Method, StatusCode};
+use crate::upnp_http::HttpClient;
+use reqwest::{Method, StatusCode};
 use roxmltree::{Document, Node};
+use serde::Serialize;
 use url::Url;
 
 use crate::{CastError, Result};
 
 const PREFLIGHT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 const MAX_DESCRIPTION_BYTES: usize = 512 * 1024;
-const UPNP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+pub(crate) const UPNP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ActionFailure {
+    pub action: String,
+    pub code: Option<u16>,
+    pub http_status: Option<u16>,
+    pub description: String,
+    #[serde(skip)]
+    pub transport_failure: bool,
+}
+
+impl std::fmt::Display for ActionFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "UPnP {}", self.action)?;
+        if let Some(code) = self.code {
+            write!(f, " error {code}:")?;
+        }
+        write!(f, " {}", self.description)
+    }
+}
+
+pub(crate) fn action_failure(
+    action: &str,
+    code: Option<u16>,
+    http_status: Option<u16>,
+    description: &str,
+    transport_failure: bool,
+) -> CastError {
+    CastError::UpnpAction(Box::new(ActionFailure {
+        action: action.into(),
+        code,
+        http_status,
+        description: sanitize_description(description),
+        transport_failure,
+    }))
+}
+
+/// Request-scoped deadline failure, including commands cancelled by the host budget.
+pub fn action_timeout(action: &str) -> CastError {
+    action_failure(action, None, None, "action timed out", true)
+}
+
+pub(crate) fn action_code(error: &CastError) -> Option<u16> {
+    match error {
+        CastError::UpnpAction(failure) => failure.code,
+        _ => None,
+    }
+}
+
+fn sanitize_description(description: &str) -> String {
+    // Whitespace/control normalization prevents multiline diagnostics. Redact any
+    // URL scheme, including embedded URLs without whitespace before them.
+    let normalized = description
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect::<String>();
+    normalized
+        .split_whitespace()
+        .map(|word| {
+            if let Some(index) = word.find("://") {
+                let start = word[..index]
+                    .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')))
+                    .map_or(0, |i| i + 1);
+                format!("{}[URL]", &word[..start])
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect()
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct MediaFacts {
+    pub loaded: bool,
+    pub is_live: bool,
+    pub is_screen_mirror: bool,
+    pub supplied_duration: f64,
+    pub media_duration: f64,
+    pub media_info_attempts: u8,
+}
 
 #[derive(Debug)]
 struct Service {
@@ -18,7 +104,8 @@ struct Service {
 
 #[derive(Debug)]
 pub struct Renderer {
-    client: Client,
+    client: HttpClient,
+    pub(crate) facts: MediaFacts,
     location: String,
     friendly_name: String,
     av_transport: Box<Service>,
@@ -28,39 +115,33 @@ pub struct Renderer {
 
 impl Renderer {
     pub async fn load(location: &str) -> Result<Self> {
+        Self::load_on_network(location, None).await
+    }
+
+    pub async fn load_on_network(location: &str, network_handle: Option<u64>) -> Result<Self> {
         let location_url = Url::parse(location)?;
         if location_url.scheme() != "http" || location_url.host().is_none() {
             return Err(CastError::Protocol(
                 "UPnP LOCATION must use HTTP with a host".into(),
             ));
         }
-        let client = Client::builder()
-            .timeout(UPNP_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
-        let mut response = client.get(location_url.clone()).send().await?;
-        if !response.status().is_success() {
+        let client = HttpClient::new(network_handle)?;
+        let (status, bytes) = tokio::time::timeout(
+            UPNP_TIMEOUT,
+            client.request(
+                Method::GET,
+                &location_url,
+                &[],
+                String::new(),
+                MAX_DESCRIPTION_BYTES,
+            ),
+        )
+        .await
+        .map_err(|_| CastError::Transport("UPnP device description timed out".into()))??;
+        if !status.is_success() {
             return Err(CastError::Protocol(format!(
-                "UPnP device description returned HTTP {}",
-                response.status()
+                "UPnP device description returned HTTP {status}"
             )));
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length > MAX_DESCRIPTION_BYTES as u64)
-        {
-            return Err(CastError::Protocol(
-                "UPnP device description exceeds 512 KiB".into(),
-            ));
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            if chunk.len() > MAX_DESCRIPTION_BYTES - bytes.len() {
-                return Err(CastError::Protocol(
-                    "UPnP device description exceeds 512 KiB".into(),
-                ));
-            }
-            bytes.extend_from_slice(&chunk);
         }
         let text = String::from_utf8_lossy(&bytes);
         let document = Document::parse(&text).map_err(|error| {
@@ -100,6 +181,7 @@ impl Renderer {
         };
         Ok(Self {
             client,
+            facts: MediaFacts::default(),
             location: location.into(),
             friendly_name: document
                 .descendants()
@@ -155,6 +237,17 @@ impl Renderer {
         metadata: &str,
         allow_empty_metadata: bool,
     ) -> Result<()> {
+        self.set_media_uri_with_retry(media_uri, metadata, allow_empty_metadata, false)
+            .await
+    }
+
+    pub(crate) async fn set_media_uri_with_retry(
+        &self,
+        media_uri: &str,
+        metadata: &str,
+        allow_empty_metadata: bool,
+        hls_501_retry: bool,
+    ) -> Result<()> {
         let arguments = |metadata: &str| {
             format!(
                 "<InstanceID>0</InstanceID><CurrentURI>{}</CurrentURI><CurrentURIMetaData>{}</CurrentURIMetaData>",
@@ -174,14 +267,12 @@ impl Renderer {
                 }
                 Err(error) if is_transition_failure(&error) && !retried_transition => {
                     retried_transition = true;
-                    self.stop().await.map_err(|stop_error| {
-                        CastError::Protocol(format!(
-                            "{error}; Stop before retry failed: {stop_error}"
-                        ))
-                    })?;
+                    self.stop().await?;
                 }
                 Err(error)
-                    if allow_empty_metadata && !retried_metadata && is_metadata_failure(&error) =>
+                    if !retried_metadata
+                        && ((allow_empty_metadata && is_metadata_failure(&error))
+                            || (hls_501_retry && action_code(&error) == Some(501))) =>
                 {
                     retried_metadata = true;
                 }
@@ -222,6 +313,11 @@ impl Renderer {
 
     pub async fn position_info(&self) -> Result<HashMap<String, String>> {
         self.action("GetPositionInfo", "<InstanceID>0</InstanceID>")
+            .await
+    }
+
+    pub async fn media_info(&self) -> Result<HashMap<String, String>> {
+        self.action("GetMediaInfo", "<InstanceID>0</InstanceID>")
             .await
     }
 
@@ -294,38 +390,57 @@ impl Renderer {
             service.service_type
         );
         let operation = async {
-            let mut response = self
+            let headers = [
+                ("Content-Type", "text/xml; charset=\"utf-8\""),
+                ("SOAPAction", soap_action.as_str()),
+            ];
+            let (mut status, mut bytes) = self
                 .client
-                .post(service.control_url.clone())
-                .header("Content-Type", "text/xml; charset=\"utf-8\"")
-                .header("SOAPAction", &soap_action)
-                .body(body.clone())
-                .send()
+                .request(
+                    Method::POST,
+                    &service.control_url,
+                    &headers,
+                    body.clone(),
+                    MAX_DESCRIPTION_BYTES,
+                )
                 .await?;
-            if response.status() == StatusCode::METHOD_NOT_ALLOWED {
-                response = self
+            if status == StatusCode::METHOD_NOT_ALLOWED {
+                (status, bytes) = self
                     .client
                     .request(
                         Method::from_bytes(b"M-POST").expect("valid HTTP method"),
-                        service.control_url.clone(),
+                        &service.control_url,
+                        &[
+                            ("Content-Type", "text/xml; charset=\"utf-8\""),
+                            (
+                                "MAN",
+                                "\"http://schemas.xmlsoap.org/soap/envelope/\"; ns=01",
+                            ),
+                            ("01-SOAPACTION", soap_action.as_str()),
+                        ],
+                        body,
+                        MAX_DESCRIPTION_BYTES,
                     )
-                    .header("Content-Type", "text/xml; charset=\"utf-8\"")
-                    .header(
-                        "MAN",
-                        "\"http://schemas.xmlsoap.org/soap/envelope/\"; ns=01",
-                    )
-                    .header("01-SOAPACTION", &soap_action)
-                    .body(body)
-                    .send()
                     .await?;
             }
-            let status = response.status();
-            let text = response.text().await?;
-            parse_soap_response(name, status, &text)
+            parse_soap_response(name, status, &String::from_utf8_lossy(&bytes))
         };
-        tokio::time::timeout(UPNP_TIMEOUT, operation)
-            .await
-            .map_err(|_| CastError::Transport(format!("UPnP {name} action timed out")))?
+        match tokio::time::timeout(UPNP_TIMEOUT, operation).await {
+            Ok(Ok(values)) => Ok(values),
+            Ok(Err(error @ CastError::UpnpAction(_))) => Err(error),
+            Ok(Err(error)) => Err(action_failure(
+                name,
+                None,
+                None,
+                if is_transport_failure(&error) {
+                    "HTTP transport failed"
+                } else {
+                    "Invalid SOAP response"
+                },
+                is_transport_failure(&error),
+            )),
+            Err(_) => Err(action_failure(name, None, None, "action timed out", true)),
+        }
     }
 }
 
@@ -336,7 +451,7 @@ fn same_renderer_host(candidate: &Url, location: &Url) -> bool {
 }
 
 fn is_metadata_failure(error: &CastError) -> bool {
-    matches!(error, CastError::Protocol(message) if ["error 714:", "error 716:", "error 501:"].iter().any(|code| message.contains(code)))
+    matches!(action_code(error), Some(714 | 716 | 501))
 }
 
 fn child_text<'a>(node: Node<'a, 'a>, name: &str) -> Option<&'a str> {
@@ -351,9 +466,13 @@ fn parse_soap_response(
     text: &str,
 ) -> Result<HashMap<String, String>> {
     let document = Document::parse(text).map_err(|_| {
-        CastError::Protocol(format!(
-            "UPnP {name} returned HTTP {status} with invalid SOAP XML"
-        ))
+        action_failure(
+            name,
+            None,
+            Some(status.as_u16()),
+            &format!("returned HTTP {status} with invalid SOAP XML"),
+            false,
+        )
     })?;
     if let Some(fault) = document
         .descendants()
@@ -367,27 +486,39 @@ fn parse_soap_response(
                 .unwrap_or_default()
                 .trim()
         };
-        return Err(CastError::Protocol(format!(
-            "UPnP {name} error {}: {}",
-            value("errorCode"),
+        return Err(action_failure(
+            name,
+            value("errorCode").parse().ok(),
+            Some(status.as_u16()),
             if value("errorDescription").is_empty() {
                 value("faultstring")
             } else {
                 value("errorDescription")
-            }
-        )));
+            },
+            false,
+        ));
     }
     if !status.is_success() {
-        return Err(CastError::Protocol(format!(
-            "UPnP {name} returned HTTP {status}"
-        )));
+        return Err(action_failure(
+            name,
+            None,
+            Some(status.as_u16()),
+            &format!("returned HTTP {status}"),
+            false,
+        ));
     }
     let response_name = format!("{name}Response");
     let response = document
         .descendants()
         .find(|node| node.has_tag_name(response_name.as_str()))
         .ok_or_else(|| {
-            CastError::Protocol(format!("UPnP {name} response is missing {response_name}"))
+            action_failure(
+                name,
+                None,
+                Some(status.as_u16()),
+                &format!("response is missing {response_name}"),
+                false,
+            )
         })?;
     Ok(response
         .children()
@@ -401,8 +532,9 @@ fn parse_soap_response(
         .collect())
 }
 
-fn is_transport_failure(error: &CastError) -> bool {
+pub fn is_transport_failure(error: &CastError) -> bool {
     match error {
+        CastError::UpnpAction(failure) => failure.transport_failure,
         CastError::Network(_) | CastError::Transport(_) => true,
         CastError::Http(error) => {
             error.is_timeout() || error.is_connect() || error.is_body() || error.is_request()
@@ -413,9 +545,10 @@ fn is_transport_failure(error: &CastError) -> bool {
 
 fn is_transition_failure(error: &CastError) -> bool {
     match error {
-        CastError::Protocol(message) => {
-            message.contains("error 701:")
-                || message
+        CastError::UpnpAction(failure) => {
+            failure.code == Some(701)
+                || failure
+                    .description
                     .to_ascii_lowercase()
                     .contains("transition not available")
         }
@@ -449,7 +582,7 @@ fn sink_supports_category(sink: &str, mime: &str) -> bool {
             return true;
         }
         parsable = true;
-        if fields[0].eq_ignore_ascii_case("http-get")
+        if (fields[0] == "*" || fields[0].eq_ignore_ascii_case("http-get"))
             && (fields[2] == "*"
                 || fields[2]
                     .split('/')
@@ -473,26 +606,95 @@ fn escape_xml(value: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{body_string_contains, header, method, path},
     };
 
-    fn soap_response(action: &str, values: &str) -> String {
+    #[test]
+    fn soap_diagnostics_are_structured_redacted_and_bounded() {
+        let error = parse_soap_response(
+            "SetAVTransportURI",
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &soap_fault(
+                "501",
+                &format!(
+                    "Failed URL=(https://user:password@example.test/movie?token=secret) {}",
+                    "é".repeat(150)
+                ),
+            ),
+        )
+        .unwrap_err();
+        let CastError::UpnpAction(failure) = &error else {
+            panic!("typed fault expected");
+        };
+        assert_eq!(failure.action, "SetAVTransportURI");
+        assert_eq!(failure.code, Some(501));
+        assert_eq!(failure.http_status, Some(500));
+        assert!(failure.description.chars().count() <= 120);
+        assert!(failure.description.contains("[URL]"));
+        assert!(!error.to_string().contains("secret"));
+        assert!(!error.to_string().contains("https://"));
+        let error =
+            parse_soap_response("Play", StatusCode::BAD_GATEWAY, "unparseable gateway error")
+                .unwrap_err();
+        let CastError::UpnpAction(failure) = error else {
+            panic!("typed HTTP error expected");
+        };
+        assert_eq!(failure.code, None);
+        assert_eq!(failure.http_status, Some(502));
+        assert!(!failure.transport_failure);
+        assert_eq!(sanitize_description("a\n b\t c"), "a b c");
+    }
+
+    #[tokio::test]
+    async fn network_handle_transport_covers_description_preflight_and_both_services() {
+        let server = MockServer::start().await;
+        let ordinary = test_renderer(&server, true).await;
+        let renderer = Renderer::load_on_network(&ordinary.location(), Some(42))
+            .await
+            .unwrap();
+        for action in ["GetProtocolInfo", "Play", "SetVolume"] {
+            Mock::given(header(
+                "SOAPAction",
+                format!(
+                    "\"urn:schemas-upnp-org:service:{}:1#{action}\"",
+                    match action {
+                        "GetProtocolInfo" => "ConnectionManager",
+                        "SetVolume" => "RenderingControl",
+                        _ => "AVTransport",
+                    }
+                ),
+            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(soap_response(action, "<Sink>*:*:video/mp4:*</Sink>")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        }
+        renderer.preflight("video/mp4").await.unwrap();
+        renderer.play().await.unwrap();
+        renderer.set_volume(0.5).await.unwrap();
+        server.verify().await;
+    }
+
+    pub(crate) fn soap_response(action: &str, values: &str) -> String {
         format!(
             r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:{action}Response xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">{values}</u:{action}Response></s:Body></s:Envelope>"#
         )
     }
 
-    fn soap_fault(code: &str, description: &str) -> String {
+    pub(crate) fn soap_fault(code: &str, description: &str) -> String {
         format!(
             r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><faultcode>s:Client</faultcode><detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>{code}</errorCode><errorDescription>{description}</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>"#
         )
     }
 
-    async fn test_renderer(server: &MockServer, optional_services: bool) -> Renderer {
+    pub(crate) async fn test_renderer(server: &MockServer, optional_services: bool) -> Renderer {
         let mut services = vec!["AVTransport"];
         if optional_services {
             services.extend(["ConnectionManager", "RenderingControl"]);
@@ -753,6 +955,8 @@ mod tests {
             "http-get:*:audio/flac:*",
             "http-get:*:*:*",
             "HTTP-GET:*:VIDEO/MP4:*",
+            "*:*:video/mp4:*",
+            "*:*:*:*",
         ] {
             let mime = if sink.contains("audio") {
                 "audio/wav"

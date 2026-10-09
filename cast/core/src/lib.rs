@@ -19,6 +19,7 @@ pub mod secure_ws;
 pub mod session;
 pub mod ssdp;
 pub mod upnp;
+mod upnp_http;
 
 pub use ssdp::{DiscoveryConfig, DiscoveryHit, DiscoveryProtocol, DiscoverySession};
 
@@ -34,6 +35,8 @@ pub enum CastError {
     Uri(#[from] http::uri::InvalidUri),
     #[error("UPnP operation failed: {0}")]
     Upnp(#[from] rupnp::Error),
+    #[error("{0}")]
+    UpnpAction(Box<upnp::ActionFailure>),
     #[error("receiver description is missing {0}")]
     MissingField(&'static str),
     #[error("receiver returned HTTP {status} for {operation}")]

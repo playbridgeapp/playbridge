@@ -12,8 +12,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import com.playbridge.sender.cast.dlna.DeviceDescription
-import com.playbridge.sender.cast.dlna.DlnaProxyHolder
 import com.playbridge.sender.model.CastProtocol
 import com.playbridge.sender.model.EndpointKey
 import com.playbridge.sender.model.ReceiverEndpoint
@@ -57,10 +55,6 @@ internal class RustReceiverDiscovery(context: Context) {
     private var worker: Job? = null
     private val activeHandle = AtomicLong(0L)
     private var nativeUnavailableLogged = false
-    private val descriptionParser = DeviceDescription(DlnaProxyHolder.httpClient)
-    private val descriptionCache = ConcurrentHashMap<String, DeviceDescription.Renderer>()
-    private val descriptionsInFlight = ConcurrentHashMap.newKeySet<String>()
-
     /** Process-lifetime discovery cache keyed by [EndpointKey] string. */
     private val stickyEndpoints = ConcurrentHashMap<String, StickyEndpoint>()
 
@@ -97,9 +91,8 @@ internal class RustReceiverDiscovery(context: Context) {
         }
         activeHandle.set(handle)
         val scanJob = scope.launch(Dispatchers.IO) {
-            // Description enrichment runs in child IO coroutines while discovery continues.
-            // Keep the authoritative map concurrent so a later mDNS/SSDP event cannot replace an
-            // enriched DLNA endpoint with the earlier description-only snapshot.
+            // Keep the endpoint map concurrent because discovery events and sticky snapshots
+            // may arrive while this scan is being consumed.
             val deviceMap = ConcurrentHashMap<String, ReceiverEndpoint>()
             stickyEndpoints.forEach { (key, sticky) -> deviceMap[key] = sticky.endpoint }
             val receivers = mutableMapOf<String, MutableSet<String>>()
@@ -122,35 +115,6 @@ internal class RustReceiverDiscovery(context: Context) {
                                 deviceMap[key] = parsed
                                 rememberSticky(key, parsed)
                                 publishMap(deviceMap)
-                                if (parsed.protocol == CastProtocol.DLNA &&
-                                    parsed.descriptionUrl != null && parsed.controlUrl == null &&
-                                    descriptionsInFlight.add(parsed.descriptionUrl)
-                                ) {
-                                    val location = parsed.descriptionUrl
-                                    launch(Dispatchers.IO) {
-                                        try {
-                                            val description = descriptionParser.fetch(location)
-                                            if (description != null) {
-                                                descriptionCache[location] = description
-                                                deviceMap.computeIfPresent(key) { _, endpoint ->
-                                                    if (endpoint.descriptionUrl == location) {
-                                                        endpoint.copy(
-                                                            name = description.friendlyName,
-                                                            controlUrl = description.avTransportControlUrl,
-                                                            renderingControlUrl = description.renderingControlControlUrl,
-                                                        )
-                                                    } else {
-                                                        endpoint
-                                                    }
-                                                }
-                                                deviceMap[key]?.let { rememberSticky(key, it) }
-                                                publishMap(deviceMap)
-                                            }
-                                        } finally {
-                                            descriptionsInFlight.remove(location)
-                                        }
-                                    }
-                                }
                             }
                         }
                         "error" -> errors++
@@ -258,12 +222,9 @@ internal class RustReceiverDiscovery(context: Context) {
             protocol == CastProtocol.GOOGLE_CAST -> 8009
             else -> 0
         }
-        val description = location?.takeIf { protocol == CastProtocol.DLNA }
-            ?.let(descriptionCache::get)
-
         return ReceiverEndpoint(
             key = EndpointKey(protocol, uuid.ifEmpty { "$ip:$effectivePort" }),
-            name = description?.friendlyName ?: name,
+            name = name,
             addresses = orderedAddresses,
             port = effectivePort.takeIf { it > 0 },
             wssPort = wssPort,
@@ -273,8 +234,6 @@ internal class RustReceiverDiscovery(context: Context) {
                 null
             },
             descriptionUrl = location.takeIf { protocol == CastProtocol.DLNA },
-            controlUrl = description?.avTransportControlUrl,
-            renderingControlUrl = description?.renderingControlControlUrl,
         )
     }
 

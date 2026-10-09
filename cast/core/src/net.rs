@@ -62,3 +62,22 @@ mod tests {
         assert_eq!(host_for_url("[fe80::1234%25en0]"), "[fe80::1234%25en0]");
     }
 }
+
+/// Bind an individual socket before connecting; never changes process routing.
+#[cfg(target_os = "android")]
+pub(crate) fn bind_android_network(
+    socket: &tokio::net::TcpSocket,
+    network: u64,
+) -> std::io::Result<()> {
+    use std::os::fd::AsRawFd;
+    #[link(name = "android")]
+    unsafe extern "C" {
+        fn android_setsocknetwork(network: u64, fd: std::os::raw::c_int) -> std::os::raw::c_int;
+    }
+    // SAFETY: the live socket owns this descriptor for the duration of the call.
+    if unsafe { android_setsocknetwork(network, socket.as_raw_fd()) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
