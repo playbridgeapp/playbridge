@@ -1,7 +1,25 @@
 # PlayBridge release model
 
-PlayBridge is a monorepo with **independently versioned** products. Shipping one
-project does not require shipping the others.
+PlayBridge products share a **minor release train**, with **independent patch
+versions**. A minor bump moves each changed product to the same `x.y.0` version
+(for example, `0.15.0`). A product with no changes since its last published release,
+including no changes in shared code it builds from (such as `shared/`, `protocol/`
+or `cast/`), skips the train and keeps its current version. When it next changes,
+it jumps straight to the then-current train minor at `x.y.0`, rather than issuing
+a release in a skipped train. Between trains, a product may ship its own fixes as
+`0.15.1`, `0.15.2`, and so on without bumping the others. Features wait for the
+next minor train or start a new train; patch releases are for fixes.
+
+Preparing a train updates the participating products' versions and changelogs
+together. Publication remains per product: a train does not require every draft or store
+submission to be published at the same time. Build numbers and Android version
+codes continue to increase independently for each product.
+
+Sender/receiver compatibility is governed by the **protocol version**, not by
+matching application versions. **Protocol-breaking changes ship only in a new
+train, never in a patch.** Different product patches or a skipped train do not,
+by themselves, imply protocol incompatibility; check the supported protocol
+versions when assessing compatibility.
 
 ## Three stages
 
@@ -19,7 +37,9 @@ project does not require shipping the others.
 
 ### Rules
 
-1. **Independent versions** — extension-only work only uprevs the extension.
+1. **Shared minor, independent patches** — feature releases advance changed products
+   to the new `x.y.0` train; unchanged products skip it. A fix release bumps only
+   that product's patch, or joins the current train at `x.y.0` if it skipped it.
 2. **Uprev = intent to ship that project** — bump its version file and changelog.
 3. **No uprev → no release-build** — ordinary merges only run PR-style CI.
 4. **Draft is the handoff** — release-build attaches assets to a draft release;
@@ -45,10 +65,23 @@ stable releases after each release's rollout delay.
 | **Android phone** | `versionName` / `versionCode` | `phone-v*` | `mobile/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
 | **Android TV player** | TV `versionName` / `versionCode` | `tv-player-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
 | **Android TV GeckoView plugin** | TV `versionName` / `versionCode` | `tv-geckoview-plugin-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → undraft |
-| **Stream proxy** | crate / image version | image tags / optional git tag | project changelog | `stream_proxy_pr.yml` | `stream_proxy_build.yml` | Promote image tags — *target* |
+| **Stream proxy** | `stream-proxy-rust/Cargo.toml` | image tags / optional git tag | `stream-proxy-rust/CHANGELOG.md` | `stream_proxy_pr.yml` | `stream_proxy_build.yml` → **public image** | Automatic on eligible `main` changes |
 | **Web** | deploy-on-main | n/a | n/a | `web_pr.yml` | — | `web_deploy.yml` (Pages) |
 | **Protocol / Rust core** | n/a (library) | n/a | n/a | contract / rust PR checks | ships inside consumers | — |
 | **Apple apps** | Xcode marketing version | store / TestFlight | Apple changelogs | local / future CI | archive | App Store Connect |
+
+### Stream proxy publication exception
+
+`stream_proxy_build.yml` currently publishes the stream proxy image automatically
+on eligible `main` changes after its tests pass, rather than creating a draft for
+manual promotion. Changing the crate version to a new version with no existing
+`stream-proxy-v*` tag enables publication of that version and `latest`. **Merging
+a train bump therefore publishes that stream-proxy version.** Do not treat
+the proxy bump as preparation of a draft only.
+
+Shared libraries, protocol/ABI versions and the embedded GeckoView
+detector manifest keep their own compatibility versions and are not synchronized
+to the product train.
 
 ### GitHub release search markers
 
@@ -150,7 +183,7 @@ must not replace the executable while a cast or receiver session is active.
 Actions → CLI Release Build → Run workflow
   force: true   # optional rebuild of draft
 Actions → CLI Publish → Run workflow
-  version: 0.1.1
+  version: 0.15.0
 ```
 
 ## Android and Desktop publish
@@ -185,5 +218,9 @@ publish jobs rather than mid-build Issue bots.
 
 - Ordinary PRs must **not** bump versions unless the user asked for an uprev or
   release (`release-and-publish` skill).
-- One uprev PR per product when practical (`bump(cli): 0.1.1`).
+- Prepare minor train bumps in one coordinated PR (`chore(release): 0.15.0`),
+  checking each product's direct and consumed shared-code changes since its last
+  published release. Update participating products' versions and changelogs;
+  document products that skip the train. Product-only fix releases may use
+  a separate patch PR (`chore(cli): 0.15.1`).
 - Never log secrets, store keys, or pairing tokens in release notes or CI logs.

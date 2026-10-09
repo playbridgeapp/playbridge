@@ -60,7 +60,7 @@ Confirm each reason against the final implementation and Apple's current list be
 
 The Xcode project set `MARKETING_VERSION` to `0.3.3-alpha` in both configurations at audit time. `CFBundleShortVersionString` must contain three period-separated integers.
 
-Use `0.3.3` for the binary. Put the alpha designation in TestFlight release notes, the build number, or other release metadata instead. See Apple's [version number definition](https://developer.apple.com/help/glossary/version-number/).
+Use the numeric release-train version (`0.15.0` for this release) for the binary; see [release policy](release.md). Put the alpha designation in TestFlight release notes, the build number, or other release metadata instead. See Apple's [version number definition](https://developer.apple.com/help/glossary/version-number/).
 
 ### 3. Remove `exit(0)`
 
