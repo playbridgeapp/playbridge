@@ -2,11 +2,22 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.6.1] — 2026-07-19
+## [0.15.0] — 2026-10-09
+
+### Added
+- **Richer media detection**: Discover media URLs in response bodies and track media changes on single-page sites without losing earlier playable streams.
 
 ### Changed
-- **Chrome Web Store Packaging**: Production Chrome uploads now remove the development-only manifest `key` field, while unpacked development builds retain the stable ID configuration.
-- **Store Readiness**: Added Chrome Web Store publishing guidance and screenshots for the listing workflow.
+- **Chrome store packages**: Remove the development-only manifest key from production uploads while retaining stable IDs for unpacked builds; refresh store listing guidance and screenshots.
+- **Stream details**: Improve candidate ranking, captured request headers and media lifecycle tracking.
+
+### Fixed
+- **Low-latency HLS**: Cast separate audio/video renditions through synthetic master playlists and improve playlist attribute and whitespace parsing.
+- **Detection ownership**: Associate media events with the committed tab and document so navigation does not mix detections from different pages.
+
+### Security
+- **Page integration**: Isolate the embedded browser's page API, bind linked casting to the owning document and keep sensitive receiver identities out of website responses.
+- **Native bridge**: Keep credentials and protected stream details out of persisted diagnostics.
 
 ## [0.6.0] — 2026-07-15
 
