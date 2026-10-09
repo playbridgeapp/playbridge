@@ -3,9 +3,17 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status: Alpha">
   <img src="https://img.shields.io/badge/license-GPLv3-blue" alt="License: GPLv3">
-  <a href="https://github.com/playbridgeapp/playbridge/releases"><img src="https://img.shields.io/github/v/release/playbridgeapp/playbridge?label=latest%20release" alt="Latest release"></a>
   <a href="https://discord.gg/4U6WPSdSa9"><img src="https://img.shields.io/badge/Discord-Join%20Chat-5865F2?logo=discord&logoColor=white" alt="Discord Community"></a>
   <a href="https://ko-fi.com/playbridgeapp"><img src="https://img.shields.io/badge/Ko--fi-Support%20us-F16061?logo=ko-fi&logoColor=white" alt="Support me on Ko-fi"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=phone&expanded=true"><img src="https://img.shields.io/badge/Phone-releases-3DDC84?logo=android&logoColor=white" alt="Phone releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=tv-player&expanded=true"><img src="https://img.shields.io/badge/TV%20Player-releases-3DDC84?logo=android&logoColor=white" alt="TV Player releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=geckoview&expanded=true"><img src="https://img.shields.io/badge/TV%20Browser-releases-3DDC84?logo=firefoxbrowser&logoColor=white" alt="TV Browser releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=desktop&expanded=true"><img src="https://img.shields.io/badge/Desktop-releases-0078D4?logo=flutter&logoColor=white" alt="Desktop releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=cli+NOT+desktop&expanded=true"><img src="https://img.shields.io/badge/CLI-releases-555555?logo=rust&logoColor=white" alt="CLI releases"></a>
+  <a href="https://github.com/playbridgeapp/playbridge/releases?q=extension&expanded=true"><img src="https://img.shields.io/badge/Extension-releases-FF7139?logo=firefoxbrowser&logoColor=white" alt="Extension releases"></a>
 </p>
 
 <p align="center">
