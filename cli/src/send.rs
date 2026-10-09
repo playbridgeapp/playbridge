@@ -22,7 +22,11 @@ use std::{
     time::Duration,
 };
 use stream_proxy_rust::{ProxyServer, ProxyServerConfig};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+use tokio::{
+    io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, BufReader},
+    sync::mpsc,
+    task::JoinHandle,
+};
 
 use crate::{
     credentials::{PlaybridgeCredentials, SenderIdentity, now_seconds},
@@ -141,7 +145,38 @@ struct JsonStatusContext<'a> {
 struct JsonSessionInput {
     media_items: Vec<String>,
     initial_index: usize,
-    stdin_commands: bool,
+    stdin_commands: Option<StdinControlReader>,
+}
+
+struct StdinControlReader {
+    requests: mpsc::Receiver<Result<ControlRequest, String>>,
+    task: JoinHandle<()>,
+}
+
+impl StdinControlReader {
+    fn spawn<R: AsyncBufRead + Unpin + Send + 'static>(mut reader: R) -> Self {
+        let (sender, requests) = mpsc::channel(16);
+        let task = tokio::spawn(async move {
+            loop {
+                let request = match read_stdin_control_request(&mut reader).await {
+                    Ok(Some(request)) => Ok(request),
+                    Ok(None) => break,
+                    Err(error) => Err(error),
+                };
+                let failed = request.is_err();
+                if sender.send(request).await.is_err() || failed {
+                    break;
+                }
+            }
+        });
+        Self { requests, task }
+    }
+}
+
+impl Drop for StdinControlReader {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 pub(crate) enum MediaPayloadSource {
@@ -149,10 +184,11 @@ pub(crate) enum MediaPayloadSource {
     Stdin,
 }
 
-async fn read_playlist_payload(
+async fn read_playlist_payload<R: AsyncBufRead + Unpin>(
     source: Option<&MediaPayloadSource>,
     fallback_url: &str,
     fallback_title: &str,
+    stdin: &mut R,
 ) -> Result<Value, String> {
     let Some(source) = source else {
         return Ok(json!({
@@ -172,7 +208,7 @@ async fn read_playlist_payload(
         }
         MediaPayloadSource::Stdin => {
             let mut data = String::new();
-            BufReader::new(tokio::io::stdin())
+            stdin
                 .take(MAX_PAYLOAD_BYTES + 1)
                 .read_line(&mut data)
                 .await
@@ -431,10 +467,14 @@ pub(crate) async fn run_json_cast(
 
     let skip_history = skip_history_override.unwrap_or(crate::ui::skip_history_default()?);
     let stdin_commands = matches!(media_payload, Some(MediaPayloadSource::Stdin));
+    // Keep the payload reader alive: it may already hold bytes from the first
+    // control command beyond the payload's newline.
+    let mut stdin = BufReader::new(tokio::io::stdin());
     let mut playlist_payload = read_playlist_payload(
         media_payload.as_ref(),
         &media_target,
         &media_title(&media_target).unwrap_or_else(|| "Untitled media".into()),
+        &mut stdin,
     )
     .await?;
     apply_history_default(&mut playlist_payload, skip_history);
@@ -573,7 +613,7 @@ pub(crate) async fn run_json_cast(
         JsonSessionInput {
             media_items,
             initial_index,
-            stdin_commands,
+            stdin_commands: stdin_commands.then(|| StdinControlReader::spawn(stdin)),
         },
         &session,
         &mut proxy_server,
@@ -710,9 +750,14 @@ async fn json_session_loop(
     loop {
         tokio::select! {
             _ = wait_interrupt() => break,
-            request = read_stdin_control_request(), if stdin_commands => {
-                match request? {
+            // Only the channel receive is cancelled when a tick wins. The task
+            // owns the same reader as the payload read and finishes each line.
+            request = async {
+                stdin_commands.as_mut()?.requests.recv().await
+            }, if stdin_commands.is_some() => {
+                match request {
                     Some(request) => {
+                        let request = request?;
                         match process_json_request(
                             &mut control,
                             &mut snapshot,
@@ -732,7 +777,7 @@ async fn json_session_loop(
                             }
                         }
                     }
-                    None => stdin_commands = false,
+                    None => stdin_commands = None,
                 }
             }
             _ = tick.tick() => {
@@ -788,10 +833,12 @@ async fn json_session_loop(
     Ok(())
 }
 
-async fn read_stdin_control_request() -> Result<Option<ControlRequest>, String> {
+async fn read_stdin_control_request<R: AsyncBufRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<ControlRequest>, String> {
     const MAX_COMMAND_BYTES: u64 = 256 * 1024;
     let mut line = String::new();
-    let read = BufReader::new(tokio::io::stdin())
+    let read = reader
         .take(MAX_COMMAND_BYTES + 1)
         .read_line(&mut line)
         .await
@@ -3183,6 +3230,205 @@ fn playlist_command(media_url: &str, media_title: &str, skip_history: bool) -> S
 mod tests {
     use super::*;
     use crate::receive::DEFAULT_PORT;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn stdin_payload_preserves_buffered_control_lines() {
+        let (mut writer, pipe) = tokio::io::duplex(1024);
+        writer
+            .write_all(b"null\n{\"id\":\"first\",\"command\":\"pause\"}\n{\"id\":\"second\",\"command\":\"play\"}\n")
+            .await
+            .unwrap();
+        drop(writer);
+        let mut reader = BufReader::new(pipe);
+        let payload = read_playlist_payload(
+            Some(&MediaPayloadSource::Stdin),
+            "https://example.test/video.mp4",
+            "Video",
+            &mut reader,
+        )
+        .await
+        .unwrap();
+        assert_eq!(payload["items"][0]["title"], "Video");
+        let mut commands = StdinControlReader::spawn(reader);
+        for (id, command) in [("first", "pause"), ("second", "play")] {
+            let request = commands.requests.recv().await.unwrap().unwrap();
+            assert_eq!(request.id, id);
+            assert_eq!(request.command, command);
+        }
+        assert!(commands.requests.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn stdin_reader_preserves_errors_and_line_limits() {
+        let oversized = vec![b'x'; 256 * 1024 + 1];
+        let mut input = oversized.as_slice();
+        assert_eq!(
+            read_stdin_control_request(&mut input).await.unwrap_err(),
+            "MCP control command exceeds 256 KiB"
+        );
+        let mut input = oversized.as_slice();
+        assert_eq!(
+            read_playlist_payload(
+                Some(&MediaPayloadSource::Stdin),
+                "unused",
+                "unused",
+                &mut input
+            )
+            .await
+            .unwrap_err(),
+            "media payload exceeds 256 KiB"
+        );
+        let mut commands = StdinControlReader::spawn(&b"not JSON\n"[..]);
+        assert!(
+            commands
+                .requests
+                .recv()
+                .await
+                .unwrap()
+                .unwrap_err()
+                .starts_with("invalid MCP control command:")
+        );
+        assert!(commands.requests.recv().await.is_none());
+
+        // The limit includes the newline, just as before.
+        let mut exact = b"{\"id\":\"limit\",\"command\":\"pause\"}".to_vec();
+        exact.resize(256 * 1024 - 1, b' ');
+        exact.push(b'\n');
+        let mut input = exact.as_slice();
+        assert_eq!(
+            read_stdin_control_request(&mut input)
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "limit"
+        );
+    }
+
+    #[tokio::test]
+    async fn stdin_controls_are_acked_after_idle_ticks_and_partial_lines() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut reader = BufReader::new(socket);
+                let mut line = String::new();
+                reader.read_line(&mut line).await.unwrap();
+                let description = line.starts_with("GET ");
+                let mut length = 0;
+                let mut action = String::new();
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).await.unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse::<usize>().unwrap();
+                    }
+                    if line.to_ascii_lowercase().starts_with("soapaction:") {
+                        action = line
+                            .rsplit_once('#')
+                            .unwrap()
+                            .1
+                            .trim()
+                            .trim_matches('"')
+                            .into();
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).await.unwrap();
+                let response = if description {
+                    "<root><device><friendlyName>Test TV</friendlyName><serviceList><service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><controlURL>/control</controlURL></service></serviceList></device></root>".to_owned()
+                } else {
+                    format!(
+                        "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:{action}Response xmlns:u=\"urn:schemas-upnp-org:service:AVTransport:1\"/></s:Body></s:Envelope>"
+                    )
+                };
+                reader.get_mut().write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+                    response.len()
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let renderer = Renderer::load(&format!("http://{address}/description.xml"))
+            .await
+            .unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let session = JsonCastSession::for_test(temp.path().to_path_buf(), "stdin-ticks");
+        let ack_path = temp.path().join("stdin-ticks/ack.json");
+        let receiver = Receiver {
+            id: ReceiverId("test-tv".into()),
+            name: "Test TV".into(),
+            protocol: ReceiverProtocol::Dlna,
+            addresses: vec![address.ip().to_string()],
+            port: Some(address.port()),
+            wss_port: None,
+            location: Some(format!("http://{address}/description.xml")),
+            uuid: None,
+        };
+        let control = TargetControl::Dlna(renderer);
+        let capabilities = dashboard_capabilities(&control);
+        let (mut writer, pipe) = tokio::io::duplex(1024);
+        let (ack_read, keep_session) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let result = json_session_loop(
+                control,
+                receiver,
+                capabilities,
+                JsonSessionInput {
+                    media_items: vec!["https://example.test/video.mp4".into()],
+                    initial_index: 0,
+                    stdin_commands: Some(StdinControlReader::spawn(BufReader::new(pipe))),
+                },
+                &session,
+                &mut None,
+            )
+            .await;
+            // Session Drop removes ack.json; retain it until the final stop
+            // acknowledgement has been inspected by the test.
+            let _ = keep_session.await;
+            result
+        });
+        for (index, command) in ["pause", "play", "seek", "stop"].into_iter().enumerate() {
+            // Let several real 250 ms ticks cancel rx.recv(), then split a line
+            // over another tick. Neither cancellation may lose stdin bytes.
+            tokio::time::sleep(Duration::from_millis(550)).await;
+            let request =
+                json!({"id": format!("request-{index}"), "command": command, "seconds": 10});
+            let mut line = serde_json::to_vec(&request).unwrap();
+            line.push(b'\n');
+            let split = line.len() / 2;
+            writer.write_all(&line[..split]).await.unwrap();
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            writer.write_all(&line[split..]).await.unwrap();
+            let ack = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let Ok(data) = fs::read_to_string(&ack_path)
+                        && let Ok(ack) = serde_json::from_str::<Value>(&data)
+                        && ack["request_id"] == request["id"]
+                    {
+                        break ack;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("control must be processed and acked after idle ticks");
+            assert_eq!(ack["ok"], true, "{ack}");
+            assert_eq!(ack["command"], command);
+        }
+        drop(writer);
+        ack_read.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        server.abort();
+    }
 
     #[tokio::test]
     async fn regular_payload_file_is_read_without_being_removed() {
@@ -3197,6 +3443,7 @@ mod tests {
             )),
             "unused",
             "unused",
+            &mut tokio::io::empty(),
         )
         .await
         .unwrap();

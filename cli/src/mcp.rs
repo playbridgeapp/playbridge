@@ -1663,6 +1663,63 @@ mod tests {
         assert_eq!(value["command"], "pause");
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn managed_controls_use_child_stdin_and_match_each_ack() {
+        // The child echoes a stale event followed by the actual command ack.
+        // No session files exist, so falling back to file-based controls fails.
+        let mut child = tokio::process::Command::new("sh")
+            .args([
+                "-c",
+                r#"while IFS= read -r line; do
+                    printf '%s\n' '{"ok":true,"request_id":"stale"}'
+                    printf '%s\n' "$line" | sed 's/^{"id":/{"ok":true,"request_id":/'
+                done"#,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let session_id = crate::json_session::JsonCastSession::generate_id();
+        let mcp = PlaybridgeMcp::new();
+        *mcp.send_child.lock().await = Some(super::ManagedSend {
+            child,
+            stdout: BufReader::new(stdout),
+            stdin: Some(stdin),
+            session_id: session_id.clone(),
+            waiting_for_pairing: false,
+            receiver_owned_playback: true,
+        });
+        for command in ["pause", "play", "seek", "stop"] {
+            let result = mcp
+                .control(Parameters(super::ControlParams {
+                    command: command.into(),
+                    session_id: None,
+                    seconds: (command == "seek").then_some(10),
+                    delta: None,
+                    value: None,
+                }))
+                .await
+                .unwrap();
+            assert_ne!(result.is_error, Some(true));
+            let ack = result.structured_content.unwrap();
+            assert_eq!(ack["ok"], true);
+            assert_eq!(ack["command"], command);
+            assert_ne!(ack["request_id"], "stale");
+            let slot = mcp.send_child.lock().await;
+            assert_eq!(slot.as_ref().unwrap().session_id, session_id);
+        }
+        let mut managed = mcp.send_child.lock().await.take().unwrap();
+        drop(managed.stdin.take());
+        tokio::time::timeout(std::time::Duration::from_secs(2), managed.child.wait())
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn preserves_pairing_and_completion_as_separate_events() {
         let events =
