@@ -1,6 +1,9 @@
 package com.playbridge.sender.cast.dlna
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalProxyServerParseTest {
@@ -26,6 +29,36 @@ class LocalProxyServerParseTest {
     fun ignoresExtInfTitleSuffix() {
         val playlist = "#EXTINF:6.0,Chapter One\nseg0.ts\n#EXTINF:6,\nseg1.ts"
         assertEquals(12_000L, LocalProxyServer.sumExtInf(playlist))
+    }
+
+    @Test
+    fun mediaPlaylistFactsDistinguishLiveFromVodAndIgnoreMasterPlaylists() {
+        val master = """#EXTM3U
+            #EXT-X-STREAM-INF:BANDWIDTH=1000
+            variant.m3u8
+        """.trimIndent()
+        assertNull(LocalProxyServer.parseHlsMediaFacts(master))
+
+        val live = requireNotNull(
+            LocalProxyServer.parseHlsMediaFacts("""#EXTM3U
+                #EXTINF:6,
+                seg.ts
+            """.trimIndent()),
+        )
+        assertTrue(live.isLive)
+        assertEquals(0L, live.durationMs)
+
+        val vod = requireNotNull(
+            LocalProxyServer.parseHlsMediaFacts("""#EXTM3U
+                #EXTINF:6,
+                seg.ts
+                #EXTINF:4.5,
+                seg2.ts
+                #EXT-X-ENDLIST
+            """.trimIndent()),
+        )
+        assertFalse(vod.isLive)
+        assertEquals(10_500L, vod.durationMs)
     }
 
     @Test

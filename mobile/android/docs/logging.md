@@ -65,10 +65,10 @@ adb logcat -c && adb logcat -v time 'VideoDetector:D' '*:S' | tee /tmp/playbridg
 | Stream route / Via phone | `StreamRouteService` | Header-name dumps yes |
 | Embedded Rust proxy / sender services | `PhoneSenderServices`, `SenderServicesNative`, `JniUpstreamHttp` | Mixed |
 | Local proxy (DLNA / fallback) | `LocalProxyServer` | Mixed |
-| DLNA TV playback status | `DlnaCastTarget` | No URLs or headers |
+| DLNA TV playback status | `DlnaCastTarget`, `RustCastSession` | No URLs or headers |
 | Google Cast | `GoogleCastTarget`, `RustCastSession`, `RustCastSessionNative` | Proxied URL log yes |
 | Cast session orchestration | `CastSessionManager`, `CastSessionService` | Mixed |
-| DLNA / UPnP | `AvTransportClient`, `RenderingControl`, `DeviceDescription` | Mixed |
+| DLNA / UPnP | `RustCastSession`, `DlnaCastTarget` | No SOAP body or media URLs |
 | Roku | `RokuClient` | Mixed |
 | Browser cast / receiver host | `BrowserCastTarget`, `BrowserReceiverHostSvc`, `BrowserReceiverRepo` | Mixed |
 | TV WebSocket / discovery | `WebSocketClient`, `ConnectionViewModel`, `ConnectionCoordinator`, `RustReceiverDiscovery`, `NetworkStatus` | Mixed |
@@ -259,7 +259,7 @@ adb logcat -c && adb logcat -v time \
 ```bash
 # DLNA
 adb logcat -c && adb logcat -v time \
-  'AvTransportClient:D' 'DlnaCastTarget:D' 'RenderingControl:D' 'DeviceDescription:D' \
+  'RustCastSession:D' 'DlnaCastTarget:D' \
   'LocalProxyServer:D' 'JniUpstreamHttp:D' \
   '*:S'
 
@@ -272,17 +272,13 @@ adb logcat -c && adb logcat -v time \
   '*:S'
 ```
 
-For DLNA failures, `AvTransportClient` reports the HTTP status and numeric UPnP
-error code without the SOAP body. `JniUpstreamHttp` assigns each upstream fetch a
-request ID and safe resource category; compare the first status with the final
-retry status (`captured`, optional `origin_referer`, then `minimal`). It does not
-log the URL, host, signed query, or header values. For screen mirroring, a DLNA
-`SetAVTransportURI` UPnP 501 on the continuous stream triggers one live-HLS
-handoff attempt. `DlnaCastTarget` reports TV transport-state changes after
-`Play` is accepted. Normal DLNA HLS loads advertise HLS in DIDL metadata and
-retry once without metadata if the renderer rejects that `SetAVTransportURI`
-with UPnP 501. DLNA mirroring waits for two complete live-HLS segments before
-handing off; Google Cast continues waiting for one.
+DLNA control actions run inside the Rust Cast Core session. Kotlin logs typed,
+redacted UPnP action failures and transport-state changes; SOAP bodies and stream
+URLs are not logged. `JniUpstreamHttp` assigns upstream fetches a request ID and
+safe resource category; compare the first status with the final retry status
+(`captured`, optional `origin_referer`, then `minimal`). It does not log the URL,
+host, signed query, or header values. DLNA screen-mirror fallback and other
+renderer-specific retries are handled by Rust.
 
 ---
 

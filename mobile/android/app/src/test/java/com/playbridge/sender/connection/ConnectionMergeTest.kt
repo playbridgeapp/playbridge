@@ -71,23 +71,16 @@ class ConnectionMergeTest {
     }
 
     @Test
-    fun `DLNA endpoint healing refreshes description transport and volume URLs`() {
+    fun `DLNA endpoint healing refreshes device description location`() {
         val saved = dev("192.168.1.20", 0, uuid = "renderer-1").copy(
             protocol = CastProtocol.DLNA,
             descriptionUrl = "http://192.168.1.20/old.xml",
-            controlUrl = "http://192.168.1.20/old-av",
         )
-        val discovered = saved.copy(
-            descriptionUrl = "http://192.168.1.21/device.xml",
-            controlUrl = "http://192.168.1.21/avtransport",
-            renderingControlUrl = "http://192.168.1.21/rendering",
-        )
+        val discovered = saved.copy(descriptionUrl = "http://192.168.1.21/device.xml")
 
         val merged = ConnectionMerge.withDiscoveredEndpoint(saved, listOf(discovered))
 
         assertEquals(discovered.descriptionUrl, merged.descriptionUrl)
-        assertEquals(discovered.controlUrl, merged.controlUrl)
-        assertEquals(discovered.renderingControlUrl, merged.renderingControlUrl)
     }
 
     @Test

@@ -19,6 +19,7 @@ import java.net.URI
 import java.net.URL
 import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 /**
@@ -37,7 +38,12 @@ class LocalProxyServer(
     private val resolver: ContentResolver,
 ) {
     sealed interface Entry {
-        data class Remote(val url: String, val headers: Map<String, String>, val mime: String?) : Entry
+        data class Remote(
+            val url: String,
+            val headers: Map<String, String>,
+            val mime: String?,
+            val factsScope: String? = null,
+        ) : Entry
         data class Local(val uri: Uri, val mime: String?) : Entry
     }
 
@@ -45,6 +51,7 @@ class LocalProxyServer(
     private val originToToken: MutableMap<String, String> = Collections.synchronizedMap(HashMap())
     private val lastGoodPlaylist: MutableMap<String, CachedPlaylist> =
         Collections.synchronizedMap(HashMap())
+    private val factsByScope = ConcurrentHashMap<String, MediaFacts>()
     private val entries: MutableMap<String, Entry> = Collections.synchronizedMap(
         object : LinkedHashMap<String, Entry>(256, 0.75f, true) {
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Entry>): Boolean {
@@ -78,6 +85,8 @@ class LocalProxyServer(
     var vodDurationMs = 0L
         private set
 
+    internal data class MediaFacts(val isLive: Boolean, val durationMs: Long)
+
     private data class CachedPlaylist(val atMs: Long, val body: ByteArray)
 
     fun start(): Int {
@@ -98,6 +107,7 @@ class LocalProxyServer(
         entries.clear()
         originToToken.clear()
         lastGoodPlaylist.clear()
+        factsByScope.clear()
     }
 
     /** Register a remote web stream; returns the proxy URL to hand the renderer. */
@@ -105,7 +115,22 @@ class LocalProxyServer(
         isLiveStream = false // re-learned when an HLS media playlist is served
         vodDurationMs = 0L
         cachedLanIp = lanIp() // refresh once per cast; register() reuses it
-        return register(Entry.Remote(url, filterHeaders(headers), mime), guessExt(url, mime))
+        val factsScope = UUID.randomUUID().toString()
+        factsByScope.remove(factsScope)
+        return register(
+            Entry.Remote(url, filterHeaders(headers), mime, factsScope),
+            guessExt(url, mime),
+        )
+    }
+
+    /** Facts discovered while serving a proxied playlist, scoped to its published media URL. */
+    internal fun mediaFacts(proxyUrl: String): MediaFacts? {
+        val token = runCatching {
+            URI(proxyUrl).path.substringAfterLast('/').substringBefore('.').substringBefore('?')
+        }.getOrNull() ?: return null
+        val entry = entries[token] as? Entry.Remote ?: return null
+        val scope = entry.factsScope ?: return null
+        return factsByScope[scope]
     }
 
     /** Register a local file (content:// / file Uri); returns the proxy URL. */
@@ -157,12 +182,12 @@ class LocalProxyServer(
             synchronized(entries) {
                 val existing = originToToken[entry.url]
                 if (existing != null && entries.containsKey(existing)) {
-                    // Touch LRU + refresh headers/mime for this origin.
+                    // Touch LRU + refresh headers/mime/facts scope for this origin.
                     entries[existing] = entry
                     return "http://$ip:$port/$existing$ext"
                 }
                 val token = UUID.randomUUID().toString().replace("-", "").take(16)
-                entries[token] = entry
+                entries[token] = entry.copy(factsScope = entry.factsScope ?: token)
                 originToToken[entry.url] = token
                 return "http://$ip:$port/$token$ext"
             }
@@ -275,7 +300,12 @@ class LocalProxyServer(
                 val looksLikeHls = bodyText.trimStart().startsWith("#EXTM3U")
                 if (looksLikeHls) {
                     Log.d(TAG, "playlist HTTP ${upstream.code} ($ctype) bytes=${bodyBytes.size}")
-                    val rewritten = rewritePlaylist(bodyText, finalUrl, entry.headers).toByteArray()
+                    val rewritten = rewritePlaylist(
+                        bodyText,
+                        finalUrl,
+                        entry.headers,
+                        entry.factsScope,
+                    ).toByteArray()
                     lastGoodPlaylist[token] = CachedPlaylist(System.currentTimeMillis(), rewritten)
                     writeBufferedResponse(
                         out,
@@ -655,13 +685,22 @@ class LocalProxyServer(
     }
 
     /** Rewrite every URL in an m3u8 to a proxy URL so headers reach all sub-requests. */
-    private fun rewritePlaylist(body: String, baseUrl: String, headers: Map<String, String>): String {
-        // Only a media playlist (#EXTINF) carries liveness/duration; the master (variants) has
-        // neither, so leave the publish()-reset values in place for it. VOD => #EXT-X-ENDLIST.
-        if (body.contains("#EXTINF")) {
-            val live = !body.contains("#EXT-X-ENDLIST")
-            isLiveStream = live
-            vodDurationMs = if (live) 0L else sumExtInf(body)
+    private fun rewritePlaylist(
+        body: String,
+        baseUrl: String,
+        headers: Map<String, String>,
+        factsScope: String?,
+    ): String {
+        // A master playlist has no media facts; only its media-playlist response updates scope.
+        parseHlsMediaFacts(body)?.let { facts ->
+            isLiveStream = facts.isLive
+            vodDurationMs = facts.durationMs
+            factsScope?.let { scope ->
+                factsByScope[scope] = facts
+                if (factsByScope.size > MAX_FACT_SCOPES) {
+                    factsByScope.keys.firstOrNull { it != scope }?.let(factsByScope::remove)
+                }
+            }
         }
         val uriAttr = Regex("URI=\"([^\"]*)\"")
         return body.lineSequence().joinToString("\n") { raw ->
@@ -669,13 +708,20 @@ class LocalProxyServer(
             when {
                 line.isBlank() -> line
                 line.startsWith("#") ->
-                    uriAttr.replace(line) { m -> "URI=\"${proxify(m.groupValues[1], baseUrl, headers)}\"" }
-                else -> proxify(line, baseUrl, headers)
+                    uriAttr.replace(line) { m ->
+                        "URI=\"${proxify(m.groupValues[1], baseUrl, headers, factsScope)}\""
+                    }
+                else -> proxify(line, baseUrl, headers, factsScope)
             }
         }
     }
 
-    private fun proxify(ref: String, baseUrl: String, headers: Map<String, String>): String {
+    private fun proxify(
+        ref: String,
+        baseUrl: String,
+        headers: Map<String, String>,
+        factsScope: String?,
+    ): String {
         val abs = resolve(baseUrl, ref)
         val pathOnly = abs.substringBefore('?').lowercase()
         // Label common HLS segment types so clients/Shaka don't treat TS as fMP4.
@@ -691,7 +737,7 @@ class LocalProxyServer(
             else -> null
         }
         // headers already filtered (inherited from the parent playlist registration)
-        return register(Entry.Remote(abs, headers, mime), guessExt(abs, mime))
+        return register(Entry.Remote(abs, headers, mime, factsScope), guessExt(abs, mime))
     }
 
     private fun resolve(base: String, ref: String): String =
@@ -776,6 +822,7 @@ class LocalProxyServer(
         private const val TAG = "LocalProxyServer"
         /** Live HLS registers one entry per segment URL; keep a hard cap. */
         private const val MAX_ENTRIES = 2_000
+        private const val MAX_FACT_SCOPES = 64
         /**
          * Max bytes to load into heap for playlist rewrite. Live segments are multi‑MB
          * and must never go through body.bytes() — that OOM-killed the app at 256MB.
@@ -785,6 +832,12 @@ class LocalProxyServer(
         private const val STALE_PLAYLIST_MAX_AGE_MS = 20_000L
         private const val DEFAULT_UA =
             "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+
+        internal fun parseHlsMediaFacts(body: String): MediaFacts? {
+            if (!body.contains("#EXTINF")) return null
+            val isLive = !body.contains("#EXT-X-ENDLIST")
+            return MediaFacts(isLive, if (isLive) 0L else sumExtInf(body))
+        }
 
         /** Sum a VOD media playlist's segment durations (#EXTINF:<seconds>[,title]) → ms. */
         fun sumExtInf(body: String): Long {

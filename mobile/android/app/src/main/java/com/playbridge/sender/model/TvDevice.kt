@@ -34,14 +34,12 @@ data class TvDevice(
     // Rust discovery can return multiple IPv4/IPv6 endpoints. [ip] remains the preferred address
     // for compatibility with the existing WebSocket and UI call sites during migration.
     val addresses: List<String> = emptyList(),
-    // DLNA/UPnP renderer discovered via SSDP (not the native WS receiver). When true,
-    // [controlUrl] is the AVTransport SOAP endpoint and there is no token/pairing.
+    // DLNA/UPnP renderer discovered via SSDP (not the native WS receiver). The Rust session
+    // resolves AVTransport/RenderingControl endpoints from [descriptionUrl].
     val isDlna: Boolean = false,
     val isRoku: Boolean = false,
     val isGoogleCast: Boolean = false,
     val descriptionUrl: String? = null,
-    val controlUrl: String? = null,
-    val renderingControlUrl: String? = null,
     val lastConnected: Long = System.currentTimeMillis()
 ) {
     val resolvedProtocol: CastProtocol
@@ -71,8 +69,6 @@ data class TvDevice(
         wssPort = wssPort,
         logsPort = logsPort,
         descriptionUrl = descriptionUrl,
-        controlUrl = controlUrl,
-        renderingControlUrl = renderingControlUrl,
     )
 
     fun toSavedEndpoint(): SavedReceiverEndpoint = SavedReceiverEndpoint(
@@ -108,8 +104,6 @@ data class TvDevice(
                 isRoku = endpoint.protocol == CastProtocol.ROKU,
                 isGoogleCast = endpoint.protocol == CastProtocol.GOOGLE_CAST,
                 descriptionUrl = endpoint.descriptionUrl,
-                controlUrl = endpoint.controlUrl,
-                renderingControlUrl = endpoint.renderingControlUrl,
                 lastConnected = saved.lastConnected,
             )
         }

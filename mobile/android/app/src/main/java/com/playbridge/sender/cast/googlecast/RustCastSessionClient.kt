@@ -3,6 +3,7 @@ package com.playbridge.sender.cast.googlecast
 import android.os.SystemClock
 import android.util.Log
 import com.playbridge.sender.BuildConfig
+import com.playbridge.sender.cast.dlna.dlnaActionFailureFromEvent
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -46,10 +47,12 @@ internal object RustCastSessionNative {
     private const val TAG = "RustCastSessionNative"
 }
 
-internal data class RustCastPlaybackStatus(
+internal data class RustPlaybackStatus(
     val state: String,
     val positionSeconds: Double,
     val durationSeconds: Double,
+    val isLive: Boolean = false,
+    val hasLiveField: Boolean = false,
     val volumeSupported: Boolean? = null,
 )
 
@@ -82,13 +85,13 @@ class GoogleCastNotReadyException(message: String = "Google Cast receiver is not
     IllegalStateException(message)
 
 /**
- * Thin coroutine adapter over Cast Core's single-owner native session worker.
+ * Shared coroutine adapter over Cast Core's single-owner protocol session worker.
  *
- * The native worker owns all CastV2 reads, heartbeat replies and request
- * correlation. Kotlin only submits JSON commands and consumes correlated
- * events, so polling and UI actions cannot race on the Cast socket.
+ * Rust owns transport reads, protocol retries, and request correlation. Kotlin submits
+ * JSON commands and consumes correlated events, so polling and controls cannot race the
+ * native worker. [RustCastSessionNative] retains its original JNI class and package.
  */
-internal class RustCastSessionClient(
+internal class RustSessionClient(
     private val scope: CoroutineScope,
     private val attemptId: Int,
     private val onPlaybackError: (GoogleCastPlaybackFailedException) -> Unit = {},
@@ -109,68 +112,80 @@ internal class RustCastSessionClient(
     var volume: Float = 0.5f
         private set
 
+    @Volatile
+    var volumeSupported: Boolean? = null
+        private set
+
+    @Volatile
+    private var protocol: String = "google_cast"
+
     suspend fun connect(
         host: String,
         port: Int,
         applicationId: String = BuildConfig.GOOGLE_CAST_APPLICATION_ID,
         forceRelaunch: Boolean = false,
         networkHandle: Long? = null,
-    ) = operationMutex.withLock {
-        val startedAt = SystemClock.elapsedRealtime()
-        try {
-            trace(
-                "connect begin endpoint=$host:$port appId=$applicationId " +
-                    "launchPolicy=${if (forceRelaunch) "force_relaunch" else "reuse_or_launch"} " +
-                    "localNetwork=${if (networkHandle == null) "default" else "bound"}",
-            )
-            close()
-            val abiVersion = RustCastSessionNative.abiVersion()
-            trace("native ABI=$abiVersion expected=$EXPECTED_ABI_VERSION")
-            check(abiVersion == EXPECTED_ABI_VERSION) {
-                "Packaged Cast Core ABI does not support ready-state sessions"
-            }
-            connected = CompletableDeferred()
-            val target = JSONObject()
-                .put("protocol", "google_cast")
-                .put("addresses", org.json.JSONArray().put(host))
-                .put("port", port)
-                .put("application_id", applicationId)
-                .put("launch_policy", if (forceRelaunch) "force_relaunch" else "reuse_or_launch")
-                .putIfNotNull("network_handle", networkHandle)
-            val nativeHandle = RustCastSessionNative.start(target.toString(), CONNECT_TIMEOUT_MS)
-            trace(
-                "native session start returned handle=${handleLabel(nativeHandle)} " +
-                    "after ${elapsedSince(startedAt)}ms",
-            )
-            check(nativeHandle != 0L) { "Native Google Cast session could not start" }
-            handle = nativeHandle
-            eventJob = scope.launch(Dispatchers.IO) { pumpEvents(nativeHandle) }
-            check(
-                withTimeoutOrNull(CONNECT_TIMEOUT_MS + EVENT_GRACE_MS) {
-                    connected.await()
-                    true
-                } == true,
-            ) {
-                "Timed out waiting for the Google Cast receiver"
-            }
-            trace("connect ready after ${elapsedSince(startedAt)}ms")
-        } catch (error: Throwable) {
-            // A failed attempt must not leave its worker, native handle, or socket available
-            // for the next attempt. The next connect() always starts from a clean handle.
-            withContext(NonCancellable) { close() }
-            if (error is CancellationException) {
-                trace("connect cancelled after ${elapsedSince(startedAt)}ms")
-            } else {
-                Log.w(
-                    TAG,
-                    "$tracePrefix connect failed after ${elapsedSince(startedAt)}ms: " +
-                        "${error.javaClass.simpleName}: ${error.message}",
-                    error,
-                )
-            }
-            throw error
-        }
+    ) {
+        val target = JSONObject()
+            .put("protocol", "google_cast")
+            .put("addresses", org.json.JSONArray().put(host))
+            .put("port", port)
+            .put("application_id", applicationId)
+            .put("launch_policy", if (forceRelaunch) "force_relaunch" else "reuse_or_launch")
+            .putIfNotNull("network_handle", networkHandle)
+        connectTarget(target, "Google Cast receiver")
     }
+
+    suspend fun connectDlna(location: String, networkHandle: Long?) {
+        connectTarget(buildDlnaTargetJson(location, networkHandle), "DLNA renderer")
+    }
+
+    private suspend fun connectTarget(target: JSONObject, endpointDescription: String) =
+        operationMutex.withLock {
+            val startedAt = SystemClock.elapsedRealtime()
+            try {
+                protocol = target.optString("protocol", "google_cast")
+                volumeSupported = null
+                trace("connect begin protocol=$protocol endpoint=$endpointDescription")
+                close()
+                val abiVersion = RustCastSessionNative.abiVersion()
+                trace("native ABI=$abiVersion expected=$EXPECTED_ABI_VERSION")
+                check(abiVersion == EXPECTED_ABI_VERSION) {
+                    "Packaged Cast Core ABI does not support ready-state sessions"
+                }
+                connected = CompletableDeferred()
+                val nativeHandle = RustCastSessionNative.start(target.toString(), CONNECT_TIMEOUT_MS)
+                trace(
+                    "native session start returned handle=${handleLabel(nativeHandle)} " +
+                        "after ${elapsedSince(startedAt)}ms",
+                )
+                check(nativeHandle != 0L) { "Native Cast Core session could not start" }
+                handle = nativeHandle
+                eventJob = scope.launch(Dispatchers.IO) { pumpEvents(nativeHandle) }
+                check(
+                    withTimeoutOrNull(CONNECT_TIMEOUT_MS + EVENT_GRACE_MS) {
+                        connected.await()
+                        true
+                    } == true,
+                ) { "Timed out waiting for $endpointDescription" }
+                trace("connect ready after ${elapsedSince(startedAt)}ms")
+            } catch (error: Throwable) {
+                // A failed attempt must not leave its worker, native handle, or socket available
+                // for the next attempt. The next connect() always starts from a clean handle.
+                withContext(NonCancellable) { close() }
+                if (error is CancellationException) {
+                    trace("connect cancelled after ${elapsedSince(startedAt)}ms")
+                } else {
+                    Log.w(
+                        TAG,
+                        "$tracePrefix connect failed after ${elapsedSince(startedAt)}ms: " +
+                            "${error.javaClass.simpleName}: ${error.message}",
+                        error,
+                    )
+                }
+                throw error
+            }
+        }
 
     suspend fun load(
         contentUrl: String,
@@ -181,9 +196,24 @@ internal class RustCastSessionClient(
         streamType: String? = null,
         hlsSegmentFormat: String? = null,
         hlsVideoSegmentFormat: String? = null,
+        durationMs: Long = 0L,
+        isScreenMirror: Boolean = false,
+        fallbackUrl: String? = null,
+        fallbackContentType: String? = null,
     ) {
-        submit(
-            "load",
+        val fields = if (protocol == "dlna") {
+            buildDlnaLoadFields(
+                url = contentUrl,
+                contentType = contentType,
+                title = title,
+                startSeconds = startSeconds,
+                durationMs = durationMs,
+                streamType = streamType,
+                isScreenMirror = isScreenMirror,
+                fallbackUrl = fallbackUrl,
+                fallbackContentType = fallbackContentType,
+            )
+        } else {
             JSONObject()
                 .put("url", contentUrl)
                 .putIfNotNull("content_type", contentType)
@@ -192,8 +222,9 @@ internal class RustCastSessionClient(
                 .put("start_seconds", startSeconds.coerceAtLeast(0.0))
                 .putIfNotNull("stream_type", streamType)
                 .putIfNotNull("hls_segment_format", hlsSegmentFormat)
-                .putIfNotNull("hls_video_segment_format", hlsVideoSegmentFormat),
-        )
+                .putIfNotNull("hls_video_segment_format", hlsVideoSegmentFormat)
+        }
+        submit("load", fields, timeoutMs = if (protocol == "dlna") DLNA_LOAD_TIMEOUT_MS else OPERATION_TIMEOUT_MS)
     }
 
     suspend fun play() {
@@ -218,15 +249,22 @@ internal class RustCastSessionClient(
         volume = clamped
     }
 
-    suspend fun status(): RustCastPlaybackStatus {
+    suspend fun adjustVolume(delta: Float) {
+        submit("adjust_volume", JSONObject().put("delta", delta.coerceIn(-1f, 1f)))
+    }
+
+    suspend fun mediaFacts(isLive: Boolean?, durationMs: Long?) {
+        if (protocol != "dlna") return
+        val fields = buildMediaFactsFields(isLive, durationMs)
+        if (fields.length() > 0) submit("media_facts", fields)
+    }
+
+    suspend fun status(): RustPlaybackStatus {
         val event = submit("status")
         val status = event.getJSONObject("status")
-        return RustCastPlaybackStatus(
-            state = status.optString("state", "unknown"),
-            positionSeconds = status.optDouble("position_seconds", 0.0),
-            durationSeconds = status.optDouble("duration_seconds", 0.0),
-            volumeSupported = status.optNullableBoolean("volume_supported"),
-        )
+        return parseRustPlaybackStatus(status, volumeSupported).also {
+            volumeSupported = it.volumeSupported
+        }
     }
 
     suspend fun disconnect() {
@@ -246,13 +284,15 @@ internal class RustCastSessionClient(
     private suspend fun submit(
         command: String,
         fields: JSONObject = JSONObject(),
+        timeoutMs: Long = operationTimeoutMs(command),
     ): JSONObject = operationMutex.withLock {
-        submitLocked(command, fields)
+        submitLocked(command, fields, timeoutMs)
     }
 
     private suspend fun submitLocked(
         command: String,
         fields: JSONObject = JSONObject(),
+        timeoutMs: Long = operationTimeoutMs(command),
     ): JSONObject {
         val nativeHandle = handle
         check(nativeHandle != 0L && isReady) { "Google Cast receiver is not ready" }
@@ -268,7 +308,7 @@ internal class RustCastSessionClient(
             check(RustCastSessionNative.submitJson(nativeHandle, request.toString())) {
                 "Native Google Cast command queue rejected $command"
             }
-            return withTimeout(OPERATION_TIMEOUT_MS) { deferred.await() }.also {
+            return withTimeout(timeoutMs) { deferred.await() }.also {
                 logCommand(command, requestId, "complete elapsed=${elapsedSince(startedAt)}ms")
             }
         } catch (error: TimeoutCancellationException) {
@@ -278,8 +318,9 @@ internal class RustCastSessionClient(
                 "$tracePrefix command=$command requestId=$requestId timed out " +
                     "after ${elapsedSince(startedAt)}ms",
             )
+            val protocolLabel = if (protocol == "dlna") "DLNA" else "Google Cast"
             throw IllegalStateException(
-                "Google Cast media operation timed out",
+                "$protocolLabel media operation timed out",
                 error,
             )
         } catch (error: Throwable) {
@@ -314,9 +355,11 @@ internal class RustCastSessionClient(
                     ?.toString()
                 when (event.optString("event")) {
                     "connected" -> {
+                        volumeSupported = parseRustVolumeSupport(event)
                         trace(
                             "event=connected protocol=${event.optString("protocol", "unknown")} " +
-                                "receiverAppId=${event.optString("receiver_application_id", "none")}",
+                                "receiverAppId=${event.optString("receiver_application_id", "none")} " +
+                                "volumeSupported=${volumeSupported ?: "unknown"}",
                         )
                         isReady = true
                         connected.complete(Unit)
@@ -343,7 +386,7 @@ internal class RustCastSessionClient(
                             "$tracePrefix event=error operation=${event.optString("operation", "unknown")} " +
                                 "requestId=${requestId ?: "none"} " +
                                 "reason=${reason ?: "none"} " +
-                                "message=${event.optString("message", "unknown")}",
+                                "error=${error.message ?: error.javaClass.simpleName}",
                         )
                         if (requestId != null) {
                             pending.remove(requestId)?.completeExceptionally(error)
@@ -353,7 +396,7 @@ internal class RustCastSessionClient(
                                     Log.w(TAG, "$tracePrefix playback-error callback failed", callbackError)
                                 }
                             trace("receiver playback failed; keeping session ready")
-                        } else if (googleCastSessionErrorEndsSession(reason)) {
+                        } else if (rustSessionErrorEndsSession(protocol, reason)) {
                             isReady = false
                             connected.completeExceptionally(error)
                             failPending(error)
@@ -416,7 +459,7 @@ internal class RustCastSessionClient(
         if (nativeHandle != 0L) {
             runCatching { RustCastSessionNative.free(nativeHandle) }
         }
-        failPending(IllegalStateException("Google Cast session closed"))
+        failPending(IllegalStateException("Rust Cast Core session closed"))
         if (nativeHandle != 0L) trace("close complete handle=${handleLabel(nativeHandle)}")
     }
 
@@ -430,6 +473,12 @@ internal class RustCastSessionClient(
         }
         pending.values.forEach { it.completeExceptionally(error) }
         pending.clear()
+    }
+
+    private fun operationTimeoutMs(command: String): Long = when {
+        protocol != "dlna" -> OPERATION_TIMEOUT_MS
+        command == "status" -> DLNA_STATUS_TIMEOUT_MS
+        else -> DLNA_COMMAND_TIMEOUT_MS
     }
 
     private fun logCommand(command: String, requestId: String, detail: String) {
@@ -453,8 +502,12 @@ internal class RustCastSessionClient(
     private fun eventException(
         event: JSONObject,
         reason: String? = eventReason(event),
-    ): IllegalStateException =
-        when (reason) {
+    ): Exception {
+        dlnaActionFailureFromEvent(
+            actionName = event.optString("operation").takeIf(String::isNotBlank),
+            upnp = event.optJSONObject("upnp"),
+        )?.let { return it }
+        return when (reason) {
             RECEIVER_ENDED_REASON -> GoogleCastReceiverEndedException()
             SESSION_UNRESPONSIVE_REASON -> GoogleCastSessionUnresponsiveException()
             CONNECTION_LOST_REASON -> GoogleCastConnectionLostException()
@@ -466,21 +519,23 @@ internal class RustCastSessionClient(
                 ),
             )
             else -> IllegalStateException(
-                event.optString(
-                    "message",
-                    "Google Cast session ended: ${event.optString("reason", "unknown")}",
-                ),
+                if (protocol == "dlna") {
+                    "DLNA receiver operation failed"
+                } else {
+                    event.optString(
+                        "message",
+                        "Cast session ended: ${event.optString("reason", "unknown")}",
+                    )
+                },
             )
         }
+    }
 
     private fun eventReason(event: JSONObject): String? =
         event.opt("reason")
             .takeUnless { it == null || it === JSONObject.NULL }
             ?.toString()
             ?.takeIf { it.isNotBlank() }
-
-    private fun JSONObject.optNullableBoolean(name: String): Boolean? =
-        if (!has(name) || isNull(name)) null else optBoolean(name)
 
     private fun JSONObject.putIfNotNull(name: String, value: Any?): JSONObject {
         if (value != null) put(name, value)
@@ -491,6 +546,9 @@ internal class RustCastSessionClient(
         const val EXPECTED_ABI_VERSION = 2
         const val CONNECT_TIMEOUT_MS = 20_000L
         const val OPERATION_TIMEOUT_MS = 16_000L
+        const val DLNA_LOAD_TIMEOUT_MS = 85_000L
+        const val DLNA_COMMAND_TIMEOUT_MS = 20_000L
+        const val DLNA_STATUS_TIMEOUT_MS = 30_000L
         const val EVENT_GRACE_MS = 1_000L
         const val EVENT_WAIT_MS = 200L
         const val RECEIVER_ENDED_REASON = "receiver_ended"
@@ -503,8 +561,13 @@ internal class RustCastSessionClient(
 
 internal const val GOOGLE_CAST_PLAYBACK_ERROR_REASON = "playback_error"
 
+internal fun rustSessionErrorEndsSession(protocol: String, reason: String?): Boolean =
+    !reason.isNullOrBlank() &&
+        reason != GOOGLE_CAST_PLAYBACK_ERROR_REASON &&
+        !(protocol == "dlna" && reason == "action_failed")
+
 internal fun googleCastSessionErrorEndsSession(reason: String?): Boolean =
-    !reason.isNullOrBlank() && reason != GOOGLE_CAST_PLAYBACK_ERROR_REASON
+    rustSessionErrorEndsSession("google_cast", reason)
 
 internal fun googleCastStatusErrorEndsSession(error: Throwable): Boolean =
     error is GoogleCastSessionInvalidException

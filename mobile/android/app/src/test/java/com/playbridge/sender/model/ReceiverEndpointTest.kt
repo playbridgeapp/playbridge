@@ -53,7 +53,6 @@ class ReceiverEndpointTest {
                 port = 8765,
                 wssPort = 8766,
                 descriptionUrl = "http://192.168.1.20/device.xml",
-                controlUrl = "http://192.168.1.20/avtransport",
             ),
             playBridgeCredentials = PlayBridgeCredentials(token = "encrypted-token"),
         )

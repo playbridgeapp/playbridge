@@ -11,10 +11,16 @@ use crate::{
     playbridge::{ReceiverFrame, SenderFrame},
     roku::RokuClient,
     secure_ws::SecureWebSocket,
-    upnp::Renderer,
+    upnp::{MediaFacts, Renderer, action_code},
 };
 
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(8);
+const DLNA_RESUME_WAIT: Duration = Duration::from_secs(10);
+const DLNA_RESUME_POLL: Duration = Duration::from_millis(500);
+// Mirror: 3s preflight + two sequences of (three 8s SetURI + 8s Stop)
+// + 8s Play = 75s. Buffered: 3s + four 8s SetURI + 8s Stop + 8s Play
+// + 10s resume wait + 8s Seek = 69s. Reserve 5s scheduling margin.
+pub const DLNA_LOAD_TIMEOUT: Duration = Duration::from_secs(80);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaRequest {
@@ -28,6 +34,9 @@ pub struct MediaRequest {
     pub stream_type: Option<String>,
     pub hls_segment_format: Option<String>,
     pub hls_video_segment_format: Option<String>,
+    pub is_screen_mirror: bool,
+    pub fallback_url: Option<String>,
+    pub fallback_content_type: Option<String>,
 }
 
 impl MediaRequest {
@@ -43,10 +52,39 @@ impl MediaRequest {
             stream_type: None,
             hls_segment_format: None,
             hls_video_segment_format: None,
+            is_screen_mirror: false,
+            fallback_url: None,
+            fallback_content_type: None,
         }
     }
 
+    fn dlna_is_live(&self) -> bool {
+        self.is_screen_mirror
+            || self
+                .stream_type
+                .as_deref()
+                .unwrap_or_else(|| castv2::media_format(&self.url).1)
+                .eq_ignore_ascii_case("LIVE")
+    }
+
+    fn dlna_is_hls(&self) -> bool {
+        let path = self
+            .url
+            .split(['?', '#'])
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        self.dlna_content_type()
+            .to_ascii_lowercase()
+            .contains("mpegurl")
+            || path.ends_with(".m3u8")
+            || path.ends_with(".m3u")
+    }
+
     fn dlna_content_type(&self) -> &str {
+        if self.is_screen_mirror {
+            return "video/mpeg";
+        }
         self.content_type
             .as_deref()
             .filter(|value| !value.trim().is_empty())
@@ -62,29 +100,13 @@ impl MediaRequest {
             .metadata
             .as_deref()
             .is_none_or(|metadata| metadata.trim().is_empty());
-        let stream_type = self
-            .stream_type
-            .as_deref()
-            .unwrap_or_else(|| castv2::media_format(&self.url).1);
-        let path = self
-            .url
-            .split(['?', '#'])
-            .next()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        generated
-            && !stream_type.eq_ignore_ascii_case("LIVE")
-            && !self
-                .dlna_content_type()
-                .to_ascii_lowercase()
-                .contains("mpegurl")
-            && !path.ends_with(".m3u8")
-            && !path.ends_with(".m3u")
+        generated && !self.dlna_is_live() && !self.dlna_is_hls() && !self.is_screen_mirror
     }
 
     fn dlna_metadata(&self) -> String {
         if let Some(metadata) = &self.metadata
             && !metadata.trim().is_empty()
+            && !self.is_screen_mirror
         {
             return metadata.clone();
         }
@@ -96,17 +118,14 @@ impl MediaRequest {
             "image" => "object.item.imageItem.photo",
             _ => "object.item.videoItem",
         };
-        let stream_type = self
-            .stream_type
-            .as_deref()
-            .unwrap_or_else(|| castv2::media_format(&self.url).1);
-        let features = if stream_type.eq_ignore_ascii_case("LIVE") {
+        let features = if self.dlna_is_live() {
             "DLNA.ORG_OP=00;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
         } else {
             "DLNA.ORG_OP=01;DLNA.ORG_CI=0;DLNA.ORG_FLAGS=01700000000000000000000000000000"
         };
         let duration = self
             .duration_seconds
+            .filter(|_| !self.dlna_is_live())
             .filter(|seconds| seconds.is_finite() && *seconds > 0.0)
             .map(|seconds| {
                 let seconds = seconds as u64;
@@ -143,6 +162,7 @@ pub struct PlaybackStatus {
     pub state: PlaybackState,
     pub position_seconds: f64,
     pub duration_seconds: f64,
+    pub is_live: bool,
 }
 
 pub enum ReceiverSession {
@@ -216,16 +236,9 @@ impl ReceiverSession {
 
     pub async fn connect_dlna(location: &str, media: &MediaRequest) -> Result<Self> {
         let renderer = timeout(Renderer::load(location), "DLNA renderer connection").await??;
-        renderer.preflight(media.dlna_content_type()).await?;
-        renderer
-            .set_media_uri_with_metadata_fallback(
-                &media.url,
-                &media.dlna_metadata(),
-                media.dlna_allows_empty_metadata_retry(),
-            )
-            .await?;
-        renderer.play().await?;
-        Ok(Self::Dlna(renderer))
+        let mut session = Self::Dlna(renderer);
+        session.load(media).await?;
+        Ok(session)
     }
 
     pub fn connect_roku(address: &str, port: u16) -> Result<Self> {
@@ -257,17 +270,7 @@ impl ReceiverSession {
                     })
                     .await
             }
-            Self::Dlna(renderer) => {
-                renderer.preflight(media.dlna_content_type()).await?;
-                renderer
-                    .set_media_uri_with_metadata_fallback(
-                        &media.url,
-                        &media.dlna_metadata(),
-                        media.dlna_allows_empty_metadata_retry(),
-                    )
-                    .await?;
-                renderer.play().await
-            }
+            Self::Dlna(renderer) => load_dlna(renderer, media).await,
             Self::GoogleCast(session) => session.load(media).await,
         }
     }
@@ -442,6 +445,26 @@ impl ReceiverSession {
             Self::Dlna(renderer) => {
                 let transport = renderer.transport_info().await?;
                 let position = renderer.position_info().await?;
+                let track_duration = position
+                    .get("TrackDuration")
+                    .and_then(|value| parse_dlna_time(value))
+                    .filter(|duration| duration.is_finite() && *duration > 0.0)
+                    .unwrap_or(0.0);
+                if !renderer.facts.is_live
+                    && track_duration <= 0.0
+                    && renderer.facts.media_duration <= 0.0
+                    && renderer.facts.media_info_attempts < 20
+                {
+                    renderer.facts.media_info_attempts += 1;
+                    // GetMediaInfo is an optional duration probe, never a reason to fail STATUS.
+                    if let Ok(info) = renderer.media_info().await {
+                        renderer.facts.media_duration = info
+                            .get("MediaDuration")
+                            .and_then(|value| parse_dlna_time(value))
+                            .filter(|duration| duration.is_finite() && *duration > 0.0)
+                            .unwrap_or(0.0);
+                    }
+                }
                 Ok(PlaybackStatus {
                     state: state_from_text(
                         transport
@@ -453,10 +476,16 @@ impl ReceiverSession {
                         .get("RelTime")
                         .and_then(|value| parse_dlna_time(value))
                         .unwrap_or(0.0),
-                    duration_seconds: position
-                        .get("TrackDuration")
-                        .and_then(|value| parse_dlna_time(value))
-                        .unwrap_or(0.0),
+                    duration_seconds: if renderer.facts.is_live {
+                        0.0
+                    } else if track_duration > 0.0 {
+                        track_duration
+                    } else if renderer.facts.media_duration > 0.0 {
+                        renderer.facts.media_duration
+                    } else {
+                        renderer.facts.supplied_duration
+                    },
+                    is_live: renderer.facts.is_live,
                 })
             }
             Self::Roku(client) => {
@@ -465,6 +494,7 @@ impl ReceiverSession {
                     state: state_from_text(&status.state),
                     position_seconds: status.position_ms as f64 / 1000.0,
                     duration_seconds: status.duration_ms as f64 / 1000.0,
+                    is_live: false,
                 })
             }
             Self::PlayBridge(socket) => {
@@ -488,6 +518,7 @@ impl ReceiverSession {
                                 state: state_from_text(&state),
                                 position_seconds: position as f64 / 1000.0,
                                 duration_seconds: duration as f64 / 1000.0,
+                                is_live: false,
                             });
                         }
                         Some(_) => {}
@@ -500,6 +531,35 @@ impl ReceiverSession {
                 }
             }
         }
+    }
+
+    pub fn media_facts(
+        &mut self,
+        is_live: Option<bool>,
+        duration_seconds: Option<f64>,
+    ) -> Result<()> {
+        let Self::Dlna(renderer) = self else {
+            return Err(CastError::Protocol(
+                "media_facts requires a DLNA session".into(),
+            ));
+        };
+        if !renderer.facts.loaded {
+            return Err(CastError::Protocol(
+                "media_facts requires a current load".into(),
+            ));
+        }
+        if duration_seconds.is_some_and(|duration| !duration.is_finite() || duration < 0.0) {
+            return Err(CastError::Protocol(
+                "duration must be finite and non-negative".into(),
+            ));
+        }
+        if let Some(is_live) = is_live {
+            renderer.facts.is_live = renderer.facts.is_screen_mirror || is_live;
+        }
+        if let Some(duration) = duration_seconds.filter(|duration| *duration > 0.0) {
+            renderer.facts.supplied_duration = duration;
+        }
+        Ok(())
     }
 
     pub fn is_playbridge(&self) -> bool {
@@ -803,11 +863,101 @@ impl GoogleCastSession {
                         state,
                         position_seconds: status["currentTime"].as_f64().unwrap_or(0.0),
                         duration_seconds: status["media"]["duration"].as_f64().unwrap_or(0.0),
+                        is_live: false,
                     });
                 }
             }
         }
     }
+}
+
+async fn load_dlna(renderer: &mut Renderer, media: &MediaRequest) -> Result<()> {
+    renderer.facts = MediaFacts {
+        is_live: media.dlna_is_live(),
+        is_screen_mirror: media.is_screen_mirror,
+        supplied_duration: media
+            .duration_seconds
+            .filter(|duration| duration.is_finite() && *duration > 0.0)
+            .unwrap_or(0.0),
+        ..MediaFacts::default()
+    };
+    renderer.preflight(media.dlna_content_type()).await?;
+    let result = renderer
+        .set_media_uri_with_retry(
+            &media.url,
+            &media.dlna_metadata(),
+            media.dlna_allows_empty_metadata_retry(),
+            !media.is_screen_mirror && media.dlna_is_hls(),
+        )
+        .await;
+    match result {
+        Err(error)
+            if media.is_screen_mirror
+                && action_code(&error) == Some(501)
+                && matches!(&error, CastError::UpnpAction(failure) if failure.action == "SetAVTransportURI")
+                && media
+                    .fallback_url
+                    .as_ref()
+                    .is_some_and(|url| !url.trim().is_empty()) =>
+        {
+            let mut fallback = media.clone();
+            fallback.url = media
+                .fallback_url
+                .as_ref()
+                .expect("checked fallback")
+                .clone();
+            fallback.content_type = Some(
+                media
+                    .fallback_content_type
+                    .as_deref()
+                    .filter(|mime| mime.to_ascii_lowercase().contains("mpegurl"))
+                    .unwrap_or("application/x-mpegURL")
+                    .into(),
+            );
+            fallback.is_screen_mirror = false;
+            fallback.stream_type = Some("LIVE".into());
+            fallback.metadata = None;
+            // A mirror's HLS fallback retains generated live DIDL; do not apply
+            // the non-mirror HLS empty-metadata retry to it.
+            renderer
+                .set_media_uri_with_retry(&fallback.url, &fallback.dlna_metadata(), false, false)
+                .await?;
+        }
+        result => result?,
+    }
+    renderer.facts.loaded = true;
+    renderer.play().await?;
+    if media.start_seconds.is_finite() && media.start_seconds > 0.0 && !renderer.facts.is_live {
+        resume_dlna(renderer, media.start_seconds, DLNA_RESUME_WAIT).await;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "session/dlna_tests.rs"]
+mod dlna_tests;
+
+async fn resume_dlna(renderer: &Renderer, seconds: f64, wait: Duration) {
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        if let Ok(Ok(info)) = tokio::time::timeout(remaining, renderer.transport_info()).await
+            && info
+                .get("CurrentTransportState")
+                .is_some_and(|state| state.eq_ignore_ascii_case("PLAYING"))
+        {
+            break;
+        }
+        tokio::time::sleep(
+            DLNA_RESUME_POLL.min(deadline.saturating_duration_since(tokio::time::Instant::now())),
+        )
+        .await;
+    }
+    // TVs often reject an early seek; resume failure must not reject an accepted LOAD.
+    let _ = renderer.seek(&format_dlna_time(seconds)).await;
 }
 
 fn google_cast_playback_state(status: &serde_json::Value) -> Result<PlaybackState> {

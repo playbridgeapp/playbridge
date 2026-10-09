@@ -2156,6 +2156,9 @@ dependencies = [
  "hkdf",
  "hmac",
  "http",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "if-addrs 0.15.0",
  "m3u8-rs",
  "mdns-sd",
@@ -2203,6 +2206,7 @@ dependencies = [
  "tokio-rustls",
  "uniffi",
  "url",
+ "wiremock",
 ]
 
 [[package]]

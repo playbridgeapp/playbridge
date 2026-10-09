@@ -1,5 +1,6 @@
 package com.playbridge.sender.cast
 
+import com.playbridge.sender.cast.googlecast.buildDlnaLoadFields
 import com.playbridge.sender.cast.mirror.ExternalScreenMirrorCoordinator
 import com.playbridge.sender.cast.proxy.StreamRouteMode
 import org.junit.Assert.assertEquals
@@ -37,6 +38,30 @@ class ExternalScreenMirrorRoutingTest {
 
         assertNull(media.hlsSegmentFormat)
         assertEquals("mpeg2_ts", media.hlsVideoSegmentFormat)
+    }
+
+    @Test
+    fun `dlna mirror load sends continuous ts and live hls fallback to rust`() {
+        val media = externalScreenMirrorMedia(TargetKind.DLNA, urls)
+        val fields = buildDlnaLoadFields(
+            url = media.url,
+            contentType = media.mimeType,
+            title = media.title,
+            startSeconds = media.startPositionMs / 1000.0,
+            durationMs = media.durationMs,
+            streamType = media.streamType,
+            isScreenMirror = media.isScreenMirror,
+            fallbackUrl = media.mirrorHlsUrl,
+            fallbackContentType = "application/x-mpegURL",
+        )
+
+        assertEquals(urls.continuousTs, fields.getString("url"))
+        assertEquals("video/mp2t", fields.getString("content_type"))
+        assertEquals("LIVE", fields.getString("stream_type"))
+        assertEquals(0.0, fields.getDouble("duration_seconds"), 0.0)
+        assertTrue(fields.getBoolean("is_screen_mirror"))
+        assertEquals(urls.hls, fields.getString("fallback_url"))
+        assertEquals("application/x-mpegURL", fields.getString("fallback_content_type"))
     }
 
     @Test

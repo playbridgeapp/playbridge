@@ -78,7 +78,7 @@ class GoogleCastTarget(
     private var activeLoadEpoch: Long? = null
 
     @Volatile
-    private var client: RustCastSessionClient? = null
+    private var client: RustSessionClient? = null
 
     @Volatile
     private var released = false
@@ -114,7 +114,7 @@ class GoogleCastTarget(
      */
     private suspend fun ensureConnected(
         forceRelaunch: Boolean = receiverEnded || forceRelaunchPending,
-    ): RustCastSessionClient? = connectionMutex.withLock {
+    ): RustSessionClient? = connectionMutex.withLock {
         if (released) {
             Log.d(TAG, "Ignoring ensureConnected for released target ${device.name}")
             return@withLock null
@@ -132,8 +132,8 @@ class GoogleCastTarget(
         }
 
         val attempt = ++connectionAttempt
-        lateinit var replacement: RustCastSessionClient
-        replacement = RustCastSessionClient(scope, attempt) { error ->
+        lateinit var replacement: RustSessionClient
+        replacement = RustSessionClient(scope, attempt) { error ->
             if (client === replacement) reportPlaybackFailure(error)
         }
         client = replacement
@@ -197,7 +197,7 @@ class GoogleCastTarget(
         }
     }
 
-    private fun requireReadyClient(): RustCastSessionClient =
+    private fun requireReadyClient(): RustSessionClient =
         checkNotNull(client?.takeIf { it.isReady }) { "Google Cast receiver is not ready" }
 
     override suspend fun load(media: MediaItem) {
@@ -295,7 +295,7 @@ class GoogleCastTarget(
     }
 
     private suspend fun loadOnClient(
-        connectedClient: RustCastSessionClient,
+        connectedClient: RustSessionClient,
         proxyUrl: String,
         media: MediaItem,
     ) {
@@ -544,7 +544,7 @@ class GoogleCastTarget(
         )
     }
 
-    private suspend fun discardClient(failedClient: RustCastSessionClient) {
+    private suspend fun discardClient(failedClient: RustSessionClient) {
         connectionMutex.withLock {
             if (client !== failedClient) {
                 Log.v(TAG, "Ignoring discard request for superseded Google Cast client")

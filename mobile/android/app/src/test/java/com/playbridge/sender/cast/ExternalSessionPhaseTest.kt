@@ -5,6 +5,7 @@ import com.playbridge.sender.cast.googlecast.GoogleCastReceiverEndedException
 import com.playbridge.sender.cast.googlecast.GoogleCastSessionUnresponsiveException
 import com.playbridge.sender.cast.googlecast.googleCastSessionErrorEndsSession
 import com.playbridge.sender.cast.googlecast.googleCastStatusErrorEndsSession
+import com.playbridge.sender.cast.googlecast.rustSessionErrorEndsSession
 import com.playbridge.sender.cast.googlecast.googleCastStatusFailuresRequireFreshSession
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -86,6 +87,8 @@ class ExternalSessionPhaseTest {
         assertEquals(true, googleCastSessionErrorEndsSession("connection_lost"))
         assertEquals(true, googleCastSessionErrorEndsSession("receiver_ended"))
         assertEquals(false, googleCastSessionErrorEndsSession("playback_error"))
+        assertEquals(true, googleCastSessionErrorEndsSession("action_failed"))
+        assertEquals(false, rustSessionErrorEndsSession("dlna", "action_failed"))
     }
 
     @Test

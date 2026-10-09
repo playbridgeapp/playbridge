@@ -262,15 +262,15 @@ final class CastSession implements Finalizable {
       calloc.free(pointer);
     }
 
+    final dlnaLoad = _protocol == ReceiverProtocol.dlna && operation == 'load';
+    // Native DLNA LOAD is bounded at 80s; allow 5s for event delivery.
+    final timeout = (dlnaLoad && _operationTimeout < const Duration(seconds: 80)
+            ? const Duration(seconds: 80)
+            : _operationTimeout) +
+        (dlnaLoad ? const Duration(seconds: 5) : const Duration(seconds: 1));
     return completer.future
         .timeout(
-          // Matches the native DLNA load budget, including compatibility retries.
-          (_protocol == ReceiverProtocol.dlna &&
-                      operation == 'load' &&
-                      _operationTimeout < const Duration(seconds: 64)
-                  ? const Duration(seconds: 64)
-                  : _operationTimeout) +
-              const Duration(seconds: 1),
+          timeout,
           onTimeout: () => throw CastSessionError(
             requestId: requestId,
             operation: operation,

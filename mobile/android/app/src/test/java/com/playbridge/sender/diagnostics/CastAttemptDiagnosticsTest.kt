@@ -1,11 +1,31 @@
 package com.playbridge.sender.diagnostics
 
 import com.playbridge.sender.cast.PlaybackState
+import com.playbridge.sender.cast.dlna.dlnaActionFailureFromEvent
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CastAttemptDiagnosticsTest {
+    @Test
+    fun structuredRustUpnpFailuresStillMapToCastDiagnostics() {
+        val failure = requireNotNull(
+            dlnaActionFailureFromEvent(
+                actionName = "load",
+                upnp = JSONObject()
+                    .put("action", "SetAVTransportURI")
+                    .put("code", 501)
+                    .put("http_status", 500),
+            ),
+        )
+
+        assertEquals(CastAttemptEvent.Kind.DLNA_SET_URI_FAILED, dlnaFailureEventKind(failure))
+        assertEquals(501, failure.upnpCode)
+        assertEquals(500, failure.httpStatus)
+    }
+
     @Test
     fun onlyPlaylistCommandsStartNativePlaybackDiagnostics() {
         assertTrue(isNativePlaybackStartCommand("""{"type":"command","action":"playlist","payload":{"items":[]}}"""))

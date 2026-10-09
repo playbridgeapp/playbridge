@@ -78,6 +78,12 @@ internal fun formatCastAttemptReport(attempt: CastAttempt, appVersion: String, a
         append("No media URLs, titles, receiver names, IP addresses, or request headers are included.")
     }
 
+internal fun dlnaFailureEventKind(failure: DlnaActionFailure): CastAttemptEvent.Kind = when (failure.actionName) {
+    "SetAVTransportURI" -> CastAttemptEvent.Kind.DLNA_SET_URI_FAILED
+    "Play" -> CastAttemptEvent.Kind.DLNA_PLAY_FAILED
+    else -> CastAttemptEvent.Kind.DLNA_ACTION_FAILED
+}
+
 internal fun classifyExternalPlayback(
     previous: CastAttempt?,
     state: PlaybackState,
@@ -204,10 +210,7 @@ class CastAttemptDiagnostics(context: Context) {
             CastAttempt.AttemptOutcome.PLAYING -> CastAttemptEvent.Kind.PLAYING
             CastAttempt.AttemptOutcome.PAUSED -> CastAttemptEvent.Kind.PAUSED
             CastAttempt.AttemptOutcome.STOPPED -> CastAttemptEvent.Kind.STOPPED
-            CastAttempt.AttemptOutcome.FAILED -> when {
-                detail?.actionName == "SetAVTransportURI" -> CastAttemptEvent.Kind.DLNA_SET_URI_FAILED
-                detail?.actionName == "Play" -> CastAttemptEvent.Kind.DLNA_PLAY_FAILED
-                detail != null -> CastAttemptEvent.Kind.DLNA_ACTION_FAILED
+            CastAttempt.AttemptOutcome.FAILED -> detail?.let(::dlnaFailureEventKind) ?: when {
                 receiverStoppedBeforePlayback -> CastAttemptEvent.Kind.RECEIVER_STOPPED_BEFORE_PLAYBACK
                 else -> CastAttemptEvent.Kind.FAILED
             }
@@ -216,7 +219,7 @@ class CastAttemptDiagnostics(context: Context) {
             elapsedMs = (System.currentTimeMillis() - attempt.startedAtMs).coerceAtLeast(0),
             kind = eventKind,
             httpStatus = detail?.httpStatus?.takeIf { it in 100..599 },
-            upnpCode = detail?.upnpCode?.toIntOrNull()?.takeIf { it in 100..999 },
+            upnpCode = detail?.upnpCode?.takeIf { it in 100..999 },
         )
         publish(current.toMutableList().apply {
             this[index] = attempt.copy(outcome = outcome, events = (attempt.events + event).takeLast(MAX_EVENTS))
