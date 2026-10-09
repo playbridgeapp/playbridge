@@ -4,8 +4,8 @@ Paste-ready text for the steps that need the paid Apple Developer account. Repla
 
 | App | Bundle ID | Version (build) |
 |---|---|---|
-| PlayBridge Phone (iOS) | `com.playbridge.PlayBridge-Phone` | 0.3.3 (6) |
-| PlayBridge TV (tvOS) | `com.playbridge.PlayBridge-TV` | 0.3.0 (5) |
+| PlayBridge Phone (iOS) | `com.playbridge.PlayBridge-Phone` | 0.15.0 (7) |
+| PlayBridge TV (tvOS) | `com.playbridge.PlayBridge-TV` | 0.15.0 (6) |
 
 Version numbers come from the Xcode projects at the time of writing; use the values of the build you upload.
 

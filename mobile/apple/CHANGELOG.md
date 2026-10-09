@@ -3,6 +3,27 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.15.0] — 2026-10-09 (build 7)
+
+### Added
+- **Bridged Apps**: Isolated website shortcuts with editable home URLs, dashboard reordering, per-site casting permissions and linked episode queues.
+- **Phone playback**: MPV playback including MKV, live episode queues, speed and track preferences, subtitle timing/style, Fit/Fill, touch lock, swipe scrubbing and double-tap seeks.
+- **Casting**: Persistent AirPlay sessions and queues, local-phone playback destinations, late subtitle attachment and receiver-owned queue controls.
+- **Browser controls**: Fullscreen browsing, refreshed menus, richer media previews and a persistent remote/cast control experience.
+
+### Changed
+- **Playback history**: Record cast progress, preserve resume positions and honor the receiver-history preference for private casts.
+- **Store readiness**: Use a numeric marketing version, add privacy disclosures and About information, and require confirmation for website-triggered downloads.
+
+### Fixed
+- **Playback continuity**: Preserve route, headers, pause intent and episode identity through retries, rotation and background transitions; improve subtitle selection and stream detection.
+- **Browser continuity**: Restore app shortcuts lazily at their home URL and preserve browser/remote navigation and website controls.
+- **External casting**: Improve DLNA renderer compatibility, Google Cast session recovery and stalled-load timeout handling.
+
+### Security
+- **Website authority**: Isolate the native page API, require user gestures for destination selection and scope queues and permissions to the owning document.
+- **Media credentials**: Preserve HTTPS certificate verification, restrict private media access to approved origins, scope headers across origins and reject unsafe remote registration URLs and redirects.
+
 ## [0.3.3-alpha] — 2026-07-03 (build 6)
 
 ### Changed
