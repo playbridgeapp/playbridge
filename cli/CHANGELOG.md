@@ -1,33 +1,23 @@
 # PlayBridge CLI Changelog
 
-## 0.3.1 (2026-09-12)
+## 0.15.0 (2026-10-09)
 
-- Fix MCP output schemas for strict SDK clients, reject ambiguous receiver names
-  with protocol-qualified choices, preserve media filenames as playback titles,
-  and provide dedicated MCP and Google Cast help.
-- Add agent-friendly paired-receiver listing, local credential removal, and
-  standalone SAS pairing without starting media playback.
-- Persist a stable per-installation CLI sender identity with a normalized host
-  display name; safely report malformed local identity and credential records.
-- Add MCP `list_paired`, `forget`, and `pair` tools.
+### Added
+- **Automation**: JSON casting sessions with live events, status and playback controls; an MCP server for discovery, sending, pairing, status and control with isolated sessions.
+- **Pairing management**: List paired receivers, forget local credentials and pair with an explicit SAS code without starting playback; matching MCP tools and dedicated help.
+- **Queues and subtitles**: Receiver-owned playlists and queue controls, richer MCP sender controls and subtitle selection.
+- **Private casts**: `--skip-history` / `--save-history`, a persisted skip-history default and the MCP history preference.
 
-## 0.3.0 (2026-09-12)
+### Changed
+- **Receiver selection**: Use the preferred receiver for JSON sends, with explicit selection or actionable alternatives when it is unavailable; retain local-file serving until the session ends.
+- **Sender identity**: Persist a stable installation identity and normalized host display name, and preserve media filenames as playback titles.
 
-- Add `--skip-history` and `--save-history` overrides for PlayBridge casts,
-  MCP `send.skip_history`, and a persisted `config skip-history on|off` default.
+### Fixed
+- **MCP compatibility**: Correct output schemas for strict clients, return actual pairing outcomes and reject ambiguous receiver names with protocol-qualified choices.
+- **Casting reliability**: Improve DLNA renderer compatibility, multi-interface discovery, Google Cast readiness and session cleanup; safely handle malformed local identity and credential records.
 
-- Add `playbridge send|cast <file|URL> --json` to cast to the preferred
-  receiver without the dashboard. Prints newline-delimited JSON events, then waits for
-  Ctrl+C so a local-file proxy stays up. If the preferred receiver is
-  unreachable, discover LAN devices and prompt (TTY) or return
-  `preferred_unreachable` with a `receivers` list for agents. `--device`
-  selects a receiver by id, uuid, name, or address. Unpaired PlayBridge
-  targets prompt for the SAS code or accept `--pair-code`. A successful
-  JSON send is saved as the preferred receiver. An active JSON send exposes
-  `playbridge status --json` and `playbridge control pause|play|toggle|stop|seek|volume|mute|speed`.
-  `playbridge mcp` exposes discover, send, submit_pair_code, status, and control
-  over MCP stdio for AI agents, with structured results, isolated session ids,
-  and pairing calls that wait for the receiver's actual success or failure.
+### Security
+- **Scoped media access**: Restrict authenticated proxy media and private-network requests to the authorized playback session and original media origin.
 
 ## 0.2.0 (2026-08-10)
 
