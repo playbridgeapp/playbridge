@@ -28,11 +28,11 @@ Linked website casts do not display a mini playback bar over browser or bridged-
 Android and iOS advertise `playbridge.capabilities.playback === 1`. The selected native destination is authoritative, including an explicit **This device** selection. Websites can display and change it without starting media, but the destination identity is consent-gated:
 
 ```ts
-const { destination } = await playbridge.getPlaybackDestination()
+const status = await playbridge.getPlaybackDestination()
 // Before website-casting consent: { id: null, name: null, kind, connected }
 // After consent: { id, name, kind: 'local' | 'native' | 'external', connected }
-await playbridge.choosePlaybackDestination() // opens the existing native destination picker
-await playbridge.choosePlaybackDestination({ destinationId: 'this-device' }) // explicit local recovery
+const { destination } = await playbridge.choosePlaybackDestination() // obtains consent if needed, then opens the native picker
+// Or choosePlaybackDestination({ destinationId: 'this-device' }) for explicit local recovery
 const session = await playbridge.play({
   destinationId: destination.id,
   // Only for This device, when capabilities.localPlaybackOrientation === 1:
@@ -42,7 +42,9 @@ const session = await playbridge.play({
 })
 ```
 
-Before the origin has website-casting consent, `getPlaybackDestination()` returns only `{ id: null, name: null, kind, connected }`. `kind` and `connected` are not identifying. After consent, `name` is the device name and `id` is `this-device` for phone playback, or HMAC-SHA256 of an install secret (generated once and stored only on the device) over `origin`, a NUL byte, and the receiver endpoint key. The raw `protocol:stableId` endpoint key is not sent to websites, and two origins do not receive the same id for one receiver. `play()` must pass the id from this call. `this-device` remains the literal id for explicit local playback. A previously learned raw endpoint key does not match.
+Before the origin has website-casting consent, `getPlaybackDestination()` returns only `{ id: null, name: null, kind, connected }`. `kind` and `connected` are not identifying. After consent, `name` is the device name and `id` is `this-device` for phone playback, or HMAC-SHA256 of an install secret (generated once and stored only on the device) over `origin`, a NUL byte, and the receiver endpoint key. The raw `protocol:stableId` endpoint key is not sent to websites, and two origins do not receive the same id for one receiver. `play()` must pass a consented id from `getPlaybackDestination()` or `choosePlaybackDestination()`. `this-device` remains the literal id for explicit local playback. A previously learned raw endpoint key does not match.
+
+Call `choosePlaybackDestination()` from a user interaction to obtain a usable destination id. For an unapproved origin, the host shows the existing website-casting consent prompt before opening the picker or selecting **This device**. Approval is remembered and the response includes the consented destination id; denial or dismissal rejects with `not_allowed` without opening the picker. A cancelled request or a page that navigates away cannot grant consent or change the destination (`session_ended`). Choosing a destination does not grant private-network media permission; play/cast requests still obtain their own required private-server grants.
 
 `choosePlaybackDestination()` and `{ destinationId: 'this-device' }` require a user gesture. The isolated content script reads `navigator.userActivation.isActive` and native code checks that attestation; a page script cannot supply it. Without an attested gesture, native rejects with `user_gesture_required`. While a receiver is connected, `this-device` opens the native picker instead of disconnecting it. A website never disconnects a live receiver by itself.
 

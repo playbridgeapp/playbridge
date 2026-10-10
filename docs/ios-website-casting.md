@@ -46,10 +46,15 @@ After consent, `name` is the receiver name and `id` is `this-device` or a per-or
 HMAC-SHA256(install secret, origin + NUL + endpoint key). The install secret is
 generated once and kept in the app's local defaults; it is not cleared when casting
 permission is reset. The raw endpoint key is not disclosed, so two websites cannot
-correlate the same receiver. `play()` must use the id from this call. Call
-`choosePlaybackDestination()` from a user interaction to show the native picker,
-or pass `{ destinationId: "this-device" }` for explicit phone playback. The user
-gesture is checked natively, not only in the page. While a TV or AirPlay receiver
+correlate the same receiver. `play()` must use a consented id from this call or
+`choosePlaybackDestination()`. Call `choosePlaybackDestination()` from a user
+interaction to obtain a usable id: an unapproved origin first sees the existing
+website-casting consent prompt, then approval is remembered before the native
+picker or local selection proceeds. Denial or dismissal rejects with `not_allowed`
+and does not open the picker. Cancellation or navigation during the prompt ends
+the request with `session_ended` without granting consent or selecting a destination.
+Private-network media permission remains part of each play/cast request. Pass
+`{ destinationId: "this-device" }` for explicit phone playback. The user gesture is checked natively, not only in the page. While a TV or AirPlay receiver
 is connected, `this-device` opens the native picker so the user confirms leaving
 it; a website never disconnects a receiver by itself.
 `play({ destinationId, items, initialOrientation })` returns a linked session and

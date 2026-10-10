@@ -108,6 +108,10 @@ internal fun pageDestinationGesture(
     return if (receiverConnected) PageDestinationGesture.OPEN_PICKER else PageDestinationGesture.SELECT_THIS_DEVICE
 }
 
+/** Rejected gestures never reach website consent, even for an unapproved origin. */
+internal fun pageDestinationNeedsConsent(gesture: PageDestinationGesture, approved: Boolean): Boolean =
+    !approved && gesture in setOf(PageDestinationGesture.OPEN_PICKER, PageDestinationGesture.SELECT_THIS_DEVICE)
+
 internal fun jsonBooleanOrNull(value: Any?): Boolean? = value as? Boolean
 
 private val HEX = "0123456789abcdef".toCharArray()
