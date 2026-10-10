@@ -102,7 +102,7 @@ fun AppNavHost(
     onAddonSettingsBack: () -> Unit = { onScreenChange(Screen.Library) },
     addonSettingsFromBridgedApp: Boolean = false,
     // Where the Dashboard's close (X) should return — the screen it was opened from.
-    dashboardReturnScreen: Screen = lastMainScreen,
+    onDashboardClose: () -> Unit = { },
     innerPadding: PaddingValues,
 
     // Session & Tab Management
@@ -1769,7 +1769,7 @@ fun AppNavHost(
                             onScreenChange(screen)
                         },
                         onExit = onFullExit,
-                        onClose = { onScreenChange(dashboardReturnScreen) },
+                        onClose = onDashboardClose,
                         onSettings = {
                             // So Settings back lands on Dashboard (not Browser/Library).
                             onLastMainScreenChange(Screen.Dashboard)

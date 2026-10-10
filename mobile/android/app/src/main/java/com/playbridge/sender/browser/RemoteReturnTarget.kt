@@ -20,3 +20,8 @@ internal fun resolveRemoteReturnTarget(
         RemoteReturnTarget(Screen.Dashboard)
     }
 }
+
+/** Places the Dashboard's close (X) returns to; screens opened from the Dashboard are not. */
+internal fun isDashboardReturnPlace(screen: Screen): Boolean =
+    screen == Screen.Browser || screen == Screen.Library || screen == Screen.DebridLibrary ||
+        screen is Screen.LibraryDetail

@@ -11,6 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **FOSS plugins**: Use opt-in Nuvio plugins from both the Library and approved Bridged Apps.
 
 ### Changed
+- **Dashboard**: The close (X) button returns to where the Dashboard was opened from, including the bridged app you were in; on a fresh launch it opens Browser. Exit now sits next to X.
 - **Legacy Library**: Marked the built-in Library as legacy ("Library (legacy)"), preinstalled the Streams bridged app as "Library", and added an in-app notice pointing users to the new app.
 - **Casting controls**: Support receiver-owned queues, attaching subtitles during playback, private casts without receiver history, and playback progress callbacks for native senders.
 
