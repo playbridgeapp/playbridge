@@ -157,25 +157,22 @@ final class PageCastCoordinator: ObservableObject {
         } catch {
             reply(request, error: "invalid_request"); return
         }
-        if ["destination", "choose_destination"].contains(request.operation) {
-            guard request.isCurrent(requireActive: true), let transport else { reply(request, error: "not_allowed"); return }
-            if request.operation == "choose_destination" {
-                // Set only by the isolated broker from navigator.userActivation (nil where
-                // WebKit lacks it). Page scripts cannot reach that handler or this field.
-                let activation = message["userActivation"] as? Bool
-                if let destination = (request.payload as? [String: Any])?["destinationId"] {
-                    guard destination as? String == "this-device" else { reply(request, error: "invalid_request"); return }
-                    guard activation == true else { reply(request, error: "user_gesture_required"); return }
-                    // A website never tears down a live receiver: the user confirms in the native picker.
-                    if transport.isConnected && transport.destinationID != nil { onChooseDestination?() }
-                    else { transport.selectWebsiteLocalDestination() }
-                } else {
-                    guard activation != false else { reply(request, error: "user_gesture_required"); return }
-                    onChooseDestination?()
-                }
-            }
+        if request.operation == "destination" {
+            guard request.isCurrent(requireActive: true), transport != nil else { reply(request, error: "not_allowed"); return }
             request.deliver(["requestId": request.requestID, "ok": true, "destination": websiteDestination(for: request.origin)])
             return
+        }
+        if request.operation == "choose_destination" {
+            guard request.isCurrent(requireActive: true), transport != nil else { reply(request, error: "not_allowed"); return }
+            // Set only by the isolated broker from navigator.userActivation (nil where
+            // WebKit lacks it). Page scripts cannot reach that handler or this field.
+            let activation = message["userActivation"] as? Bool
+            if let destination = (request.payload as? [String: Any])?["destinationId"] {
+                guard destination as? String == "this-device" else { reply(request, error: "invalid_request"); return }
+                guard activation == true else { reply(request, error: "user_gesture_required"); return }
+            } else {
+                guard activation != false else { reply(request, error: "user_gesture_required"); return }
+            }
         }
         if request.operation == "cancel" {
             if let target = (request.payload as? [String: Any])?["requestId"] as? String {
@@ -199,7 +196,7 @@ final class PageCastCoordinator: ObservableObject {
         guard !recentRequests.contains(key) else { reply(request, error: "stale_request"); return }
         recentRequests.append(key)
         if recentRequests.count > 64 { recentRequests.removeFirst() }
-        let opening = ["cast", "open", "play"].contains(request.operation)
+        let opening = ["cast", "open", "play", "choose_destination"].contains(request.operation)
         if opening {
             guard request.isCurrent(requireActive: true) else { reply(request, error: "not_allowed"); return }
             cancelPending("superseded")
@@ -211,7 +208,8 @@ final class PageCastCoordinator: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             do {
-                if opening { try await open(request) }
+                if request.operation == "choose_destination" { try await chooseDestination(request) }
+                else if opening { try await open(request) }
                 else { try await operate(request) }
                 guard pending === request else { return }
                 completePending()
@@ -231,18 +229,39 @@ final class PageCastCoordinator: ObservableObject {
 
     private func check(_ request: Request) throws {
         try Task.checkCancellation()
-        guard pending === request, request.isCurrent(requireActive: ["cast", "open", "play"].contains(request.operation)) else {
+        guard pending === request, request.isCurrent(requireActive: ["cast", "open", "play", "choose_destination"].contains(request.operation)) else {
             throw PageCastError(code: "session_ended")
         }
     }
 
-    private func authorize(_ request: Request, items: [[String: Any]], declared: Set<String>, metadata: [String: Any]?) async throws -> Set<String> {
-        // Obtain website consent before resolving any website-supplied hostname.
+    private func authorizeWebsite(_ request: Request) async throws {
         if !permissions.isApproved(request.origin) {
-            guard await ask(request, stage: .website) else { throw PageCastError(code: "not_allowed") }
+            let allowed = await ask(request, stage: .website)
             try check(request)
+            guard allowed else { throw PageCastError(code: "not_allowed") }
             permissions.approve(request.origin)
         }
+    }
+
+    private func chooseDestination(_ request: Request) async throws {
+        try check(request)
+        try await authorizeWebsite(request)
+        try check(request)
+        guard let transport else { throw PageCastError(code: "session_ended") }
+        if (request.payload as? [String: Any])?["destinationId"] as? String == "this-device" {
+            // A website never tears down a live receiver: the user confirms in the native picker.
+            if transport.isConnected && transport.destinationID != nil { onChooseDestination?() }
+            else { transport.selectWebsiteLocalDestination() }
+        } else {
+            onChooseDestination?()
+        }
+        try check(request)
+        request.deliver(["requestId": request.requestID, "ok": true, "destination": websiteDestination(for: request.origin)])
+    }
+
+    private func authorize(_ request: Request, items: [[String: Any]], declared: Set<String>, metadata: [String: Any]?) async throws -> Set<String> {
+        // Obtain website consent before resolving any website-supplied hostname.
+        try await authorizeWebsite(request)
         let origins = try await resolveOrigins(items, declared, metadata)
         try check(request)
         let missing = origins.subtracting(permissions.privateOrigins(for: request.origin))
@@ -374,7 +393,10 @@ final class PageCastCoordinator: ObservableObject {
         let continuation = decision; decision = nil
         continuation?.resume(returning: allowed)
     }
-    func dismissPresentation() { cancelPending("user_cancelled") }
+    func dismissPresentation() {
+        if pending?.operation == "choose_destination", case .website = presentation?.stage { resolvePrompt(false) }
+        else { cancelPending("user_cancelled") }
+    }
     private func ask(_ request: Request, stage: Stage) async -> Bool {
         guard pending === request, request.isCurrent() else { return false }
         show(request, stage: stage)
@@ -588,7 +610,7 @@ final class PageCastCoordinator: ObservableObject {
     }
     private func cancelPending(_ reason: String) {
         guard let request = pending else { return }
-        reply(request, error: reason)
+        reply(request, error: request.operation == "choose_destination" && reason != "not_allowed" ? "session_ended" : reason)
         task?.cancel()
         if request.operation == "play" { transport?.cancelWebsiteLocalPreparation() }
         completePending()

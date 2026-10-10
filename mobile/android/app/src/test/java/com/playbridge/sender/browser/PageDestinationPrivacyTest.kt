@@ -116,6 +116,21 @@ class PageDestinationPrivacyTest {
     }
 
     @Test
+    fun `only valid unapproved destination choices need website consent`() {
+        for (gesture in listOf(PageDestinationGesture.OPEN_PICKER, PageDestinationGesture.SELECT_THIS_DEVICE)) {
+            assertTrue(pageDestinationNeedsConsent(gesture, approved = false))
+            assertFalse(pageDestinationNeedsConsent(gesture, approved = true))
+        }
+        for (gesture in listOf(PageDestinationGesture.REJECT_GESTURE, PageDestinationGesture.REJECT_INVALID)) {
+            assertFalse(pageDestinationNeedsConsent(gesture, approved = false))
+            assertFalse(pageDestinationNeedsConsent(gesture, approved = true))
+        }
+        val inactive = pageDestinationGesture(false, null, false, receiverConnected = false)
+        assertEquals(PageDestinationGesture.REJECT_GESTURE, inactive)
+        assertFalse(pageDestinationNeedsConsent(inactive, approved = false))
+    }
+
+    @Test
     fun `non boolean activation is not an attested gesture`() {
         assertEquals(null, jsonBooleanOrNull(null))
         assertEquals(null, jsonBooleanOrNull(JSONObject.NULL))

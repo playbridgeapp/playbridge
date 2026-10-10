@@ -438,6 +438,75 @@ private final class FakeTransport: PageCastTransport {
         print("PASS compatible receiver selection, cancellation and reconnect")
     }
 
+    @MainActor static func destinationConsent() async {
+        do {
+            var resolutions = 0
+            let f = Fixture { _, _, _ in resolutions += 1; return [] }
+            var pickerOpens = 0
+            f.coordinator.onChooseDestination = { pickerOpens += 1 }
+            _ = await f.response(f.send("choose_destination", userActivation: false), error: "user_gesture_required")
+            _ = await f.response(f.send("choose_destination", payload: ["destinationId": "this-device"]), error: "user_gesture_required")
+            precondition(f.coordinator.presentation == nil && pickerOpens == 0)
+            let choice = f.send("choose_destination", userActivation: true)
+            await f.wait({ f.coordinator.presentation != nil }, "destination website consent")
+            guard case .website = f.coordinator.presentation?.stage else { preconditionFailure("Expected website stage") }
+            precondition(pickerOpens == 0 && f.coordinator.websiteDestination(for: "https://site.example")["id"] is NSNull)
+            f.coordinator.resolvePrompt(true)
+            let destination = await f.response(choice)["destination"] as! [String: Any]
+            precondition(destination["id"] as? String == f.pageDestinationId() && destination["id"] as? String != "receiver-one")
+            precondition(pickerOpens == 1 && f.permissions.isApproved("https://site.example"))
+            _ = await f.response(f.send("choose_destination", userActivation: true))
+            precondition(pickerOpens == 2 && f.coordinator.presentation == nil && resolutions == 0)
+            precondition(f.permissions.privateOrigins(for: "https://site.example").isEmpty && f.transport.sends.isEmpty)
+        }
+        for dismissed in [false, true] {
+            let f = Fixture()
+            var pickerOpens = 0
+            f.coordinator.onChooseDestination = { pickerOpens += 1 }
+            let choice = f.send("choose_destination", userActivation: true)
+            await f.wait({ f.coordinator.presentation != nil }, "destination denial")
+            if dismissed { f.coordinator.dismissPresentation() } else { f.coordinator.resolvePrompt(false) }
+            _ = await f.response(choice, error: "not_allowed")
+            precondition(pickerOpens == 0 && !f.permissions.isApproved("https://site.example"))
+        }
+        do {
+            let f = Fixture()
+            f.transport.isConnected = false
+            let choice = f.send("choose_destination", payload: ["destinationId": "this-device"], userActivation: true)
+            await f.wait({ f.coordinator.presentation != nil }, "local destination consent")
+            precondition(f.transport.destinationID == "receiver-one")
+            f.coordinator.resolvePrompt(true)
+            let destination = await f.response(choice)["destination"] as! [String: Any]
+            precondition(destination["id"] as? String == "this-device" && f.transport.destinationID == nil)
+        }
+        for cancel in [false, true] {
+            let f = Fixture()
+            var pickerOpens = 0
+            f.coordinator.onChooseDestination = { pickerOpens += 1 }
+            let choice = f.send("choose_destination", userActivation: true)
+            await f.wait({ f.coordinator.presentation != nil }, "destination awaiting cancellation")
+            if cancel { f.send("cancel", payload: ["requestId": choice]) }
+            else { f.page.pageCastCanRequest = false; f.coordinator.resolvePrompt(true) }
+            _ = await f.response(choice, error: "session_ended")
+            f.coordinator.resolvePrompt(true)
+            precondition(pickerOpens == 0 && !f.permissions.isApproved("https://site.example"))
+        }
+        do {
+            let f = Fixture()
+            var pickerOpens = 0
+            f.coordinator.onChooseDestination = { pickerOpens += 1 }
+            let choice = f.send("choose_destination", userActivation: true)
+            await f.wait({ f.coordinator.presentation != nil }, "destination awaiting navigation")
+            f.page.pageCastDocumentID = UUID()
+            f.coordinator.sourceInvalidated(f.page)
+            f.coordinator.resolvePrompt(true)
+            await Task.yield()
+            precondition(f.page.reply(choice) == nil && f.coordinator.presentation == nil)
+            precondition(pickerOpens == 0 && !f.permissions.isApproved("https://site.example"))
+        }
+        print("PASS destination consent, gesture gate, denial/dismissal, remembered approval, local selection, cancellation and navigation")
+    }
+
     @MainActor static func unifiedPlayback() async {
         do {
             let f = Fixture()
@@ -454,7 +523,11 @@ private final class FakeTransport: PageCastTransport {
             var pickerOpens = 0
             f.coordinator.onChooseDestination = { pickerOpens += 1 }
             // The picker is user-mediated; WebKit without navigator.userActivation reports nil.
-            _ = await f.response(f.send("choose_destination"))
+            let choice = f.send("choose_destination")
+            await f.wait({ f.coordinator.presentation != nil }, "destination consent without WebKit activation support")
+            precondition(pickerOpens == 0)
+            f.coordinator.resolvePrompt(true)
+            _ = await f.response(choice)
             _ = await f.response(f.send("choose_destination", userActivation: true))
             precondition(pickerOpens == 2)
             _ = await f.response(f.send("choose_destination", userActivation: false), error: "user_gesture_required")
@@ -577,6 +650,7 @@ private final class FakeTransport: PageCastTransport {
         }
         await rejectsWebsiteWebhooks()
         destinationIdsArePerOrigin()
+        await destinationConsent()
         await unifiedPlayback()
         await permissionFlow()
         await privatePermissionsAndPayloads()

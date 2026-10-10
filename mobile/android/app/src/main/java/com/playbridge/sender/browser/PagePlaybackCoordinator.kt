@@ -25,6 +25,8 @@ class PagePlaybackCoordinator(
     private val linked: LinkedPageCastCoordinator,
     private val scope: CoroutineScope,
 ) {
+    var onWebsiteConsent: (suspend (JSONObject, String) -> Boolean)? = null
+
     private var active: LinkedPageCastOpenRequest? = null
     private var externalProgress: Job? = null
     private var createdAtMillis = 0L
@@ -75,24 +77,39 @@ class PagePlaybackCoordinator(
                     val payload = message.optJSONObject("payload") ?: JSONObject()
                     val hasDestinationId = payload.has("destinationId") && !payload.isNull("destinationId")
                     val destinationId = payload.opt("destinationId") as? String
-                    when (pageDestinationGesture(
+                    val gesture = pageDestinationGesture(
                         hasDestinationId,
                         destinationId,
                         jsonBooleanOrNull(if (message.has("userActivation")) message.opt("userActivation") else null),
                         liveReceiverConnected(),
-                    )) {
-                        PageDestinationGesture.OPEN_PICKER -> Components.playbackDevicePicker.request()
-                        PageDestinationGesture.SELECT_THIS_DEVICE -> connection.selectThisDevice()
+                    )
+                    when (gesture) {
                         PageDestinationGesture.REJECT_GESTURE -> {
                             reply(message, "user_gesture_required"); return@launch
                         }
                         PageDestinationGesture.REJECT_INVALID -> {
                             reply(message, "invalid_request"); return@launch
                         }
+                        else -> Unit
                     }
+                    if (origin == null) { reply(message, "not_allowed"); return@launch }
+                    val requestId = message.optString("bridgeRequestId")
+                    if (linked.isOpenCancelled(requestId)) { reply(message, "session_ended"); return@launch }
+                    if (pageDestinationNeedsConsent(gesture, PageCastConsentStore.isApproved(context, origin))) {
+                        val allowed = onWebsiteConsent?.invoke(message, origin) == true
+                        if (!Components.isCurrentPageNavigation(tab, generation) || linked.isOpenCancelled(requestId)) {
+                            reply(message, "session_ended"); return@launch
+                        }
+                        if (!allowed) { reply(message, "not_allowed"); return@launch }
+                        PageCastConsentStore.approve(context, origin)
+                    }
+                    // Re-read the live route after consent; a receiver may have connected while prompting.
+                    if (hasDestinationId && !liveReceiverConnected()) connection.selectThisDevice()
+                    else Components.playbackDevicePicker.request()
                 }
                 val value = destination(origin)
-                if (Components.isCurrentPageNavigation(tab, generation)) reply(message, destination = value)
+                if (Components.isCurrentPageNavigation(tab, generation) &&
+                    !linked.isOpenCancelled(message.optString("bridgeRequestId"))) reply(message, destination = value)
                 else reply(message, "session_ended")
             }
             return true

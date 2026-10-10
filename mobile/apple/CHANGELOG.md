@@ -3,6 +3,11 @@
 All notable changes to the iOS phone app (`com.playbridge.PlayBridge-Phone`).
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- **Website playback consent**: Ask for website-casting approval when choosing a playback destination, so fresh installs can obtain a usable device id before playing.
+
 ## [0.3.3-alpha] — 2026-07-03 (build 6)
 
 ### Changed

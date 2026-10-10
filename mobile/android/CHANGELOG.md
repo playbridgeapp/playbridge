@@ -14,6 +14,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Casting controls**: Support receiver-owned queues, attaching subtitles during playback, private casts without receiver history, and playback progress callbacks for native senders.
 
 ### Fixed
+- **Website playback consent**: Ask for website-casting approval when choosing a playback destination, so fresh installs can obtain a usable device id before playing.
 - **Browser continuity**: Restore tabs lazily, preserve Bridged App sessions and input focus, and return reliably between Browser, Dashboard and Remote.
 - **Playback and discovery**: Reduce probe storms and memory pressure; improve stream thumbnails, HLS parsing, DLNA discovery/playback and Google Cast reconnects.
 - **Resume and file serving**: Preserve page-cast resume positions and correctly serve suffix ranges, invalid-range responses and HEAD requests for local files.

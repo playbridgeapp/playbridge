@@ -172,6 +172,14 @@ private data class PendingLinkedPageCast(
     val requestedPrivateOrigins: Set<String>,
 )
 
+private data class PendingPageDestinationConsent(
+    val origin: String,
+    val tabId: Int,
+    val navigationGeneration: Long,
+    val bridgeRequestId: String,
+    val decision: kotlinx.coroutines.CompletableDeferred<Boolean>,
+)
+
 private data class PendingLinkedOperation(
     val message: org.json.JSONObject,
     val origin: String,
@@ -983,11 +991,17 @@ class BrowserActivity : ComponentActivity() {
             val tvPlayerMode by settingsRepository.tvPlayerMode.collectAsStateWithLifecycle(initialValue = "tv")
             var pendingPageCast by remember { mutableStateOf<PendingPageCast?>(null) }
             var pendingLinkedPageCast by remember { mutableStateOf<PendingLinkedPageCast?>(null) }
+            var pendingDestinationConsent by remember { mutableStateOf<PendingPageDestinationConsent?>(null) }
             var pendingLinkedOperation by remember { mutableStateOf<PendingLinkedOperation?>(null) }
             val pageCastCallbackOwner = remember { Any() }
             DisposableEffect(pageCastCallbackOwner) {
                 Components.claimPageCastCallbacks(pageCastCallbackOwner)
                 onDispose {
+                    pendingDestinationConsent?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                        it.decision.complete(false)
+                    }
+                    pagePlaybackCoordinator.onWebsiteConsent = null
                     pendingLinkedPageCast?.request?.let {
                         linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId, "activity_recreated")
                     }
@@ -1221,6 +1235,23 @@ class BrowserActivity : ComponentActivity() {
                     }
                     pendingLinkedDeviceRequest = null
                 }
+                pagePlaybackCoordinator.onWebsiteConsent = { message, origin ->
+                    pendingDestinationConsent?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                        it.decision.complete(false)
+                    }
+                    pendingLinkedPageCast?.request?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                    }
+                    pendingLinkedPageCast = null
+                    val consent = PendingPageDestinationConsent(
+                        origin, message.optInt("tabId", -1), message.optLong("navigationGeneration", -1),
+                        message.optString("bridgeRequestId"), kotlinx.coroutines.CompletableDeferred(),
+                    )
+                    pendingDestinationConsent = consent
+                    try { consent.decision.await() }
+                    finally { if (pendingDestinationConsent === consent) pendingDestinationConsent = null }
+                }
                 Components.onLinkedCastRequest = linkedRequest@ { message ->
                     val type = message.optString("type")
                     if (pagePlaybackCoordinator.handle(message)) return@linkedRequest
@@ -1228,6 +1259,10 @@ class BrowserActivity : ComponentActivity() {
                         val targetBridgeRequestId = message.optString("targetBridgeRequestId")
                         pagePlaybackCoordinator.cancelOpen(targetBridgeRequestId)
                         linkedPageCastCoordinator.cancelOpen(targetBridgeRequestId)
+                        pendingDestinationConsent?.takeIf { it.bridgeRequestId == targetBridgeRequestId }?.let {
+                            pendingDestinationConsent = null
+                            it.decision.complete(false)
+                        }
                         if (pendingLinkedPageCast?.request?.bridgeRequestId == targetBridgeRequestId) {
                             pendingLinkedPageCast = null
                         }
@@ -1315,6 +1350,11 @@ class BrowserActivity : ComponentActivity() {
                         linkedPageCastCoordinator.reject(request.bridgeRequestId, "session_ended")
                         return@linkedRequest
                     }
+                    pendingDestinationConsent?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                        pendingDestinationConsent = null
+                        it.decision.complete(false)
+                    }
                     pendingLinkedPageCast?.request?.let {
                         linkedPageCastCoordinator.reject(it.bridgeRequestId, "superseded")
                     }
@@ -1361,6 +1401,13 @@ class BrowserActivity : ComponentActivity() {
                 }
                 Components.onPageNavigation = { tabId, navigationGeneration ->
                     pagePlaybackCoordinator.navigation(tabId, navigationGeneration)
+                    pendingDestinationConsent?.takeIf {
+                        pageRequestSuperseded(it.tabId, it.navigationGeneration, tabId, navigationGeneration)
+                    }?.let {
+                        linkedPageCastCoordinator.cancelOpen(it.bridgeRequestId)
+                        pendingDestinationConsent = null
+                        it.decision.complete(false)
+                    }
                     pendingPageCast?.takeIf {
                         pageRequestSuperseded(
                             it.tabId,
@@ -1482,20 +1529,28 @@ class BrowserActivity : ComponentActivity() {
                 )
             }
 
-            pendingLinkedPageCast?.let { pending ->
-                val request = pending.request
-                val websiteName = PageCastConsentStore.displayName(request.origin)
-                val localNetworkPrompt = pending.stage == PageCastConsentStage.PRIVATE_ORIGINS
+            val destinationConsent = pendingDestinationConsent
+            val pendingConsent = if (destinationConsent == null) pendingLinkedPageCast else null
+            val consentOrigin = pendingConsent?.request?.origin ?: destinationConsent?.origin
+            if (consentOrigin != null) {
+                val websiteName = PageCastConsentStore.displayName(consentOrigin)
+                val localNetworkPrompt = pendingConsent?.stage == PageCastConsentStage.PRIVATE_ORIGINS
+                fun denyConsent() {
+                    if (destinationConsent != null) {
+                        destinationConsent.decision.complete(false)
+                        pendingDestinationConsent = null
+                    } else {
+                        pendingConsent?.request?.let { linkedPageCastCoordinator.reject(it.bridgeRequestId, "not_allowed") }
+                        pendingLinkedPageCast = null
+                    }
+                }
                 val privateOriginList = PageCastConsentStore.unapprovedPrivateOrigins(
-                    this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
+                    this@BrowserActivity, consentOrigin, pendingConsent?.requestedPrivateOrigins.orEmpty(),
                 ).joinToString("\n") {
                     "• ${PageCastConsentStore.displayName(it)}"
                 }
                 AlertDialog(
-                    onDismissRequest = {
-                        linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
-                        pendingLinkedPageCast = null
-                    },
+                    onDismissRequest = { denyConsent() },
                     title = {
                         Text(
                             if (localNetworkPrompt) "Allow local-network media?"
@@ -1516,7 +1571,15 @@ class BrowserActivity : ComponentActivity() {
                         )
                     },
                     confirmButton = {
-                        TextButton(onClick = {
+                        TextButton(onClick = allowConsent@ {
+                            if (destinationConsent != null) {
+                                // Approval is persisted by the coordinator only after its navigation/cancel checks.
+                                pendingDestinationConsent = null
+                                destinationConsent.decision.complete(true)
+                                return@allowConsent
+                            }
+                            val pending = pendingConsent ?: return@allowConsent
+                            val request = pending.request
                             if (localNetworkPrompt) {
                                 PageCastConsentStore.approvePrivateOrigins(
                                     this@BrowserActivity, request.origin, pending.requestedPrivateOrigins,
@@ -1542,10 +1605,7 @@ class BrowserActivity : ComponentActivity() {
                         }) { Text("Allow") }
                     },
                     dismissButton = {
-                        TextButton(onClick = {
-                            linkedPageCastCoordinator.reject(request.bridgeRequestId, "not_allowed")
-                            pendingLinkedPageCast = null
-                        }) { Text("Deny") }
+                        TextButton(onClick = { denyConsent() }) { Text("Deny") }
                     },
                 )
             }
