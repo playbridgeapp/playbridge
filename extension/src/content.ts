@@ -24,7 +24,7 @@ import {
   type VideoCastOverlayPosition,
   type VideoCastOverlayPreferences,
 } from "./settings";
-import { formatDeviceProtocol } from "./core/device-protocol";
+import { formatDeviceProtocol, isActiveDevice } from "./core/device-protocol";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -1032,12 +1032,11 @@ function renderPicker(): void {
   // 2. Devices
   const devices = currentBridgeStatus?.devices || [];
   for (const device of devices) {
-    const isTvActive =
-      Boolean(device.active) ||
-      (currentBridgeStatus?.selection?.kind === "tv" &&
-        (currentBridgeStatus.selection.id === (device.id || device.uuid) ||
-         currentBridgeStatus.selection.name === device.name)) ||
-      (!currentBridgeStatus?.selection && currentBridgeStatus?.activeTv === device.name);
+    const isTvActive = isActiveDevice(
+      device,
+      currentBridgeStatus?.selection,
+      currentBridgeStatus?.activeTv,
+    );
 
     const devBtn = document.createElement("button");
     devBtn.type = "button";

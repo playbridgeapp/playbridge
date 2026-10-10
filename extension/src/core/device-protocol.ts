@@ -33,3 +33,27 @@ export function formatDeviceProtocol(protocol?: string | null): string | null {
       return trimmed;
   }
 }
+
+interface ActiveDeviceRow {
+  id?: string;
+  uuid: string;
+  name: string;
+  active?: boolean;
+}
+
+/**
+ * Whether a device row is the current destination. Apps with device selection
+ * mark the exact protocol + id; one TV is often listed once per protocol under
+ * the same name, so names only identify the active row for legacy apps.
+ */
+export function isActiveDevice(
+  device: ActiveDeviceRow,
+  selection: { kind: string; id?: string } | null | undefined,
+  activeTv: string | null | undefined,
+): boolean {
+  if (selection) {
+    return selection.kind === "tv" &&
+      (device.active === true || (!!selection.id && selection.id === device.id));
+  }
+  return !!activeTv && activeTv === device.name;
+}

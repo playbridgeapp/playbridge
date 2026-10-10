@@ -639,3 +639,19 @@ test("popup and content script render secondary protocol label for device rows",
   );
 });
 
+
+test("isActiveDevice marks only the selected protocol entry of a multi-protocol TV", () => {
+  const { isActiveDevice } = bridge;
+  const rows = [
+    { id: "dlna:uuid:9180", uuid: "uuid:9180", name: "Master bedroom TV", active: false },
+    { id: "googleCast:95d1", uuid: "95d1", name: "Master bedroom TV", active: false },
+    { id: "playBridge:1b5e", uuid: "1b5e", name: "Master bedroom TV", active: true },
+  ];
+  const selection = { kind: "tv", id: "playBridge:1b5e", name: "Master bedroom TV" };
+  assert.deepEqual(rows.map((d) => isActiveDevice(d, selection, "Master bedroom TV")), [false, false, true]);
+  // This computer selected: no TV row is active even if a name matches activeTv.
+  assert.deepEqual(rows.map((d) => isActiveDevice(d, { kind: "local" }, "Master bedroom TV")), [false, false, false]);
+  // Legacy desktop (no selection): fall back to the activeTv name.
+  assert.equal(isActiveDevice({ uuid: "x", name: "Legacy TV" }, undefined, "Legacy TV"), true);
+  assert.equal(isActiveDevice({ uuid: "y", name: "Other" }, undefined, "Legacy TV"), false);
+});

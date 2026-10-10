@@ -12,7 +12,7 @@ import {
     setShowVideoCastOverlay,
     setVideoCastOverlaySiteOverride,
 } from "../settings";
-import { formatDeviceProtocol } from "../core/device-protocol";
+import { formatDeviceProtocol, isActiveDevice } from "../core/device-protocol";
 
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -302,11 +302,7 @@ function renderDevices() {
 
         // 2. Devices
         bridgeDevices.forEach((d) => {
-            const isTvActive =
-                Boolean(d.active) ||
-                (bridgeSelection?.kind === 'tv' &&
-                    (bridgeSelection.id === (d.id || d.uuid) || bridgeSelection.name === d.name)) ||
-                (!bridgeSelection && currentStatus?.activeTv === d.name);
+            const isTvActive = isActiveDevice(d, bridgeSelection, currentStatus?.activeTv);
 
             const item = document.createElement('div');
             item.className = 'saved-connection-item' + (isTvActive ? ' active' : '');
