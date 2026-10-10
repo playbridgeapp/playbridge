@@ -2,18 +2,25 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.15.0] — 2026-10-09 (build 6)
+
+### Added
+- **Playback controls**: Receiver-owned queue controls, late subtitle attachment, an explicit player-switching menu and native playback progress callbacks.
+- **Still watching**: Configurable reminders during long playback sessions.
+- **Top Shelf and About**: Add Apple TV 4K @2x Top Shelf images and an About section with the privacy policy address and app version.
 
 ### Changed
-- **MPV uses standard LGPL MPVKit 1.0.0** (same as the phone) instead of the GPL `mpv-ios/MPVKit` 0.41.0-av fork: `gpu-next` video, AVFoundation audio. The local AudioUnit patch is removed.
-- **No more CocoaPods**: SwiftProtobuf comes from Swift Package Manager; open `PlayBridge TV.xcodeproj`.
-- Settings has an **About** section with the privacy policy address and app version.
-- Minimum tvOS lowered from 26.4 to 17.0.
-- Added @2x Top Shelf images for Apple TV 4K.
+- **MPV playback**: Use standard LGPL MPVKit 1.0.0, aligned with the phone, with gpu-next video and AVFoundation audio; remove the old AudioUnit patch and VLC engine.
+- **Platform support**: Lower the minimum tvOS version from 26.4 to 17.0; dependencies, including SwiftProtobuf, now use Swift Package Manager without CocoaPods.
+- **Private casts**: Honor the receiver-history preference and preserve cast progress across episode transitions.
 
 ### Fixed
-- MPV now switches the display to HDR10/HLG for HDR files; previously the mode was chosen before mpv knew the colorimetry, so HDR played in SDR mode.
-- Embedded frameworks' `MinimumOSVersion` is clamped to the deployment target for App Store validation.
+- **HDR output**: Switch the display to HDR10/HLG after MPV identifies the media's color information instead of playing HDR in SDR mode.
+- **Playback continuity**: Improve subtitle selection, track preferences and sender status during episode changes and player switching.
+- **Store validation**: Clamp embedded frameworks' minimum OS version to the deployment target.
+
+### Security
+- **Pairing credentials**: Protect persisted pairing tokens and avoid echoing authentication secrets in receiver responses.
 
 ## [0.3.0] — 2026-06-28 (build 5)
 
