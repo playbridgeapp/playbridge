@@ -135,6 +135,13 @@ class LibraryViewModel(
         _selectedTab.value = tab.coerceIn(0, 3)
     }
 
+    private val _isLegacyNoticeDismissed = MutableStateFlow(false)
+    val isLegacyNoticeDismissed: StateFlow<Boolean> = _isLegacyNoticeDismissed.asStateFlow()
+
+    fun dismissLegacyNotice() {
+        _isLegacyNoticeDismissed.value = true
+    }
+
     // Consolidated Discovery filters state
     private val _filters = MutableStateFlow(DiscoveryFiltersState())
     val filters: StateFlow<DiscoveryFiltersState> = _filters.asStateFlow()

@@ -1257,6 +1257,15 @@ fun AppNavHost(
                             session?.loadUrl(url)
                             onScreenChange(Screen.Browser)
                         },
+                        onOpenStreams = {
+                            val streamsApp = bridgedApps.firstOrNull { it.origin == "https://streams.playbridge.app" }
+                            if (streamsApp != null) {
+                                onOpenBridgedApp(streamsApp)
+                            } else {
+                                session?.loadUrl("https://streams.playbridge.app/")
+                                onScreenChange(Screen.Browser)
+                            }
+                        },
                         tvName = tvDevice?.name,
                         onOpenConnectionScreen = { onScreenChange(Screen.Connection) },
                         onMenuClick = { onScreenChange(Screen.Dashboard) },

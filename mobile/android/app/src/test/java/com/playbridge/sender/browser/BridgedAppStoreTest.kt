@@ -46,4 +46,36 @@ class BridgedAppStoreTest {
         assertFalse(BridgedAppStore.isExternalWebNavigation(origin, "about:blank"))
         assertFalse(BridgedAppStore.isExternalWebNavigation(origin, "blob:https://jellyfin.example/123"))
     }
+
+    @Test
+    fun `seedStreamsLibrary adds Streams on new install`() {
+        val seeded = BridgedAppStore.seedStreamsLibrary(emptyList(), alreadySeeded = false)
+        assertEquals(1, seeded.size)
+        val app = seeded.first()
+        assertEquals(BridgedAppStore.STREAMS_ORIGIN, app.origin)
+        assertEquals("Library", app.name)
+        assertEquals(BridgedAppStore.STREAMS_START_URL, app.startUrl)
+        assertNull(app.iconUrl)
+    }
+
+    @Test
+    fun `seedStreamsLibrary preserves existing Streams app configuration`() {
+        val customApp = BridgedApp(
+            origin = BridgedAppStore.STREAMS_ORIGIN,
+            name = "My Custom Streams",
+            startUrl = "https://streams.playbridge.app/watch/123",
+            iconUrl = "https://streams.playbridge.app/icon.png",
+        )
+        val seeded = BridgedAppStore.seedStreamsLibrary(listOf(customApp), alreadySeeded = false)
+        assertEquals(listOf(customApp), seeded)
+        assertEquals("My Custom Streams", seeded.first().name)
+        assertEquals("https://streams.playbridge.app/watch/123", seeded.first().startUrl)
+        assertEquals("https://streams.playbridge.app/icon.png", seeded.first().iconUrl)
+    }
+
+    @Test
+    fun `seedStreamsLibrary does not re-add after removal when already seeded`() {
+        val seeded = BridgedAppStore.seedStreamsLibrary(emptyList(), alreadySeeded = true)
+        assertTrue(seeded.isEmpty())
+    }
 }

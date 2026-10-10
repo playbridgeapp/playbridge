@@ -228,11 +228,11 @@ private fun SettingsHubContent(
                         )
                     )
 
-                    add(SettingsHubRow.Header("Library"))
+                    add(SettingsHubRow.Header("Library (legacy)"))
                     add(
                         SettingsHubRow.Item(
                             icon = Icons.Default.VideoLibrary,
-                            title = "Library",
+                            title = "Library (legacy)",
                             subtitle = "Metadata API keys and display options",
                             onClick = onLibrary,
                         )
