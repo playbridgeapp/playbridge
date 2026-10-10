@@ -72,7 +72,11 @@ jobs:
               exit 0
             fi
             echo "Force rebuild: deleting draft $TAG"
-            gh release delete "$TAG" --yes --cleanup-tag
+            # Drafts usually have no git tag yet; --cleanup-tag fails with 422 then.
+            gh release delete "$TAG" --yes
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              git push origin ":refs/tags/$TAG"
+            fi
           elif git rev-parse "$TAG" >/dev/null 2>&1; then
             # Tag exists without a GitHub Release object (unusual).
             if [ "$FORCE" != "true" ]; then
