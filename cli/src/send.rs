@@ -2760,7 +2760,7 @@ async fn dashboard_control(
                     .await?
                 }
                 TargetControl::Dlna(renderer) => renderer
-                    .seek(&format_time(position_ms as f64 / 1000.0))
+                    .seek(&format_dlna_time(position_ms as f64 / 1000.0))
                     .await
                     .map_err(|error| error.to_string())?,
                 TargetControl::Roku(session) => session
@@ -2859,16 +2859,11 @@ async fn dashboard_control(
     }
 }
 
-fn format_time(secs: f64) -> String {
+/// UPnP AVTransport `REL_TIME` targets must be `H+:MM:SS`; renderers read a
+/// two-part `MM:SS` value as hours and minutes.
+fn format_dlna_time(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
-    let hrs = s / 3600;
-    let mins = (s % 3600) / 60;
-    let secs = s % 60;
-    if hrs > 0 {
-        format!("{:02}:{:02}:{:02}", hrs, mins, secs)
-    } else {
-        format!("{:02}:{:02}", mins, secs)
-    }
+    format!("{:02}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
 }
 
 fn parse_dlna_time(time_str: &str) -> Option<f64> {
@@ -2998,7 +2993,7 @@ async fn cast_to_target(
             renderer.play().await.map_err(|error| error.to_string())?;
             if start_seconds > 0.0 {
                 renderer
-                    .seek(&format_time(start_seconds))
+                    .seek(&format_dlna_time(start_seconds))
                     .await
                     .map_err(|error| error.to_string())?;
             }
@@ -3231,6 +3226,17 @@ mod tests {
     use super::*;
     use crate::receive::DEFAULT_PORT;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn dlna_seek_targets_always_include_hours() {
+        assert_eq!(format_dlna_time(0.0), "00:00:00");
+        assert_eq!(format_dlna_time(72.9), "00:01:12");
+        assert_eq!(format_dlna_time(3_725.0), "01:02:05");
+        assert_eq!(format_dlna_time(-5.0), "00:00:00");
+        for seconds in [0.0, 59.0, 72.0, 3_599.0, 3_725.0] {
+            assert_eq!(parse_dlna_time(&format_dlna_time(seconds)), Some(seconds));
+        }
+    }
 
     #[tokio::test]
     async fn stdin_payload_preserves_buffered_control_lines() {
