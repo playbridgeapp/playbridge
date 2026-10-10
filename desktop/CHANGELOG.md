@@ -2,7 +2,26 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.13.0+31] — 2026-08-11
+## [0.15.0+32] — 2026-10-09
+
+### Added
+- **Player controls**: Playback speed, hold-to-seek, remaining time, remembered audio/subtitle languages, Fit/Zoom/Fill scaling and subtitle delay.
+- **Episode skips**: IntroDB-powered intro, recap and outro skip controls.
+- **Sender controls**: Tray playback controls and saved devices grouped by protocol; receiver-owned queues, late subtitle attachment and native playback progress callbacks.
+- **Memory diagnostics**: Optional memory diagnostics for troubleshooting playback.
+
+### Changed
+- **Private casts**: Honor the sender's preference to keep casts out of receiver history and resume records.
+
+### Fixed
+- **Playback continuity**: Keep controls visible until playback starts, make double-click fullscreen reliable, and apply scaling consistently.
+- **Casting reliability**: Improve DLNA discovery across network interfaces, Google Cast readiness/reconnects, receiver relaunches and bounded connection recovery.
+- **Media routing**: Preserve playback resources through retries and handle HLS byte ranges and unusual playlist content types correctly.
+
+### Security
+- **Scoped media access**: Keep authenticated media credentials on their original origin and restrict proxy resources, subtitles and private-network access to the active playback session.
+
+## [0.13.0+31] — 2026-08-23
 
 > **Works best together**: Screen mirroring, mixed-media playlists, and the skip pre-play preference are cross-device features introduced in this coordinated release. Use PlayBridge Phone 0.13.0+ and TV Player 0.13.0+ on the other side for full support.
 
