@@ -580,24 +580,23 @@ fun DashboardScreen(
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp)
         ) {
-            IconButton(
-                onClick = onClose,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Close,
-                    contentDescription = "Close Dashboard",
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
-                )
-            }
             Row(
-                modifier = Modifier.align(Alignment.TopEnd),
+                modifier = Modifier.align(Alignment.TopStart),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                IconButton(
+                    onClick = onClose,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close Dashboard",
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+                    )
+                }
                 IconButton(
                     onClick = { showExitConfirm = true },
                     modifier = Modifier
@@ -611,6 +610,11 @@ fun DashboardScreen(
                         tint = MaterialTheme.colorScheme.error,
                     )
                 }
+            }
+            Row(
+                modifier = Modifier.align(Alignment.TopEnd),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 IconButton(
                     onClick = { showOnboarding = true },
                     modifier = Modifier.size(40.dp).clip(CircleShape)

@@ -682,8 +682,11 @@ class BrowserActivity : ComponentActivity() {
                 if (currentScreen != Screen.Connection) connectionInitialTab = 0
                 if (currentScreen != Screen.AddonSettings) pluginManagerReturnTabId = null
             }
-            // The screen the Dashboard was opened from, so its close (X) returns there.
+            // The place the Dashboard was opened from, so its close (X) returns there. Null on a
+            // fresh launch, where X opens Browser. Screens opened from the Dashboard itself
+            // (Settings, Phone Files, …) don't replace it when they return to the Dashboard.
             var dashboardOrigin by remember { mutableStateOf<Screen?>(null) }
+            var dashboardOriginBridgedAppTabId by remember { mutableStateOf<String?>(null) }
             val clipboardManager = LocalClipboardManager.current
             val keyboardController = LocalSoftwareKeyboardController.current
             val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
@@ -2280,6 +2283,7 @@ class BrowserActivity : ComponentActivity() {
                                             isSecure = isSecureConnection,
                                             onLogoClick = {
                                                 dashboardOrigin = currentScreen
+                                                dashboardOriginBridgedAppTabId = null
                                                 currentScreen = Screen.Dashboard
                                             },
                                             onSecurityIconClick = { showSiteInfoSheet = true },
@@ -2565,8 +2569,9 @@ class BrowserActivity : ComponentActivity() {
                                 remoteOrigin = currentScreen
                                 remoteOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
                             }
-                            if (target == Screen.Dashboard && currentScreen != Screen.Dashboard) {
+                            if (target == Screen.Dashboard && isDashboardReturnPlace(currentScreen)) {
                                 dashboardOrigin = currentScreen
+                                dashboardOriginBridgedAppTabId = selectedTabId.takeIf { isBridgedAppMode }
                             }
                             if (target == Screen.Dashboard && currentScreen == Screen.Browser &&
                                 selectedTabId != null && selectedTabId == activeBridgedAppTabId) {
@@ -2622,7 +2627,25 @@ class BrowserActivity : ComponentActivity() {
                             }
                             currentScreen = returnTarget.screen
                         },
-                        dashboardReturnScreen = dashboardOrigin ?: lastMainScreen,
+                        onDashboardClose = {
+                            // Same rules as Remote: reopen the bridged app only while its tab
+                            // still belongs to it; a fresh launch has no origin and opens Browser.
+                            val returnTarget = resolveRemoteReturnTarget(
+                                origin = dashboardOrigin ?: Screen.Browser,
+                                bridgedAppTabId = dashboardOriginBridgedAppTabId,
+                                apps = bridgedAppStore.apps.value,
+                                tabUrls = store.state.tabs.associate { it.id to it.content.url },
+                            ).let { if (it.screen == Screen.Dashboard) RemoteReturnTarget(Screen.Browser) else it }
+                            activeBridgedAppTabId = returnTarget.bridgedAppTabId
+                            Components.activeBridgedAppTabId = returnTarget.bridgedAppTabId
+                            if (returnTarget.bridgedAppTabId != null) {
+                                tabManager.selectTab(returnTarget.bridgedAppTabId, store)
+                            } else if (returnTarget.screen == Screen.Browser &&
+                                store.state.selectedTabId in bridgedAppTabIds) {
+                                selectNormalBrowserTab()
+                            }
+                            currentScreen = returnTarget.screen
+                        },
                         innerPadding = innerPadding,
                         session = session,
                         onMagnetDetected = { interceptedMagnet = it },
