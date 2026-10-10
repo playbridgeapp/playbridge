@@ -79,6 +79,7 @@ class TvSenderController extends ChangeNotifier {
     this.reconnectGiveUp = defaultReconnectGiveUp,
   })  : _identity = identity,
         _store = store,
+        _selection = store.selection,
         _discovery = TvDiscoveryBrowser(),
         _transport = transport ?? PlayBridgeTransport(),
         _retainProxyUrls =
@@ -94,6 +95,220 @@ class TvSenderController extends ChangeNotifier {
 
   final PairingStore _identity;
   final TvConnectionStore _store;
+  PlaybackSelection _selection;
+  final Set<VoidCallback> _selectionWaiters = {};
+
+  PlaybackSelection get selection => _selection;
+  String get selectionName {
+    if (_selection.isLocal) return 'This computer';
+    final id = _selection.identityKey;
+    for (final tv in discovered) {
+      if (tv.identityKey == id) return tv.name;
+    }
+    for (final tv in pairedTvs) {
+      if (tv.identityKey == id) return tv.name;
+    }
+    return _selection.uuid!;
+  }
+
+  bool get selectedTvConnected =>
+      !_selection.isLocal &&
+      isConnected &&
+      _activeTv?.identityKey == _selection.identityKey;
+
+  String get selectionStatus => selectedTvConnected
+      ? 'connected'
+      : !_userClosed &&
+              (_pending?.identityKey == _selection.identityKey) &&
+              (_reconnectStatus != null ||
+                  const {
+                    SenderConnectionState.connecting,
+                    SenderConnectionState.waitingForChallenge,
+                    SenderConnectionState.waitingForCodeInput,
+                    SenderConnectionState.verifyingCode,
+                  }.contains(_state))
+          ? 'connecting'
+          : 'offline';
+
+  Future<void> _setSelection(PlaybackSelection value) {
+    _selection = value;
+    final saved = _store.setSelection(value);
+    notifyListeners();
+    return saved;
+  }
+
+  void _selectTv(TvProtocol protocol, String uuid) {
+    unawaited(_setSelection(PlaybackSelection.tv(protocol, uuid))
+        .catchError((Object error) {
+      debugPrint('[tv-sender] selection save failed: ${error.runtimeType}');
+    }));
+  }
+
+  DiscoveredTv? deviceById(String id) {
+    for (final tv in discovered) {
+      if (tv.identityKey == id) return tv;
+    }
+    for (final tv in pairedTvs) {
+      if (tv.identityKey == id) {
+        return DiscoveredTv(
+          uuid: tv.uuid,
+          protocol: tv.protocol,
+          name: tv.name,
+          host: tv.host,
+          addresses: tv.allAddresses,
+          port: tv.port,
+          wssPort: tv.wssPort,
+          location: tv.location,
+        );
+      }
+    }
+    return null;
+  }
+
+  bool needsPairing(DiscoveredTv tv) =>
+      tv.protocol == TvProtocol.playBridge &&
+      (_store.byIdentity(tv.protocol, tv.uuid)?.token.isEmpty ?? true);
+
+  /// Safe extension-only device metadata: no addresses, pins or credentials.
+  List<Map<String, dynamic>> get extensionDevices {
+    final devices = <String, DiscoveredTv>{
+      for (final tv in pairedTvs) tv.identityKey: deviceById(tv.identityKey)!,
+      for (final tv in discovered) tv.identityKey: tv,
+    };
+    final online = discovered.map((tv) => tv.identityKey).toSet();
+    final rows = [
+      for (final tv in devices.values)
+        <String, dynamic>{
+          'id': tv.identityKey,
+          'uuid': tv.uuid,
+          'name': tv.name,
+          'protocol': tv.protocol.name,
+          'connectable': canConnectTo(tv),
+          'paired': !needsPairing(tv),
+          'saved': _store.isSaved(tv.protocol, tv.uuid),
+          'online': online.contains(tv.identityKey),
+          'active': tv.identityKey == _selection.identityKey,
+        }
+    ];
+    int rank(Map<String, dynamic> row) => row['active'] == true
+        ? 0
+        : row['saved'] == true
+            ? (row['online'] == true ? 1 : 2)
+            : 3;
+    rows.sort((a, b) {
+      final group = rank(a).compareTo(rank(b));
+      if (group != 0) return group;
+      final name = (a['name'] as String)
+          .toLowerCase()
+          .compareTo((b['name'] as String).toLowerCase());
+      return name != 0
+          ? name
+          : (a['id'] as String).compareTo(b['id'] as String);
+    });
+    return rows;
+  }
+
+  Future<Map<String, dynamic>> selectDevice(
+    String id, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final tv = deviceById(id);
+    if (tv == null) return {'ok': false, 'error': 'unknown_device'};
+    if (!canConnectTo(tv)) return {'ok': false, 'error': 'not_connectable'};
+    if (needsPairing(tv)) return {'ok': false, 'error': 'pairing_required'};
+    _selectTv(tv.protocol, tv.uuid);
+    final connected = await ensureSelectedConnected(timeout: timeout);
+    return connected
+        ? {'ok': true, 'target': 'tv', 'targetName': tv.name}
+        : {
+            'ok': false,
+            'error': discovered.any((d) => d.identityKey == id)
+                ? 'connect_failed'
+                : 'offline'
+          };
+  }
+
+  /// A stale/drop/give-up never resets intent. Only explicit local selection does.
+  Future<bool> ensureSelectedConnected(
+      {Duration timeout = const Duration(seconds: 8)}) async {
+    if (_disposed || _selection.isLocal) return false;
+    if (selectedTvConnected) return true;
+    final id = _selection.identityKey!;
+    final tv = deviceById(id);
+    if (tv == null || !canConnectTo(tv) || needsPairing(tv)) return false;
+    final done = Completer<bool>();
+    var started = false;
+    var connectReturned = false;
+    Timer? timer;
+    void finish(bool ok) {
+      if (!done.isCompleted) done.complete(ok);
+    }
+
+    void observe() {
+      if (_disposed ||
+          _selection.identityKey != id ||
+          (_userClosed && (started || connectReturned))) {
+        finish(false);
+        return;
+      }
+      if (selectedTvConnected) {
+        finish(true);
+        return;
+      }
+      if (selectionStatus == 'connecting') {
+        started = true;
+      }
+      if ((started || connectReturned) &&
+          const {
+            SenderConnectionState.disconnected,
+            SenderConnectionState.error,
+            SenderConnectionState.authFailed,
+            SenderConnectionState.pinMismatch,
+            SenderConnectionState.pairingDenied,
+            SenderConnectionState.waitingForCodeInput,
+          }.contains(_state)) {
+        finish(false);
+      }
+    }
+
+    void cancel() => finish(false);
+    _selectionWaiters.add(cancel);
+    addListener(observe);
+    final saved = _store.byIdentity(tv.protocol, tv.uuid);
+    final attempt = saved == null ? connectToDiscovered(tv) : reconnect(saved);
+    final generation = _sessionGeneration;
+    unawaited(attempt.then((_) {
+      connectReturned = true;
+      observe();
+    }, onError: (Object _) {
+      finish(false);
+    }));
+    timer = Timer(timeout, () {
+      if (_sessionGeneration == generation && _selection.identityKey == id) {
+        _beginUserClose();
+        unawaited(_transport.disconnect().catchError((Object _) {}));
+        notifyListeners();
+      }
+      finish(false);
+    });
+    try {
+      return await done.future;
+    } finally {
+      timer.cancel();
+      removeListener(observe);
+      _selectionWaiters.remove(cancel);
+    }
+  }
+
+  Future<void> restoreSelection() async {
+    if (_selection.isLocal || _pending != null || _disposed) return;
+    final saved = _store.byIdentity(_selection.protocol!, _selection.uuid!);
+    if (saved != null &&
+        !(saved.protocol == TvProtocol.playBridge && saved.token.isEmpty)) {
+      await reconnect(saved);
+    }
+  }
+
   final TvDiscoveryBrowser _discovery;
   TvTransport _transport;
   final Future<StreamProxyLease> Function(Iterable<String>) _retainProxyUrls;
@@ -261,6 +476,9 @@ class TvSenderController extends ChangeNotifier {
     _bindTransportSubscriptions();
     _servicesSub = StreamProxyServer.instance.events.listen(_onServicesEvent);
     await _discovery.start();
+    unawaited(restoreSelection().catchError((Object error) {
+      debugPrint('[tv-sender] selection restore failed: ${error.runtimeType}');
+    }));
   }
 
   /// Subscribes to the injected transport without starting discovery. Tests use
@@ -338,7 +556,7 @@ class TvSenderController extends ChangeNotifier {
     _browserPairingRequests
         .removeWhere((_, request) => request.receiverId == receiverId);
     if (_transport.protocol == TvProtocol.webBrowser) {
-      await _transport.disconnect();
+      await disconnect();
     }
     _lastBrowserError = null;
     notifyListeners();
@@ -389,6 +607,7 @@ class TvSenderController extends ChangeNotifier {
       );
       return;
     }
+    if (!needsPairing(tv)) _selectTv(tv.protocol, tv.uuid);
     final sameSession = _activeTv?.identityKey == tv.identityKey ||
         _retryTarget?.identityKey == tv.identityKey;
     await _connectFromUser(
@@ -414,11 +633,14 @@ class TvSenderController extends ChangeNotifier {
 
   /// Reconnect a known TV by token (e.g. from the paired list). Prefers a fresh
   /// discovered address when the TV is currently visible (survives DHCP changes).
-  Future<void> reconnect(TvRecord tv) => _connectFromUser(
-        (generation) => _connectRecord(tv, generation),
-        preserveEstablishedSession: _activeTv?.identityKey == tv.identityKey ||
-            _retryTarget?.identityKey == tv.identityKey,
-      );
+  Future<void> reconnect(TvRecord tv) {
+    _selectTv(tv.protocol, tv.uuid);
+    return _connectFromUser(
+      (generation) => _connectRecord(tv, generation),
+      preserveEstablishedSession: _activeTv?.identityKey == tv.identityKey ||
+          _retryTarget?.identityKey == tv.identityKey,
+    );
+  }
 
   Future<void> _connectRecord(TvRecord tv, int generation) async {
     final saved = _store.byIdentity(tv.protocol, tv.uuid);
@@ -446,9 +668,19 @@ class TvSenderController extends ChangeNotifier {
     );
   }
 
-  Future<void> disconnect() {
+  Future<void> disconnect() async {
+    final persistence = _setSelection(const PlaybackSelection.local());
     _beginUserClose();
-    return _transport.disconnect();
+    notifyListeners();
+    await _transport.disconnect();
+    await persistence;
+  }
+
+  /// Stop an in-progress pairing without changing the playback destination.
+  Future<void> cancelPairing() async {
+    _beginUserClose();
+    notifyListeners();
+    await _transport.disconnect();
   }
 
   Future<void> forget(
@@ -462,6 +694,9 @@ class TvSenderController extends ChangeNotifier {
       await _transport.disconnect();
     }
     await _store.forget(uuid, protocol: protocol);
+    if (_selection.identityKey == '${protocol.name}:$uuid') {
+      await _setSelection(const PlaybackSelection.local());
+    }
     if (_activeTv?.uuid == uuid && _activeTv?.protocol == protocol) {
       _activeTv = null;
     }
@@ -1033,6 +1268,7 @@ class TvSenderController extends ChangeNotifier {
             _store.upsert(_activeTv!);
           }
         }
+        if (p != null) _selectTv(p.protocol, p.uuid);
         _noteSessionEstablished();
         if (_transport.protocol == TvProtocol.playBridge) {
           // The receiver only broadcasts context on its own transitions, so a
@@ -1286,6 +1522,7 @@ class TvSenderController extends ChangeNotifier {
       lastConnected: DateTime.now(),
     ));
     _activeTv = _store.byIdentity(p.protocol, p.uuid);
+    _selectTv(p.protocol, p.uuid);
     notifyListeners();
   }
 
@@ -1510,6 +1747,9 @@ class TvSenderController extends ChangeNotifier {
     _releaseProxyLeases();
     if (_disposed) return;
     _disposed = true;
+    for (final cancel in _selectionWaiters.toList()) {
+      cancel();
+    }
     _beginUserClose();
     _devSub?.cancel();
     _scanSub?.cancel();

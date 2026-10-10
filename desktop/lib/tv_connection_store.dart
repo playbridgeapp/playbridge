@@ -144,11 +144,43 @@ class TvRecord {
   }
 }
 
+/// The desktop-owned destination, independent of whether its transport is live.
+class PlaybackSelection {
+  const PlaybackSelection.local()
+      : protocol = null,
+        uuid = null;
+  const PlaybackSelection.tv(this.protocol, this.uuid);
+
+  final TvProtocol? protocol;
+  final String? uuid;
+  bool get isLocal => protocol == null;
+  String? get identityKey => isLocal ? null : '${protocol!.name}:$uuid';
+
+  Map<String, dynamic> toJson() => isLocal
+      ? {'kind': 'local'}
+      : {'kind': 'tv', 'protocol': protocol!.name, 'uuid': uuid};
+
+  static PlaybackSelection fromJson(Object? value) {
+    if (value is Map &&
+        value['kind'] == 'tv' &&
+        value['uuid'] is String &&
+        (value['uuid'] as String).isNotEmpty) {
+      for (final protocol in TvProtocol.values) {
+        if (protocol.name == value['protocol']) {
+          return PlaybackSelection.tv(protocol, value['uuid'] as String);
+        }
+      }
+    }
+    return const PlaybackSelection.local();
+  }
+}
+
 /// Persistent list of TVs the desktop sender has paired with.
 class TvConnectionStore {
   TvConnectionStore._(this._prefs);
 
   static const _kTvs = 'pb.sender.paired_tvs';
+  static const _kSelection = 'pb.sender.playback_selection';
 
   final SharedPreferences _prefs;
 
@@ -157,6 +189,19 @@ class TvConnectionStore {
     final store = TvConnectionStore._(p);
     await store._migrateLegacyRecords();
     return store;
+  }
+
+  PlaybackSelection get selection {
+    try {
+      return PlaybackSelection.fromJson(
+          jsonDecode(_prefs.getString(_kSelection) ?? '{}'));
+    } on Object {
+      return const PlaybackSelection.local();
+    }
+  }
+
+  Future<void> setSelection(PlaybackSelection value) async {
+    await _prefs.setString(_kSelection, jsonEncode(value.toJson()));
   }
 
   List<TvRecord> get tvs {
@@ -252,6 +297,9 @@ class TvConnectionStore {
     final list =
         tvs.where((t) => t.uuid != uuid || t.protocol != protocol).toList();
     await _save(list);
+    if (selection.identityKey == '${protocol.name}:$uuid') {
+      await setSelection(const PlaybackSelection.local());
+    }
   }
 
   Future<void> _migrateLegacyRecords() async {
@@ -271,5 +319,8 @@ class TvConnectionStore {
     }
   }
 
-  Future<void> forgetAll() => _prefs.remove(_kTvs);
+  Future<void> forgetAll() async {
+    await _prefs.remove(_kTvs);
+    await setSelection(const PlaybackSelection.local());
+  }
 }

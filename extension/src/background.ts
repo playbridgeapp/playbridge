@@ -993,6 +993,14 @@ function processAndNotifyVideo(videoData: VideoData, tabId: number, headers: Rec
 function bridgeStatusLabel(): "disconnected" | "connecting" | "connected" {
   const s = bridge.getState();
   if (!s.desktopConnected) return "disconnected";
+  if (s.capabilities?.selectDevice) {
+    if (s.selection?.kind === "local") return "connected";
+    if (s.selection?.kind === "tv") {
+      if (s.selection.status === "connected") return "connected";
+      if (s.selection.status === "offline") return "disconnected";
+      return "connecting";
+    }
+  }
   return s.activeTv ? "connected" : "connecting";
 }
 
@@ -1001,7 +1009,11 @@ function broadcastStatus() {
   const msg = {
     type: "ws_status_update",
     status: bridgeStatusLabel(),
+    desktopConnected: s.desktopConnected,
     activeTv: s.activeTv,
+    target: s.target,
+    capabilities: s.capabilities,
+    selection: s.selection,
     devices: s.devices,
   };
   browser.runtime.sendMessage(msg).catch(() => {});
@@ -1110,7 +1122,8 @@ function castVideo(
   video: VideoData,
   titleHint?: string | null,
   tabRecords?: VideoData[],
-): Promise<{ ok: boolean; error?: string }> {
+  destination?: "local" | null,
+): Promise<bridge.BridgeResult> {
   if (__PB_DEBUG__) {
     console.debug("[PB Debug][sender input] candidate URL:", video.url);
     console.debug("[PB Debug][sender input] candidate headers:", video.headers ?? {});
@@ -1159,6 +1172,7 @@ function castVideo(
       freshRecord.contentType,
       audio,
       freshRecord.syntheticPlaylist,
+      destination,
     ),
   );
 }
@@ -1914,12 +1928,52 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (msg.action === "wake") {
+    bridge.wake();
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (msg.action === "selectDevice") {
+    bridge.wake();
+    bridge.selectDevice(String(msg.id)).then(sendResponse);
+    return true;
+  }
+
+  if (msg.action === "selectLocal") {
+    bridge.wake();
+    bridge.selectLocal().then(sendResponse);
+    return true;
+  }
+
+  if (msg.action === "refreshDevices") {
+    bridge.wake();
+    bridge.refreshDevices().then(sendResponse);
+    return true;
+  }
+
+  if (msg.action === "showApp") {
+    bridge.wake();
+    bridge.showApp(typeof msg.pairId === "string" ? msg.pairId : undefined).then(sendResponse);
+    return true;
+  }
+
+  if (msg.action === "launchApp") {
+    bridge.wake();
+    bridge.launchApp().then(sendResponse);
+    return true;
+  }
+
   if (msg.action === "wsGetStatus") {
+    bridge.wake();
     const s = bridge.getState();
     sendResponse({
       status: bridgeStatusLabel(),
       desktopConnected: s.desktopConnected,
       activeTv: s.activeTv,
+      target: s.target,
+      capabilities: s.capabilities,
+      selection: s.selection,
       devices: s.devices,
     });
     return true;
@@ -1940,6 +1994,8 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (msg.action === "wsPlayOnTv") {
+    bridge.wake();
+    const destination = msg.destination === "local" ? "local" : null;
     // Popup path: may pass a full video object (including quality-selected URL).
     // Content-script path: only accept a URL identifier; headers always come
     // from the stored detection record for the sender's tab.
@@ -1947,7 +2003,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (fromContent) {
       const url = typeof msg.url === "string" ? msg.url : (msg.video as VideoData | undefined)?.url;
       if (!url || typeof url !== "string") {
-        sendResponse({ success: false, reason: "Video not found" });
+        sendResponse({ success: false, ok: false, reason: "Video not found", error: "Video not found" });
         return true;
       }
       const tabVideosList = getTabVideos(sender.tab!.id!);
@@ -1955,14 +2011,22 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         findVideoByIdentity(tabVideosList, url) ??
         tabVideosList.find((v) => v.url === url);
       if (!stored) {
-        sendResponse({ success: false, reason: "Video not found" });
+        sendResponse({ success: false, ok: false, reason: "Video not found", error: "Video not found" });
         return true;
       }
       // Prefer the live tab title from sender (website title).
       const titleHint = sender.tab?.title;
       const toCast = resolveCastVideoForPlayback(stored, tabVideosList);
-      castVideo(toCast, titleHint, tabVideosList).then((r) =>
-        sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+      castVideo(toCast, titleHint, tabVideosList, destination).then((r) =>
+        sendResponse({
+          success: r.ok,
+          ok: r.ok,
+          target: r.target,
+          targetName: r.targetName,
+          error: r.error,
+          code: r.code,
+          reason: r.ok ? null : (r.error ?? "Not connected"),
+        }),
       );
       return true;
     }
@@ -1975,7 +2039,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : undefined) ??
       (msg.video as VideoData | undefined);
     if (!video) {
-      sendResponse({ success: false, reason: "Video not found" });
+      sendResponse({ success: false, ok: false, reason: "Video not found", error: "Video not found" });
       return true;
     }
     // Prefer stored headers for the same URL when available (popup quality pick
@@ -2021,23 +2085,33 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     };
 
     ensureTabId()
-      .then(() => castVideo(toCast, null, videos.length > 0 ? videos : [toCast]))
+      .then(() => castVideo(toCast, null, videos.length > 0 ? videos : [toCast], destination))
       .then((r) =>
-        sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+        sendResponse({
+          success: r.ok,
+          ok: r.ok,
+          target: r.target,
+          targetName: r.targetName,
+          error: r.error,
+          code: r.code,
+          reason: r.ok ? null : (r.error ?? "Not connected"),
+        }),
       );
     return true;
   }
 
   // Content-script cast: URL identifier only; tab/frame from sender; headers from store.
   if (msg.action === "castDetectedVideo") {
+    bridge.wake();
+    const destination = msg.destination === "local" ? "local" : null;
     const tabId = sender.tab?.id;
     if (tabId == null || tabId < 0) {
-      sendResponse({ success: false, reason: "Invalid sender" });
+      sendResponse({ success: false, ok: false, reason: "Invalid sender", error: "Invalid sender" });
       return true;
     }
     const url = msg.url;
     if (typeof url !== "string" || !url || url.startsWith("blob:") || url.startsWith("data:")) {
-      sendResponse({ success: false, reason: "Invalid media URL" });
+      sendResponse({ success: false, ok: false, reason: "Invalid media URL", error: "Invalid media URL" });
       return true;
     }
     const videos = getTabVideos(tabId);
@@ -2046,20 +2120,29 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       findVideoByIdentity(videos, url) ??
       videos.find((v) => v.url === url);
     if (!stored) {
-      sendResponse({ success: false, reason: "Video not found" });
+      sendResponse({ success: false, ok: false, reason: "Video not found", error: "Video not found" });
       return true;
     }
     // Content may point at a headerless DOM/get_file URL; upgrade to the
     // header-bearing network record the popup would cast for this player.
     // Demuxed HLS is further resolved to the group master.
     const toCast = resolveOverlayCastVideo(stored, videos, sender);
-    castVideo({ ...toCast, tabId }, sender.tab?.title, videos).then((r) =>
-      sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+    castVideo({ ...toCast, tabId }, sender.tab?.title, videos, destination).then((r) =>
+      sendResponse({
+        success: r.ok,
+        ok: r.ok,
+        target: r.target,
+        targetName: r.targetName,
+        error: r.error,
+        code: r.code,
+        reason: r.ok ? null : (r.error ?? "Not connected"),
+      }),
     );
     return true;
   }
 
   if (msg.action === "wsSendToTv") {
+    bridge.wake();
     if (msg.target === "player") {
       const url = msg.url as string;
       const tabId = (sender.tab?.id ?? msg.tabId) as number | undefined;
@@ -2072,12 +2155,20 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       resolveTabId.then((resolvedTabId) =>
         resolveStreamTitle(resolvedTabId, url, sender.tab?.title).then((title) =>
           bridge.cast(url, {}, title).then((r) =>
-            sendResponse({ success: r.ok, reason: r.ok ? null : (r.error ?? "Not connected") }),
+            sendResponse({
+              success: r.ok,
+              ok: r.ok,
+              target: r.target,
+              targetName: r.targetName,
+              error: r.error,
+              code: r.code,
+              reason: r.ok ? null : (r.error ?? "Not connected"),
+            }),
           ),
         ),
       );
     } else {
-      sendResponse({ success: false, reason: "Unsupported target" });
+      sendResponse({ success: false, ok: false, reason: "Unsupported target", error: "Unsupported target" });
     }
     return true;
   }
@@ -2126,18 +2217,7 @@ function handleContextMenuClick(
     void openDataConsentPage();
     return;
   }
-  const s = bridge.getState();
-  if (!s.desktopConnected || !s.activeTv) {
-    browser.notifications.create("pb-not-connected", {
-      type: "basic",
-      iconUrl: "icon.png",
-      title: "PlayBridge",
-      message: s.desktopConnected
-        ? "No TV connected — open the PlayBridge app and pick a TV."
-        : "PlayBridge desktop app is not running.",
-    });
-    return;
-  }
+  bridge.wake();
   const url =
     info.menuItemId === "playbridge-play"
       ? (info.srcUrl ?? info.linkUrl)
@@ -2145,7 +2225,19 @@ function handleContextMenuClick(
   if (url) {
     const titleHint = tab?.title?.trim() || null;
     void resolveStreamTitle(tab?.id, url, titleHint).then((title) =>
-      bridge.cast(url, {}, title),
+      bridge.cast(url, {}, title).then((r) => {
+        if (!r.ok) {
+          browser.notifications.create("pb-cast-failed", {
+            type: "basic",
+            iconUrl: "icon.png",
+            title: "PlayBridge",
+            message:
+              r.code === "app_not_running"
+                ? "PlayBridge desktop app is not running."
+                : (r.error || "Failed to play video."),
+          });
+        }
+      }),
     );
   }
 }

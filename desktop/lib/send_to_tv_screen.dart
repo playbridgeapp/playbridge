@@ -128,7 +128,7 @@ class _SendToTvScreenState extends State<SendToTvScreen> {
           controller.submitSasCode(code);
         },
         onCancel: () {
-          controller.disconnect();
+          controller.cancelPairing();
         },
       );
     }

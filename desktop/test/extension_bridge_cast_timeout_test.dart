@@ -61,6 +61,13 @@ class _LinkedSender extends TvSenderController {
 
   @override
   bool get isConnected => true;
+  @override
+  bool get selectedTvConnected => true;
+  @override
+  PlaybackSelection get selection =>
+      const PlaybackSelection.tv(TvProtocol.playBridge, 'fixture-tv');
+  @override
+  String get selectionName => 'Fixture TV';
 }
 
 class _Player extends ChangeNotifier implements PlayerController {
@@ -80,7 +87,11 @@ void main() {
   test(
       'authenticated extension cast receives a failed result on acquisition timeout',
       () async {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({
+      'pb.sender.playback_selection': jsonEncode(
+          const PlaybackSelection.tv(TvProtocol.playBridge, 'fixture-tv')
+              .toJson())
+    });
     final directory =
         await Directory.systemTemp.createTemp('playbridge-bridge-timeout-');
     try {
@@ -122,6 +133,7 @@ void main() {
             'type': 'result',
             'ok': false,
             'target': 'tv',
+            'targetName': 'Fixture TV',
             'error': 'send failed'
           });
           expect(transport.loads, 0);

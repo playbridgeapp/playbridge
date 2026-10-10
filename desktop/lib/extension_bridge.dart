@@ -20,10 +20,9 @@ import 'tv_sender_controller.dart';
 /// the host (browser-enforced allowlist) nor read the token file, so it can't
 /// drive the bridge even though there is a loopback port.
 ///
-/// Routing: when a TV/device is linked ([TvSenderController.isConnected]), cast
-/// and control go to that receiver. When nothing is connected, the same
-/// commands play on **this** desktop ([PlayerController]) so the extension
-/// always has a working target.
+/// Casts use the desktop-owned persisted selection. An offline selected TV is
+/// reconnected with a deadline, never silently replaced by local playback.
+/// Controls and OS cast_file requests retain their live-connection routing.
 ///
 /// Wire format: newline-delimited JSON, one object per line.
 /// - client → app: `{"token":"…"}` (first line), then `{"cmd":…}`.
@@ -37,6 +36,7 @@ class ExtensionBridge {
     this.onPromptStop,
     this.onPlaybackActivity,
     this.onNewMedia,
+    this.onShowApp,
   });
 
   final TvSenderController _sender;
@@ -46,9 +46,11 @@ class ExtensionBridge {
   final VoidCallback? onPromptStop;
   final VoidCallback? onPlaybackActivity;
   final VoidCallback? onNewMedia;
+  final Future<void> Function(String? pairId)? onShowApp;
 
   ServerSocket? _server;
   final Set<Socket> _authed = {};
+  final Map<Socket, String> _lastState = {};
   String _token = '';
 
   Future<void> start() async {
@@ -64,7 +66,10 @@ class ExtensionBridge {
   }
 
   void _onClient(Socket socket) {
-    void dropClient() => _authed.remove(socket);
+    void dropClient() {
+      _authed.remove(socket);
+      _lastState.remove(socket);
+    }
 
     // Socket.listen handles errors from the inbound stream, but Socket is also
     // an IOSink: a browser/native-host disconnect can complete `done` with an
@@ -76,12 +81,13 @@ class ExtensionBridge {
       onError: (Object error, StackTrace _) {
         dropClient();
         if (error is! SocketException) {
-          debugPrint('[ext-bridge] client sink failed: $error');
+          debugPrint('[ext-bridge] client sink failed: ${error.runtimeType}');
         }
       },
     ));
 
     var authed = false;
+    var commands = Future<void>.value();
     final buf = <int>[];
     socket.listen(
       (data) {
@@ -100,7 +106,16 @@ class ExtensionBridge {
               return;
             }
           } else {
-            _handleCommand(line, socket);
+            // Each connection correlates result frames by FIFO, not request IDs.
+            commands = commands.then((_) async {
+              if (!_authed.contains(socket)) return;
+              try {
+                await _handleCommand(line, socket);
+              } on Object {
+                _send(socket,
+                    {'type': 'result', 'ok': false, 'error': 'command_failed'});
+              }
+            });
           }
         }
       },
@@ -116,7 +131,7 @@ class ExtensionBridge {
       if (obj is Map && obj['token'] == _token) {
         _authed.add(socket);
         _send(socket, {'type': 'hello', 'ok': true});
-        _sendStateTo(socket);
+        _sendStateTo(socket, force: true);
         return true;
       }
     } catch (_) {
@@ -125,7 +140,7 @@ class ExtensionBridge {
     return false;
   }
 
-  void _handleCommand(String line, Socket socket) {
+  Future<void> _handleCommand(String line, Socket socket) async {
     final Map obj;
     try {
       final decoded = jsonDecode(line);
@@ -137,7 +152,33 @@ class ExtensionBridge {
 
     switch (obj['cmd']) {
       case 'list_devices':
-        _sendStateTo(socket);
+        _sendStateTo(socket, force: true);
+        break;
+      case 'select_device':
+        final id = obj['id'];
+        final result = id is String
+            ? await _sender.selectDevice(id)
+            : {'ok': false, 'error': 'unknown_device'};
+        _send(socket, {'type': 'result', ...result});
+        break;
+      case 'select_local':
+        await _sender.disconnect();
+        _send(socket, {
+          'type': 'result',
+          'ok': true,
+          'target': 'local',
+          'targetName': 'This computer'
+        });
+        break;
+      case 'refresh_devices':
+        await _sender.rescan();
+        _pushState();
+        _send(socket, {'type': 'result', 'ok': true});
+        break;
+      case 'show_app':
+        await onShowApp
+            ?.call(obj['pairId'] is String ? obj['pairId'] as String : null);
+        _send(socket, {'type': 'result', 'ok': true});
         break;
       case 'cast':
         final url = obj['url'] as String?;
@@ -156,49 +197,46 @@ class ExtensionBridge {
         final audioUrl = (obj['audioUrl'] as String?)?.trim();
         final playlistBody = (obj['playlistBody'] as String?)?.trim();
         debugLogExtensionCastRequest(url: url, headers: headers);
-        if (_sender.isConnected) {
-          unawaited(() async {
-            if (kDebugMode) {
-              debugPrint(
-                '[ext-bridge] cast → tv'
-                '${playlistBody != null && playlistBody.isNotEmpty ? " (synthetic body)" : ""}'
-                '${audioUrl != null && audioUrl.isNotEmpty ? " + audioUrl" : ""}',
-              );
-            }
-            final ok = await _sender.castUrl(
-              url,
+        if (!_sender.selection.isLocal && obj['destination'] != 'local') {
+          final targetId = _sender.selection.identityKey;
+          final targetName = _sender.selectionName;
+          if (!await _sender.ensureSelectedConnected() ||
+              _sender.selection.identityKey != targetId) {
+            _send(socket, {
+              'type': 'result',
+              'ok': false,
+              'error': 'destination_offline',
+              'targetName': targetName
+            });
+            break;
+          }
+          final ok = await _sender.castUrl(url,
+              headers: headers,
+              title: title,
+              contentType: contentType,
+              playlistBody: playlistBody?.isEmpty == true ? null : playlistBody,
+              audioUrl: audioUrl?.isEmpty == true ? null : audioUrl);
+          _send(socket, {
+            'type': 'result',
+            'ok': ok,
+            'target': 'tv',
+            'targetName': targetName,
+            if (!ok) 'error': 'send failed'
+          });
+        } else {
+          onNewMedia?.call();
+          unawaited(_player.playUrl(url,
               headers: headers,
               title: title,
               contentType: contentType,
               playlistBody: playlistBody?.isEmpty == true ? null : playlistBody,
               audioUrl: audioUrl?.isEmpty == true ? null : audioUrl,
-            );
-            _send(socket, {
-              'type': 'result',
-              'ok': ok,
-              'target': 'tv',
-              if (!ok) 'error': 'send failed',
-            });
-          }());
-        } else {
-          onNewMedia?.call();
-          // No cast target — play on this machine (extension → desktop).
-          if (kDebugMode) {
-            debugPrint('[ext-bridge] cast → local player');
-          }
-          unawaited(_player.playUrl(
-            url,
-            headers: headers,
-            title: title,
-            contentType: contentType,
-            playlistBody: playlistBody?.isEmpty == true ? null : playlistBody,
-            audioUrl: audioUrl?.isEmpty == true ? null : audioUrl,
-            isRemote: true,
-          ));
+              isRemote: true));
           _send(socket, {
             'type': 'result',
             'ok': true,
             'target': 'local',
+            'targetName': 'This computer'
           });
         }
         break;
@@ -214,7 +252,7 @@ class ExtensionBridge {
           break;
         }
         final fileTitle = obj['title'] as String?;
-        unawaited(() async {
+        await (() async {
           final file = File(path);
           if (!file.existsSync()) {
             _send(socket, {
@@ -244,13 +282,13 @@ class ExtensionBridge {
             title: name,
             isRemote: true,
           );
-          debugPrint('[ext-bridge] cast_file → local player: $path');
+          if (kDebugMode) debugPrint('[ext-bridge] cast_file → local player');
           _send(socket, {
             'type': 'result',
             'ok': true,
             'target': 'local',
           });
-        }());
+        })();
         break;
       case 'control':
         final action = obj['action'] as String?;
@@ -259,14 +297,14 @@ class ExtensionBridge {
           break;
         }
         if (_sender.isConnected) {
-          unawaited(() async {
+          await (() async {
             final ok = await _sender.sendControl(action);
             _send(socket, {
               'type': 'result',
               'ok': ok,
               'target': 'tv',
             });
-          }());
+          })();
         } else {
           _send(socket, {
             'type': 'result',
@@ -342,43 +380,50 @@ class ExtensionBridge {
 
   void _pushState() {
     if (_authed.isEmpty) return;
-    final frame = _stateFrame();
+    final frame = jsonEncode(_stateFrame());
     for (final s in _authed) {
-      _send(s, frame);
+      _sendStateTo(s, encodedFrame: frame);
     }
   }
 
-  void _sendStateTo(Socket socket) => _send(socket, _stateFrame());
+  void _sendStateTo(Socket socket, {String? encodedFrame, bool force = false}) {
+    final frame = encodedFrame ?? jsonEncode(_stateFrame());
+    if (!force && _lastState[socket] == frame) return;
+    if (_sendEncoded(socket, frame)) _lastState[socket] = frame;
+  }
 
   Map<String, dynamic> _stateFrame() {
-    final tvLinked = _sender.isConnected;
+    final selection = _sender.selection;
     return {
       'type': 'state',
-      // Always ready to accept cast — either a TV or this desktop.
       'connected': true,
-      'target': tvLinked ? 'tv' : 'local',
-      'state': tvLinked ? _sender.state.name : _player.state,
-      'activeTv': tvLinked ? _sender.activeTv?.name : 'This computer',
-      'devices': [
-        for (final d in _sender.discovered)
-          {
-            'uuid': d.uuid,
-            'name': d.name,
-            'protocol': d.protocol.name,
-            'connectable': _sender.canConnectTo(d),
-            'paired': _sender.pairedTvs.any(
-              (saved) => saved.identityKey == d.identityKey,
-            ),
-          },
-      ],
+      'target': selection.isLocal ? 'local' : 'tv',
+      'state': selection.isLocal ? _player.state : _sender.state.name,
+      'activeTv': _sender.selectionName,
+      'capabilities': {'selectDevice': 1},
+      'selection': selection.isLocal
+          ? {'kind': 'local'}
+          : {
+              'kind': 'tv',
+              'id': selection.identityKey,
+              'name': _sender.selectionName,
+              'status': _sender.selectionStatus,
+            },
+      'devices': _sender.extensionDevices,
     };
   }
 
   void _send(Socket socket, Map<String, dynamic> obj) {
+    _sendEncoded(socket, jsonEncode(obj));
+  }
+
+  bool _sendEncoded(Socket socket, String frame) {
     try {
-      socket.write('${jsonEncode(obj)}\n');
+      socket.write('$frame\n');
+      return true;
     } catch (_) {
       // Client already disconnected; state pushes must not warn-flood.
+      return false;
     }
   }
 
@@ -387,7 +432,12 @@ class ExtensionBridge {
       final dir = Directory(bridgeDirPath());
       if (!dir.existsSync()) dir.createSync(recursive: true);
       final file = File(bridgeFilePath());
-      await file.writeAsString(jsonEncode({'port': port, 'token': token}),
+      await file.writeAsString(
+          jsonEncode({
+            'port': port,
+            'token': token,
+            'appExecutable': Platform.resolvedExecutable
+          }),
           flush: true);
       if (!Platform.isWindows) {
         try {
@@ -419,6 +469,7 @@ class ExtensionBridge {
       }
     }
     _authed.clear();
+    _lastState.clear();
     await _server?.close();
     _server = null;
   }
