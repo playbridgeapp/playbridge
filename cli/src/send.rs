@@ -2629,7 +2629,7 @@ async fn dashboard_poll(
             if let Ok(info) = renderer.transport_info().await
                 && let Some(state) = info.get("CurrentTransportState")
             {
-                snapshot.state = state.to_ascii_lowercase();
+                snapshot.state = dlna_snapshot_state(state);
             }
             if let Ok(info) = renderer.position_info().await {
                 if let Some(value) = info.get("RelTime").and_then(|value| parse_dlna_time(value)) {
@@ -2857,6 +2857,20 @@ async fn dashboard_control(
             Ok(())
         }
     }
+}
+
+/// Maps UPnP `CurrentTransportState` onto the snapshot states that play,
+/// pause and toggle compare against (`PAUSED_PLAYBACK` must read as paused).
+fn dlna_snapshot_state(state: &str) -> String {
+    match state.trim().to_ascii_uppercase().as_str() {
+        "PLAYING" => "playing",
+        "PAUSED_PLAYBACK" | "PAUSED_RECORDING" => "paused",
+        "TRANSITIONING" => "buffering",
+        "STOPPED" => "stopped",
+        "NO_MEDIA_PRESENT" => "idle",
+        _ => return state.trim().to_ascii_lowercase(),
+    }
+    .into()
 }
 
 /// UPnP AVTransport `REL_TIME` targets must be `H+:MM:SS`; renderers read a
@@ -3226,6 +3240,16 @@ mod tests {
     use super::*;
     use crate::receive::DEFAULT_PORT;
     use tokio::io::AsyncWriteExt;
+
+    #[test]
+    fn dlna_transport_states_use_snapshot_vocabulary() {
+        assert_eq!(dlna_snapshot_state("PAUSED_PLAYBACK"), "paused");
+        assert_eq!(dlna_snapshot_state("PLAYING"), "playing");
+        assert_eq!(dlna_snapshot_state("TRANSITIONING"), "buffering");
+        assert_eq!(dlna_snapshot_state("STOPPED"), "stopped");
+        assert_eq!(dlna_snapshot_state("NO_MEDIA_PRESENT"), "idle");
+        assert_eq!(dlna_snapshot_state("VENDOR_STATE"), "vendor_state");
+    }
 
     #[test]
     fn dlna_seek_targets_always_include_hours() {
