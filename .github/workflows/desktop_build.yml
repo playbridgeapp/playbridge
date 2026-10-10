@@ -349,6 +349,7 @@ jobs:
         tag_name: desktop-v${{ steps.version.outputs.version }}
         name: PlayBridge Desktop v${{ steps.version.outputs.version }}
         draft: true
+        target_commitish: ${{ github.sha }}
         body: |
           <!-- tag: 1a4b6c -->
           <!-- playbridge-rollout-delay-hours: 24 -->
