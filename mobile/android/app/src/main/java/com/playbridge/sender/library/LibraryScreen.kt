@@ -104,6 +104,7 @@ fun LibraryScreen(
     onTvShowClick: (Int) -> Unit,
     onRemoteClick: (() -> Unit)? = null,
     onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
+    onOpenStreams: () -> Unit = {},
     mainListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
     discoveredMoviesListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
     discoveredTvShowsListState: LazyListState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() },
@@ -142,6 +143,7 @@ fun LibraryScreen(
             onTvShowClick = onTvShowClick,
             onRemoteClick = onRemoteClick,
             onAddonItemClick = onAddonItemClick,
+            onOpenStreams = onOpenStreams,
             mainListState = mainListState,
             discoveredMoviesListState = discoveredMoviesListState,
             discoveredTvShowsListState = discoveredTvShowsListState,
@@ -170,6 +172,7 @@ private fun LibraryScreenContent(
     onTvShowClick: (Int) -> Unit,
     onRemoteClick: (() -> Unit)? = null,
     onAddonItemClick: (id: String, type: String, source: String?) -> Unit = { _, _, _ -> },
+    onOpenStreams: () -> Unit = {},
     mainListState: LazyListState,
     discoveredMoviesListState: LazyListState,
     discoveredTvShowsListState: LazyListState,
@@ -210,6 +213,7 @@ private fun LibraryScreenContent(
     // Search state
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
     val isSearching by viewModel.isSearching.collectAsStateWithLifecycle()
+    val isLegacyNoticeDismissed by viewModel.isLegacyNoticeDismissed.collectAsStateWithLifecycle()
     val isSearchLoading by viewModel.isSearchLoading.collectAsStateWithLifecycle()
     val addonSearchGroups by viewModel.addonSearchGroups.collectAsStateWithLifecycle()
     val addonSearchResults = remember(addonSearchGroups) { addonSearchGroups.flatMap { it.items }.distinctBy { it.id } }
@@ -411,7 +415,7 @@ private fun LibraryScreenContent(
                                 // (which opens the device picker), so the top bar just
                                 // titles the screen instead of duplicating "Watching on".
                                 Text(
-                                    text = "Library",
+                                    text = "Library (legacy)",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -453,6 +457,13 @@ private fun LibraryScreenContent(
                             }
                         }
                     ) // closes TopAppBar
+                    if (!isLegacyNoticeDismissed && !isSearching) {
+                        LibraryLegacyNoticeBanner(
+                            onOpenStreams = onOpenStreams,
+                            onDismiss = { viewModel.dismissLegacyNotice() },
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                        )
+                    }
                 } // closes Column
             }
         },
@@ -903,6 +914,83 @@ private fun LibraryScreenContent(
             }
         }
     }
+    }
+}
+
+@Composable
+private fun LibraryLegacyNoticeBanner(
+    onOpenStreams: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+    ) {
+        Column(
+            modifier = Modifier.padding(start = 14.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Info,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = "This Library is deprecated",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(28.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "This feature will be removed in a future release. The new Library (streams.playbridge.app) replaces this one.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                modifier = Modifier.padding(end = 6.dp),
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(
+                    onClick = onOpenStreams,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                ) {
+                    Text(
+                        text = "Open Library",
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
     }
 }
 

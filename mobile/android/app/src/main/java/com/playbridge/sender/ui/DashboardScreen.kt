@@ -166,8 +166,8 @@ fun DashboardScreen(
         ),
         DashboardItem(
             icon = Icons.AutoMirrored.Filled.LibraryBooks,
-            title = "Legacy Library",
-            subtitle = "Your media library",
+            title = "Library (legacy)",
+            subtitle = "Deprecated · use the new Library",
             screen = Screen.Library,
             gradientColors = listOf(Color(0xFF6A1B9A), Color(0xFF8E24AA))
         ),
@@ -250,13 +250,28 @@ fun DashboardScreen(
         }
     }
     val availableIds = availableItems.map { it.id }
-    val orderedIds = DashboardTileOrder.reconcile(savedOrder, availableIds)
+    val orderedIds = remember(savedOrder, availableIds) {
+        if (!onboardingPrefs.getBoolean("migrated_dashboard_tile_order_v1", false)) {
+            val migrated = DashboardTileOrder.migrateOrder(savedOrder, availableIds)
+            onboardingPrefs.edit()
+                .putString("dashboard_tile_order", org.json.JSONArray(migrated).toString())
+                .putBoolean("migrated_dashboard_tile_order_v1", true)
+                .apply()
+            savedOrder = migrated
+            migrated
+        } else {
+            DashboardTileOrder.reconcile(savedOrder, availableIds)
+        }
+    }
     val itemsById = availableItems.associateBy { it.id }
     val orderedItems = orderedIds.mapNotNull { itemsById[it] }
     val pages = orderedItems.chunked(DashboardTileOrder.TILES_PER_PAGE)
     fun saveOrder(ids: List<String>) {
         savedOrder = ids
-        onboardingPrefs.edit().putString("dashboard_tile_order", org.json.JSONArray(ids).toString()).apply()
+        onboardingPrefs.edit()
+            .putString("dashboard_tile_order", org.json.JSONArray(ids).toString())
+            .putBoolean("migrated_dashboard_tile_order_v1", true)
+            .apply()
     }
     fun moveTile(id: String, position: Int) {
         saveOrder(DashboardTileOrder.move(orderedIds, id, position))

@@ -54,7 +54,7 @@ fun LibrarySettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Library") },
+                title = { Text("Library (legacy)") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back")

@@ -31,8 +31,21 @@ data class BridgedApp(
 /** The installed list is local to this PlayBridge installation; cast grants remain separate. */
 class BridgedAppStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences("bridged_apps", Context.MODE_PRIVATE)
-    private val mutableApps = MutableStateFlow(read())
+    private val mutableApps = MutableStateFlow(readAndSeed())
     val apps: StateFlow<List<BridgedApp>> = mutableApps
+
+    private fun readAndSeed(): List<BridgedApp> {
+        val current = read()
+        val alreadySeeded = prefs.getBoolean(PREF_KEY_SEEDED_STREAMS_LIBRARY, false)
+        if (alreadySeeded) return current
+
+        val seeded = seedStreamsLibrary(current, alreadySeeded = false)
+        prefs.edit().putBoolean(PREF_KEY_SEEDED_STREAMS_LIBRARY, true).apply()
+        if (seeded != current) {
+            write(seeded)
+        }
+        return seeded
+    }
 
     fun install(app: BridgedApp) = update { existing ->
         existing.filterNot { it.origin == app.origin } + app.copy(tabId = existing.find { it.origin == app.origin }?.tabId)
@@ -50,10 +63,9 @@ class BridgedAppStore(context: Context) {
         apps.map { if (it.origin == origin) it.copy(tabId = tabId) else it }
     }
 
-    private fun update(transform: (List<BridgedApp>) -> List<BridgedApp>) {
-        val next = transform(mutableApps.value)
+    private fun write(apps: List<BridgedApp>) {
         prefs.edit().putString("installed", JSONArray().apply {
-            next.forEach { app ->
+            apps.forEach { app ->
                 put(JSONObject().apply {
                     put("origin", app.origin)
                     put("name", app.name)
@@ -63,6 +75,11 @@ class BridgedAppStore(context: Context) {
                 })
             }
         }.toString()).apply()
+    }
+
+    private fun update(transform: (List<BridgedApp>) -> List<BridgedApp>) {
+        val next = transform(mutableApps.value)
+        write(next)
         mutableApps.value = next
     }
 
@@ -152,6 +169,31 @@ class BridgedAppStore(context: Context) {
                     connection.disconnect()
                 }
             }.getOrNull()
+        }
+
+        const val STREAMS_ORIGIN = "https://streams.playbridge.app"
+        const val STREAMS_START_URL = "https://streams.playbridge.app/"
+        const val STREAMS_DEFAULT_NAME = "Library"
+        const val PREF_KEY_SEEDED_STREAMS_LIBRARY = "seeded_streams_library_v1"
+
+        /**
+         * Pure seed logic for preinstalling the Streams bridged app.
+         *
+         * @param existing The currently installed apps.
+         * @param alreadySeeded Whether the one-time seed flag has already been set.
+         * @return The updated list of apps. If already seeded or Streams is already installed,
+         *         the list is returned unchanged. Otherwise, a new BridgedApp entry is added.
+         */
+        fun seedStreamsLibrary(existing: List<BridgedApp>, alreadySeeded: Boolean): List<BridgedApp> {
+            if (alreadySeeded) return existing
+            if (existing.any { it.origin == STREAMS_ORIGIN }) return existing
+            val defaultStreamsApp = BridgedApp(
+                origin = STREAMS_ORIGIN,
+                name = STREAMS_DEFAULT_NAME,
+                startUrl = STREAMS_START_URL,
+                iconUrl = null,
+            )
+            return existing + defaultStreamsApp
         }
     }
 }
