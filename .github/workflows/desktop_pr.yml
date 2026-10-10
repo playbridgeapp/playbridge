@@ -25,9 +25,11 @@ on:
         type: string
         default: ""
 
+# Only PR runs supersede each other. Release workflows call this workflow, so two
+# releases on main would otherwise share a group and cancel each other's checks.
 concurrency:
-  group: desktop-pr-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: desktop-pr-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
