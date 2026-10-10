@@ -397,6 +397,7 @@ jobs:
           tag_name: phone-v${{ steps.versions.outputs.phone }}
           name: PlayBridge Phone v${{ steps.versions.outputs.phone }}
           draft: true
+          target_commitish: ${{ github.sha }}
           body: |
             <!-- tag: 5c9b2f -->
             <!-- playbridge-rollout-delay-hours: 24 -->
@@ -417,6 +418,7 @@ jobs:
           tag_name: tv-player-v${{ steps.versions.outputs.player }}
           name: PlayBridge TV Player v${{ steps.versions.outputs.player }}
           draft: true
+          target_commitish: ${{ github.sha }}
           body: |
             <!-- tag: 8d2a1c -->
             <!-- playbridge-rollout-delay-hours: 24 -->
@@ -439,6 +441,7 @@ jobs:
           tag_name: tv-geckoview-plugin-v${{ steps.versions.outputs.browser }}
           name: PlayBridge TV GeckoView Plugin v${{ steps.versions.outputs.browser }}
           draft: true
+          target_commitish: ${{ github.sha }}
           body: |
             <!-- tag: 3e7f9a -->
             <!-- playbridge-rollout-delay-hours: 24 -->

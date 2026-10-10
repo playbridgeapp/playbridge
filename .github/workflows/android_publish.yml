@@ -30,6 +30,7 @@ jobs:
     outputs:
       is_draft: ${{ steps.release.outputs.is_draft }}
       tag: ${{ steps.release.outputs.tag }}
+      test_ref: ${{ steps.release.outputs.test_ref }}
     steps:
       - name: Find draft GitHub release
         id: release
@@ -47,7 +48,7 @@ jobs:
           TAG="${PREFIX}-v${VERSION}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,url >/tmp/android-release.json; then
+          if ! gh release view "$TAG" --repo "$REPOSITORY" --json isDraft,targetCommitish,url >/tmp/android-release.json; then
             echo "No GitHub Release found for $TAG." >&2
             echo "Run Android Release Build first (uprev or workflow_dispatch)." >&2
             exit 1
@@ -58,9 +59,22 @@ jobs:
           echo "is_draft=$is_draft" >> "$GITHUB_OUTPUT"
           if [ "$is_draft" = "false" ]; then
             echo "⏭️ $TAG is already published: $url"
-          else
-            echo "✅ Found draft $TAG: $url"
+            exit 0
           fi
+          echo "✅ Found draft $TAG: $url"
+
+          if gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --method GET --silent >/dev/null 2>&1; then
+            TEST_REF="$TAG"
+          else
+            TARGET=$(jq -r '.targetCommitish' /tmp/android-release.json)
+            if [[ ! "$TARGET" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "Draft $TAG has no remote tag and targetCommitish '$TARGET' is not a full 40-hex commit SHA." >&2
+              echo "Pin it with: gh release edit $TAG --repo $REPOSITORY --target <sha>, or rebuild the draft." >&2
+              exit 1
+            fi
+            TEST_REF="$TARGET"
+          fi
+          echo "test_ref=$TEST_REF" >> "$GITHUB_OUTPUT"
 
   test:
     name: test
@@ -72,7 +86,7 @@ jobs:
     uses: ./.github/workflows/android_pr.yml
     with:
       always_run: true
-      ref: ${{ needs.validate.outputs.tag }}
+      ref: ${{ needs.validate.outputs.test_ref }}
 
   publish-play-store:
     name: publish to Play Store

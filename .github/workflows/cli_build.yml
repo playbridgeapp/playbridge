@@ -212,6 +212,7 @@ jobs:
           tag_name: cli-v${{ needs.validate.outputs.version }}
           name: PlayBridge CLI v${{ needs.validate.outputs.version }}
           draft: true
+          target_commitish: ${{ github.sha }}
           body: |
             <!-- tag: 7b2c9a -->
             <!-- playbridge-rollout-delay-hours: 24 -->
