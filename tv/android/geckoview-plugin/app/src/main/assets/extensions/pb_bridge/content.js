@@ -1,17 +1,52 @@
-// PlayBridge JS Bridge — content script
-// Listens for eval requests from background script and executes in page context.
-console.log("[PB Bridge] Content script loaded");
+// This window is Gecko's isolated content-script global. Never export the channel to the page.
+// The shared controller only needs DOM access; <video> nodes remain visible in this world.
+const videoDocumentId = crypto.randomUUID();
+let lastVideoActive = null;
+let videoDocumentLive = true;
+
+function postVideo(data) {
+    if (!videoDocumentLive) return;
+    browser.runtime.sendMessage({ type: "video", documentId: videoDocumentId, data })
+        .catch(() => {}); // A closing document/runtime cannot deliver its final message.
+}
+
+window.pbVideoChannel = {
+    onmessage: null,
+    postMessage(data) {
+        try {
+            const message = JSON.parse(data);
+            if (message.type === "active") lastVideoActive = data;
+            // Reassert activation before periodic status. Native navigation/recreation resets
+            // its selector even when the controller's score has not changed.
+            if (message.type === "status" && lastVideoActive) postVideo(lastVideoActive);
+            postVideo(data);
+        } catch (_) { /* Only controller JSON crosses this bridge. */ }
+    }
+};
+
+window.addEventListener("pagehide", () => {
+    postVideo(JSON.stringify({ type: "active", active: false }));
+    videoDocumentLive = false;
+});
+window.addEventListener("pageshow", () => {
+    videoDocumentLive = true; // BFCache restores keep the same isolated controller.
+    if (lastVideoActive) postVideo(lastVideoActive);
+});
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.type === "video_cmd") {
+        if (videoDocumentLive && (!message.documentId || message.documentId === videoDocumentId)) {
+            window.pbVideoChannel.onmessage?.({ data: message.cmd });
+        }
+        return;
+    }
     if (message.type === "eval") {
         try {
             const result = eval(message.code);
-            console.log("[PB Bridge] Eval result:", result);
             sendResponse(String(result || ""));
-        } catch (e) {
-            console.error("[PB Bridge] Eval error:", e);
-            sendResponse("error: " + e.message);
+        } catch (_) {
+            sendResponse("error: eval_failed");
         }
-        return true; // Keep the message channel open for sendResponse
+        return true;
     }
 });

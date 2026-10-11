@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import android.view.MotionEvent
 import android.view.View
+import com.playbridge.shared.browser.VideoTargetSelector
+import org.json.JSONObject
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
@@ -27,8 +29,128 @@ class GeckoViewEngine(
 
     private var _canGoBack: Boolean = false
 
+    // Gecko frame ids are 64-bit: out-of-process (cross-origin) iframes get ids far above
+    // Int.MAX_VALUE, and getInt() saturated them, so commands targeted a frame that didn't exist.
+    private data class FrameKey(val tabId: Long, val frameId: Long)
+    private val videoTargets = VideoTargetSelector<FrameKey>()
+    private val documents = mutableMapOf<FrameKey, String>()
+    private var mutedTarget: FrameKey? = null
+    private var activeVideoMuted: Boolean? = null
+    private var autoUnmuteDone = false
+    private var navigationGeneration = 0
+    private val videoMessageListener: (JSONObject) -> Unit = ::handleVideoMessage
+
+    var onVideoResult: ((String, String) -> Unit)? = null
+    var onVideoStatus: ((String) -> Unit)? = null
+    var onVideoOverlay: ((Boolean, String, String, String?, String?, Long) -> Unit)? = null
+    var onRequestUnmuteTap: (() -> Unit)? = null
+
+    fun isVideoControlActive(): Boolean = videoTargets.isActive
+    fun isActiveVideoMuted(): Boolean? = activeVideoMuted.takeIf { mutedTarget == videoTargets.current() }
+    fun cycleVideoTarget() { videoTargets.cycle() }
+    fun videoToggle() = sendVideoCommand("toggle")
+    fun videoSeek(deltaSeconds: Int) = sendVideoCommand("seek,$deltaSeconds")
+    fun videoSeekTo(seconds: Double) = sendVideoCommand("seekto,$seconds")
+    fun videoVolume(delta: Double) = sendVideoCommand("vol,$delta")
+    fun videoUnmute() = sendVideoCommand("unmute")
+
+    private fun sendVideoCommand(cmd: String) {
+        val target = videoTargets.current() ?: return
+        val document = documents[target] ?: return
+        PbBridge.videoCommand(target.tabId, target.frameId, document, cmd)
+    }
+
+    /** Keep the delayed unmute on the document/frame that received the trusted tap. */
+    fun unmuteAfterTap(): (() -> Unit)? {
+        val target = videoTargets.current() ?: return null
+        val document = documents[target] ?: return null
+        val generation = navigationGeneration
+        return {
+            if (generation == navigationGeneration && videoTargets.current() == target &&
+                documents[target] == document) videoUnmute()
+        }
+    }
+
+    private fun resetVideoControlState() {
+        val hadFrames = videoTargets.isActive
+        navigationGeneration++
+        videoTargets.reset()
+        documents.clear()
+        mutedTarget = null
+        activeVideoMuted = null
+        autoUnmuteDone = false
+        if (hadFrames) sendIdleVideoStatus()
+    }
+
+    private fun sendIdleVideoStatus() {
+        onVideoStatus?.invoke("""{"type":"status","state":"idle","position":0,"duration":0}""")
+    }
+
+    private fun handleVideoMessage(message: JSONObject) {
+        try {
+            val tabId = message.getLong("tabId")
+            val frameId = message.getLong("frameId")
+            if (tabId < 0 || frameId < 0) return
+            val key = FrameKey(tabId, frameId)
+            val document = message.getString("documentId")
+            val data = message.getString("data")
+            val o = JSONObject(data)
+            when (o.optString("type")) {
+                "active" -> {
+                    if (o.optBoolean("active")) {
+                        if (documents[key] != document) {
+                            videoTargets.remove(key)
+                            if (mutedTarget == key) { mutedTarget = null; activeVideoMuted = null }
+                        }
+                        documents[key] = document
+                        videoTargets.update(key, o.optDouble("score", 0.0), o.optBoolean("playing"))
+                    } else if (documents[key] == document) {
+                        videoTargets.remove(key)
+                        documents.remove(key)
+                        if (!videoTargets.isActive) {
+                            mutedTarget = null
+                            activeVideoMuted = null
+                            autoUnmuteDone = false
+                            sendIdleVideoStatus()
+                        }
+                    }
+                }
+                "status" -> {
+                    if (documents[key] != document || videoTargets.current() != key) return
+                    mutedTarget = key
+                    if (o.has("muted")) activeVideoMuted = o.optBoolean("muted")
+                    val state = o.optString("state")
+                    if (state == "idle") { activeVideoMuted = null; autoUnmuteDone = false }
+                    if (activeVideoMuted == true && state == "playing" &&
+                        !o.optBoolean("suppressUnmute", false) && !autoUnmuteDone) {
+                        autoUnmuteDone = true
+                        onRequestUnmuteTap?.invoke()
+                    }
+                    onVideoStatus?.invoke(data)
+                }
+                "result" -> {
+                    if (documents[key] != document || videoTargets.current() != key) return
+                    val kind = o.optString("kind")
+                    val value = o.optString("value")
+                    if (kind != "none" && value != "none") onVideoResult?.invoke(kind, value)
+                }
+                "overlay" -> {
+                    if (documents[key] != document || videoTargets.current() != key) return
+                    onVideoOverlay?.invoke(o.optBoolean("visible"), o.optString("text"),
+                        o.optString("style", "fullscreen"),
+                        if (o.has("backgroundColor")) o.optString("backgroundColor") else null,
+                        if (o.has("textColor")) o.optString("textColor") else null,
+                        o.optLong("autoDismissMs", 0L))
+                }
+            }
+        } catch (_: Exception) {
+            Log.w(TAG, "Invalid video bridge message")
+        }
+    }
+
     init {
         runtime.warmUp()
+        PbBridge.onVideoMessage = videoMessageListener
         setupGeckoView()
     }
 
@@ -49,6 +171,10 @@ class GeckoViewEngine(
         session.reload()
     }
 
+    fun goForward() {
+        session.goForward()
+    }
+
     fun goBack() {
         session.goBack()
     }
@@ -65,6 +191,8 @@ class GeckoViewEngine(
     }
 
     fun destroy() {
+        if (PbBridge.onVideoMessage === videoMessageListener) PbBridge.onVideoMessage = null
+        resetVideoControlState()
         session.close()
     }
 
@@ -188,6 +316,8 @@ class GeckoViewEngine(
                 perms: List<org.mozilla.geckoview.GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean,
             ) {
+                // Gecko NavigationDelegate location changes refer to the top-level document.
+                resetVideoControlState()
                 if (url != null) onLocationChanged?.invoke(url)
             }
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
