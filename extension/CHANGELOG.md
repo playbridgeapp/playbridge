@@ -11,7 +11,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - **Reconnection**: Hovering the cast button, opening the popup or casting reconnects to the desktop app immediately instead of waiting for the reconnect backoff.
 - **Cast Results**: The cast button reports "Playing on this computer" or "Casting to <TV>". An offline TV shows an error with a one-off "Play on this computer" action instead of playing locally without asking.
-- **Device Rows**: Show the protocol (PlayBridge, Google Cast, DLNA) to tell apart one TV discovered several ways.
+- **Device Filter Chips**: Show protocol filter chips (PlayBridge, Google Cast, DLNA, Roku, Web Browser) at the bottom of the device list in the popup and in-page picker when multiple protocols exist, replacing per-row protocol badges and remembering the user's protocol selection.
 
 ## [0.6.1] — 2026-07-19
 

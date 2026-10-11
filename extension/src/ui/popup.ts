@@ -12,7 +12,14 @@ import {
     setShowVideoCastOverlay,
     setVideoCastOverlaySiteOverride,
 } from "../settings";
-import { formatDeviceProtocol, isActiveDevice } from "../core/device-protocol";
+import {
+    formatDeviceProtocol,
+    isActiveDevice,
+    protocolChips,
+    defaultProtocol,
+    filterByProtocol,
+    DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
+} from "../core/device-protocol";
 
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -71,6 +78,8 @@ let lastStatusKey = '';
 let lastDevicesKey = '';
 let overlayPreferences = null;
 let dataConsent = { required: false, granted: true, version: 1 };
+let rememberedProtocol = null;
+let selectedPopupProtocol = null;
 
 // Navigation
 tabBtns.forEach(btn => {
@@ -301,7 +310,16 @@ function renderDevices() {
         devicesList.appendChild(localItem);
 
         // 2. Devices
-        bridgeDevices.forEach((d) => {
+        const chips = protocolChips(bridgeDevices);
+        const showChips = chips.length >= 2;
+        const activeProtocol = showChips
+            ? defaultProtocol(bridgeDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+            : null;
+        const visibleDevices = showChips && activeProtocol
+            ? filterByProtocol(bridgeDevices, activeProtocol)
+            : bridgeDevices;
+
+        visibleDevices.forEach((d) => {
             const isTvActive = isActiveDevice(d, bridgeSelection, currentStatus?.activeTv);
 
             const item = document.createElement('div');
@@ -316,14 +334,6 @@ function renderDevices() {
 
             const actions = document.createElement('div');
             actions.className = 'saved-connection-actions';
-
-            const protoLabel = formatDeviceProtocol(d.protocol);
-            if (protoLabel) {
-                const protoBadge = document.createElement('span');
-                protoBadge.className = 'badge-protocol';
-                protoBadge.textContent = protoLabel;
-                actions.appendChild(protoBadge);
-            }
 
             if (d.paired) {
                 const tag = document.createElement('span');
@@ -374,6 +384,31 @@ function renderDevices() {
             item.appendChild(actions);
             devicesList.appendChild(item);
         });
+
+        if (showChips) {
+            const chipsRow = document.createElement('div');
+            chipsRow.className = 'protocol-chips-row';
+            chips.forEach((chip) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'protocol-chip' + (chip === activeProtocol ? ' active' : '');
+                btn.textContent = formatDeviceProtocol(chip) || chip;
+                btn.setAttribute('data-protocol', chip);
+                btn.addEventListener('click', () => {
+                    rememberedProtocol = chip;
+                    try {
+                        browser.storage.local
+                            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+                            .catch(() => {});
+                    } catch {
+                        // ignore
+                    }
+                    renderDevices();
+                });
+                chipsRow.appendChild(btn);
+            });
+            devicesList.appendChild(chipsRow);
+        }
         return;
     }
 
@@ -385,7 +420,17 @@ function renderDevices() {
         devicesList.appendChild(empty);
         return;
     }
-    bridgeDevices.forEach((d) => {
+
+    const legacyChips = protocolChips(bridgeDevices);
+    const legacyShowChips = legacyChips.length >= 2;
+    const legacyActiveProtocol = legacyShowChips
+        ? defaultProtocol(bridgeDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+        : null;
+    const legacyVisibleDevices = legacyShowChips && legacyActiveProtocol
+        ? filterByProtocol(bridgeDevices, legacyActiveProtocol)
+        : bridgeDevices;
+
+    legacyVisibleDevices.forEach((d) => {
         const item = document.createElement('div');
         item.className = 'saved-connection-item';
         const info = document.createElement('div');
@@ -398,14 +443,6 @@ function renderDevices() {
         const actions = document.createElement('div');
         actions.className = 'saved-connection-actions';
 
-        const protoLabel = formatDeviceProtocol(d.protocol);
-        if (protoLabel) {
-            const protoBadge = document.createElement('span');
-            protoBadge.className = 'badge-protocol';
-            protoBadge.textContent = protoLabel;
-            actions.appendChild(protoBadge);
-        }
-
         const tag = document.createElement('span');
         tag.className = 'saved-connection-pin';
         tag.textContent = d.paired ? 'paired' : 'not paired';
@@ -415,6 +452,31 @@ function renderDevices() {
         item.appendChild(actions);
         devicesList.appendChild(item);
     });
+
+    if (legacyShowChips) {
+        const chipsRow = document.createElement('div');
+        chipsRow.className = 'protocol-chips-row';
+        legacyChips.forEach((chip) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'protocol-chip' + (chip === legacyActiveProtocol ? ' active' : '');
+            btn.textContent = formatDeviceProtocol(chip) || chip;
+            btn.setAttribute('data-protocol', chip);
+            btn.addEventListener('click', () => {
+                rememberedProtocol = chip;
+                try {
+                    browser.storage.local
+                        .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+                        .catch(() => {});
+                } catch {
+                    // ignore
+                }
+                renderDevices();
+            });
+            chipsRow.appendChild(btn);
+        });
+        devicesList.appendChild(chipsRow);
+    }
 }
 
 function updateStatusUI(s) {
@@ -1016,8 +1078,25 @@ if (resetSiteOverlayBtn) {
     });
 }
 
+async function loadRememberedProtocol() {
+    try {
+        const stored = await browser.storage.local.get(DEVICE_PICKER_PROTOCOL_STORAGE_KEY);
+        if (stored && typeof stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY] === 'string') {
+            rememberedProtocol = stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY];
+            renderDevices();
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
 browser.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (DEVICE_PICKER_PROTOCOL_STORAGE_KEY in changes) {
+        const next = changes[DEVICE_PICKER_PROTOCOL_STORAGE_KEY]?.newValue;
+        rememberedProtocol = typeof next === 'string' ? next : null;
+        renderDevices();
+    }
     if (VIDEO_CAST_OVERLAY_STORAGE_KEYS.some(key => key in changes)) {
         loadOverlaySetting();
     }
@@ -1026,6 +1105,7 @@ browser.storage.onChanged.addListener((changes, area) => {
 // Init
 window.addEventListener('DOMContentLoaded', async () => {
     await loadDataConsent();
+    await loadRememberedProtocol();
     loadStatus();
     loadOverlaySetting();
 });

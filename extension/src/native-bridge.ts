@@ -6,7 +6,14 @@
 // from the browser, and the extension never touches the TV's self-signed cert.
 
 import browser from "./browser";
-export { formatDeviceProtocol, isActiveDevice } from "./core/device-protocol";
+export {
+  formatDeviceProtocol,
+  isActiveDevice,
+  protocolChips,
+  defaultProtocol,
+  filterByProtocol,
+  DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
+} from "./core/device-protocol";
 
 declare const __PB_DEBUG__: boolean;
 const isDebug = typeof __PB_DEBUG__ !== "undefined" && Boolean(__PB_DEBUG__);

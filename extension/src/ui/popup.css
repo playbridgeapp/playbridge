@@ -815,7 +815,7 @@ input:checked+.slider:before {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 150px;
+    max-height: 220px;
     overflow-y: auto;
 }
 
@@ -897,11 +897,6 @@ input:checked+.slider:before {
     color: var(--text-muted);
 }
 
-.badge-protocol {
-    font-size: 11px;
-    color: var(--text-muted);
-}
-
 .pair-app-btn {
     background: transparent;
     border: 1px solid var(--accent);
@@ -917,4 +912,37 @@ input:checked+.slider:before {
 .pair-app-btn:hover {
     background: var(--accent);
     color: var(--bg-primary);
+}
+
+.protocol-chips-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 8px;
+    margin-top: 4px;
+    border-top: 1px solid var(--bg-tertiary);
+}
+
+.protocol-chip {
+    background: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.protocol-chip:hover {
+    border-color: var(--accent);
+    color: var(--text-main);
+}
+
+.protocol-chip.active {
+    background: rgba(208, 188, 255, 0.18);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
 }

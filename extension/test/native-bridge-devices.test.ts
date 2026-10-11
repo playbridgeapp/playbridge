@@ -602,7 +602,120 @@ test("formatDeviceProtocol correctly maps known protocols, preserves raw unknown
   assert.equal(formatDeviceProtocol("   "), null);
 });
 
-test("popup and content script render secondary protocol label for device rows", async () => {
+test("protocolChips extracts unique protocols in canonical order", () => {
+  const { protocolChips } = bridge;
+  assert.equal(typeof protocolChips, "function");
+
+  const devices = [
+    { protocol: "roku" },
+    { protocol: "googleCast" },
+    { protocol: "dlna" },
+    { protocol: "playBridge" },
+    { protocol: "webBrowser" },
+    { protocol: "airplay" },
+    { protocol: "custom-proto" },
+    { protocol: "googleCast" }, // duplicate
+    { protocol: undefined },
+    { protocol: "" },
+    { protocol: "   " },
+  ];
+
+  const chips = protocolChips(devices);
+  assert.deepEqual(chips, [
+    "playBridge",
+    "googleCast",
+    "dlna",
+    "roku",
+    "webBrowser",
+    "airplay",
+    "custom-proto",
+  ]);
+
+  // When devices have no protocol or empty
+  assert.deepEqual(protocolChips([]), []);
+  assert.deepEqual(protocolChips([{ protocol: "" }, { protocol: undefined }]), []);
+});
+
+test("defaultProtocol determines the default selected protocol chip with proper priority", () => {
+  const { defaultProtocol } = bridge;
+  assert.equal(typeof defaultProtocol, "function");
+
+  const devices = [
+    { id: "tv-dlna", uuid: "1", name: "Living Room TV", protocol: "dlna", active: false },
+    { id: "tv-cast", uuid: "2", name: "Living Room TV", protocol: "googleCast", active: false },
+    { id: "tv-pb", uuid: "3", name: "Living Room TV", protocol: "playBridge", active: false },
+    { id: "tv-roku", uuid: "4", name: "Bedroom Roku", protocol: "roku", active: false },
+  ];
+
+  // Priority 1: Remembered choice if still present
+  assert.equal(
+    defaultProtocol(devices, { kind: "tv", id: "tv-cast" }, "roku", "Living Room TV"),
+    "roku",
+  );
+  assert.equal(
+    defaultProtocol(devices, { kind: "tv", id: "tv-cast" }, "googleCast", "Living Room TV"),
+    "googleCast",
+  );
+
+  // Priority 2: Active device protocol if remembered is not present/empty
+  assert.equal(
+    defaultProtocol(devices, { kind: "tv", id: "tv-dlna" }, null, "Living Room TV"),
+    "dlna",
+  );
+  assert.equal(
+    defaultProtocol(devices, { kind: "tv", id: "tv-dlna" }, "nonexistent", "Living Room TV"),
+    "dlna",
+  );
+
+  // Priority 3: PlayBridge if active device is not present (or selection is local)
+  assert.equal(
+    defaultProtocol(devices, { kind: "local" }, null, "Living Room TV"),
+    "playBridge",
+  );
+  assert.equal(
+    defaultProtocol(devices, null, null, null),
+    "playBridge",
+  );
+
+  // Priority 4: First chip if PlayBridge not present and no active device/remembered
+  const noPbDevices = [
+    { id: "tv-dlna", name: "TV", protocol: "dlna" },
+    { id: "tv-roku", name: "TV", protocol: "roku" },
+  ];
+  assert.equal(
+    defaultProtocol(noPbDevices, null, null, null),
+    "dlna",
+  );
+
+  // Empty devices returns null
+  assert.equal(defaultProtocol([], null, null, null), null);
+  assert.equal(defaultProtocol([{ name: "Legacy" }], null, null, null), null);
+});
+
+test("filterByProtocol filters devices by protocol case-insensitively", () => {
+  const { filterByProtocol } = bridge;
+  assert.equal(typeof filterByProtocol, "function");
+
+  const devices = [
+    { name: "TV 1", protocol: "playBridge" },
+    { name: "TV 2", protocol: "googleCast" },
+    { name: "TV 3", protocol: "dlna" },
+    { name: "TV 4", protocol: "PlayBridge" },
+  ];
+
+  assert.deepEqual(filterByProtocol(devices, "playBridge"), [
+    { name: "TV 1", protocol: "playBridge" },
+    { name: "TV 4", protocol: "PlayBridge" },
+  ]);
+  assert.deepEqual(filterByProtocol(devices, "googlecast"), [
+    { name: "TV 2", protocol: "googleCast" },
+  ]);
+  // Null or empty protocol returns all devices
+  assert.deepEqual(filterByProtocol(devices, null), devices);
+  assert.deepEqual(filterByProtocol(devices, undefined), devices);
+});
+
+test("popup and content script render protocol chips row and remove per-row protocol badges", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
 
@@ -611,15 +724,22 @@ test("popup and content script render secondary protocol label for device rows",
     path.resolve(process.cwd(), "src/ui/popup.ts"),
     "utf-8",
   );
+  // Per-row badge must not be present
+  assert.equal(
+    popupSource.includes("badge-protocol"),
+    false,
+    "popup.ts must remove per-row badge-protocol",
+  );
+  // Protocol chips row must be present
   assert.match(
     popupSource,
-    /const protoLabel = formatDeviceProtocol\(d\.protocol\);/,
-    "popup.ts must map device protocol using formatDeviceProtocol",
+    /chipsRow\.className = 'protocol-chips-row';/,
+    "popup.ts must render protocol-chips-row",
   );
   assert.match(
     popupSource,
-    /protoBadge\.className = 'badge-protocol';/,
-    "popup.ts must assign badge-protocol class to secondary protocol label",
+    /btn\.className = 'protocol-chip'/,
+    "popup.ts must render protocol-chip buttons",
   );
 
   // Check content.ts
@@ -627,15 +747,28 @@ test("popup and content script render secondary protocol label for device rows",
     path.resolve(process.cwd(), "src/content.ts"),
     "utf-8",
   );
+  // Per-row protocol badge must not be present
+  assert.equal(
+    contentSource.includes("picker-item-badge protocol"),
+    false,
+    "content.ts must remove per-row picker-item-badge protocol",
+  );
+  // Picker protocol chips row must be present
   assert.match(
     contentSource,
-    /const protoLabel = formatDeviceProtocol\(device\.protocol\);/,
-    "content.ts must map device protocol using formatDeviceProtocol",
+    /chipsRow\.className = "picker-protocol-chips";/,
+    "content.ts must render picker-protocol-chips",
   );
   assert.match(
     contentSource,
-    /protoBadge\.className = "picker-item-badge protocol";/,
-    "content.ts must assign protocol badge class in in-page picker",
+    /chipBtn\.className = "protocol-chip"/,
+    "content.ts must render protocol-chip buttons",
+  );
+  // Chip click handler must check e.isTrusted and must not call closePicker
+  assert.match(
+    contentSource,
+    /chipBtn\.addEventListener\("click",\s*\((?:e|\w+)\)\s*=>\s*\{\s*if\s*\(!e\.isTrusted\)\s*return;\s*e\.stopPropagation\(\);\s*e\.preventDefault\(\);[\s\S]*?renderPicker\(\);/,
+    "content.ts chip click must guard with isTrusted and re-render picker without closing",
   );
 });
 

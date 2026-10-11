@@ -24,7 +24,14 @@ import {
   type VideoCastOverlayPosition,
   type VideoCastOverlayPreferences,
 } from "./settings";
-import { formatDeviceProtocol, isActiveDevice } from "./core/device-protocol";
+import {
+  formatDeviceProtocol,
+  isActiveDevice,
+  protocolChips,
+  defaultProtocol,
+  filterByProtocol,
+  DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
+} from "./core/device-protocol";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -78,6 +85,7 @@ let statusEl: HTMLElement | null = null;
 let deviceChipBtn: HTMLButtonElement | null = null;
 let devicePickerEl: HTMLDivElement | null = null;
 let isPickerOpen = false;
+let rememberedPickerProtocol: string | null = null;
 let lastContentWakeTime = 0;
 const CONTENT_WAKE_THROTTLE_MS = 5000;
 
@@ -637,13 +645,38 @@ function injectOverlayStyles(root: ShadowRoot): void {
       color: #CAC4D0;
       flex-shrink: 0;
     }
-    .picker-item-badge.protocol {
-      background: rgba(255, 255, 255, 0.06);
-      color: #938F99;
-    }
     .picker-item-badge.online {
       color: #A8E6CF;
       background: rgba(168, 230, 207, 0.15);
+    }
+    .picker-protocol-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding-top: 6px;
+      margin-top: 2px;
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .picker-protocol-chips button.protocol-chip {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #CAC4D0;
+      font: 500 11px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      padding: 3px 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .picker-protocol-chips button.protocol-chip:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(208, 188, 255, 0.4);
+      color: #E6E1E5;
+    }
+    .picker-protocol-chips button.protocol-chip.active {
+      background: rgba(208, 188, 255, 0.2);
+      border-color: #D0BCFF;
+      color: #D0BCFF;
+      font-weight: 600;
     }
     .picker-item-badge.offline {
       color: #F2B8B5;
@@ -1031,7 +1064,21 @@ function renderPicker(): void {
 
   // 2. Devices
   const devices = currentBridgeStatus?.devices || [];
-  for (const device of devices) {
+  const chips = protocolChips(devices);
+  const showChips = chips.length >= 2;
+  const activeProtocol = showChips
+    ? defaultProtocol(
+        devices,
+        currentBridgeStatus?.selection,
+        rememberedPickerProtocol,
+        currentBridgeStatus?.activeTv,
+      )
+    : null;
+  const visibleDevices = showChips && activeProtocol
+    ? filterByProtocol(devices, activeProtocol)
+    : devices;
+
+  for (const device of visibleDevices) {
     const isTvActive = isActiveDevice(
       device,
       currentBridgeStatus?.selection,
@@ -1046,14 +1093,6 @@ function renderPicker(): void {
     devName.className = "picker-item-name";
     devName.textContent = device.name;
     devBtn.appendChild(devName);
-
-    const protoLabel = formatDeviceProtocol(device.protocol);
-    if (protoLabel) {
-      const protoBadge = document.createElement("span");
-      protoBadge.className = "picker-item-badge protocol";
-      protoBadge.textContent = protoLabel;
-      devBtn.appendChild(protoBadge);
-    }
 
     if (device.paired) {
       const badge = document.createElement("span");
@@ -1098,6 +1137,37 @@ function renderPicker(): void {
     }
 
     devicePickerEl.appendChild(devBtn);
+  }
+
+  // 3. Protocol filter chips row at the bottom
+  if (showChips) {
+    const chipsRow = document.createElement("div");
+    chipsRow.className = "picker-protocol-chips";
+    for (const chip of chips) {
+      const chipBtn = document.createElement("button");
+      chipBtn.type = "button";
+      chipBtn.className = "protocol-chip" + (chip === activeProtocol ? " active" : "");
+      chipBtn.textContent = formatDeviceProtocol(chip) || chip;
+      chipBtn.setAttribute("data-protocol", chip);
+
+      chipBtn.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        e.stopPropagation();
+        e.preventDefault();
+        rememberedPickerProtocol = chip;
+        try {
+          browser.storage.local
+            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+            .catch(() => {});
+        } catch {
+          // ignore
+        }
+        renderPicker();
+      });
+
+      chipsRow.appendChild(chipBtn);
+    }
+    devicePickerEl.appendChild(chipsRow);
   }
 }
 
@@ -1771,6 +1841,13 @@ function onStorageChanged(
   area: string,
 ): void {
   if (area !== "local") return;
+  if (DEVICE_PICKER_PROTOCOL_STORAGE_KEY in changes) {
+    const next = changes[DEVICE_PICKER_PROTOCOL_STORAGE_KEY]?.newValue;
+    rememberedPickerProtocol = typeof next === "string" ? next : null;
+    if (isPickerOpen) {
+      renderPicker();
+    }
+  }
   if (!VIDEO_CAST_OVERLAY_STORAGE_KEYS.some((key) => key in changes)) return;
   void refreshOverlayPreferences();
 }
@@ -1803,6 +1880,24 @@ async function init(): Promise<void> {
   // Avoid FOUC: do not create UI until the setting is known.
   browser.storage.onChanged.addListener(onStorageChanged);
   browser.runtime.onMessage.addListener(onRuntimeMessage);
+  try {
+    browser.storage.local
+      .get(DEVICE_PICKER_PROTOCOL_STORAGE_KEY)
+      .then((stored) => {
+        if (
+          stored &&
+          typeof stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY] === "string"
+        ) {
+          rememberedPickerProtocol = stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY];
+          if (isPickerOpen) {
+            renderPicker();
+          }
+        }
+      })
+      .catch(() => {});
+  } catch {
+    // ignore
+  }
   browser.runtime
     .sendMessage({ action: "wsGetStatus" })
     .then((res) => {
