@@ -117,15 +117,7 @@ class ServerService : Service() {
     private val externalBrowserContextReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             if (intent.action != ACTION_CONTEXT_BROWSER_EXTERNAL) return
-            synchronized(contextLock) {
-                if (!canRecoverExternalBrowserContext(
-                        activeContext,
-                        activityLaunchesInFlight > 0 || pendingPlayerLaunchAfterMpvExit != null,
-                    )) return
-                activeContext = "browser_external"
-                activePlayerEngine = null
-                broadcastContext()
-            }
+            recoverExternalBrowserContextInternal()
         }
     }
 
@@ -133,15 +125,31 @@ class ServerService : Service() {
     // statuses; late messages after switching modes must not overwrite the phone scrubber.
     private val browserVideoStatusReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != ACTION_BROWSER_VIDEO_STATUS || activeContext != "browser_external") return
-            val json = intent.getStringExtra(EXTRA_BROWSER_VIDEO_STATUS_JSON) ?: return
-            if (json.length > MAX_BROWSER_VIDEO_STATUS_BYTES ||
-                json.toByteArray(Charsets.UTF_8).size > MAX_BROWSER_VIDEO_STATUS_BYTES) return
-            try {
-                if (org.json.JSONObject(json).optString("type") != "status") return
-            } catch (_: Exception) { return }
-            broadcastPlaylistStatusInternal(json)
+            if (intent.action != ACTION_BROWSER_VIDEO_STATUS) return
+            intent.getStringExtra(EXTRA_BROWSER_VIDEO_STATUS_JSON)?.let(::receiveExternalBrowserVideoStatusInternal)
         }
+    }
+
+    private fun recoverExternalBrowserContextInternal() {
+        synchronized(contextLock) {
+            if (!canRecoverExternalBrowserContext(
+                    activeContext,
+                    activityLaunchesInFlight > 0 || pendingPlayerLaunchAfterMpvExit != null,
+                )) return
+            activeContext = "browser_external"
+            activePlayerEngine = null
+            broadcastContext()
+        }
+    }
+
+    private fun receiveExternalBrowserVideoStatusInternal(json: String) {
+        if (activeContext != "browser_external") return
+        if (json.length > MAX_BROWSER_VIDEO_STATUS_BYTES ||
+            json.toByteArray(Charsets.UTF_8).size > MAX_BROWSER_VIDEO_STATUS_BYTES) return
+        try {
+            if (org.json.JSONObject(json).optString("type") != "status") return
+        } catch (_: Exception) { return }
+        broadcastPlaylistStatusInternal(json)
     }
 
     private val playerProcessEventReceiver = object : android.content.BroadcastReceiver() {
@@ -286,12 +294,14 @@ class ServerService : Service() {
             android.content.IntentFilter(ACTION_CONTEXT_BROWSER_EXTERNAL), browserControlPermission,
             null, androidx.core.content.ContextCompat.RECEIVER_EXPORTED
         )
+        // The hello may arrive before ServerService is recreated; consume its resumed snapshot.
+        PluginBridge.recoverContextIfResumed()
         // A surviving, resumed plugin can restore context after lmkd kills this process.
         // Older plugins simply ignore this command. Require the permission in both directions.
-        sendBroadcast(Intent(ACTION_BROWSER_CONTROL).apply {
+        sendPluginCommand(Intent(ACTION_BROWSER_CONTROL).apply {
             setPackage("com.playbridge.geckoview.plugin")
             putExtra(EXTRA_BROWSER_ACTION, "announce_context")
-        }, browserControlPermission)
+        })
         // If this Service was recreated without process death, prewarm may still be suspended
         // from its previous browser context. Reconcile after giving the reply a startup turn.
         mainHandler.postDelayed({
@@ -711,7 +721,7 @@ class ServerService : Service() {
                 if (msg.payload.command == "stop") activePlayerEngine = null
             }
             is IncomingMessage.Remote -> {
-                FileLogger.i(TAG, "Remote command: ${msg.payload.key}")
+                FileLogger.i(TAG, "Remote command received")
                 val remoteKey = msg.payload.key
                 if (remoteKey == "volume_up" || remoteKey == "volume_down" || remoteKey == "mute") {
                     // System media volume — handle centrally so it works in every context.
@@ -731,7 +741,7 @@ class ServerService : Service() {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
                         setPackage("com.playbridge.geckoview.plugin")
                     }
-                    sendBroadcast(browserIntent)
+                    sendPluginCommand(browserIntent)
                 } else {
                     val intent = Intent(ACTION_REMOTE).apply {
                         putExtra(EXTRA_REMOTE_KEY, msg.payload.key)
@@ -751,7 +761,7 @@ class ServerService : Service() {
                 when (activeContext) {
                     "browser_external" -> {
                         intent.setPackage("com.playbridge.geckoview.plugin")
-                        sendBroadcast(intent)
+                        sendPluginCommand(intent)
                     }
                     "browser", "player" -> {
                         intent.putExtra(EXTRA_TARGET_PLAYER_ENGINE, activePlayerEngine)
@@ -763,13 +773,13 @@ class ServerService : Service() {
                 }
             }
             is IncomingMessage.BrowserControl -> {
-                FileLogger.i(TAG, "Browser control: ${msg.payload.action}")
+                FileLogger.i(TAG, "Browser control received")
                 if (activeContext == "browser_external") {
                     val browserIntent = Intent(ACTION_BROWSER_CONTROL).apply {
                         putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
                         setPackage("com.playbridge.geckoview.plugin")
                     }
-                    sendBroadcast(browserIntent)
+                    sendPluginCommand(browserIntent)
                 } else {
                     val intent = Intent(ACTION_BROWSER_CONTROL).apply {
                         putExtra(EXTRA_BROWSER_ACTION, msg.payload.action)
@@ -1053,7 +1063,7 @@ class ServerService : Service() {
             putExtra(EXTRA_USER_AGENT_VALUE, value)
             setPackage(pkg)
         }
-        sendBroadcast(intent)
+        if (pkg == "com.playbridge.geckoview.plugin") sendPluginCommand(intent) else sendBroadcast(intent)
     }
 
     /** Tell the phone's manager the TV's saved user agents + which one (if any) is active. */
@@ -1078,14 +1088,22 @@ class ServerService : Service() {
         }
     }
 
+    /** Prefer the registered Binder endpoint, with signature-protected broadcast fallback. */
+    private fun sendPluginCommand(intent: Intent) {
+        PluginBridge.sendCommand(intent) {
+            sendBroadcast(intent, "com.playbridge.permission.BROWSER_CONTROL")
+        }
+    }
+
     /** Remove browser activities from their tasks when another mode takes over. */
     private fun dismissBrowsers(exceptPackage: String? = null) {
         for (browserPackage in listOf(packageName, "com.playbridge.geckoview.plugin")) {
             if (browserPackage == exceptPackage) continue
-            sendBroadcast(Intent(ACTION_BROWSER_CONTROL).apply {
+            val intent = Intent(ACTION_BROWSER_CONTROL).apply {
                 setPackage(browserPackage)
                 putExtra(EXTRA_BROWSER_ACTION, "dismiss")
-            })
+            }
+            if (browserPackage == "com.playbridge.geckoview.plugin") sendPluginCommand(intent) else sendBroadcast(intent)
         }
     }
 
@@ -1512,6 +1530,18 @@ class ServerService : Service() {
                     }
                 }
             }
+        }
+
+        internal fun recoverExternalBrowserContextFromPlugin() {
+            _staticInstance?.recoverExternalBrowserContextInternal()
+        }
+
+        internal fun receiveExternalBrowserVideoStatus(json: String) {
+            _staticInstance?.receiveExternalBrowserVideoStatusInternal(json)
+        }
+
+        internal fun receiveExternalBrowserClosed() {
+            _staticInstance?.setContextIdleInternal(setOf("browser", "browser_external"))
         }
 
         fun broadcastPlaylistStatus(statusJson: String) {

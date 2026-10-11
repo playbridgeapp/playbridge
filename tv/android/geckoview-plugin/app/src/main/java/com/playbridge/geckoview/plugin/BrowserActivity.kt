@@ -62,6 +62,12 @@ class BrowserActivity : ComponentActivity() {
     private var explicitlyClosing = false
     private var replacedByAnotherMode = false
     private var browserResumed = false
+    private var idleAnnounced = false
+    private val playerBridge = PlayerBridgeConnection(
+        this,
+        isResumed = { browserResumed && !isFinishing && !isDestroyed && !replacedByAnotherMode },
+        onCommand = ::handlePlayerCommand,
+    )
 
     // Drag state — tracks an in-progress click-drag (e.g. seekbar scrubbing)
     private var isDragging = false
@@ -93,25 +99,30 @@ class BrowserActivity : ComponentActivity() {
 
     private val commandReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            when (intent?.action) {
-                ACTION_MOUSE -> {
-                    val event = intent.getStringExtra(EXTRA_MOUSE_EVENT)
-                    val dx = intent.getFloatExtra(EXTRA_MOUSE_DX, 0f)
-                    val dy = intent.getFloatExtra(EXTRA_MOUSE_DY, 0f)
-                    handleMouseCommand(event, dx, dy)
-                }
-                ACTION_REMOTE -> {
-                    val key = intent.getStringExtra(EXTRA_REMOTE_KEY)
-                    handleRemoteCommand(key)
-                }
-                ACTION_BROWSER_CONTROL -> {
-                    val action = intent.getStringExtra(EXTRA_BROWSER_ACTION)
-                    handleBrowserControlCommand(action)
-                }
-                ACTION_USER_AGENT_CHANGED -> {
-                    val value = intent.getStringExtra(EXTRA_USER_AGENT_VALUE)
-                    engine?.setUserAgentOverride(value)
-                }
+            intent?.let(::handlePlayerCommand)
+        }
+    }
+
+    /** Binder and legacy broadcasts share exactly the same command handlers. */
+    private fun handlePlayerCommand(intent: Intent) {
+        when (intent.action) {
+            ACTION_MOUSE -> {
+                val event = intent.getStringExtra(EXTRA_MOUSE_EVENT)
+                val dx = intent.getFloatExtra(EXTRA_MOUSE_DX, 0f)
+                val dy = intent.getFloatExtra(EXTRA_MOUSE_DY, 0f)
+                handleMouseCommand(event, dx, dy)
+            }
+            ACTION_REMOTE -> {
+                val key = intent.getStringExtra(EXTRA_REMOTE_KEY)
+                handleRemoteCommand(key)
+            }
+            ACTION_BROWSER_CONTROL -> {
+                val action = intent.getStringExtra(EXTRA_BROWSER_ACTION)
+                handleBrowserControlCommand(action)
+            }
+            ACTION_USER_AGENT_CHANGED -> {
+                val value = intent.getStringExtra(EXTRA_USER_AGENT_VALUE)
+                engine?.setUserAgentOverride(value)
             }
         }
     }
@@ -248,16 +259,20 @@ class BrowserActivity : ComponentActivity() {
         engine?.onVideoOverlay = { visible, text, style, bgColor, textColor, autoDismissMs ->
             showCustomVideoOverlay(visible, text, style, bgColor, textColor, autoDismissMs)
         }
-        engine?.onVideoStatus = { json ->
+        engine?.onVideoStatus = ::sendVideoStatus
+        engine?.onRequestUnmuteTap = { autoUnmuteActiveVideo() }
+
+        // Add engine view at index 0 (behind cursor)
+        contentContainer?.addView(engine?.getView(), 0)
+    }
+
+    private fun sendVideoStatus(json: String) {
+        if (!playerBridge.videoStatus(json)) {
             sendBroadcast(Intent(ACTION_BROWSER_VIDEO_STATUS).apply {
                 setPackage("com.playbridge.player")
                 putExtra(EXTRA_VIDEO_STATUS_JSON, json)
             }, BROWSER_CONTROL_PERMISSION)
         }
-        engine?.onRequestUnmuteTap = { autoUnmuteActiveVideo() }
-
-        // Add engine view at index 0 (behind cursor)
-        contentContainer?.addView(engine?.getView(), 0)
     }
 
     private fun enterGeckoFullscreen() {
@@ -689,7 +704,7 @@ class BrowserActivity : ComponentActivity() {
             finish()
             return
         }
-        Log.d(TAG, "Browser control: $action")
+        Log.d(TAG, "Browser control received")
         if (action != null && action.startsWith("seek_to:")) {
             action.removePrefix("seek_to:").toLongOrNull()?.let { engine?.videoSeekTo(it / 1000.0) }
             return
@@ -810,22 +825,47 @@ class BrowserActivity : ComponentActivity() {
         cursorHideHandler.postDelayed(cursorHideRunnable, cursorHideDelayMs)
     }
 
+    override fun onStart() {
+        super.onStart()
+        playerBridge.start()
+    }
+
     override fun onStop() {
         if (!isFinishing && !isChangingConfigurations) {
             engine?.pauseForBackground()
         }
+        announceBrowserClosed()
+        playerBridge.stop()
         super.onStop()
+    }
+
+    private fun announceBrowserClosed() {
+        if (idleAnnounced || replacedByAnotherMode || (!explicitlyClosing && !isFinishing)) return
+        // Preserve the old destroy ordering: clear the scrubber before relinquishing context.
+        if (engine?.isVideoControlActive() == true) {
+            sendVideoStatus("""{"type":"status","state":"idle","position":0,"duration":0}""")
+        }
+        if (!playerBridge.browserClosed()) {
+            sendBroadcast(Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
+                setPackage("com.playbridge.player")
+            }, "com.playbridge.permission.CONTEXT_IDLE")
+        }
+        idleAnnounced = true
     }
 
     private fun announceExternalBrowserContext() {
         if (!browserResumed || isFinishing || isDestroyed || replacedByAnotherMode) return
-        sendBroadcast(Intent("com.playbridge.player.ACTION_CONTEXT_BROWSER_EXTERNAL").apply {
-            setPackage("com.playbridge.player")
-        }, BROWSER_CONTROL_PERMISSION)
+        if (!playerBridge.hello()) {
+            sendBroadcast(Intent("com.playbridge.player.ACTION_CONTEXT_BROWSER_EXTERNAL").apply {
+                setPackage("com.playbridge.player")
+            }, BROWSER_CONTROL_PERMISSION)
+        }
     }
 
     override fun onPause() {
         browserResumed = false
+        playerBridge.hello()
+        announceBrowserClosed()
         super.onPause()
     }
 
@@ -844,16 +884,9 @@ class BrowserActivity : ComponentActivity() {
         scope.cancel()
         engine?.destroy()
         engine = null
-        // Notify the player app's ServerService that the browser session has ended so it can
-        // reset activeContext to "idle".
-        try {
-            if (!replacedByAnotherMode && (explicitlyClosing || isFinishing)) {
-                val idleIntent = Intent("com.playbridge.player.ACTION_CONTEXT_IDLE").apply {
-                    setPackage("com.playbridge.player")
-                }
-                sendBroadcast(idleIntent, "com.playbridge.permission.CONTEXT_IDLE")
-            }
-        } catch (_: Exception) {}
+        // Notify before releasing the Binder, with the existing replaced/explicit-close rules.
+        announceBrowserClosed()
+        playerBridge.stop()
         super.onDestroy()
     }
 
