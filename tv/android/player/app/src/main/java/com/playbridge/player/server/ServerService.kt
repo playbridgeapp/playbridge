@@ -817,7 +817,7 @@ class ServerService : Service() {
             is IncomingMessage.ContextQuery -> {
                 FileLogger.i(TAG, "Context query - responding with: $activeContext")
                 scope.launch {
-                    webSocketServer?.sendTo(command.connectionId, createContextJson(activeContext))
+                    webSocketServer?.sendTo(command.connectionId, createContextJson(wireContext(activeContext)))
                 }
                 // Ask the running player to re-broadcast playlist/tracks/status so a
                 // freshly (re)connected phone can repopulate its remote screen — these
@@ -990,9 +990,17 @@ class ServerService : Service() {
         }
     }
 
+    /**
+     * The protocol's context enum is idle/player/browser/screen_mirror. "browser_external"
+     * (the GeckoView plugin) is an internal routing value; senders must see "browser", or
+     * they show "Nothing playing" and hide the browser remote.
+     */
+    private fun wireContext(context: String): String =
+        if (context == "browser_external") "browser" else context
+
     private fun broadcastContext() {
         scope.launch {
-            webSocketServer?.broadcastStatus(createContextJson(activeContext))
+            webSocketServer?.broadcastStatus(createContextJson(wireContext(activeContext)))
         }
     }
 
