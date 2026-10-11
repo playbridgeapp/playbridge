@@ -21,14 +21,25 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Diagnostics**: Serve logs only over the paired encrypted connection.
 - **Re-pairing**: Rotate credentials for an existing sender and revoke its previous token.
 
-## GeckoView Plugin [0.15.0] — 2026-10-09 (versionCode 213)
+## GeckoView Plugin [0.15.0] — 2026-10-11 (versionCode 213)
+
+> **Requires TV Player 0.15.1 or later.** This plugin only accepts commands from a player that holds the new browser-control permission. With an older player, GeckoView mode can't be opened or controlled.
+
+### Added
+- **Video controls**: Play/pause, seek, switch video source, unmute and forward from the phone remote, D-pad control of the active video (including fullscreen), on-screen feedback, automatic unmute of muted autoplay, and the title and scrubber on the phone. Works for videos in the page and in cross-origin player frames, using the same controller as the built-in WebView browser.
 
 ### Changed
 - **Release train**: Align TV Browser's version with the other PlayBridge products.
+- **Player connection**: Keep a direct, protected connection to the TV player while the browser is open, so remote and touchpad input stay responsive and the player isn't killed first on low-memory TVs.
 
 ### Fixed
 - **Browser continuity**: Pause media when the browser goes into the background and resume the browser session when returning.
 - **Navigation state**: Track the current URL, close cleanly with Back/Home, and preserve the replacement player's active state when switching out of browser mode.
+- **Phone keyboard and maximize**: Typing from the phone keyboard and the maximize button work again; the page bridge never connected before.
+- **Home in fullscreen**: Home from the phone remote now exits fullscreen and closes the browser.
+
+### Security
+- **Browser control**: Only apps signed with the PlayBridge key can open the plugin or send it remote, touchpad, text, navigation or user-agent commands. Any app on the TV could previously control it.
 
 ## Player [0.13.1] — 2026-08-29 (versionCode 229)
 
