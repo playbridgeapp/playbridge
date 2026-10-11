@@ -2,24 +2,31 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.15.0] — 2026-10-11
+
+> **Works best together**: Device selection and the website playback API need PlayBridge Desktop 0.15.1 or later. With older desktop apps the extension keeps its read-only device list and websites see playback as unavailable.
 
 ### Added
-- **Website Page API**: Added desktop browser support for `window.playbridge` in top-level frames (`getPlaybackDestination`, `choosePlaybackDestination`, `play`, `linkCast`, `cast`, and linked sessions with `replace`, `append`, `jump`, `provideItems`, `unlink`, and events `needitems`, `statechange`, `ended`).
-- **Website Access & Consent**: Extension-owned consent prompt and device picker window (`ui/page-access.html`) for website casting permissions, WebCrypto HMAC destination privacy, user gesture attestation, automatic navigation unlinking, and popup Website Access management.
-- **Device Selection**: Choose the playback device (a paired TV or This computer) from the popup or from a device chip beside the in-page cast button. Requires a PlayBridge desktop app with device selection; older apps keep the read-only list.
+- **Device selection**: Choose the playback device (a paired TV or This computer) from the popup or from a device chip beside the in-page cast button.
+- **Website playback API**: Websites in desktop browsers can use `window.playbridge` in top-level frames (`getPlaybackDestination`, `choosePlaybackDestination`, `play`, `linkCast`, `cast`, and linked sessions with `replace`, `append`, `jump`, `provideItems`, `unlink`, and events `needitems`, `statechange`, `ended`).
+- **Website access and consent**: An extension-owned window asks before a website can cast and lets you pick its device. Destination ids are private per website, choosing a device requires a user gesture, sessions unlink on navigation, and the popup lists website access you can revoke.
 - **Open PlayBridge**: When the desktop app is not running, casting offers to launch it.
+- **Richer media detection**: Discover media URLs in response bodies and track media changes on single-page sites without losing earlier playable streams.
 
 ### Changed
 - **Reconnection**: Hovering the cast button, opening the popup or casting reconnects to the desktop app immediately instead of waiting for the reconnect backoff.
-- **Cast Results**: The cast button reports "Playing on this computer" or "Casting to <TV>". An offline TV shows an error with a one-off "Play on this computer" action instead of playing locally without asking.
-- **Device Filter Chips**: Show protocol filter chips (PlayBridge, Google Cast, DLNA, Roku, Web Browser) at the bottom of the device list in the popup and in-page picker when multiple protocols exist, replacing per-row protocol badges and remembering the user's protocol selection.
+- **Cast results**: The cast button reports "Playing on this computer" or "Casting to <TV>". An offline TV shows an error with a one-off "Play on this computer" action instead of playing locally without asking.
+- **Device filter chips**: Protocol filter chips (PlayBridge, Google Cast, DLNA, Roku, Web Browser) above the device list in the popup and in-page picker replace per-row protocol badges, remember your choice and hide offline devices.
+- **Chrome store packages**: Remove the development-only manifest key from production uploads while retaining stable IDs for unpacked builds; refresh store listing guidance and screenshots.
+- **Stream details**: Improve candidate ranking, captured request headers and media lifecycle tracking.
 
-## [0.6.1] — 2026-07-19
+### Fixed
+- **Low-latency HLS**: Cast separate audio/video renditions through synthetic master playlists and improve playlist attribute and whitespace parsing.
+- **Detection ownership**: Associate media events with the committed tab and document so navigation does not mix detections from different pages.
 
-### Changed
-- **Chrome Web Store Packaging**: Production Chrome uploads now remove the development-only manifest `key` field, while unpacked development builds retain the stable ID configuration.
-- **Store Readiness**: Added Chrome Web Store publishing guidance and screenshots for the listing workflow.
+### Security
+- **Page integration**: Isolate the embedded browser's page API, bind linked casting to the owning document and keep sensitive receiver identities out of website responses.
+- **Native bridge**: Keep credentials and protected stream details out of persisted diagnostics.
 
 ## [0.6.0] — 2026-07-15
 
