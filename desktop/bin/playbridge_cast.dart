@@ -16,6 +16,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:playbridge_desktop/bridge_paths.dart';
+import 'package:playbridge_desktop/app_launcher.dart';
 
 Future<void> main(List<String> args) async {
   if (args.isEmpty) {
@@ -43,7 +44,11 @@ Future<void> main(List<String> args) async {
   }
 
   // 2) App not running (or forward failed) → launch it, passing the file.
-  final launched = await _launchApp(value, title);
+  final launched = await launchDesktopApp(castFile: value, title: title);
+  if (!launched) {
+    stderr.writeln(
+        'playbridge_cast: PlayBridge is not running and could not be launched — open it and try again.');
+  }
   exit(launched ? 0 : 1);
 }
 
@@ -127,57 +132,3 @@ Future<bool> _forward(
 /// Best-effort launch of the desktop GUI, passing the file via `--cast-file` so
 /// it casts once a TV is connected. Locates the app relative to this binary
 /// (packaged builds keep them together), falling back to the same dir.
-Future<bool> _launchApp(String value, String? title) async {
-  final exeFile = File(Platform.resolvedExecutable);
-  final exeDir = exeFile.parent.path;
-  final args = [
-    '--cast-file',
-    value,
-    if (title != null) ...['--cast-title', title]
-  ];
-
-  try {
-    if (Platform.isMacOS) {
-      // This binary usually lives in <App>.app/Contents/Resources; the bundle is
-      // three levels up. `open -a <bundle> --args …` reuses a running instance.
-      final bundle = _macAppBundle(exeFile);
-      if (bundle != null) {
-        await Process.start('open', ['-a', bundle, '--args', ...args],
-            mode: ProcessStartMode.detached);
-        return true;
-      }
-    }
-    // Windows/Linux (and macOS fallback): launch a sibling app executable.
-    for (final name in _appExeNames()) {
-      final candidate = File('$exeDir${Platform.pathSeparator}$name');
-      if (candidate.existsSync()) {
-        await Process.start(candidate.path, args,
-            mode: ProcessStartMode.detached);
-        return true;
-      }
-    }
-  } catch (_) {
-    // Launch failure is reported to stderr below.
-  }
-  stderr.writeln('playbridge_cast: PlayBridge is not running and could not be '
-      'launched — open it and try again.');
-  return false;
-}
-
-/// Candidate GUI executable names beside this binary (packaged layout).
-List<String> _appExeNames() {
-  if (Platform.isWindows) return ['playbridge_desktop.exe', 'PlayBridge.exe'];
-  return ['playbridge_desktop', 'PlayBridge'];
-}
-
-/// Walk up from `<bundle>.app/Contents/Resources/<bin>` to the `.app` path.
-String? _macAppBundle(File exeFile) {
-  var dir = exeFile.parent;
-  for (var i = 0; i < 5; i++) {
-    if (dir.path.endsWith('.app')) return dir.path;
-    final parent = dir.parent;
-    if (parent.path == dir.path) break;
-    dir = parent;
-  }
-  return null;
-}

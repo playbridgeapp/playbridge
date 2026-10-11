@@ -24,6 +24,16 @@ import {
   type VideoCastOverlayPosition,
   type VideoCastOverlayPreferences,
 } from "./settings";
+import {
+  formatDeviceProtocol,
+  isActiveDevice,
+  protocolChips,
+  defaultProtocol,
+  filterByProtocol,
+  visibleDevices,
+  hiddenOfflineCount,
+  DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
+} from "./core/device-protocol";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,6 +84,41 @@ let shadowRoot: ShadowRoot | null = null;
 let chromeEl: HTMLElement | null = null;
 let castBtn: HTMLButtonElement | null = null;
 let statusEl: HTMLElement | null = null;
+let deviceChipBtn: HTMLButtonElement | null = null;
+let devicePickerEl: HTMLDivElement | null = null;
+let isPickerOpen = false;
+let showOfflinePicker = false;
+let rememberedPickerProtocol: string | null = null;
+let lastContentWakeTime = 0;
+const CONTENT_WAKE_THROTTLE_MS = 5000;
+
+interface ContentBridgeStatus {
+  status?: string;
+  desktopConnected?: boolean;
+  activeTv?: string | null;
+  target?: "tv" | "local";
+  capabilities?: { selectDevice?: number };
+  selection?: {
+    kind: "local";
+  } | {
+    kind: "tv";
+    id: string;
+    name: string;
+    status: "connected" | "connecting" | "offline";
+  };
+  devices?: Array<{
+    id?: string;
+    uuid: string;
+    name: string;
+    protocol?: string;
+    paired: boolean;
+    online?: boolean;
+    active?: boolean;
+  }>;
+}
+
+let currentBridgeStatus: ContentBridgeStatus | null = null;
+
 let overlayState: OverlayState = "idle";
 let castInFlight = false;
 let statusResetTimer: ReturnType<typeof setTimeout> | null = null;
@@ -452,17 +497,20 @@ function injectOverlayStyles(root: ShadowRoot): void {
       pointer-events: none !important;
     }
     /* Isolated hit target for the cast control. */
+    /* Isolated hit target for the cast control. */
     .controls {
       pointer-events: auto;
       position: absolute;
       top: ${OVERLAY_INSET - 4}px;
       right: ${OVERLAY_INSET - 2}px;
-      width: ${BUTTON_SIZE + 8}px;
-      height: ${BUTTON_SIZE + 8}px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
     }
     .chrome[data-position="top-left"] .controls {
       left: ${OVERLAY_INSET - 2}px;
       right: auto;
+      flex-direction: row-reverse;
     }
     .chrome[data-position="top-center"] .controls {
       left: 50%;
@@ -474,16 +522,203 @@ function injectOverlayStyles(root: ShadowRoot): void {
       left: ${OVERLAY_INSET - 2}px;
       right: auto;
       transform: translateY(-50%);
+      flex-direction: row-reverse;
     }
     .chrome[data-position="middle-right"] .controls {
       top: 50%;
+      right: ${OVERLAY_INSET - 2}px;
       transform: translateY(-50%);
+    }
+    button.device-chip {
+      pointer-events: auto;
+      border: none;
+      border-radius: 16px;
+      background: rgba(28, 27, 31, 0.85);
+      color: #E6E1E5;
+      font: 500 12px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      padding: 6px 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      transition: background 0.15s ease, color 0.15s ease;
+      white-space: nowrap;
+      max-width: 180px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    button.device-chip:hover {
+      background: rgba(44, 44, 50, 0.95);
+      color: #D0BCFF;
+    }
+    button.device-chip.hidden {
+      display: none !important;
+    }
+    /* The chip only appears while the cast control is hovered/focused or the picker is open. */
+    button.device-chip {
+      opacity: 0;
+      transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+    }
+    .controls:hover button.device-chip,
+    .controls:focus-within button.device-chip,
+    .controls.picker-open button.device-chip {
+      opacity: 1;
+    }
+    .device-picker {
+      pointer-events: auto;
+      position: absolute;
+      top: ${OVERLAY_INSET + BUTTON_SIZE + 6}px;
+      right: ${OVERLAY_INSET + 4}px;
+      min-width: 200px;
+      max-width: 280px;
+      max-height: 240px;
+      overflow-y: auto;
+      padding: 6px;
+      border-radius: 10px;
+      background: rgba(28, 27, 31, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      z-index: 10;
+    }
+    .device-picker.hidden {
+      display: none !important;
+    }
+    .chrome[data-position="top-left"] .device-picker {
+      left: ${OVERLAY_INSET + 4}px;
+      right: auto;
+    }
+    .chrome[data-position="top-center"] .device-picker {
+      left: 50%;
+      right: auto;
+      transform: translateX(-50%);
+    }
+    .chrome[data-position="middle-left"] .device-picker {
+      top: calc(50% + ${BUTTON_SIZE / 2 + 8}px);
+      left: ${OVERLAY_INSET + 4}px;
+      right: auto;
+    }
+    .chrome[data-position="middle-right"] .device-picker {
+      top: calc(50% + ${BUTTON_SIZE / 2 + 8}px);
+      right: ${OVERLAY_INSET + 4}px;
+    }
+    .picker-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font: 500 12px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #E6E1E5;
+      background: transparent;
+      border: none;
+      width: 100%;
+      text-align: left;
+      transition: background 0.15s ease;
+    }
+    .picker-item:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .picker-item.active {
+      color: #D0BCFF;
+      background: rgba(208, 188, 255, 0.15);
+      font-weight: 600;
+    }
+    .picker-item-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      margin-right: 4px;
+    }
+    .picker-item-badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #CAC4D0;
+      flex-shrink: 0;
+    }
+    .picker-item-badge.online {
+      color: #A8E6CF;
+      background: rgba(168, 230, 207, 0.15);
+    }
+    .picker-protocol-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      padding-bottom: 6px;
+      margin-bottom: 2px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .picker-protocol-chips button.protocol-chip {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      color: #CAC4D0;
+      font: 500 11px/1.2 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      padding: 3px 8px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+    .picker-protocol-chips button.protocol-chip:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(208, 188, 255, 0.4);
+      color: #E6E1E5;
+    }
+    .picker-protocol-chips button.protocol-chip.active {
+      background: rgba(208, 188, 255, 0.2);
+      border-color: #D0BCFF;
+      color: #D0BCFF;
+      font-weight: 600;
+    }
+    .picker-item-badge.offline {
+      color: #F2B8B5;
+      background: rgba(242, 184, 181, 0.15);
+    }
+    .picker-item-pair-btn {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(208, 188, 255, 0.2);
+      border: 1px solid rgba(208, 188, 255, 0.4);
+      color: #D0BCFF;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .picker-item-pair-btn:hover {
+      background: rgba(208, 188, 255, 0.35);
+    }
+    button.toggle-offline-btn {
+      background: transparent;
+      border: none;
+      color: #938F99;
+      font: 500 11px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer;
+      padding: 6px 8px;
+      margin-top: 2px;
+      text-align: center;
+      align-self: center;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: color 0.15s ease;
+      width: auto;
+    }
+    button.toggle-offline-btn:hover {
+      color: #D0BCFF;
     }
     button.cast {
       pointer-events: auto;
-      position: absolute;
-      top: 4px;
-      right: 4px;
+      flex-shrink: 0;
       width: ${BUTTON_SIZE}px;
       height: ${BUTTON_SIZE}px;
       border: none;
@@ -530,7 +765,7 @@ function injectOverlayStyles(root: ShadowRoot): void {
       position: absolute;
       top: ${OVERLAY_INSET + BUTTON_SIZE + 6}px;
       right: ${OVERLAY_INSET + 4}px;
-      max-width: min(220px, 70vw);
+      max-width: min(280px, 75vw);
       padding: 6px 10px;
       border-radius: 8px;
       background: rgba(28, 27, 31, 0.88);
@@ -549,6 +784,25 @@ function injectOverlayStyles(root: ShadowRoot): void {
       opacity: 1;
       transform: translateY(0);
       visibility: visible;
+    }
+    .status.has-action {
+      pointer-events: auto;
+    }
+    .status button.status-action-btn {
+      pointer-events: auto;
+      margin-left: 6px;
+      padding: 2px 6px;
+      border: 1px solid rgba(208, 188, 255, 0.4);
+      border-radius: 4px;
+      background: rgba(208, 188, 255, 0.2);
+      color: #D0BCFF;
+      font: inherit;
+      cursor: pointer;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .status button.status-action-btn:hover {
+      background: rgba(208, 188, 255, 0.35);
     }
     .chrome[data-position="top-left"] .status {
       left: ${OVERLAY_INSET + 4}px;
@@ -608,6 +862,14 @@ function ensureOverlay(): void {
   const controls = document.createElement("div");
   controls.className = "controls";
 
+  const chipBtn = document.createElement("button");
+  chipBtn.type = "button";
+  chipBtn.className = "device-chip hidden";
+  chipBtn.setAttribute("aria-label", "Select playback device");
+
+  const picker = document.createElement("div");
+  picker.className = "device-picker hidden";
+
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "cast";
@@ -620,11 +882,24 @@ function ensureOverlay(): void {
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
 
+  controls.appendChild(chipBtn);
   controls.appendChild(btn);
   chrome.appendChild(controls);
+  chrome.appendChild(picker);
   chrome.appendChild(status);
   wrap.appendChild(chrome);
   shadow.appendChild(wrap);
+
+  chipBtn.addEventListener("click", onChipClick, true);
+  chipBtn.addEventListener("mousedown", stopBubble, true);
+  chipBtn.addEventListener("mouseup", stopBubble, true);
+  chipBtn.addEventListener("pointerdown", stopBubble, true);
+  chipBtn.addEventListener("pointerenter", onCastPointerEnter);
+  chipBtn.addEventListener("pointerleave", onCastPointerLeave);
+
+  picker.addEventListener("mousedown", stopBubble, true);
+  picker.addEventListener("mouseup", stopBubble, true);
+  picker.addEventListener("pointerdown", stopBubble, true);
 
   btn.addEventListener("click", onCastClick, true);
   btn.addEventListener("mousedown", stopBubble, true);
@@ -639,7 +914,12 @@ function ensureOverlay(): void {
   shadowRoot = shadow;
   chromeEl = chrome;
   castBtn = btn;
+  deviceChipBtn = chipBtn;
+  devicePickerEl = picker;
   statusEl = status;
+
+  document.addEventListener("pointerdown", onOutsidePointerDown, true);
+  updateDeviceChipAndPicker();
   attachOverlayHost();
   showChrome({ restartTimer: true });
 }
@@ -658,6 +938,7 @@ function clearAutoHideTimer(): void {
 function shouldHoldChromeVisible(): boolean {
   return (
     castInFlight ||
+    isPickerOpen ||
     overlayState === "casting" ||
     overlayState === "success" ||
     overlayState === "error"
@@ -689,7 +970,270 @@ function hideChrome(): void {
   chromeEl?.classList.add("is-hidden");
 }
 
+function maybeWakeBridge(): void {
+  const now = Date.now();
+  if (now - lastContentWakeTime < CONTENT_WAKE_THROTTLE_MS) return;
+  lastContentWakeTime = now;
+  browser.runtime.sendMessage({ action: "wake" }).catch(() => {});
+}
+
+function closePicker(): void {
+  isPickerOpen = false;
+  showOfflinePicker = false;
+  devicePickerEl?.classList.add("hidden");
+  deviceChipBtn?.parentElement?.classList.remove("picker-open");
+  scheduleAutoHide();
+}
+
+function onChipClick(e: Event): void {
+  if (!e.isTrusted) return;
+  e.preventDefault();
+  e.stopPropagation();
+  maybeWakeBridge();
+  if (isPickerOpen) {
+    closePicker();
+  } else {
+    isPickerOpen = true;
+    showOfflinePicker = false;
+    devicePickerEl?.classList.remove("hidden");
+    deviceChipBtn?.parentElement?.classList.add("picker-open");
+    showChrome({ restartTimer: false });
+    renderPicker();
+    browser.runtime
+      .sendMessage({ action: "wsGetStatus" })
+      .then((res) => {
+        if (res) {
+          currentBridgeStatus = res;
+          updateDeviceChipAndPicker();
+        }
+      })
+      .catch(() => {});
+  }
+}
+
+function onOutsidePointerDown(e: Event): void {
+  if (!isPickerOpen) return;
+  // A document listener never sees nodes inside our closed shadow root:
+  // composedPath() stops at the host, so test the host itself.
+  const path = e.composedPath ? e.composedPath() : [];
+  if (overlayHost && !path.includes(overlayHost)) {
+    closePicker();
+  }
+}
+
+function getChipLabel(): string {
+  if (currentBridgeStatus?.selection?.kind === "local") {
+    return "→ This computer ▾";
+  }
+  if (currentBridgeStatus?.selection?.kind === "tv") {
+    return `→ ${currentBridgeStatus.selection.name || "TV"} ▾`;
+  }
+  if (currentBridgeStatus?.target === "local") {
+    return "→ This computer ▾";
+  }
+  if (currentBridgeStatus?.activeTv) {
+    return `→ ${currentBridgeStatus.activeTv} ▾`;
+  }
+  return "→ Select device ▾";
+}
+
+function updateDeviceChipAndPicker(): void {
+  if (!deviceChipBtn) return;
+  const hasCapability = Boolean(currentBridgeStatus?.capabilities?.selectDevice);
+  if (!hasCapability) {
+    deviceChipBtn.classList.add("hidden");
+    closePicker();
+    return;
+  }
+  deviceChipBtn.classList.remove("hidden");
+  deviceChipBtn.textContent = getChipLabel();
+  if (isPickerOpen) {
+    renderPicker();
+  }
+}
+
+function renderPicker(): void {
+  if (!devicePickerEl) return;
+  devicePickerEl.replaceChildren();
+
+  const devices = currentBridgeStatus?.devices || [];
+  const eligibleDevices = visibleDevices(
+    devices,
+    currentBridgeStatus?.selection,
+    currentBridgeStatus?.activeTv,
+    showOfflinePicker,
+  );
+  const chips = protocolChips(eligibleDevices);
+  const showChips = chips.length >= 2;
+  const activeProtocol = showChips
+    ? defaultProtocol(
+        eligibleDevices,
+        currentBridgeStatus?.selection,
+        rememberedPickerProtocol,
+        currentBridgeStatus?.activeTv,
+      )
+    : null;
+  const visibleDevicesList = showChips && activeProtocol
+    ? filterByProtocol(eligibleDevices, activeProtocol)
+    : eligibleDevices;
+  const offlineCount = hiddenOfflineCount(
+    devices,
+    currentBridgeStatus?.selection,
+    currentBridgeStatus?.activeTv,
+    showChips && activeProtocol ? activeProtocol : null,
+  );
+
+  // 1. Protocol filter chips row at the TOP
+  if (showChips) {
+    const chipsRow = document.createElement("div");
+    chipsRow.className = "picker-protocol-chips";
+    for (const chip of chips) {
+      const chipBtn = document.createElement("button");
+      chipBtn.type = "button";
+      chipBtn.className = "protocol-chip" + (chip === activeProtocol ? " active" : "");
+      chipBtn.textContent = formatDeviceProtocol(chip) || chip;
+      chipBtn.setAttribute("data-protocol", chip);
+
+      chipBtn.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        e.stopPropagation();
+        e.preventDefault();
+        rememberedPickerProtocol = chip;
+        try {
+          browser.storage.local
+            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+            .catch(() => {});
+        } catch {
+          // ignore
+        }
+        renderPicker();
+      });
+
+      chipsRow.appendChild(chipBtn);
+    }
+    devicePickerEl.appendChild(chipsRow);
+  }
+
+  // 2. This computer row next
+  const isLocalActive =
+    currentBridgeStatus?.selection?.kind === "local" ||
+    currentBridgeStatus?.target === "local";
+
+  const localBtn = document.createElement("button");
+  localBtn.type = "button";
+  localBtn.className = "picker-item" + (isLocalActive ? " active" : "");
+  const localName = document.createElement("span");
+  localName.className = "picker-item-name";
+  localName.textContent = "This computer";
+  localBtn.appendChild(localName);
+
+  if (isLocalActive) {
+    const activeBadge = document.createElement("span");
+    activeBadge.className = "picker-item-badge online";
+    activeBadge.textContent = "Active";
+    localBtn.appendChild(activeBadge);
+  }
+
+  localBtn.addEventListener("click", (e) => {
+    if (!e.isTrusted) return;
+    e.stopPropagation();
+    e.preventDefault();
+    closePicker();
+    browser.runtime.sendMessage({ action: "selectLocal" }).catch(() => {});
+  });
+  devicePickerEl.appendChild(localBtn);
+
+  // 3. Devices
+  for (const device of visibleDevicesList) {
+    const isTvActive = isActiveDevice(
+      device,
+      currentBridgeStatus?.selection,
+      currentBridgeStatus?.activeTv,
+    );
+
+    const devBtn = document.createElement("button");
+    devBtn.type = "button";
+    devBtn.className = "picker-item" + (isTvActive ? " active" : "");
+
+    const devName = document.createElement("span");
+    devName.className = "picker-item-name";
+    devName.textContent = device.name;
+    devBtn.appendChild(devName);
+
+    if (device.paired) {
+      const badge = document.createElement("span");
+      badge.className = "picker-item-badge " + (device.online === false ? "offline" : "online");
+      badge.textContent = device.online === false ? "Offline" : isTvActive ? "Active" : "Online";
+      devBtn.appendChild(badge);
+
+      devBtn.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        e.stopPropagation();
+        e.preventDefault();
+        closePicker();
+        if (device.protocol) {
+          rememberedPickerProtocol = device.protocol;
+          try {
+            browser.storage.local
+              .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: device.protocol })
+              .catch(() => {});
+          } catch {
+            // ignore
+          }
+        }
+        browser.runtime
+          .sendMessage({ action: "selectDevice", id: device.id || device.uuid })
+          .catch(() => {});
+      });
+    } else {
+      const pairBtn = document.createElement("button");
+      pairBtn.type = "button";
+      pairBtn.className = "picker-item-pair-btn";
+      pairBtn.textContent = "Pair";
+      pairBtn.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        e.stopPropagation();
+        e.preventDefault();
+        closePicker();
+        browser.runtime
+          .sendMessage({ action: "showApp", pairId: device.id || device.uuid })
+          .catch(() => {});
+      });
+      devBtn.appendChild(pairBtn);
+
+      devBtn.addEventListener("click", (e) => {
+        if (!e.isTrusted) return;
+        e.stopPropagation();
+        e.preventDefault();
+        closePicker();
+        browser.runtime
+          .sendMessage({ action: "showApp", pairId: device.id || device.uuid })
+          .catch(() => {});
+      });
+    }
+
+    devicePickerEl.appendChild(devBtn);
+  }
+
+  // 4. Toggle offline link at bottom if offline devices exist
+  if (offlineCount > 0) {
+    const toggleBtn = document.createElement("button");
+    toggleBtn.type = "button";
+    toggleBtn.className = "toggle-offline-btn";
+    toggleBtn.textContent = showOfflinePicker ? "Hide offline" : `Show ${offlineCount} offline`;
+    toggleBtn.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      e.stopPropagation();
+      e.preventDefault();
+      showOfflinePicker = !showOfflinePicker;
+      renderPicker();
+    });
+    devicePickerEl.appendChild(toggleBtn);
+  }
+}
+
 function onChromeFocusIn(): void {
+  maybeWakeBridge();
   clearAutoHideTimer();
   showChrome({ restartTimer: false });
 }
@@ -743,6 +1287,15 @@ function destroyOverlay(): void {
     statusResetTimer = null;
   }
   clearAutoHideTimer();
+  document.removeEventListener("pointerdown", onOutsidePointerDown, true);
+  if (deviceChipBtn) {
+    deviceChipBtn.removeEventListener("click", onChipClick, true);
+    deviceChipBtn.removeEventListener("mousedown", stopBubble, true);
+    deviceChipBtn.removeEventListener("mouseup", stopBubble, true);
+    deviceChipBtn.removeEventListener("pointerdown", stopBubble, true);
+    deviceChipBtn.removeEventListener("pointerenter", onCastPointerEnter);
+    deviceChipBtn.removeEventListener("pointerleave", onCastPointerLeave);
+  }
   if (castBtn) {
     castBtn.removeEventListener("click", onCastClick, true);
     castBtn.removeEventListener("mousedown", stopBubble, true);
@@ -761,6 +1314,9 @@ function destroyOverlay(): void {
   shadowRoot = null;
   chromeEl = null;
   castBtn = null;
+  deviceChipBtn = null;
+  devicePickerEl = null;
+  isPickerOpen = false;
   statusEl = null;
   overlayState = "idle";
   castInFlight = false;
@@ -784,7 +1340,7 @@ function clearStatusTimer(): void {
 function hideStatusMessage(): void {
   clearStatusTimer();
   if (!statusEl) return;
-  statusEl.classList.remove("show");
+  statusEl.classList.remove("show", "has-action");
   const el = statusEl;
   statusResetTimer = setTimeout(() => {
     statusResetTimer = null;
@@ -793,6 +1349,37 @@ function hideStatusMessage(): void {
       el.textContent = "";
     }
   }, STATUS_FADE_MS);
+}
+
+function setStatusWithAction(
+  message: string,
+  actionLabel: string,
+  onActionClick: () => void,
+): void {
+  if (!statusEl) return;
+  clearStatusTimer();
+  statusEl.textContent = "";
+  const span = document.createElement("span");
+  span.textContent = message;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "status-action-btn";
+  btn.textContent = actionLabel;
+  btn.addEventListener("click", (e) => {
+    if (!e.isTrusted) return;
+    e.stopPropagation();
+    e.preventDefault();
+    onActionClick();
+  });
+  statusEl.appendChild(span);
+  statusEl.appendChild(btn);
+  statusEl.classList.add("has-action", "show");
+  showChrome({ restartTimer: false });
+
+  statusResetTimer = setTimeout(() => {
+    statusResetTimer = null;
+    hideStatusMessage();
+  }, 10_000);
 }
 
 function setStatusText(message: string): void {
@@ -816,6 +1403,7 @@ function showEphemeralStatus(message: string, durationMs = STATUS_RESET_MS): voi
 
 /** No-stream hint only while the pointer is over the cast icon. */
 function onCastPointerEnter(): void {
+  maybeWakeBridge();
   if (!enabled) return;
   if (overlayState === "disabled-no-stream") {
     showEphemeralStatus(NO_STREAM_MSG, NO_STREAM_STATUS_MS);
@@ -977,66 +1565,74 @@ function scheduleResolve(): void {
 
 // ── Cast interaction ─────────────────────────────────────────────────────────
 
-async function onCastClick(e: Event): Promise<void> {
-  // The host lives in the page's shared DOM. Never allow synthetic page events
-  // to invoke the privileged background casting path.
-  if (!e.isTrusted) return;
-  e.preventDefault();
-  e.stopPropagation();
-  if (!enabled || castInFlight || !primaryVideo || !chromeVisible) return;
-
+async function performCast(
+  candidate: MediaCandidate,
+  destination?: "local",
+): Promise<void> {
   castInFlight = true;
   showChrome({ restartTimer: false });
-  setOverlayVisualState("casting", "Casting…");
+  setOverlayVisualState("casting", destination === "local" ? "Playing on this computer…" : "Casting…");
 
   try {
-    const video = primaryVideo;
-    const response = await fetchDetectedVideos();
-    if (!enabled || primaryVideo !== video || !video.isConnected) {
-      setOverlayVisualState("error", "Video changed; try again.");
-      return;
-    }
-    const candidate = resolveCandidate(
-      video,
-      response.videos,
-      response.senderFrameId,
-    );
-    lastCandidateUrl = candidate?.url ?? null;
-
-    if (!candidate) {
-      setOverlayVisualState("error", "No castable stream detected yet");
-      return;
-    }
-
-    const status = (await browser.runtime.sendMessage({
-      action: "wsGetStatus",
-    })) as {
-      status?: string;
-      desktopConnected?: boolean;
-    } | null;
-
-    if (!status?.desktopConnected) {
-      setOverlayVisualState("error", "Open the PlayBridge desktop app.");
-      return;
-    }
-    if (status.status !== "connected") {
-      setOverlayVisualState("error", "Connect a TV in PlayBridge.");
-      return;
-    }
-
-    // Send only the URL identifier; background uses sender.tab + stored headers.
     const res = (await browser.runtime.sendMessage({
       action: "castDetectedVideo",
       url: candidate.url,
-    })) as { success?: boolean; reason?: string | null } | null;
+      ...(destination ? { destination } : {}),
+    })) as {
+      success?: boolean;
+      ok?: boolean;
+      target?: "tv" | "local";
+      targetName?: string;
+      error?: string;
+      code?: string;
+      reason?: string | null;
+    } | null;
 
-    if (res?.success) {
-      setOverlayVisualState("success", "Casting to TV");
-    } else {
-      const reason = res?.reason || "Cast failed";
-      if (reason === "Not connected" || reason === "Not connected to TV") {
-        setOverlayVisualState("error", "Connect a TV in PlayBridge.");
+    if (res?.success || res?.ok) {
+      if (res.target === "local") {
+        setOverlayVisualState("success", "Playing on this computer");
       } else {
+        setOverlayVisualState("success", `Casting to ${res.targetName || "TV"}`);
+      }
+    } else {
+      if (res?.code === "app_not_running") {
+        overlayState = "error";
+        if (castBtn) {
+          castBtn.classList.remove("state-casting", "state-success");
+          castBtn.classList.add("state-error");
+          castBtn.disabled = false;
+        }
+        setStatusWithAction(
+          "PlayBridge desktop isn't running",
+          "Open PlayBridge",
+          async () => {
+            setStatusText("Opening PlayBridge…");
+            const launchRes = (await browser.runtime.sendMessage({
+              action: "launchApp",
+            })) as { ok?: boolean } | null;
+            if (launchRes?.ok) {
+              void performCast(candidate);
+            } else {
+              setOverlayVisualState("error", "Failed to launch PlayBridge");
+            }
+          },
+        );
+      } else if (res?.error === "destination_offline") {
+        overlayState = "error";
+        if (castBtn) {
+          castBtn.classList.remove("state-casting", "state-success");
+          castBtn.classList.add("state-error");
+          castBtn.disabled = false;
+        }
+        setStatusWithAction(
+          `${res.targetName || "TV"} is offline`,
+          "Play on this computer",
+          () => {
+            void performCast(candidate, "local");
+          },
+        );
+      } else {
+        const reason = res?.reason || res?.error || "Cast failed";
         setOverlayVisualState("error", reason);
       }
     }
@@ -1045,12 +1641,44 @@ async function onCastClick(e: Event): Promise<void> {
   } finally {
     castInFlight = false;
     if (castBtn && overlayState !== "disabled-no-stream") {
-      // Re-enable unless still in a transitional disable state.
-      if (overlayState === "idle" || overlayState === "success" || overlayState === "error") {
+      if (
+        overlayState === "idle" ||
+        overlayState === "success" ||
+        overlayState === "error"
+      ) {
         castBtn.disabled = false;
       }
     }
   }
+}
+
+async function onCastClick(e: Event): Promise<void> {
+  // The host lives in the page's shared DOM. Never allow synthetic page events
+  // to invoke the privileged background casting path.
+  if (!e.isTrusted) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!enabled || castInFlight || !primaryVideo || !chromeVisible) return;
+
+  const video = primaryVideo;
+  const response = await fetchDetectedVideos();
+  if (!enabled || primaryVideo !== video || !video.isConnected) {
+    setOverlayVisualState("error", "Video changed; try again.");
+    return;
+  }
+  const candidate = resolveCandidate(
+    video,
+    response.videos,
+    response.senderFrameId,
+  );
+  lastCandidateUrl = candidate?.url ?? null;
+
+  if (!candidate) {
+    setOverlayVisualState("error", "No castable stream detected yet");
+    return;
+  }
+
+  await performCast(candidate);
 }
 
 // ── Observers / listeners ────────────────────────────────────────────────────
@@ -1274,12 +1902,19 @@ function onStorageChanged(
   area: string,
 ): void {
   if (area !== "local") return;
+  if (DEVICE_PICKER_PROTOCOL_STORAGE_KEY in changes) {
+    const next = changes[DEVICE_PICKER_PROTOCOL_STORAGE_KEY]?.newValue;
+    rememberedPickerProtocol = typeof next === "string" ? next : null;
+    if (isPickerOpen) {
+      renderPicker();
+    }
+  }
   if (!VIDEO_CAST_OVERLAY_STORAGE_KEYS.some((key) => key in changes)) return;
   void refreshOverlayPreferences();
 }
 
 function onRuntimeMessage(message: unknown): void {
-  const msg = message as { type?: string };
+  const msg = message as { type?: string; [key: string]: unknown } | undefined;
   if (
     msg?.type === "overlay_navigation" ||
     msg?.type === "data_consent_changed"
@@ -1287,12 +1922,17 @@ function onRuntimeMessage(message: unknown): void {
     void refreshOverlayPreferences();
     return;
   }
+  if (msg?.type === "ws_status_update") {
+    currentBridgeStatus = msg as unknown as ContentBridgeStatus;
+    updateDeviceChipAndPicker();
+    if (enabled && settingLoaded) {
+      scheduleResolve();
+    }
+    return;
+  }
   if (!enabled || !settingLoaded) return;
   // New detection or bridge status — re-rank without high-frequency polling.
-  if (
-    msg?.type === "video_detected" ||
-    msg?.type === "ws_status_update"
-  ) {
+  if (msg?.type === "video_detected") {
     scheduleResolve();
   }
 }
@@ -1301,6 +1941,33 @@ async function init(): Promise<void> {
   // Avoid FOUC: do not create UI until the setting is known.
   browser.storage.onChanged.addListener(onStorageChanged);
   browser.runtime.onMessage.addListener(onRuntimeMessage);
+  try {
+    browser.storage.local
+      .get(DEVICE_PICKER_PROTOCOL_STORAGE_KEY)
+      .then((stored) => {
+        if (
+          stored &&
+          typeof stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY] === "string"
+        ) {
+          rememberedPickerProtocol = stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY];
+          if (isPickerOpen) {
+            renderPicker();
+          }
+        }
+      })
+      .catch(() => {});
+  } catch {
+    // ignore
+  }
+  browser.runtime
+    .sendMessage({ action: "wsGetStatus" })
+    .then((res) => {
+      if (res) {
+        currentBridgeStatus = res as ContentBridgeStatus;
+        updateDeviceChipAndPicker();
+      }
+    })
+    .catch(() => {});
   await refreshOverlayPreferences();
 }
 

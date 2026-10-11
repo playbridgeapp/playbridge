@@ -815,7 +815,7 @@ input:checked+.slider:before {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    max-height: 150px;
+    max-height: 220px;
     overflow-y: auto;
 }
 
@@ -868,4 +868,102 @@ input:checked+.slider:before {
 .delete-connection-btn:hover {
     color: var(--danger);
     background-color: rgba(239, 35, 60, 0.1);
+}
+
+.saved-connection-item.active {
+    border-color: var(--accent);
+    background-color: rgba(163, 137, 246, 0.15);
+}
+
+.saved-connection-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.badge-active {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+}
+
+.badge-online {
+    font-size: 11px;
+    color: var(--success);
+}
+
+.badge-offline {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.pair-app-btn {
+    background: transparent;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.pair-app-btn:hover {
+    background: var(--accent);
+    color: var(--bg-primary);
+}
+
+.protocol-chips-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--bg-tertiary);
+}
+
+.protocol-chip {
+    background: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.protocol-chip:hover {
+    border-color: var(--accent);
+    color: var(--text-main);
+}
+
+.protocol-chip.active {
+    background: rgba(208, 188, 255, 0.18);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.toggle-offline-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 6px 8px;
+    margin-top: 2px;
+    text-align: center;
+    align-self: center;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.15s ease;
+    width: auto;
+}
+
+.toggle-offline-btn:hover {
+    color: var(--accent);
 }

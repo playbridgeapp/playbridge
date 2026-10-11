@@ -406,6 +406,21 @@ class _ReceiverAppState extends State<ReceiverApp> with WindowListener {
       onPromptStop: () => unawaited(_stillWatching.stopWatching()),
       onPlaybackActivity: _stillWatching.recordUserActivity,
       onNewMedia: _stillWatching.resetForNewMedia,
+      onShowApp: (pairId) async {
+        await _showSenderScreen();
+        if (pairId == null) return;
+        for (final tv in _sender.discovered) {
+          if (tv.identityKey == pairId) {
+            // The existing Send to TV view displays the SAS/PIN stages.
+            unawaited(
+                _sender.connectToDiscovered(tv).catchError((Object error) {
+              debugPrint(
+                  '[ext-bridge] pairing connect failed: ${error.runtimeType}');
+            }));
+            break;
+          }
+        }
+      },
     );
     _mediaSession = MediaSessionBridge(
       _player,

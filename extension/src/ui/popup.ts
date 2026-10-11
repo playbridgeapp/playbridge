@@ -12,6 +12,16 @@ import {
     setShowVideoCastOverlay,
     setVideoCastOverlaySiteOverride,
 } from "../settings";
+import {
+    formatDeviceProtocol,
+    isActiveDevice,
+    protocolChips,
+    defaultProtocol,
+    filterByProtocol,
+    visibleDevices,
+    hiddenOfflineCount,
+    DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
+} from "../core/device-protocol";
 
 // DOM Elements
 const tabBtns = document.querySelectorAll('.tab-btn');
@@ -49,6 +59,7 @@ const openUrlPlayerBtn = document.getElementById('open-url-player-btn');
 const refreshBtn = document.getElementById('refresh-btn');
 const statusHint = document.getElementById('status-hint');
 const devicesList = document.getElementById('devices-list');
+const devicesSubtitle = document.getElementById('devices-subtitle');
 
 const statusDot = document.getElementById('status-dot');
 const statusText = document.getElementById('status-text');
@@ -60,11 +71,18 @@ let videoItems = [];
 let subtitleItems = [];
 let selectedVideoUrl = null;
 let selectedSubtitleUrl = null;
+let currentStatus = null;
 let bridgeDevices = [];
+let bridgeCapabilities = null;
+let bridgeSelection = null;
+let bridgeTarget = null;
 let lastStatusKey = '';
 let lastDevicesKey = '';
 let overlayPreferences = null;
 let dataConsent = { required: false, granted: true, version: 1 };
+let rememberedProtocol = null;
+let selectedPopupProtocol = null;
+let showOfflinePopup = false;
 
 // Navigation
 tabBtns.forEach(btn => {
@@ -214,23 +232,30 @@ reviewDataConsentBtn?.addEventListener('click', openDataConsent);
 manageDataConsentBtn?.addEventListener('click', openDataConsent);
 
 function applyStatus(s) {
-    // The desktop pushes a status frame ~1×/sec; only touch the DOM when something
-    // actually changed, so the popup doesn't flicker/reflow every second.
-    const statusKey = `${s.status}|${s.activeTv || ''}|${s.desktopConnected ? 1 : 0}`;
-    if (statusKey !== lastStatusKey) {
-        lastStatusKey = statusKey;
-        updateStatusUI(s.status, s.activeTv);
-        if (statusHint) {
-            statusHint.textContent =
-                s.status === 'connected'
-                    ? `Casts go to: ${s.activeTv}`
-                    : s.desktopConnected
-                        ? 'Desktop app is running — open it and connect a TV to cast.'
-                        : 'Open the PlayBridge desktop app to start casting.';
+    currentStatus = s;
+    bridgeCapabilities = s.capabilities || null;
+    bridgeSelection = s.selection || null;
+    bridgeTarget = s.target || null;
+
+    if (devicesSubtitle) {
+        if (bridgeCapabilities?.selectDevice) {
+            devicesSubtitle.textContent =
+                'Click a device or This computer to select where casts play. Pairing is done in the desktop app.';
+        } else {
+            devicesSubtitle.textContent =
+                'Pairing and choosing a TV is done in the PlayBridge desktop app. This list is informational.';
         }
     }
 
-    const devKey = JSON.stringify(s.devices || []);
+    const selKey = JSON.stringify(s.selection || null);
+    const capKey = JSON.stringify(s.capabilities || null);
+    const statusKey = `${s.status}|${s.activeTv || ''}|${s.desktopConnected ? 1 : 0}|${s.target || ''}|${selKey}|${capKey}`;
+    if (statusKey !== lastStatusKey) {
+        lastStatusKey = statusKey;
+        updateStatusUI(s);
+    }
+
+    const devKey = JSON.stringify(s.devices || []) + `|${selKey}|${s.target || ''}|${capKey}`;
     if (devKey !== lastDevicesKey) {
         lastDevicesKey = devKey;
         bridgeDevices = s.devices || [];
@@ -248,6 +273,186 @@ function loadStatus() {
 function renderDevices() {
     if (!devicesList) return;
     devicesList.replaceChildren();
+
+    if (bridgeCapabilities?.selectDevice) {
+        const eligibleDevices = visibleDevices(
+            bridgeDevices,
+            bridgeSelection,
+            currentStatus?.activeTv,
+            showOfflinePopup,
+        );
+        const chips = protocolChips(eligibleDevices);
+        const showChips = chips.length >= 2;
+        const activeProtocol = showChips
+            ? defaultProtocol(eligibleDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+            : null;
+        const visibleDevicesList = showChips && activeProtocol
+            ? filterByProtocol(eligibleDevices, activeProtocol)
+            : eligibleDevices;
+        const offlineCount = hiddenOfflineCount(
+            bridgeDevices,
+            bridgeSelection,
+            currentStatus?.activeTv,
+            showChips && activeProtocol ? activeProtocol : null,
+        );
+
+        // 1. Protocol filter chips row at the TOP
+        if (showChips) {
+            const chipsRow = document.createElement('div');
+            chipsRow.className = 'protocol-chips-row';
+            chips.forEach((chip) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'protocol-chip' + (chip === activeProtocol ? ' active' : '');
+                btn.textContent = formatDeviceProtocol(chip) || chip;
+                btn.setAttribute('data-protocol', chip);
+                btn.addEventListener('click', () => {
+                    rememberedProtocol = chip;
+                    try {
+                        browser.storage.local
+                            .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+                            .catch(() => {});
+                    } catch {
+                        // ignore
+                    }
+                    renderDevices();
+                });
+                chipsRow.appendChild(btn);
+            });
+            devicesList.appendChild(chipsRow);
+        }
+
+        // 2. "This computer" row next
+        const isLocalActive =
+            bridgeSelection?.kind === 'local' || bridgeTarget === 'local';
+
+        const localItem = document.createElement('div');
+        localItem.className = 'saved-connection-item' + (isLocalActive ? ' active' : '');
+
+        const localInfo = document.createElement('div');
+        localInfo.className = 'saved-connection-info';
+        const localName = document.createElement('span');
+        localName.className = 'saved-connection-ip';
+        localName.textContent = 'This computer';
+        const localSubtitle = document.createElement('span');
+        localSubtitle.className = 'saved-connection-pin';
+        localSubtitle.textContent = 'Play audio/video on this computer';
+        localInfo.appendChild(localName);
+        localInfo.appendChild(localSubtitle);
+        localItem.appendChild(localInfo);
+
+        const localActions = document.createElement('div');
+        localActions.className = 'saved-connection-actions';
+        if (isLocalActive) {
+            const badge = document.createElement('span');
+            badge.className = 'badge-active';
+            badge.textContent = 'Active';
+            localActions.appendChild(badge);
+        }
+        localItem.appendChild(localActions);
+
+        localItem.addEventListener('click', () => {
+            browser.runtime.sendMessage({ action: 'selectLocal' }).then(() => {
+                loadStatus();
+                showToast('Selected This computer');
+            }).catch(() => {});
+        });
+        devicesList.appendChild(localItem);
+
+        // 3. Devices
+        visibleDevicesList.forEach((d) => {
+            const isTvActive = isActiveDevice(d, bridgeSelection, currentStatus?.activeTv);
+
+            const item = document.createElement('div');
+            item.className = 'saved-connection-item' + (isTvActive ? ' active' : '');
+
+            const info = document.createElement('div');
+            info.className = 'saved-connection-info';
+            const name = document.createElement('span');
+            name.className = 'saved-connection-ip';
+            name.textContent = d.name;
+            info.appendChild(name);
+
+            const actions = document.createElement('div');
+            actions.className = 'saved-connection-actions';
+
+            if (d.paired) {
+                const tag = document.createElement('span');
+                tag.className = d.online === false
+                    ? 'badge-offline'
+                    : isTvActive
+                    ? 'badge-active'
+                    : 'badge-online';
+                tag.textContent = d.online === false
+                    ? 'Offline'
+                    : isTvActive
+                    ? 'Active'
+                    : 'Online';
+                actions.appendChild(tag);
+
+                item.addEventListener('click', () => {
+                    if (d.protocol) {
+                        rememberedProtocol = d.protocol;
+                        try {
+                            browser.storage.local
+                                .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: d.protocol })
+                                .catch(() => {});
+                        } catch {
+                            // ignore
+                        }
+                    }
+                    browser.runtime
+                        .sendMessage({ action: 'selectDevice', id: d.id || d.uuid })
+                        .then(() => {
+                            loadStatus();
+                            showToast(`Selected ${d.name}`);
+                        })
+                        .catch(() => {});
+                });
+            } else {
+                const pairBtn = document.createElement('button');
+                pairBtn.type = 'button';
+                pairBtn.className = 'pair-app-btn';
+                pairBtn.textContent = 'Pair in app';
+                pairBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    browser.runtime
+                        .sendMessage({ action: 'showApp', pairId: d.id || d.uuid })
+                        .catch(() => {});
+                    showToast('Opening PlayBridge…');
+                });
+                actions.appendChild(pairBtn);
+
+                item.addEventListener('click', () => {
+                    browser.runtime
+                        .sendMessage({ action: 'showApp', pairId: d.id || d.uuid })
+                        .catch(() => {});
+                    showToast('Opening PlayBridge…');
+                });
+            }
+
+            item.appendChild(info);
+            item.appendChild(actions);
+            devicesList.appendChild(item);
+        });
+
+        // 4. Toggle offline link at bottom if offline devices exist
+        if (offlineCount > 0) {
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'toggle-offline-btn';
+            toggleBtn.textContent = showOfflinePopup ? 'Hide offline' : `Show ${offlineCount} offline`;
+            toggleBtn.addEventListener('click', () => {
+                showOfflinePopup = !showOfflinePopup;
+                renderDevices();
+            });
+            devicesList.appendChild(toggleBtn);
+        }
+
+        return;
+    }
+
+    // Backward compatibility: read-only list
     if (!bridgeDevices || bridgeDevices.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'subtitle';
@@ -255,7 +460,54 @@ function renderDevices() {
         devicesList.appendChild(empty);
         return;
     }
-    bridgeDevices.forEach((d) => {
+
+    const legacyEligible = visibleDevices(
+        bridgeDevices,
+        bridgeSelection,
+        currentStatus?.activeTv,
+        showOfflinePopup,
+    );
+    const legacyChips = protocolChips(legacyEligible);
+    const legacyShowChips = legacyChips.length >= 2;
+    const legacyActiveProtocol = legacyShowChips
+        ? defaultProtocol(legacyEligible, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+        : null;
+    const legacyVisibleDevices = legacyShowChips && legacyActiveProtocol
+        ? filterByProtocol(legacyEligible, legacyActiveProtocol)
+        : legacyEligible;
+    const legacyOfflineCount = hiddenOfflineCount(
+        bridgeDevices,
+        bridgeSelection,
+        currentStatus?.activeTv,
+        legacyShowChips && legacyActiveProtocol ? legacyActiveProtocol : null,
+    );
+
+    if (legacyShowChips) {
+        const chipsRow = document.createElement('div');
+        chipsRow.className = 'protocol-chips-row';
+        legacyChips.forEach((chip) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'protocol-chip' + (chip === legacyActiveProtocol ? ' active' : '');
+            btn.textContent = formatDeviceProtocol(chip) || chip;
+            btn.setAttribute('data-protocol', chip);
+            btn.addEventListener('click', () => {
+                rememberedProtocol = chip;
+                try {
+                    browser.storage.local
+                        .set({ [DEVICE_PICKER_PROTOCOL_STORAGE_KEY]: chip })
+                        .catch(() => {});
+                } catch {
+                    // ignore
+                }
+                renderDevices();
+            });
+            chipsRow.appendChild(btn);
+        });
+        devicesList.appendChild(chipsRow);
+    }
+
+    legacyVisibleDevices.forEach((d) => {
         const item = document.createElement('div');
         item.className = 'saved-connection-item';
         const info = document.createElement('div');
@@ -263,27 +515,81 @@ function renderDevices() {
         const name = document.createElement('span');
         name.className = 'saved-connection-ip';
         name.textContent = d.name;
+        info.appendChild(name);
+
+        const actions = document.createElement('div');
+        actions.className = 'saved-connection-actions';
+
         const tag = document.createElement('span');
         tag.className = 'saved-connection-pin';
         tag.textContent = d.paired ? 'paired' : 'not paired';
-        info.appendChild(name);
-        info.appendChild(tag);
+        actions.appendChild(tag);
+
         item.appendChild(info);
+        item.appendChild(actions);
         devicesList.appendChild(item);
     });
+
+    if (legacyOfflineCount > 0) {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'toggle-offline-btn';
+        toggleBtn.textContent = showOfflinePopup ? 'Hide offline' : `Show ${legacyOfflineCount} offline`;
+        toggleBtn.addEventListener('click', () => {
+            showOfflinePopup = !showOfflinePopup;
+            renderDevices();
+        });
+        devicesList.appendChild(toggleBtn);
+    }
 }
 
-function updateStatusUI(status, activeTv) {
+function updateStatusUI(s) {
+    const status = s.status;
+    const activeTv = s.activeTv;
     statusDot.className = `dot mx-${status}`;
+
+    if (bridgeCapabilities?.selectDevice) {
+        if (s.selection?.kind === 'local' || s.target === 'local') {
+            statusText.textContent = 'Ready · This computer';
+            statusText.style.color = 'var(--success)';
+            if (statusHint) statusHint.textContent = 'Casts play on this computer.';
+            return;
+        }
+        if (s.selection?.kind === 'tv') {
+            const name = s.selection.name || 'TV';
+            if (s.selection.status === 'connected') {
+                statusText.textContent = `Connected · ${name}`;
+                statusText.style.color = 'var(--success)';
+                if (statusHint) statusHint.textContent = `Casts go to: ${name}`;
+            } else if (s.selection.status === 'offline') {
+                statusText.textContent = `Offline · ${name}`;
+                statusText.style.color = 'var(--danger)';
+                if (statusHint) statusHint.textContent = `${name} is offline. Choose another device or This computer.`;
+            } else {
+                statusText.textContent = `Connecting · ${name}`;
+                statusText.style.color = 'var(--accent)';
+                if (statusHint) statusHint.textContent = `Connecting to ${name}…`;
+            }
+            return;
+        }
+    }
+
     if (status === 'connected') {
         statusText.textContent = activeTv ? `Connected · ${activeTv}` : 'Connected';
         statusText.style.color = 'var(--success)';
+        if (statusHint) statusHint.textContent = `Casts go to: ${activeTv}`;
     } else if (status === 'connecting') {
         statusText.textContent = 'Desktop ready · no TV';
         statusText.style.color = 'var(--accent)';
+        if (statusHint) {
+            statusHint.textContent = s.desktopConnected
+                ? 'Desktop app is running — open it and connect a TV to cast.'
+                : 'Open the PlayBridge desktop app to start casting.';
+        }
     } else {
         statusText.textContent = 'Desktop app not running';
         statusText.style.color = 'var(--danger)';
+        if (statusHint) statusHint.textContent = 'Open the PlayBridge desktop app to start casting.';
     }
 }
 
@@ -574,33 +880,27 @@ function renderVideos() {
 
 // User Actions
 
-// A cast can proceed only when the desktop app is connected to a TV.
-function ensureConnected() {
-    return browser.runtime
-        .sendMessage({ action: 'wsGetStatus' })
-        .then((res) => !!res && res.status === 'connected')
-        .catch(() => false);
-}
-
-function castGuardMessage() {
-    return statusText.textContent === 'Desktop app not running'
-        ? 'PlayBridge desktop app is not running.'
-        : 'Open the PlayBridge app and connect a TV first.';
+function reportPlaybackResult(res, fallbackSuccessMsg = 'Playing on TV') {
+    if (res && (res.success || res.ok)) {
+        showToast(
+            res.target === 'local'
+                ? 'Playing on this computer'
+                : (res.targetName ? `Playing on ${res.targetName}` : fallbackSuccessMsg),
+        );
+    } else {
+        if (res?.code === 'app_not_running') {
+            showToast('PlayBridge desktop app is not running.');
+        } else if (res?.error === 'destination_offline') {
+            showToast(`${res.targetName || 'TV'} is offline`);
+        } else {
+            showToast('Error: ' + (res?.error || res?.reason || 'Unknown'));
+        }
+    }
 }
 
 masterPlayBtn.addEventListener('click', async () => {
     if (!selectedVideoUrl) {
         showToast('Please select a video first');
-        return;
-    }
-    
-    // Wait for connection if currently connecting
-    if (statusText.textContent === 'Connecting...') {
-        showToast('Waiting for TV to connect...');
-    }
-    const isConnected = await ensureConnected();
-    if (!isConnected) {
-        showToast(castGuardMessage());
         return;
     }
     
@@ -631,29 +931,14 @@ masterPlayBtn.addEventListener('click', async () => {
         video: videoPayload,
         subtitleUrl: selectedSubtitleUrl
     }).then(res => {
-        if (res && res.success) {
-            showToast('Playing on TV');
-        } else {
-            if (res && res.reason === "Not connected to TV") {
-                showToast(castGuardMessage());
-            } else {
-                showToast('Error: ' + (res?.reason || 'Unknown'));
-            }
-        }
-    }).catch(err => console.error("Error sending play command:", err));
+        reportPlaybackResult(res, 'Playing on TV');
+    }).catch(err => {
+        console.error("Error sending play command:", err);
+        showToast('Error sending play command');
+    });
 });
 
 openCurrentTabBtn.addEventListener('click', async () => {
-    // Wait for connection if currently connecting
-    if (statusText.textContent === 'Connecting...') {
-        showToast('Waiting for TV to connect...');
-    }
-    const isConnected = await ensureConnected();
-    if (!isConnected) {
-        showToast(castGuardMessage());
-        return;
-    }
-
     browser.runtime.sendMessage({ action: 'getCurrentTabUrl' }).then(res => {
         const url = res?.url;
         if (url) {
@@ -662,16 +947,11 @@ openCurrentTabBtn.addEventListener('click', async () => {
                 url: url,
                 target: 'browser'
             }).then(sendRes => {
-                if (sendRes && sendRes.success) {
-                    showToast('Opening tab on TV');
-                } else {
-                    if (sendRes && sendRes.reason === "Not connected to TV") {
-                        showToast(castGuardMessage());
-                    } else {
-                        showToast('Error: ' + (sendRes?.reason || 'Unknown'));
-                    }
-                }
-            }).catch(err => console.error("Error sending open command:", err));
+                reportPlaybackResult(sendRes, 'Opening tab on TV');
+            }).catch(err => {
+                console.error("Error sending open command:", err);
+                showToast('Error sending open command');
+            });
         } else {
             showToast('Cannot get current tab URL');
         }
@@ -685,31 +965,16 @@ openUrlBrowserBtn.addEventListener('click', async () => {
         return;
     }
     
-    // Wait for connection if currently connecting
-    if (statusText.textContent === 'Connecting...') {
-        showToast('Waiting for TV to connect...');
-    }
-    const isConnected = await ensureConnected();
-    if (!isConnected) {
-        showToast(castGuardMessage());
-        return;
-    }
-    
     browser.runtime.sendMessage({
         action: 'wsSendToTv',
         url: url,
         target: 'browser'
     }).then(res => {
-        if (res && res.success) {
-            showToast('Opening URL on TV');
-        } else {
-            if (res && res.reason === "Not connected to TV") {
-                showToast(castGuardMessage());
-            } else {
-                showToast('Error: ' + (res?.reason || 'Unknown'));
-            }
-        }
-    }).catch(err => console.error("Error sending open command:", err));
+        reportPlaybackResult(res, 'Opening URL on TV');
+    }).catch(err => {
+        console.error("Error sending open command:", err);
+        showToast('Error sending open command');
+    });
 });
 
 openUrlPlayerBtn.addEventListener('click', async () => {
@@ -719,36 +984,25 @@ openUrlPlayerBtn.addEventListener('click', async () => {
         return;
     }
     
-    // Wait for connection if currently connecting
-    if (statusText.textContent === 'Connecting...') {
-        showToast('Waiting for TV to connect...');
-    }
-    const isConnected = await ensureConnected();
-    if (!isConnected) {
-        showToast(castGuardMessage());
-        return;
-    }
-    
     browser.runtime.sendMessage({
         action: 'wsSendToTv',
         url: url,
         target: 'player'
     }).then(res => {
-        if (res && res.success) {
-            showToast('Playing URL on TV');
-        } else {
-            if (res && res.reason === "Not connected to TV") {
-                showToast(castGuardMessage());
-            } else {
-                showToast('Error: ' + (res?.reason || 'Unknown'));
-            }
-        }
-    }).catch(err => console.error("Error sending play command:", err));
+        reportPlaybackResult(res, 'Playing URL on TV');
+    }).catch(err => {
+        console.error("Error sending play command:", err);
+        showToast('Error sending play command');
+    });
 });
 
 if (refreshBtn) {
     refreshBtn.addEventListener('click', () => {
-        browser.runtime.sendMessage({ action: 'wsConnect' });
+        if (bridgeCapabilities?.selectDevice) {
+            browser.runtime.sendMessage({ action: 'refreshDevices' });
+        } else {
+            browser.runtime.sendMessage({ action: 'wsConnect' });
+        }
         loadStatus();
         showToast('Refreshing…');
     });
@@ -757,12 +1011,7 @@ if (refreshBtn) {
 // Listen for updates from background
 browser.runtime.onMessage.addListener((message) => {
     if (message.type === 'ws_status_update') {
-        applyStatus({
-            status: message.status,
-            desktopConnected: message.status !== 'disconnected',
-            activeTv: message.activeTv,
-            devices: message.devices,
-        });
+        applyStatus(message);
     } else if (message.type === 'video_detected') {
         // Reload videos if a new one is detected while popup is open
         loadVideos();
@@ -893,8 +1142,25 @@ if (resetSiteOverlayBtn) {
     });
 }
 
+async function loadRememberedProtocol() {
+    try {
+        const stored = await browser.storage.local.get(DEVICE_PICKER_PROTOCOL_STORAGE_KEY);
+        if (stored && typeof stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY] === 'string') {
+            rememberedProtocol = stored[DEVICE_PICKER_PROTOCOL_STORAGE_KEY];
+            renderDevices();
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
 browser.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
+    if (DEVICE_PICKER_PROTOCOL_STORAGE_KEY in changes) {
+        const next = changes[DEVICE_PICKER_PROTOCOL_STORAGE_KEY]?.newValue;
+        rememberedProtocol = typeof next === 'string' ? next : null;
+        renderDevices();
+    }
     if (VIDEO_CAST_OVERLAY_STORAGE_KEYS.some(key => key in changes)) {
         loadOverlaySetting();
     }
@@ -903,6 +1169,7 @@ browser.storage.onChanged.addListener((changes, area) => {
 // Init
 window.addEventListener('DOMContentLoaded', async () => {
     await loadDataConsent();
+    await loadRememberedProtocol();
     loadStatus();
     loadOverlaySetting();
 });

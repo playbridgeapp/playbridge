@@ -2,6 +2,16 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Extension device selection**: Share a persisted This computer/TV destination with browser casting, including saved and discovered receivers, pairing in the app, device refresh and explicit app launch from the native host.
+
+### Fixed
+- **Extension state updates**: Suppress identical consecutive state pushes per client while always replying to authentication and device-list requests.
+- **Extension reconnection and pairing cancellation**: Browser commands reconnect after manual app startup or restart. Cancelling new TV pairing preserves the saved playback destination.
+- **Offline destinations**: Reconnect the selected TV before browser casts and report an offline destination instead of silently playing locally. Explicit one-off local playback leaves the saved selection intact.
+
 ## [0.15.0+32] — 2026-10-09
 
 ### Added

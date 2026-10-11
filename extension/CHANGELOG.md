@@ -2,6 +2,17 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Device Selection**: Choose the playback device (a paired TV or This computer) from the popup or from a device chip beside the in-page cast button. Requires a PlayBridge desktop app with device selection; older apps keep the read-only list.
+- **Open PlayBridge**: When the desktop app is not running, casting offers to launch it.
+
+### Changed
+- **Reconnection**: Hovering the cast button, opening the popup or casting reconnects to the desktop app immediately instead of waiting for the reconnect backoff.
+- **Cast Results**: The cast button reports "Playing on this computer" or "Casting to <TV>". An offline TV shows an error with a one-off "Play on this computer" action instead of playing locally without asking.
+- **Device Filter Chips**: Show protocol filter chips (PlayBridge, Google Cast, DLNA, Roku, Web Browser) at the bottom of the device list in the popup and in-page picker when multiple protocols exist, replacing per-row protocol badges and remembering the user's protocol selection.
+
 ## [0.6.1] — 2026-07-19
 
 ### Changed
