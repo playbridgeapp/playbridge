@@ -1,5 +1,6 @@
 package com.playbridge.player.server
 
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
@@ -8,6 +9,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.RemoteException
+import com.playbridge.player.player.RendererProcessPrewarmer
 import com.playbridge.shared.browser.PluginBridgeProtocol
 
 /** Main-process transport only. ServerService retains ownership of routing/context/status policy. */
@@ -34,7 +36,7 @@ internal object PluginBridge {
         }
     }
 
-    fun hello(message: Message, service: Messenger) {
+    fun hello(message: Message, service: Messenger, context: Context) {
         val reply = message.replyTo ?: return
         if (message.sendingUid < 0) return
         val resumed = message.data.getBoolean(PluginBridgeProtocol.RESUMED, false)
@@ -49,7 +51,23 @@ internal object PluginBridge {
             clients.remove(next)
             return
         }
-        if (resumed) ServerService.recoverExternalBrowserContextFromPlugin()
+        if (!resumed) return
+        if (ServerService.isRunning()) {
+            ServerService.recoverExternalBrowserContextFromPlugin()
+        } else {
+            // The main process was killed (or force-stopped by an update) while the browser
+            // stayed visible. The binding restarted only this process; bring the phone's
+            // connection back now instead of waiting for START_STICKY backoff (or forever
+            // after a force-stop). The visible plugin's binding exempts this FGS start. The
+            // browser owns the screen, so keep renderer prewarm released until ServerService
+            // recovers the context from the cached hello and reconciles the gate.
+            RendererProcessPrewarmer.setBrowserActive(true)
+            try {
+                ServerService.start(context)
+            } catch (_: RuntimeException) {
+                // ForegroundServiceStartNotAllowedException etc.: START_STICKY remains the fallback.
+            }
+        }
     }
 
     /** Authenticate a message against the current hello, including its reply endpoint. */

@@ -17,7 +17,7 @@ class PluginBridgeService : Service() {
             if (destroyed) return
             try {
                 when (message.what) {
-                    PluginBridgeProtocol.HELLO -> PluginBridge.hello(message, messenger)
+                    PluginBridgeProtocol.HELLO -> PluginBridge.hello(message, messenger, applicationContext)
                     PluginBridgeProtocol.GOODBYE, PluginBridgeProtocol.VIDEO_STATUS,
                     PluginBridgeProtocol.CONTEXT_IDLE -> PluginBridge.handleClientMessage(message, messenger)
                 }

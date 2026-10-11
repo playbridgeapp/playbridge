@@ -1540,6 +1540,8 @@ class ServerService : Service() {
             }
         }
 
+        internal fun isRunning(): Boolean = _staticInstance != null
+
         internal fun recoverExternalBrowserContextFromPlugin() {
             _staticInstance?.recoverExternalBrowserContextInternal()
         }
