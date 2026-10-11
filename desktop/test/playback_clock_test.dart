@@ -7,6 +7,8 @@ void main() {
     expect(formatRemainingClock(5000, 65000), '-01:00');
     expect(formatRemainingClock(65000, 65000), '-00:00');
     expect(formatPlaybackClock(3661000), '1:01:01');
+    expect(formatControlElapsed(0), '--:--');
+    expect(formatControlElapsed(1000), '00:01');
   });
 
   test('held arrow keys escalate from 10s to 50s', () {
