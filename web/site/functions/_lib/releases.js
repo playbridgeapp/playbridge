@@ -44,12 +44,6 @@ const PRODUCTS = {
       windows: { assetPattern: /^playbridge-desktop-windows-.*\.zip$/ },
       linux: { assetPattern: /^playbridge-desktop-linux-.*\.tar\.gz$/ }
     }
-  },
-  extension: {
-    tagPrefix: 'extension-v',
-    targets: {
-      firefox: { assetPattern: /^playbridge-extension-.*\.xpi$/ }
-    }
   }
 };
 
@@ -96,7 +90,6 @@ export function downloadTargetForPlatform(platform) {
   if (cleanPlatform === 'macos' || cleanPlatform === 'windows' || cleanPlatform === 'linux') {
     return { product: 'desktop', target: cleanPlatform };
   }
-  if (cleanPlatform === 'firefox') return { product: 'extension', target: 'firefox' };
   return null;
 }
 

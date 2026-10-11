@@ -31,8 +31,7 @@ function release(product, version, ageHours, overrides = {}) {
       tag: 'tv-geckoview-plugin-v',
       asset: `playbridge-tv-geckoview-plugin-${version}-universal-release.apk`
     },
-    desktop: { tag: 'desktop-v', asset: `playbridge-desktop-macos-${version}.zip` },
-    extension: { tag: 'extension-v', asset: `playbridge-extension-${version}.xpi` }
+    desktop: { tag: 'desktop-v', asset: `playbridge-desktop-macos-${version}.zip` }
   }[product];
   return {
     tag_name: `${config.tag}${version}`,
@@ -75,7 +74,7 @@ test('maps every direct download platform to a release target', () => {
   assert.deepEqual(downloadTargetForPlatform('macos'), { product: 'desktop', target: 'macos' });
   assert.deepEqual(downloadTargetForPlatform('windows'), { product: 'desktop', target: 'windows' });
   assert.deepEqual(downloadTargetForPlatform('linux'), { product: 'desktop', target: 'linux' });
-  assert.deepEqual(downloadTargetForPlatform('firefox'), { product: 'extension', target: 'firefox' });
+  assert.equal(downloadTargetForPlatform('firefox'), null);
   assert.equal(downloadTargetForPlatform('unknown'), null);
 });
 

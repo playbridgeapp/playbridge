@@ -23,6 +23,16 @@ release until those actions are complete.
 
 ### Repository action required before the next version bump
 
+> **Done (2026-10-11).** `extension_build.yml` now runs `pnpm store:check`,
+> attaches the exact store ZIPs and checksums to the GitHub release, submits
+> the Firefox package to the listed AMO channel with the source archive, and
+> uploads and submits the Chrome package through the Chrome Web Store API v2
+> (published automatically after review). CI no longer signs unlisted XPIs, and
+> `playbridge.app/firefox` redirects to the AMO listing. Required secrets:
+> `AMO_JWT_ISSUER`, `AMO_JWT_SECRET`, `CWS_SERVICE_ACCOUNT_JSON` (a service
+> account added under Account in the Chrome Web Store dashboard) and
+> `CWS_PUBLISHER_ID`. The original audit notes follow.
+
 Update `.github/workflows/extension_build.yml` before merging the release
 version. The current workflow:
 
@@ -565,9 +575,9 @@ References:
 - [x] zero-warning `web-ext lint` and packaged-manifest validation pass
 - [x] Firefox binary ZIP, Chrome ZIP, and AMO source ZIP generated reproducibly
 - [x] artifact checksums generated (regenerate from the final release commit)
-- [ ] Release CI runs `pnpm store:check` and uploads the exact generated
+- [x] Release CI runs `pnpm store:check` and uploads the exact generated
       artifacts/checksums
-- [ ] Current Firefox `--channel unlisted` release signing removed or isolated
+- [x] Current Firefox `--channel unlisted` release signing removed or isolated
       to explicitly versioned test builds
 - [ ] Version detection made robust, or release bump kept in the final/squashed
       commit merged to `main`

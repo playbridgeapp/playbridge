@@ -60,7 +60,7 @@ stable releases after each release's rollout delay.
 | Project | Version source | Tag prefix | Changelog | PR CI | Release-build | Publish |
 | --- | --- | --- | --- | --- | --- | --- |
 | **CLI** | `cli/Cargo.toml` | `cli-v*` | `cli/CHANGELOG.md` | `rust_pr.yml` | `cli_build.yml` → **draft** | `cli_publish.yml` → undraft |
-| **Extension** | `extension/manifests/*.json` | `extension-v*` | `extension/CHANGELOG.md` | `extension_pr.yml` | `extension_build.yml` → draft | Publish workflow — *target* |
+| **Extension** | `extension/manifests/*.json` | `extension-v*` | `extension/CHANGELOG.md` | `extension_pr.yml` | `extension_build.yml` → **public** release (no draft) | Same run submits to AMO (listed) and the Chrome Web Store; stores publish after review |
 | **Desktop** | `desktop/pubspec.yaml` | `desktop-v*` | `desktop/CHANGELOG.md` | `desktop_pr.yml` | `desktop_build.yml` → **draft** | `desktop_publish.yml` → undraft |
 | **Android phone** | `versionName` / `versionCode` | `phone-v*` | `mobile/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
 | **Android TV player** | TV `versionName` / `versionCode` | `tv-player-v*` | `tv/android/CHANGELOG.md` | `android_pr.yml` | `android_build.yml` → **draft** | `android_publish.yml` → Play + undraft |
@@ -166,7 +166,7 @@ the GitHub release form before or after publication: use `0` to make a published
 release eligible immediately, or an integer from `1` through `168` to delay it.
 If the marker is omitted or invalid, the resolver defaults to 24 hours. This
 applies to CLI, Android phone, Android TV Player, Android TV GeckoView plugin,
-Desktop, and Firefox extension downloads; store-distributed builds are excluded.
+and Desktop downloads; store-distributed builds, including both browser extensions, are excluded.
 
 The resolver caches a result for at most 10 minutes. GitHub release pages and
 their assets are public immediately after publication; the marker only controls
