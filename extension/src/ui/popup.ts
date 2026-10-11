@@ -1154,6 +1154,56 @@ async function loadRememberedProtocol() {
     }
 }
 
+async function loadWebsiteAccess() {
+    try {
+        const response = await browser.runtime.sendMessage({ action: 'getPageConsentOrigins' });
+        if (response && Array.isArray(response.origins)) {
+            renderWebsiteAccess(response.origins);
+        }
+    } catch (e) {
+        // ignore
+    }
+}
+
+function renderWebsiteAccess(origins: string[]) {
+    const list = document.getElementById('website-access-list');
+    const emptyMsg = document.getElementById('no-website-access-msg');
+    if (!list) return;
+    list.replaceChildren();
+
+    if (origins.length === 0) {
+        emptyMsg?.classList.remove('hidden');
+        return;
+    }
+    emptyMsg?.classList.add('hidden');
+
+    origins.forEach((origin) => {
+        const item = document.createElement('div');
+        item.className = 'website-access-item';
+
+        const name = document.createElement('span');
+        name.className = 'website-access-origin';
+        name.textContent = origin;
+        item.appendChild(name);
+
+        const revokeBtn = document.createElement('button');
+        revokeBtn.type = 'button';
+        revokeBtn.className = 'website-revoke-btn';
+        revokeBtn.textContent = 'Revoke';
+        revokeBtn.addEventListener('click', () => {
+            browser.runtime
+                .sendMessage({ action: 'revokePageConsentOrigin', origin })
+                .then(() => {
+                    showToast(`Revoked access for ${origin}`);
+                    loadWebsiteAccess();
+                });
+        });
+        item.appendChild(revokeBtn);
+
+        list.appendChild(item);
+    });
+}
+
 browser.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (DEVICE_PICKER_PROTOCOL_STORAGE_KEY in changes) {
@@ -1164,6 +1214,9 @@ browser.storage.onChanged.addListener((changes, area) => {
     if (VIDEO_CAST_OVERLAY_STORAGE_KEYS.some(key => key in changes)) {
         loadOverlaySetting();
     }
+    if ('pageConsent:v1' in changes) {
+        loadWebsiteAccess();
+    }
 });
 
 // Init
@@ -1172,4 +1225,5 @@ window.addEventListener('DOMContentLoaded', async () => {
     await loadRememberedProtocol();
     loadStatus();
     loadOverlaySetting();
+    loadWebsiteAccess();
 });

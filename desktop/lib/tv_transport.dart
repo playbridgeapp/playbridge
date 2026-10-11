@@ -859,7 +859,8 @@ class BrowserTransport extends TvTransport {
     return castBrowserMedia(
       url: video.url,
       title: video.hasTitle() ? video.title : null,
-      contentType: browserContentTypeForUrl(video.url),
+      contentType:
+          video.contentTypeOrNull ?? browserContentTypeForUrl(video.url),
       posterUrl: video.posterUrlOrNull,
       subtitleUrl: video.subtitlesOrNull?.first,
       startPosition: video.startPositionMsOrNull == null

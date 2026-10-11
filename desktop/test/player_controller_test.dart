@@ -121,6 +121,42 @@ void main() {
 
   QueueItem item(int n) => QueueItem(url: 'https://x/$n.mp4', title: 'Ep$n');
 
+  test('playlist commit guard preserves the old queue after async preparation',
+      () async {
+    final engine = _FakeEngine();
+    final controller = PlayerController(engineForTest: engine);
+    addTearDown(controller.dispose);
+    await controller.playPlaylist([item(1)], 0);
+    final playbackId = controller.playbackId;
+    var checks = 0;
+    await controller.playPlaylist([item(2)], 0, canCommit: () => ++checks == 1);
+    expect(checks, 2);
+    expect(controller.playbackId, playbackId);
+    expect(controller.queue.single.title, 'Ep1');
+    expect(engine.openCount, 1);
+  });
+
+  test('linked queue waits at the end and resumes on late append', () async {
+    final engine = _FakeEngine();
+    final controller = PlayerController(engineForTest: engine);
+    addTearDown(controller.dispose);
+    controller.onLinkedQueueEnd = () => true;
+    await controller.playPlaylist([
+      QueueItem(
+          url: 'https://x/photo.jpg',
+          title: 'Photo',
+          declaredMediaKind: 'image',
+          displayDurationMs: 200)
+    ], 0);
+    await Future<void>.delayed(const Duration(milliseconds: 250));
+    expect(controller.state, 'ended');
+    expect(controller.queue, hasLength(1));
+    await controller.queueAddAll([item(2)]);
+    expect(controller.queue, hasLength(2));
+    expect(controller.currentIndex, 1);
+    expect(controller.state, 'playing');
+  });
+
   test(
       'progress boundaries capture outgoing identity and position before mutation',
       () async {

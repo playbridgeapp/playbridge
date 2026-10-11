@@ -48,6 +48,7 @@ Map<String, String>? sanitizePlayerHeaders(Map<String, String>? headers) {
 class MpvEngine extends PlayerEngine {
   StreamProxyLease? _proxyLease;
   int _proxyLeaseGeneration = 0;
+  bool _pageMedia = false;
   MpvEngine({this.preselectHlsQuality = false}) {
     _subs.addAll([
       player.stream.playing.listen((playing) {
@@ -69,7 +70,8 @@ class MpvEngine extends PlayerEngine {
       player.stream.tracks.listen((_) => notifyListeners()),
       player.stream.track.listen((_) => notifyListeners()),
       player.stream.error.listen((e) {
-        debugPrint('[mpv] error: $e');
+        debugPrint(
+            _pageMedia ? '[mpv] website playback failed' : '[mpv] error: $e');
         onError?.call(e);
         notifyListeners();
       }),
@@ -387,6 +389,7 @@ class MpvEngine extends PlayerEngine {
     bool play = true,
   }) async {
     // Ensure demuxer/network tuning is live before the first open (race fix).
+    _pageMedia = items.any((item) => item.enforcePageNetworkPolicy);
     await _configured;
 
     // Extension demuxed LL-HLS: prefer https session video + audio-add so
@@ -401,7 +404,9 @@ class MpvEngine extends PlayerEngine {
         audioUrl: i.audioUrl,
       );
       var playUrl = plan.openUrl;
-      if (preselectHlsQuality && !plan.isLocalPlaylist) {
+      if (preselectHlsQuality &&
+          !plan.isLocalPlaylist &&
+          !i.enforcePageNetworkPolicy) {
         playUrl = await resolveHlsMaster(playUrl, headers: headers);
       }
       return (media: Media(playUrl, httpHeaders: headers), plan: plan);
@@ -443,7 +448,7 @@ class MpvEngine extends PlayerEngine {
         await (player.platform as NativePlayer)
             .command(['audio-add', audioUrl, 'select', 'Companion audio']);
       } catch (e) {
-        debugPrint('[mpv] audio-add failed: $e');
+        debugPrint('[mpv] audio-add failed: ${e.runtimeType}');
       }
     }
 
@@ -458,7 +463,7 @@ class MpvEngine extends PlayerEngine {
             await native
                 .command(['sub-add', subs[i], 'auto', 'External ${i + 1}']);
           } catch (e) {
-            debugPrint('[mpv] sub-add failed: $e');
+            debugPrint('[mpv] sub-add failed: ${e.runtimeType}');
           }
         }
       }

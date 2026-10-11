@@ -5,6 +5,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Website playback API**: Linked browser sessions control This computer and PlayBridge TV queues, with lazy item supply, progress events, destination checks and a Controlled by / Unlink banner and tray action. External receivers support single-item playback with explicit queue/subtitle limits.
 - **Extension device selection**: Share a persisted This computer/TV destination with browser casting, including saved and discovered receivers, pairing in the app, device refresh and explicit app launch from the native host.
 
 ### Fixed

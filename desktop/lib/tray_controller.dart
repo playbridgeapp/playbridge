@@ -7,6 +7,7 @@ import 'package:tray_manager/tray_manager.dart';
 import 'package:window_manager/window_manager.dart';
 
 import 'auto_launch.dart';
+import 'linked_playback.dart';
 import 'pairing_store.dart';
 import 'player_controller.dart';
 import 'receiver_server.dart';
@@ -30,6 +31,7 @@ Menu buildTrayMenu({
   required bool hasRemotePlayback,
   required String? remoteTitle,
   required String remotePlaybackState,
+  String? controllerOrigin,
 }) {
   bool isAvailable(TvRecord device) =>
       nearbyDeviceKeys.contains(device.identityKey) ||
@@ -47,6 +49,10 @@ Menu buildTrayMenu({
     });
   return Menu(items: [
     MenuItem(key: 'show', label: 'Show window'),
+    if (controllerOrigin != null) ...[
+      MenuItem(label: 'Controlled by $controllerOrigin', disabled: true),
+      MenuItem(key: 'linked_unlink', label: 'Unlink'),
+    ],
     MenuItem.separator(),
     MenuItem(label: 'Sender', disabled: true),
     MenuItem(label: senderStatus, disabled: true),
@@ -142,6 +148,7 @@ class TrayController with TrayListener {
     required this.store,
     required this.sender,
     required this.showSender,
+    this.linkedPlayback,
   });
 
   final PlayerController player;
@@ -149,6 +156,7 @@ class TrayController with TrayListener {
   final PairingStore store;
   final TvSenderController sender;
   final Future<void> Function() showSender;
+  final LinkedPlaybackCoordinator? linkedPlayback;
 
   bool _launchAtLogin = false;
   bool _ready = false;
@@ -202,6 +210,7 @@ class TrayController with TrayListener {
     player.addListener(_refresh);
     server.addListener(_refresh);
     sender.addListener(_onSenderChange);
+    linkedPlayback?.addListener(_refresh);
 
     _ready = true;
     await _refresh();
@@ -213,6 +222,7 @@ class TrayController with TrayListener {
     player.removeListener(_refresh);
     server.removeListener(_refresh);
     sender.removeListener(_onSenderChange);
+    linkedPlayback?.removeListener(_refresh);
     trayManager.removeListener(this);
     await trayManager.destroy();
   }
@@ -271,6 +281,7 @@ class TrayController with TrayListener {
     // Position/status notifications are frequent; only rebuild for visible
     // menu changes. Include route and launch preferences so toggles refresh.
     final signature = jsonEncode([
+      linkedPlayback?.controllerOrigin,
       status,
       senderStatus,
       reconnecting?.attempt,
@@ -306,6 +317,7 @@ class TrayController with TrayListener {
       hasRemotePlayback: hasRemotePlayback,
       remoteTitle: remoteTitle,
       remotePlaybackState: remotePlaybackState,
+      controllerOrigin: linkedPlayback?.controllerOrigin,
     ));
     _lastMenuSignature = signature;
   }
@@ -369,6 +381,8 @@ class TrayController with TrayListener {
       return;
     }
     switch (key) {
+      case 'linked_unlink':
+        linkedPlayback?.unlink();
       case 'show':
         unawaited(_showWindow());
       case 'sender_manage':

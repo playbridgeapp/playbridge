@@ -21,6 +21,7 @@ const outfiles = [
   join(directory, "settings.test.mjs"),
   join(directory, "synthetic-hls.test.mjs"),
   join(directory, "native-bridge-devices.test.mjs"),
+  join(directory, "page-api.test.mjs"),
 ];
 
 try {
@@ -40,6 +41,7 @@ try {
       "test/settings.test.ts",
       "test/synthetic-hls.test.ts",
       "test/native-bridge-devices.test.ts",
+      "test/page-api.test.ts",
     ],
     outdir: directory,
     entryNames: "[name]",

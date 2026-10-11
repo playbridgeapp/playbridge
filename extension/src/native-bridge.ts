@@ -43,6 +43,7 @@ export type DeviceSelection =
 
 export interface BridgeCapabilities {
   selectDevice?: number;
+  linkedPlayback?: number;
 }
 
 export interface BridgeResult {
@@ -81,6 +82,26 @@ const listeners = new Set<StateListener>();
 const pendingResults: Array<((res: BridgeResult) => void) | null> = [];
 let pendingLaunchResolvers: Array<(res: BridgeResult) => void> = [];
 let connectionResolvers: Array<(connected: boolean) => void> = [];
+
+const pendingLinkedRequests = new Map<
+  string,
+  {
+    resolve: (res: Record<string, unknown>) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+
+export type LinkedEventListener = (
+  sessionId: string,
+  event: string,
+  detail: Record<string, unknown>
+) => void;
+const linkedEventListeners = new Set<LinkedEventListener>();
+
+export function onLinkedEvent(listener: LinkedEventListener): () => void {
+  linkedEventListeners.add(listener);
+  return () => linkedEventListeners.delete(listener);
+}
 
 let state: BridgeState = {
   desktopConnected: false,
@@ -305,6 +326,44 @@ export function control(action: string): Promise<BridgeResult> {
   return sendCommand({ cmd: "control", action }, 10_000);
 }
 
+export function sendLinkedCommand(
+  message: Record<string, unknown>,
+  timeoutMs: number = 30_000,
+): Promise<Record<string, unknown>> {
+  const bridgeRequestId =
+    typeof message.bridgeRequestId === "string" && message.bridgeRequestId
+      ? message.bridgeRequestId
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+  return new Promise((resolve) => {
+    if (pendingLinkedRequests.size >= 32) {
+      resolve({ ok: false, error: "resource_limit" });
+      return;
+    }
+
+    if (!port) {
+      connect();
+    }
+    if (!port) {
+      resolve({ ok: false, error: "unavailable" });
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      pendingLinkedRequests.delete(bridgeRequestId);
+      resolve({ ok: false, error: "timeout" });
+    }, timeoutMs);
+
+    pendingLinkedRequests.set(bridgeRequestId, { resolve, timer });
+
+    if (!send({ ...message, bridgeRequestId })) {
+      clearTimeout(timer);
+      pendingLinkedRequests.delete(bridgeRequestId);
+      resolve({ ok: false, error: "unavailable" });
+    }
+  });
+}
+
 async function sendCommand(
   payload: Record<string, unknown>,
   timeoutMs: number = 10_000,
@@ -453,6 +512,28 @@ function onMessage(raw: unknown): void {
       }
       break;
     }
+    case "linked_result": {
+      const bridgeRequestId = typeof msg.bridgeRequestId === "string" ? msg.bridgeRequestId : "";
+      const pending = pendingLinkedRequests.get(bridgeRequestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingLinkedRequests.delete(bridgeRequestId);
+        pending.resolve(msg as Record<string, unknown>);
+      }
+      break;
+    }
+    case "linked_event": {
+      const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
+      const event = typeof msg.event === "string" ? msg.event : "";
+      const detail =
+        msg.detail && typeof msg.detail === "object"
+          ? (msg.detail as Record<string, unknown>)
+          : {};
+      for (const listener of linkedEventListeners) {
+        listener(sessionId, event, detail);
+      }
+      break;
+    }
   }
 }
 
@@ -484,6 +565,11 @@ function failPending(error: string, code?: string): void {
     const cb = pendingResults.shift();
     if (cb) cb({ ok: false, error, code });
   }
+  for (const [_, pending] of pendingLinkedRequests) {
+    clearTimeout(pending.timer);
+    pending.resolve({ ok: false, error: "unavailable" });
+  }
+  pendingLinkedRequests.clear();
 }
 
 function scheduleReconnect(): void {
@@ -525,5 +611,10 @@ export function _resetStateForTesting(): void {
   pendingResults.length = 0;
   pendingLaunchResolvers.length = 0;
   connectionResolvers.length = 0;
+  for (const [_, pending] of pendingLinkedRequests) {
+    clearTimeout(pending.timer);
+  }
+  pendingLinkedRequests.clear();
+  linkedEventListeners.clear();
   setDisconnected();
 }

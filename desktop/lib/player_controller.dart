@@ -33,6 +33,10 @@ class PlayerController extends ChangeNotifier {
   static const int maxQueueItems = 200;
   static const int maxQueueBatchItems = 50;
 
+  /// A linked page may resolve the next episode after the last item completes.
+  bool Function()? onLinkedQueueEnd;
+  bool _waitingForLinkedItems = false;
+
   /// [engineForTest] injects a fake engine (unit tests); production leaves it null.
   PlayerController({
     EngineType initialEngine = EngineType.mpvInternal,
@@ -197,6 +201,7 @@ class PlayerController extends ChangeNotifier {
 
   String get state {
     if (_currentIndex < 0) return 'idle';
+    if (_waitingForLinkedItems) return 'ended';
     if (currentMediaKind == MediaKind.image) {
       return _imagePlaying ? 'playing' : 'paused';
     }
@@ -390,30 +395,34 @@ class PlayerController extends ChangeNotifier {
     List<QueueItem> items,
     int startIndex, {
     bool isRemote = false,
+    bool Function()? canCommit,
   }) async {
     await _waitForProxyToggle();
+    if (canCommit != null && !canCommit()) return;
     if (items.isEmpty) return;
     if (items.length > maxQueueItems) {
       throw ArgumentError.value(
           items.length, 'items', 'maximum queue size is $maxQueueItems');
     }
     for (var index = 0; index < items.length; index++) {
+      if (items[index].enforcePageNetworkPolicy) continue;
       debugLogNetworkRequest(
         source: 'player',
         url: items[index].url,
         headers: items[index].headers,
       );
     }
-    _playbackBoundary('stopped', sessionEnded: true);
-    // Mask before queue/reveal so stop→unfocus→play B never flashes video A.
-    // Do not disable the mpv video track — that left a permanent black picture.
-    _opening = true;
-    notifyListeners();
-
     final mode = store?.streamProxyMode ?? StreamProxyMode.off;
     final prepared = await Future.wait(
       items.map((item) => PlaybackRequestPreparer.prepare(item, mode)),
     );
+
+    if (canCommit != null && !canCommit()) return;
+    _playbackBoundary('stopped', sessionEnded: true);
+    // Mask before queue/reveal so a new open never flashes the prior video.
+    _opening = true;
+    _waitingForLinkedItems = false;
+    notifyListeners();
 
     _queue
       ..clear()
@@ -448,14 +457,16 @@ class PlayerController extends ChangeNotifier {
     List<QueueItem> items, {
     bool isRemote = false,
     String? ifPlaybackId,
+    bool Function()? canCommit,
   }) async {
     if (items.isEmpty) return true;
     if (items.length > maxQueueBatchItems) return false;
     await _waitForProxyToggle();
+    if (canCommit != null && !canCommit()) return false;
     if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
     if (_currentIndex < 0 || _queue.isEmpty) {
-      await playPlaylist(items, 0, isRemote: isRemote);
-      return true;
+      await playPlaylist(items, 0, isRemote: isRemote, canCommit: canCommit);
+      return canCommit == null || canCommit();
     }
     if (_queue.length + items.length > maxQueueItems) return false;
     final targetPlaybackId = _playbackId;
@@ -463,17 +474,23 @@ class PlayerController extends ChangeNotifier {
     final prepared = await Future.wait(
       items.map((item) => PlaybackRequestPreparer.prepare(item, mode)),
     );
+    if (canCommit != null && !canCommit()) return false;
     if (_playbackId != targetPlaybackId ||
         (ifPlaybackId != null && ifPlaybackId != _playbackId)) {
       return false;
     }
     if (_queue.length + prepared.length > maxQueueItems) return false;
+    final nextIndex = _queue.length;
     _queue.addAll(prepared);
     _queueItemIds
         .addAll(List.generate(prepared.length, (_) => const Uuid().v4()));
     _queueRevision++;
     queueChanges.value++;
     notifyListeners();
+    if (_waitingForLinkedItems) {
+      _waitingForLinkedItems = false;
+      await _jumpToReady(nextIndex);
+    }
     return true;
   }
 
@@ -486,8 +503,10 @@ class PlayerController extends ChangeNotifier {
     return true;
   }
 
-  Future<bool> jumpToGuarded(int index, {String? ifPlaybackId}) async {
+  Future<bool> jumpToGuarded(int index,
+      {String? ifPlaybackId, bool Function()? canCommit}) async {
     await _waitForProxyToggle();
+    if (canCommit != null && !canCommit()) return false;
     if (ifPlaybackId != null && ifPlaybackId != _playbackId) return false;
     if (index < 0 || index >= _queue.length) return false;
     await _jumpToReady(index);
@@ -570,8 +589,9 @@ class PlayerController extends ChangeNotifier {
 
   Future<void> _jumpToReady(int index) async {
     if (index < 0 || index >= _queue.length) return;
-    if (index == _currentIndex) return;
+    if (index == _currentIndex && !_waitingForLinkedItems) return;
     _playbackBoundary('stopped');
+    _waitingForLinkedItems = false;
     _opening = true;
     try {
       _setIndex(index);
@@ -731,6 +751,11 @@ class PlayerController extends ChangeNotifier {
         if (hasNext) {
           unawaited(next());
         } else {
+          if (onLinkedQueueEnd?.call() == true) {
+            _waitingForLinkedItems = true;
+            notifyListeners();
+            return;
+          }
           unawaited(stop());
         }
       }
@@ -753,6 +778,11 @@ class PlayerController extends ChangeNotifier {
     _playbackBoundary('ended', sessionEnded: !hasNext);
     if (hasNext) {
       unawaited(next());
+      return;
+    }
+    if (onLinkedQueueEnd?.call() == true) {
+      _waitingForLinkedItems = true;
+      notifyListeners();
       return;
     }
     // Last item finished — clear the session. Leaving the queue loaded left
@@ -797,6 +827,11 @@ class PlayerController extends ChangeNotifier {
   }
 
   Future<void> resume() async {
+    if (_waitingForLinkedItems) {
+      _waitingForLinkedItems = false;
+      await _openCurrentItem();
+      return;
+    }
     if (currentMediaKind == MediaKind.image) {
       if (_imageDurationMs > 0) {
         _imagePlaying = true;
@@ -888,6 +923,7 @@ class PlayerController extends ChangeNotifier {
   Future<void> stop() async {
     await _waitForProxyToggle();
     _playbackBoundary('stopped', sessionEnded: true);
+    _waitingForLinkedItems = false;
     _imageTimer?.cancel();
     _imageTimer = null;
     _imagePlaying = false;

@@ -706,11 +706,13 @@ class TvSenderController extends ChangeNotifier {
   // ─── Casting ──────────────────────────────────────────────────────────────
   // A single video is sent as a one-item playlist (see senderSingleVideoCommandJson).
 
-  Future<bool> castVideo(PlayPayload video) async {
+  Future<bool> castVideo(PlayPayload video,
+      {bool Function()? canCommit}) async {
     final generation = ++_proxyLeaseGeneration;
     final lease = await _acquireProxyLease([video.url]);
     if (lease == null) return false;
-    if (generation != _proxyLeaseGeneration) {
+    if (generation != _proxyLeaseGeneration ||
+        (canCommit != null && !canCommit())) {
       lease.close();
       return false;
     }
@@ -749,7 +751,8 @@ class TvSenderController extends ChangeNotifier {
       ..skipHistory = true;
   }
 
-  Future<bool> castPlaylist(PlaylistPayload playlist) async {
+  Future<bool> castPlaylist(PlaylistPayload playlist,
+      {bool Function()? canCommit}) async {
     _lastCastError = null;
     final outgoing = PlaylistPayload()..mergeFromMessage(playlist);
     final items = playlist.items.map(_withHistoryPreference).toList();
@@ -760,7 +763,8 @@ class TvSenderController extends ChangeNotifier {
     final lease =
         await _acquireProxyLease(outgoing.items.map((item) => item.url));
     if (lease == null) return false;
-    if (generation != _proxyLeaseGeneration) {
+    if (generation != _proxyLeaseGeneration ||
+        (canCommit != null && !canCommit())) {
       lease.close();
       return false;
     }
@@ -783,6 +787,32 @@ class TvSenderController extends ChangeNotifier {
       _stoppedPlaybackId = null;
     }
     return ok;
+  }
+
+  /// Website media always carries exact private-origin grants. External players
+  /// receive a LAN proxy URL; native PlayBridge receivers enforce the grants.
+  Future<bool> castLinkedPlaylist(PlaylistPayload playlist,
+      {required bool Function() canCommit}) async {
+    if (!canCommit() || playlist.items.isEmpty) return false;
+    if (_transport.protocol == TvProtocol.playBridge) {
+      return castPlaylist(playlist, canCommit: canCommit);
+    }
+    final target = _activeTv;
+    if (target == null || playlist.items.length != 1) return false;
+    final lanIp = await _localLanIp(target.host);
+    if (lanIp == null || !canCommit()) return false;
+    final item = PlayPayload()..mergeFromMessage(playlist.items.single);
+    final registration = await StreamProxyServer.instance.registerRemote(
+      item.url,
+      item.headers,
+      host: lanIp,
+      contentType: item.contentTypeOrNull,
+      allowedPrivateOrigins: item.allowedPrivateOrigins,
+    );
+    if (!canCommit()) return false;
+    item.url = registration.url;
+    item.headers.clear();
+    return castVideo(item, canCommit: canCommit);
   }
 
   /// Cast a remote URL (e.g. a stream the browser extension detected) with
@@ -920,11 +950,12 @@ class TvSenderController extends ChangeNotifier {
     return await castVideo(payload);
   }
 
-  Future<bool> queueAdd(PlayPayload item) async {
+  Future<bool> queueAdd(PlayPayload item, {bool Function()? canCommit}) async {
     final generation = _proxyLeaseGeneration;
     final lease = await _acquireProxyLease([item.url]);
     if (lease == null) return false;
-    if (generation != _proxyLeaseGeneration) {
+    if (generation != _proxyLeaseGeneration ||
+        (canCommit != null && !canCommit())) {
       lease.close();
       return false;
     }

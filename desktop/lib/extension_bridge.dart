@@ -7,6 +7,8 @@ import 'package:flutter/foundation.dart';
 
 import 'bridge_paths.dart';
 import 'extension_request_debug_log.dart';
+import 'desktop_linked_playback.dart';
+import 'linked_playback.dart';
 import 'player_controller.dart';
 import 'tv_sender_controller.dart';
 
@@ -37,7 +39,10 @@ class ExtensionBridge {
     this.onPlaybackActivity,
     this.onNewMedia,
     this.onShowApp,
-  });
+  }) : linkedPlayback =
+            LinkedPlaybackCoordinator(DesktopLinkedPlayback(_player, _sender));
+
+  final LinkedPlaybackCoordinator linkedPlayback;
 
   final TvSenderController _sender;
   final PlayerController _player;
@@ -69,6 +74,7 @@ class ExtensionBridge {
     void dropClient() {
       _authed.remove(socket);
       _lastState.remove(socket);
+      linkedPlayback.disconnectOwner(socket);
     }
 
     // Socket.listen handles errors from the inbound stream, but Socket is also
@@ -106,6 +112,24 @@ class ExtensionBridge {
               return;
             }
           } else {
+            // Linked operations use IDs and are independent of the legacy FIFO.
+            Map? linked;
+            try {
+              final value = jsonDecode(line);
+              if (value is Map &&
+                  value['type'] is String &&
+                  (value['type'] as String).startsWith('linked_')) {
+                linked = value;
+              }
+            } on Object {/* Ignore malformed JSON below. */}
+            if (linked != null) {
+              unawaited(linkedPlayback
+                  .handle(linked, socket, (event) => _send(socket, event))
+                  .then((result) {
+                if (_authed.contains(socket)) _send(socket, result);
+              }));
+              continue;
+            }
             // Each connection correlates result frames by FIFO, not request IDs.
             commands = commands.then((_) async {
               if (!_authed.contains(socket)) return;
@@ -400,7 +424,7 @@ class ExtensionBridge {
       'target': selection.isLocal ? 'local' : 'tv',
       'state': selection.isLocal ? _player.state : _sender.state.name,
       'activeTv': _sender.selectionName,
-      'capabilities': {'selectDevice': 1},
+      'capabilities': {'selectDevice': 1, 'linkedPlayback': 1},
       'selection': selection.isLocal
           ? {'kind': 'local'}
           : {
@@ -459,6 +483,7 @@ class ExtensionBridge {
   }
 
   Future<void> stop() async {
+    linkedPlayback.dispose();
     _sender.removeListener(_pushState);
     _player.removeListener(_pushState);
     for (final s in _authed) {

@@ -967,3 +967,46 @@ input:checked+.slider:before {
 .toggle-offline-btn:hover {
     color: var(--accent);
 }
+
+/* Website Access */
+.website-access-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.website-access-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--bg-primary);
+    border: 1px solid var(--bg-tertiary);
+    border-radius: 8px;
+    padding: 8px 12px;
+}
+
+.website-access-origin {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-main);
+    word-break: break-all;
+}
+
+.website-revoke-btn {
+    background: transparent;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: inherit;
+}
+
+.website-revoke-btn:hover {
+    background: var(--danger);
+    color: var(--bg-primary);
+}
