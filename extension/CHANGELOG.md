@@ -17,6 +17,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Reconnection**: Hovering the cast button, opening the popup or casting reconnects to the desktop app immediately instead of waiting for the reconnect backoff.
 - **Cast results**: The cast button reports "Playing on this computer" or "Casting to <TV>". An offline TV shows an error with a one-off "Play on this computer" action instead of playing locally without asking.
 - **Device filter chips**: Protocol filter chips (PlayBridge, Google Cast, DLNA, Roku, Web Browser) above the device list in the popup and in-page picker replace per-row protocol badges, remember your choice and hide offline devices.
+- **Firefox for Android**: The add-on is no longer offered for Firefox for Android, which cannot run the desktop app's native messaging host.
 - **Chrome store packages**: Remove the development-only manifest key from production uploads while retaining stable IDs for unpacked builds; refresh store listing guidance and screenshots.
 - **Stream details**: Improve candidate ranking, captured request headers and media lifecycle tracking.
 
