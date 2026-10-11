@@ -21,22 +21,23 @@ These are internal UI requests, not a page API change.
 
 ## GeckoView disconnect guard
 
-The pinned M150 `WebExtension.Port.disconnect()` checks its disconnected flag,
+The pinned M157 `WebExtension.Port.disconnect()` checks its disconnected flag,
 but the extension callback and common cleanup do not. A queued disconnect after
 app-side cleanup can shut down the same native EventDispatcher twice, producing
 `NativeException NullHandle()`. The phone build applies a narrow ASM guard to
 `disconnectFromExtension()` and `disconnected()` in every flavor/build type.
 Cleanup marks the port disconnected before native shutdown. First-time errors
-are not caught or suppressed. No GeckoView version, TV dependency, or native
-engine binary is changed.
+are not caught or suppressed. The M157 release source and actual AAR bytecode
+still contain the unguarded teardown, so the transform remains necessary.
 
 `buildSrc` tests load the actual pinned AAR port bytecode, replacing only its
 native dispatcher with a fixture. They demonstrate the unpatched duplicate
 shutdown failure and check late callbacks, repeated callbacks, delegate
 reentry, and first-time failure propagation. This is not a physical JNI/device
 reproduction and does not identify the exact port involved in a user crash.
-The transform fails if the upstream method shape changes; review/remove it
-when updating GeckoView.
+The transform fails if the upstream method shape changes. A `preBuild` dependency
+also checks the pinned AAR for the target class, so removal of the class cannot
+silently bypass instrumentation. Review/remove the guard when updating GeckoView.
 
 Plugin permission revocation separately marks document authority closed, cancels
 work once, and rejects further traffic. It does not forcibly disconnect a port

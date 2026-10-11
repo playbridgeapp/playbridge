@@ -7,7 +7,8 @@ plugins {
 android {
     namespace = "com.playbridge.geckoview.plugin"
     compileSdk {
-        version = release(37)
+        // GeckoView 157's AAR requires Android 37.1.
+        version = release(37) { minorApiLevel = 1 }
     }
 
     lint {
