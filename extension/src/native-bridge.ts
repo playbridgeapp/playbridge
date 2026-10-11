@@ -12,6 +12,8 @@ export {
   protocolChips,
   defaultProtocol,
   filterByProtocol,
+  visibleDevices,
+  hiddenOfflineCount,
   DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
 } from "./core/device-protocol";
 

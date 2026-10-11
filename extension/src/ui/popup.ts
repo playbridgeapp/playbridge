@@ -18,6 +18,8 @@ import {
     protocolChips,
     defaultProtocol,
     filterByProtocol,
+    visibleDevices,
+    hiddenOfflineCount,
     DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
 } from "../core/device-protocol";
 
@@ -80,6 +82,7 @@ let overlayPreferences = null;
 let dataConsent = { required: false, granted: true, version: 1 };
 let rememberedProtocol = null;
 let selectedPopupProtocol = null;
+let showOfflinePopup = false;
 
 // Navigation
 tabBtns.forEach(btn => {
@@ -272,14 +275,26 @@ function renderDevices() {
     devicesList.replaceChildren();
 
     if (bridgeCapabilities?.selectDevice) {
-        const chips = protocolChips(bridgeDevices);
+        const eligibleDevices = visibleDevices(
+            bridgeDevices,
+            bridgeSelection,
+            currentStatus?.activeTv,
+            showOfflinePopup,
+        );
+        const chips = protocolChips(eligibleDevices);
         const showChips = chips.length >= 2;
         const activeProtocol = showChips
-            ? defaultProtocol(bridgeDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+            ? defaultProtocol(eligibleDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
             : null;
-        const visibleDevices = showChips && activeProtocol
-            ? filterByProtocol(bridgeDevices, activeProtocol)
-            : bridgeDevices;
+        const visibleDevicesList = showChips && activeProtocol
+            ? filterByProtocol(eligibleDevices, activeProtocol)
+            : eligibleDevices;
+        const offlineCount = hiddenOfflineCount(
+            bridgeDevices,
+            bridgeSelection,
+            currentStatus?.activeTv,
+            showChips && activeProtocol ? activeProtocol : null,
+        );
 
         // 1. Protocol filter chips row at the TOP
         if (showChips) {
@@ -345,7 +360,7 @@ function renderDevices() {
         devicesList.appendChild(localItem);
 
         // 3. Devices
-        visibleDevices.forEach((d) => {
+        visibleDevicesList.forEach((d) => {
             const isTvActive = isActiveDevice(d, bridgeSelection, currentStatus?.activeTv);
 
             const item = document.createElement('div');
@@ -363,16 +378,16 @@ function renderDevices() {
 
             if (d.paired) {
                 const tag = document.createElement('span');
-                tag.className = isTvActive
+                tag.className = d.online === false
+                    ? 'badge-offline'
+                    : isTvActive
                     ? 'badge-active'
-                    : d.online !== false
-                    ? 'badge-online'
-                    : 'badge-offline';
-                tag.textContent = isTvActive
+                    : 'badge-online';
+                tag.textContent = d.online === false
+                    ? 'Offline'
+                    : isTvActive
                     ? 'Active'
-                    : d.online !== false
-                    ? 'Online'
-                    : 'Offline';
+                    : 'Online';
                 actions.appendChild(tag);
 
                 item.addEventListener('click', () => {
@@ -421,6 +436,19 @@ function renderDevices() {
             devicesList.appendChild(item);
         });
 
+        // 4. Toggle offline link at bottom if offline devices exist
+        if (offlineCount > 0) {
+            const toggleBtn = document.createElement('button');
+            toggleBtn.type = 'button';
+            toggleBtn.className = 'toggle-offline-btn';
+            toggleBtn.textContent = showOfflinePopup ? 'Hide offline' : `Show ${offlineCount} offline`;
+            toggleBtn.addEventListener('click', () => {
+                showOfflinePopup = !showOfflinePopup;
+                renderDevices();
+            });
+            devicesList.appendChild(toggleBtn);
+        }
+
         return;
     }
 
@@ -433,14 +461,26 @@ function renderDevices() {
         return;
     }
 
-    const legacyChips = protocolChips(bridgeDevices);
+    const legacyEligible = visibleDevices(
+        bridgeDevices,
+        bridgeSelection,
+        currentStatus?.activeTv,
+        showOfflinePopup,
+    );
+    const legacyChips = protocolChips(legacyEligible);
     const legacyShowChips = legacyChips.length >= 2;
     const legacyActiveProtocol = legacyShowChips
-        ? defaultProtocol(bridgeDevices, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
+        ? defaultProtocol(legacyEligible, bridgeSelection, rememberedProtocol, currentStatus?.activeTv)
         : null;
     const legacyVisibleDevices = legacyShowChips && legacyActiveProtocol
-        ? filterByProtocol(bridgeDevices, legacyActiveProtocol)
-        : bridgeDevices;
+        ? filterByProtocol(legacyEligible, legacyActiveProtocol)
+        : legacyEligible;
+    const legacyOfflineCount = hiddenOfflineCount(
+        bridgeDevices,
+        bridgeSelection,
+        currentStatus?.activeTv,
+        legacyShowChips && legacyActiveProtocol ? legacyActiveProtocol : null,
+    );
 
     if (legacyShowChips) {
         const chipsRow = document.createElement('div');
@@ -489,6 +529,18 @@ function renderDevices() {
         item.appendChild(actions);
         devicesList.appendChild(item);
     });
+
+    if (legacyOfflineCount > 0) {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.type = 'button';
+        toggleBtn.className = 'toggle-offline-btn';
+        toggleBtn.textContent = showOfflinePopup ? 'Hide offline' : `Show ${legacyOfflineCount} offline`;
+        toggleBtn.addEventListener('click', () => {
+            showOfflinePopup = !showOfflinePopup;
+            renderDevices();
+        });
+        devicesList.appendChild(toggleBtn);
+    }
 }
 
 function updateStatusUI(s) {

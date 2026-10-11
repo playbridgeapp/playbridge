@@ -30,6 +30,8 @@ import {
   protocolChips,
   defaultProtocol,
   filterByProtocol,
+  visibleDevices,
+  hiddenOfflineCount,
   DEVICE_PICKER_PROTOCOL_STORAGE_KEY,
 } from "./core/device-protocol";
 
@@ -85,6 +87,7 @@ let statusEl: HTMLElement | null = null;
 let deviceChipBtn: HTMLButtonElement | null = null;
 let devicePickerEl: HTMLDivElement | null = null;
 let isPickerOpen = false;
+let showOfflinePicker = false;
 let rememberedPickerProtocol: string | null = null;
 let lastContentWakeTime = 0;
 const CONTENT_WAKE_THROTTLE_MS = 5000;
@@ -695,6 +698,24 @@ function injectOverlayStyles(root: ShadowRoot): void {
     .picker-item-pair-btn:hover {
       background: rgba(208, 188, 255, 0.35);
     }
+    button.toggle-offline-btn {
+      background: transparent;
+      border: none;
+      color: #938F99;
+      font: 500 11px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      cursor: pointer;
+      padding: 6px 8px;
+      margin-top: 2px;
+      text-align: center;
+      align-self: center;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: color 0.15s ease;
+      width: auto;
+    }
+    button.toggle-offline-btn:hover {
+      color: #D0BCFF;
+    }
     button.cast {
       pointer-events: auto;
       flex-shrink: 0;
@@ -958,6 +979,7 @@ function maybeWakeBridge(): void {
 
 function closePicker(): void {
   isPickerOpen = false;
+  showOfflinePicker = false;
   devicePickerEl?.classList.add("hidden");
   deviceChipBtn?.parentElement?.classList.remove("picker-open");
   scheduleAutoHide();
@@ -972,6 +994,7 @@ function onChipClick(e: Event): void {
     closePicker();
   } else {
     isPickerOpen = true;
+    showOfflinePicker = false;
     devicePickerEl?.classList.remove("hidden");
     deviceChipBtn?.parentElement?.classList.add("picker-open");
     showChrome({ restartTimer: false });
@@ -1034,19 +1057,31 @@ function renderPicker(): void {
   devicePickerEl.replaceChildren();
 
   const devices = currentBridgeStatus?.devices || [];
-  const chips = protocolChips(devices);
+  const eligibleDevices = visibleDevices(
+    devices,
+    currentBridgeStatus?.selection,
+    currentBridgeStatus?.activeTv,
+    showOfflinePicker,
+  );
+  const chips = protocolChips(eligibleDevices);
   const showChips = chips.length >= 2;
   const activeProtocol = showChips
     ? defaultProtocol(
-        devices,
+        eligibleDevices,
         currentBridgeStatus?.selection,
         rememberedPickerProtocol,
         currentBridgeStatus?.activeTv,
       )
     : null;
-  const visibleDevices = showChips && activeProtocol
-    ? filterByProtocol(devices, activeProtocol)
-    : devices;
+  const visibleDevicesList = showChips && activeProtocol
+    ? filterByProtocol(eligibleDevices, activeProtocol)
+    : eligibleDevices;
+  const offlineCount = hiddenOfflineCount(
+    devices,
+    currentBridgeStatus?.selection,
+    currentBridgeStatus?.activeTv,
+    showChips && activeProtocol ? activeProtocol : null,
+  );
 
   // 1. Protocol filter chips row at the TOP
   if (showChips) {
@@ -1109,7 +1144,7 @@ function renderPicker(): void {
   devicePickerEl.appendChild(localBtn);
 
   // 3. Devices
-  for (const device of visibleDevices) {
+  for (const device of visibleDevicesList) {
     const isTvActive = isActiveDevice(
       device,
       currentBridgeStatus?.selection,
@@ -1127,8 +1162,8 @@ function renderPicker(): void {
 
     if (device.paired) {
       const badge = document.createElement("span");
-      badge.className = "picker-item-badge" + (isTvActive || device.online ? " online" : " offline");
-      badge.textContent = isTvActive ? "Active" : (device.online ? "Online" : "Offline");
+      badge.className = "picker-item-badge " + (device.online === false ? "offline" : "online");
+      badge.textContent = device.online === false ? "Offline" : isTvActive ? "Active" : "Online";
       devBtn.appendChild(badge);
 
       devBtn.addEventListener("click", (e) => {
@@ -1178,6 +1213,22 @@ function renderPicker(): void {
     }
 
     devicePickerEl.appendChild(devBtn);
+  }
+
+  // 4. Toggle offline link at bottom if offline devices exist
+  if (offlineCount > 0) {
+    const toggleBtn = document.createElement("button");
+    toggleBtn.type = "button";
+    toggleBtn.className = "toggle-offline-btn";
+    toggleBtn.textContent = showOfflinePicker ? "Hide offline" : `Show ${offlineCount} offline`;
+    toggleBtn.addEventListener("click", (e) => {
+      if (!e.isTrusted) return;
+      e.stopPropagation();
+      e.preventDefault();
+      showOfflinePicker = !showOfflinePicker;
+      renderPicker();
+    });
+    devicePickerEl.appendChild(toggleBtn);
   }
 }
 

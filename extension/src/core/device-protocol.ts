@@ -186,3 +186,56 @@ export function filterByProtocol<T extends { protocol?: string }>(
   const target = protocol.trim().toLowerCase();
   return devices.filter((d) => d.protocol?.trim().toLowerCase() === target);
 }
+
+/**
+ * Returns devices that should be visible based on online state and selection.
+ * Devices with online === false are hidden by default unless they are active/selected.
+ * Legacy desktop app devices without an 'online' field are treated as online.
+ * When showOffline is true, all devices are returned.
+ */
+export function visibleDevices<
+  T extends {
+    id?: string;
+    uuid?: string;
+    name?: string;
+    active?: boolean;
+    online?: boolean;
+  },
+>(
+  devices: T[],
+  selection?: { kind: string; id?: string } | null,
+  activeTv?: string | null,
+  showOffline: boolean = false,
+): T[] {
+  if (showOffline) {
+    return devices;
+  }
+  return devices.filter(
+    (d) => d.online !== false || isActiveDevice(d, selection, activeTv),
+  );
+}
+
+/**
+ * Counts how many devices matching the given protocol filter are hidden
+ * (offline and not active). Returns 0 when no devices are hidden.
+ */
+export function hiddenOfflineCount<
+  T extends {
+    id?: string;
+    uuid?: string;
+    name?: string;
+    active?: boolean;
+    online?: boolean;
+    protocol?: string;
+  },
+>(
+  devices: T[],
+  selection?: { kind: string; id?: string } | null,
+  activeTv?: string | null,
+  protocol?: string | null,
+): number {
+  const filtered = filterByProtocol(devices, protocol);
+  return filtered.filter(
+    (d) => d.online === false && !isActiveDevice(d, selection, activeTv),
+  ).length;
+}

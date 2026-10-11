@@ -946,3 +946,24 @@ input:checked+.slider:before {
     color: var(--accent);
     font-weight: 600;
 }
+
+.toggle-offline-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 6px 8px;
+    margin-top: 2px;
+    text-align: center;
+    align-self: center;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    transition: color 0.15s ease;
+    width: auto;
+}
+
+.toggle-offline-btn:hover {
+    color: var(--accent);
+}

@@ -831,3 +831,138 @@ test("isActiveDevice marks only the selected protocol entry of a multi-protocol 
   assert.equal(isActiveDevice({ uuid: "x", name: "Legacy TV" }, undefined, "Legacy TV"), true);
   assert.equal(isActiveDevice({ uuid: "y", name: "Other" }, undefined, "Legacy TV"), false);
 });
+
+test("visibleDevices filters out offline non-active devices by default and keeps legacy devices", () => {
+  const { visibleDevices } = bridge;
+  assert.equal(typeof visibleDevices, "function");
+
+  const devices = [
+    { id: "tv-1", name: "Online TV", online: true, active: false },
+    { id: "tv-2", name: "Offline Inactive TV", online: false, active: false },
+    { id: "tv-3", name: "Offline Active TV", online: false, active: true },
+    { id: "tv-4", name: "Legacy Desktop TV" }, // no online field
+  ];
+
+  const selection = { kind: "tv", id: "tv-3" };
+
+  // By default (showOffline = false):
+  // tv-2 is hidden because online === false and not active.
+  // tv-3 is included because it is active.
+  // tv-4 is included because online is undefined (legacy).
+  const visibleCollapsed = visibleDevices(devices, selection, null, false);
+  assert.deepEqual(
+    visibleCollapsed.map((d: any) => d.id),
+    ["tv-1", "tv-3", "tv-4"],
+  );
+
+  // When expanded (showOffline = true): all devices returned
+  const visibleExpanded = visibleDevices(devices, selection, null, true);
+  assert.deepEqual(
+    visibleExpanded.map((d: any) => d.id),
+    ["tv-1", "tv-2", "tv-3", "tv-4"],
+  );
+});
+
+test("hiddenOfflineCount counts only offline non-active devices, filtered by protocol if provided", () => {
+  const { hiddenOfflineCount } = bridge;
+  assert.equal(typeof hiddenOfflineCount, "function");
+
+  const devices = [
+    { id: "tv-pb-1", name: "PB Online", protocol: "playBridge", online: true },
+    { id: "tv-pb-2", name: "PB Offline", protocol: "playBridge", online: false },
+    { id: "tv-dlna-1", name: "DLNA Offline Inactive", protocol: "dlna", online: false },
+    { id: "tv-dlna-2", name: "DLNA Offline Active", protocol: "dlna", online: false },
+    { id: "tv-roku-1", name: "Roku Legacy", protocol: "roku" }, // no online field
+  ];
+
+  const selection = { kind: "tv", id: "tv-dlna-2" };
+
+  // For playBridge: 1 hidden offline device (tv-pb-2)
+  assert.equal(hiddenOfflineCount(devices, selection, null, "playBridge"), 1);
+
+  // For dlna: tv-dlna-2 is active so not hidden; tv-dlna-1 is hidden -> count 1
+  assert.equal(hiddenOfflineCount(devices, selection, null, "dlna"), 1);
+
+  // For roku: 0 hidden devices
+  assert.equal(hiddenOfflineCount(devices, selection, null, "roku"), 0);
+
+  // Across all devices (protocol null): tv-pb-2 and tv-dlna-1 -> count 2
+  assert.equal(hiddenOfflineCount(devices, selection, null, null), 2);
+});
+
+test("protocol chips only include protocols with visible devices when offline devices are hidden", () => {
+  const { visibleDevices, protocolChips, defaultProtocol } = bridge;
+
+  const devices = [
+    { id: "1", name: "Roku TV", protocol: "roku", online: true },
+    { id: "2", name: "DLNA TV", protocol: "dlna", online: false }, // only device for DLNA is offline
+    { id: "3", name: "PlayBridge TV", protocol: "playBridge", online: false }, // offline
+    { id: "4", name: "Cast TV", protocol: "googleCast", online: true },
+  ];
+
+  // When collapsed: only roku and googleCast have online devices
+  const visible = visibleDevices(devices, null, null, false);
+  const chips = protocolChips(visible);
+  // DLNA and PlayBridge must NOT have chips because their devices are offline
+  assert.deepEqual(chips, ["googleCast", "roku"]);
+
+  // If user remembered "dlna" or "playBridge", defaultProtocol falls back to visible chips
+  assert.equal(defaultProtocol(visible, null, "dlna", null), "googleCast");
+  assert.equal(defaultProtocol(visible, null, "playBridge", null), "googleCast");
+
+  // When expanded: dlna and playBridge chips reappear
+  const expanded = visibleDevices(devices, null, null, true);
+  assert.deepEqual(protocolChips(expanded), ["playBridge", "googleCast", "dlna", "roku"]);
+});
+
+test("popup and content script mark active offline device as Offline and render toggle offline button", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+
+  // Check popup.ts
+  const popupSource = fs.readFileSync(
+    path.resolve(process.cwd(), "src/ui/popup.ts"),
+    "utf-8",
+  );
+  // Active offline device is marked Offline
+  assert.match(
+    popupSource,
+    /d\.online === false\s*\?\s*'badge-offline'\s*:\s*isTvActive\s*\?\s*'badge-active'\s*:\s*'badge-online'/,
+    "popup.ts must mark active offline device with badge-offline",
+  );
+  // Toggle offline button
+  assert.match(
+    popupSource,
+    /toggleBtn\.className = 'toggle-offline-btn';/,
+    "popup.ts must render toggle-offline-btn",
+  );
+  assert.match(
+    popupSource,
+    /showOfflinePopup \? 'Hide offline' : `Show \$\{offlineCount\} offline`/,
+    "popup.ts must show correct toggle offline label",
+  );
+
+  // Check content.ts
+  const contentSource = fs.readFileSync(
+    path.resolve(process.cwd(), "src/content.ts"),
+    "utf-8",
+  );
+  // Active offline device is marked Offline
+  assert.match(
+    contentSource,
+    /device\.online === false \? "Offline" : isTvActive \? "Active" : "Online"/,
+    "content.ts must mark active offline device with Offline text",
+  );
+  // Toggle offline button in content.ts
+  assert.match(
+    contentSource,
+    /toggleBtn\.className = "toggle-offline-btn";/,
+    "content.ts must render toggle-offline-btn",
+  );
+  // Toggle click in content.ts must check e.isTrusted and must not close picker
+  assert.match(
+    contentSource,
+    /toggleBtn\.addEventListener\("click",\s*\((?:e|\w+)\)\s*=>\s*\{\s*if\s*\(!e\.isTrusted\)\s*return;\s*e\.stopPropagation\(\);\s*e\.preventDefault\(\);\s*showOfflinePicker = !showOfflinePicker;\s*renderPicker\(\);/,
+    "content.ts toggle offline click must check e.isTrusted and re-render without closing picker",
+  );
+});
