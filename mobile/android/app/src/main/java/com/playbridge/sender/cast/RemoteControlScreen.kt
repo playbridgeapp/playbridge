@@ -1,93 +1,182 @@
 package com.playbridge.sender.cast
 
+import android.net.Uri
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.ui.platform.LocalContext
-import android.net.Uri
-import com.playbridge.sender.library.*
-import com.playbridge.sender.browser.*
-import com.playbridge.sender.connection.WebSocketClient
-import androidx.compose.foundation.Canvas
-import androidx.compose.ui.geometry.Offset
-import android.view.HapticFeedbackConstants
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import kotlinx.coroutines.launch
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.systemGestureExclusion
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.automirrored.filled.VolumeDown
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Cast
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Gamepad
+import androidx.compose.material.icons.filled.Keyboard
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import com.playbridge.sender.cast.remote.DpadArea
+import com.playbridge.sender.cast.remote.LocalRemoteMotionPolicy
+import com.playbridge.sender.cast.remote.RemoteDialogVolumeKeys
+import com.playbridge.sender.cast.remote.RemoteFeedback
+import com.playbridge.sender.cast.remote.RemoteNavBar
+import com.playbridge.sender.cast.remote.RemoteOptimisticState
+import com.playbridge.sender.cast.remote.RemoteTransportRow
+import com.playbridge.sender.cast.remote.RemoteVolumeKeys
+import com.playbridge.sender.cast.remote.crossedSeekBound
+import com.playbridge.sender.cast.remote.relativeRemoteSeek
+import com.playbridge.sender.cast.remote.rememberRemoteHaptics
+import com.playbridge.sender.cast.remote.rememberRemoteMotionPolicy
+import com.playbridge.sender.cast.remote.remoteDoubleTapAction
+import com.playbridge.sender.cast.remote.remoteNavAvailability
+import com.playbridge.sender.cast.remote.remotePressFeedback
+import com.playbridge.sender.cast.remote.remoteTransportAvailability
+import com.playbridge.sender.cast.remote.remoteWaveClocks
+import com.playbridge.sender.connection.WebSocketClient
+import com.playbridge.sender.library.PlaylistEpisode
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ln
 import kotlin.math.sin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /** Live playback status synced from the TV via `status` messages. */
 data class TvPlaybackStatus(
@@ -184,10 +273,59 @@ fun RemoteControlScreen(
     connectionState: WebSocketClient.ConnectionState = WebSocketClient.ConnectionState.Disconnected,
     linkedPageCastControllerName: String? = null,
     onUnlinkWebsite: () -> Unit = {},
+    onBrowseLibrary: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
+    remoteSessionKey: String = "",
+    remoteMediaKey: String? = null,
+    commandFailureVersion: Long = 0L,
+    nativeVolumeSupported: Boolean = true,
+    nativeRemoteSupported: Boolean = true,
+    nativeTouchpadSupported: Boolean = true,
+    receiverConnected: Boolean = connectionState is WebSocketClient.ConnectionState.Connected,
 ) {
-    var showSettingsSheet by remember { mutableStateOf(false) }
-    var showAddSubtitle by remember { mutableStateOf(false) }
-    var showSubtitlesSheet by remember { mutableStateOf(false) }
+    var showSettingsSheet by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
+    var showAddSubtitle by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
+    var showSubtitlesSheet by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
+    var showKeyboardSheet by remember(remoteSessionKey, remoteMediaKey, activeContext) { mutableStateOf(false) }
+    val motion = rememberRemoteMotionPolicy()
+    val haptics = rememberRemoteHaptics()
+    var optimistic by remember(remoteSessionKey, remoteMediaKey, activeContext, mediaTitle, currentEpisodeIndex, receiverConnected) {
+        mutableStateOf(RemoteOptimisticState(SystemClock::uptimeMillis))
+    }
+    val reportedPlaying = playbackState == "playing" || playbackState == "buffering"
+    LaunchedEffect(positionMs, playbackState) {
+        optimistic = optimistic.reconcile(positionMs, reportedPlaying)
+    }
+    LaunchedEffect(optimistic) {
+        while (optimistic.hasPending) {
+            delay(100L)
+            optimistic = optimistic.expire()
+        }
+    }
+    LaunchedEffect(commandFailureVersion) {
+        if (commandFailureVersion > 0L) optimistic = optimistic.clear()
+    }
+    LaunchedEffect(playbackState) {
+        if (playbackState == "error") optimistic = optimistic.clear()
+    }
+    val displayedPosition = optimistic.position(positionMs)
+    val displayedPlaying = optimistic.playing(reportedPlaying)
+    val seek: (Long) -> Unit = { target ->
+        if (receiverConnected) {
+            optimistic = optimistic.seek(target, durationMs)
+            if (activeContext == "browser") onBrowserControl("seek_to:${optimistic.position(positionMs)}")
+            else onSeekTo(optimistic.position(positionMs))
+        }
+    }
+    val playPause: () -> Unit = {
+        if (receiverConnected) {
+            val next = !optimistic.playing(reportedPlaying)
+            optimistic = optimistic.play(next)
+            haptics.perform(RemoteFeedback.PLAY_PAUSE)
+            if (activeContext == "browser") onBrowserControl("toggle_play")
+            else onPlayerControl(if (next) "play" else "pause")
+        }
+    }
     val remoteContext = remoteContextOf(activeContext)
     val videoActive = playbackState == "playing" || playbackState == "paused" || playbackState == "buffering"
     val resolvedMediaKind = mediaKind.takeIf { it in setOf("video", "audio", "image") } ?: "video"
@@ -195,13 +333,14 @@ fun RemoteControlScreen(
     val isAudio = resolvedMediaKind == "audio"
     val externalMode = externalProtocolLabel != null
     val capabilities = externalCapabilities.orEmpty()
-    val supportsRemote = !externalMode || Capability.REMOTE in capabilities
-    val supportsVolume = !externalMode || Capability.VOLUME in capabilities
+    val supportsRemote = if (externalMode) Capability.REMOTE in capabilities else nativeRemoteSupported
+    val supportsVolume = if (externalMode) Capability.VOLUME in capabilities else nativeVolumeSupported
     val supportsSeek = if (externalMode) Capability.SEEK in capabilities else isSeekable
     val availableModes = availableRemoteModes(
         remoteContext = remoteContext,
         externalMode = externalMode,
         supportsRemote = supportsRemote,
+        supportsTouchpad = nativeTouchpadSupported,
     )
     var modeByContext by remember {
         mutableStateOf(
@@ -222,7 +361,33 @@ fun RemoteControlScreen(
         }
     }
 
+    val nav = remoteNavAvailability(activeContext, externalMode, supportsRemote, supportsVolume, receiverConnected)
+    val transport = remoteTransportAvailability(
+        activeContext, externalMode, supportsSeek, isLive, isImage, episodes.map { it.index }, currentEpisodeIndex,
+    )
+    RemoteVolumeKeys(nav.volume, remoteSessionKey) { up -> onRemoteKey(if (up) "volume_up" else "volume_down") }
+    CompositionLocalProvider(LocalRemoteMotionPolicy provides motion) {
     Scaffold(
+        bottomBar = {
+            Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
+                if (transport.visible) {
+                    RemoteTransportRow(
+                        isPlaying = displayedPlaying,
+                        enabled = receiverConnected,
+                        showPlayPause = !isImage || durationMs > 0L,
+                        showSeek = transport.seek,
+                        previous = transport.previous,
+                        next = transport.next,
+                        onJumpToEpisode = onJumpToEpisode,
+                        onSeekBack = { seek(relativeRemoteSeek(optimistic.position(positionMs), -10_000L, durationMs)) },
+                        onSeekForward = { seek(relativeRemoteSeek(optimistic.position(positionMs), 10_000L, durationMs)) },
+                        onPlayPause = playPause,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+                RemoteNavBar(nav, onRemoteKey, onKeys = { showKeyboardSheet = true })
+            }
+        },
         topBar = {
             TopAppBar(
                 title = { Text("Remote", fontWeight = FontWeight.Bold) },
@@ -283,24 +448,21 @@ fun RemoteControlScreen(
                 Spacer(modifier = Modifier.height(12.dp))
             }
 
-            // Segmented Mode Selector for immediate UX clarity
-            RemoteModeSegmentedRow(
-                selected = effectiveMode,
-                modes = availableModes,
-                onSelect = { selectMode(it) },
-            )
-            Spacer(modifier = Modifier.height(16.dp))
+            if (availableModes.size > 1) {
+                RemoteModeSegmentedRow(
+                    selected = effectiveMode,
+                    modes = availableModes,
+                    onSelect = {
+                        if (it == RemoteMode.KEYBOARD) showKeyboardSheet = true else selectMode(it)
+                    },
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+            }
 
-            AnimatedContent(
-                targetState = effectiveMode to remoteContext,
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(220)) togetherWith fadeOut(animationSpec = tween(220))
-                },
-                label = "RemoteBody"
-            ) { (mode, ctx) ->
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+              key(effectiveMode, remoteContext, remoteSessionKey, remoteMediaKey) {
+                val mode = effectiveMode
+                val ctx = remoteContext
                 Column(
                     modifier = Modifier.fillMaxSize(),
                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -311,19 +473,17 @@ fun RemoteControlScreen(
                             RemoteContext.PLAYER -> {
                                 NowPlayingPanel(title = mediaTitle, mediaKind = resolvedMediaKind)
 
-                                if (!externalMode && !isImage) {
-                                    TrackChipsRow(
-                                        audioTracks = audioTracks,
-                                        subtitleTracks = if (isAudio) emptyList() else subtitleTracks,
-                                        showSubtitles = !isAudio,
-                                        onSelectAudio = onSelectAudio,
-                                        onSubtitlesClick = { showSubtitlesSheet = true },
-                                        onMore = { showSettingsSheet = true }
-                                    )
-                                }
+                                TrackChipsRow(
+                                    audioTracks = if (!externalMode && !isImage) audioTracks else emptyList(),
+                                    subtitleTracks = if (!externalMode && !isImage && !isAudio) subtitleTracks else emptyList(),
+                                    showSubtitles = !externalMode && !isImage && !isAudio,
+                                    onSelectAudio = onSelectAudio,
+                                    onSubtitlesClick = { showSubtitlesSheet = true },
+                                    onMore = { showSettingsSheet = true }
+                                )
 
                                 EpisodesCarousel(
-                                    episodes = episodes,
+                                    episodes = if (externalMode) emptyList() else episodes,
                                     currentIndex = currentEpisodeIndex,
                                     onJumpToEpisode = onJumpToEpisode,
                                     modifier = Modifier.weight(1f)
@@ -331,32 +491,31 @@ fun RemoteControlScreen(
 
                                 if (!isImage || durationMs > 0L) {
                                     SeekVolumeBar(
-                                        positionMs = positionMs,
+                                        positionMs = displayedPosition,
                                         durationMs = durationMs,
                                         isLive = isLive,
                                         isSeekable = supportsSeek && !isImage,
-                                        isPlaying = playbackState == null || playbackState == "playing" || playbackState == "buffering",
-                                        enableVolume = supportsVolume && !isImage,
-                                        onSeekTo = onSeekTo,
+                                        isPlaying = displayedPlaying,
+                                        enableVolume = nav.volume && !isImage,
+                                        onSeekTo = seek,
                                         onVolumeUp = { onRemoteKey("volume_up") },
                                         onVolumeDown = { onRemoteKey("volume_down") },
-                                        onPlayPauseToggle = { onPlayerControl(if (playbackState == "playing") "pause" else "play") }
+                                        onPlayPauseToggle = playPause
                                     )
                                 }
-                                MediaControlRow(
-                                    onPlayerControl = onPlayerControl,
-                                    showLoop = !externalMode && !isImage,
-                                    showSeek = !isImage && !isLive && supportsSeek,
-                                )
+
                             }
 
                             RemoteContext.BROWSER -> BrowserContextView(
                                 playbackState = playbackState,
-                                positionMs = positionMs,
+                                isPlaying = displayedPlaying,
+                                onSeekTo = seek,
+                                onPlayPause = playPause,
+                                positionMs = displayedPosition,
                                 durationMs = durationMs,
                                 isLive = isLive,
                                 isSeekable = supportsSeek,
-                                dlnaMode = externalMode,
+                                enableVolume = nav.volume,
                                 mediaTitle = mediaTitle,
                                 onBrowserControl = onBrowserControl,
                                 onRemoteKey = onRemoteKey
@@ -364,24 +523,22 @@ fun RemoteControlScreen(
 
                             RemoteContext.IDLE -> IdleEmptyState(
                                 tvName = tvName,
-                                onShowControls = { selectMode(RemoteMode.TOUCHPAD) },
+                                onBrowseLibrary = onBrowseLibrary,
+                                onOpenBrowser = onOpenBrowser,
                                 modifier = Modifier.weight(1f)
                             )
                         }
 
                         RemoteMode.DPAD -> {
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                                DpadArea(onRemoteKey = onRemoteKey)
+                                DpadArea(onRemoteKey = onRemoteKey, enabled = receiverConnected && motion.resumed)
                             }
-                            ModeBottomBar(
-                                ctx = ctx, dlnaMode = externalMode, isLive = isLive, isSeekable = supportsSeek,
-                                playbackState = playbackState, onRemoteKey = onRemoteKey,
-                                onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
-                            )
+                            ModeBottomBar(ctx = ctx, onBrowserControl = onBrowserControl, onMore = { showSettingsSheet = true })
                         }
                         RemoteMode.TOUCHPAD -> {
                             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                                 TouchpadArea(
+                                    enabled = receiverConnected && motion.resumed,
                                     onMouseMove = onMouseMove,
                                     onMouseClick = onMouseClick,
                                     onMouseScroll = onMouseScroll,
@@ -395,22 +552,19 @@ fun RemoteControlScreen(
                                     onGestureEnd = onPointerGestureEnd,
                                 )
                             }
-                            ModeBottomBar(
-                                ctx = ctx, dlnaMode = externalMode, isLive = isLive, isSeekable = supportsSeek,
-                                playbackState = playbackState, onRemoteKey = onRemoteKey,
-                                onBrowserControl = onBrowserControl, onPlayerControl = onPlayerControl
-                            )
+                            ModeBottomBar(ctx = ctx, onBrowserControl = onBrowserControl, onMore = { showSettingsSheet = true })
                         }
                         RemoteMode.KEYBOARD -> Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                             KeyboardArea(onRemoteKey = onRemoteKey)
                         }
                     }
                 }
+              }
             }
         }
     }
 
-    if (showSettingsSheet && !isImage) {
+    if (showSettingsSheet) {
         PlayerSettingsSheet(
             settings = playerSettings,
             videoTracks = videoTracks,
@@ -420,8 +574,20 @@ fun RemoteControlScreen(
             onToggleAudioBoost = onToggleAudioBoost,
             onAdjustSubtitleOffset = onAdjustSubtitleOffset,
             onSwitchEngine = onSwitchEngine,
+            showSettings = !externalMode && !isImage,
+            showLoop = !externalMode && !isImage && !isLive,
+            onLoop = { onPlayerControl(if (it) "loop_on" else "loop_off") },
+            onStop = { onPlayerControl("stop"); showSettingsSheet = false },
+            showAddSubtitle = !externalMode && !isImage && !isAudio,
+            onAddSubtitle = { showSettingsSheet = false; showAddSubtitle = true },
             onDismiss = { showSettingsSheet = false }
         )
+    }
+    if (showKeyboardSheet && nav.keys) {
+        ModalBottomSheet(onDismissRequest = { showKeyboardSheet = false }) {
+            RemoteDialogVolumeKeys()
+            KeyboardArea(onRemoteKey = onRemoteKey)
+        }
     }
     if (showAddSubtitle && resolvedMediaKind == "video") {
         AddSubtitleDialog(
@@ -451,6 +617,7 @@ fun RemoteControlScreen(
             onDismiss = { showSubtitlesSheet = false }
         )
     }
+    }
 }
 
 internal enum class RemoteMode(val label: String, val icon: ImageVector) {
@@ -466,11 +633,12 @@ internal fun availableRemoteModes(
     remoteContext: RemoteContext,
     externalMode: Boolean,
     supportsRemote: Boolean,
+    supportsTouchpad: Boolean = supportsRemote,
 ): List<RemoteMode> = buildList {
     add(RemoteMode.CONTEXT)
-    if (supportsRemote) add(RemoteMode.DPAD)
-    if (!externalMode) add(RemoteMode.TOUCHPAD)
-    if (!externalMode && remoteContext == RemoteContext.BROWSER) add(RemoteMode.KEYBOARD)
+    if (supportsRemote && (remoteContext != RemoteContext.IDLE || externalMode)) add(RemoteMode.DPAD)
+    if (!externalMode && supportsTouchpad && remoteContext != RemoteContext.IDLE) add(RemoteMode.TOUCHPAD)
+    if (!externalMode && supportsRemote && remoteContext == RemoteContext.BROWSER) add(RemoteMode.KEYBOARD)
 }
 
 private fun remoteContextOf(active: String): RemoteContext = when (active) {
@@ -479,21 +647,14 @@ private fun remoteContextOf(active: String): RemoteContext = when (active) {
     else -> RemoteContext.IDLE
 }
 
-/** Reusable Glassmorphic Surface Modifier */
+/** Theme-aware solid remote card. */
+@Composable
 private fun Modifier.glassSurface(
     shape: RoundedCornerShape = RoundedCornerShape(24.dp),
-    alpha: Float = 0.1f
-): Modifier = this
-    .clip(shape)
-    .background(
-        Brush.verticalGradient(
-            colors = listOf(
-                Color.White.copy(alpha = alpha + 0.04f),
-                Color.White.copy(alpha = alpha)
-            )
-        )
-    )
-    .border(1.dp, Color.White.copy(alpha = 0.15f), shape)
+    alpha: Float = 0.1f,
+): Modifier = clip(shape)
+    .background(MaterialTheme.colorScheme.surfaceContainer)
+    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
 
 /** Segmented Row for switching remote modes instantly */
 @Composable
@@ -511,12 +672,15 @@ private fun RemoteModeSegmentedRow(
     ) {
         modes.forEach { mode ->
             val isSelected = mode == selected
+            val interaction = remember { MutableInteractionSource() }
             Row(
                 modifier = Modifier
                     .weight(1f)
+                    .heightIn(min = 48.dp)
+                    .remotePressFeedback(interaction)
                     .clip(RoundedCornerShape(50))
                     .background(if (isSelected) MaterialTheme.colorScheme.primary else Color.Transparent)
-                    .clickable { onSelect(mode) }
+                    .clickable(interactionSource = interaction, indication = null) { onSelect(mode) }
                     .padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
@@ -525,14 +689,14 @@ private fun RemoteModeSegmentedRow(
                     mode.icon,
                     contentDescription = mode.label,
                     modifier = Modifier.size(16.dp),
-                    tint = if (isSelected) Color.Black else Color.White.copy(alpha = 0.6f)
+                    tint = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
                     mode.label,
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isSelected) Color.Black else Color.White.copy(alpha = 0.6f)
+                    color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -558,7 +722,7 @@ private fun ConnectedTvChip(
     val accent = when {
         isConnected -> connectedGreen
         isConnecting -> connectingOrange
-        else -> Color.White.copy(alpha = 0.6f)
+        else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
     }
 
     val name = deviceName ?: if (isExternal) "receiver" else "TV"
@@ -615,11 +779,14 @@ private fun ProtocolBadge(text: String, accent: Color) {
 @Composable
 private fun ColumnScope.BrowserContextView(
     playbackState: String?,
+    isPlaying: Boolean,
+    onSeekTo: (Long) -> Unit,
+    onPlayPause: () -> Unit,
     positionMs: Long,
     durationMs: Long,
     isLive: Boolean,
     isSeekable: Boolean,
-    dlnaMode: Boolean,
+    enableVolume: Boolean,
     mediaTitle: String?,
     onBrowserControl: (String) -> Unit,
     onRemoteKey: (String) -> Unit
@@ -637,71 +804,49 @@ private fun ColumnScope.BrowserContextView(
             durationMs = durationMs,
             isLive = isLive,
             isSeekable = isSeekable,
-            isPlaying = playbackState == "playing" || playbackState == "buffering",
-            enableVolume = !dlnaMode,
-            onSeekTo = { ms -> onBrowserControl("seek_to:$ms") },
+            isPlaying = isPlaying,
+            enableVolume = enableVolume,
+            onSeekTo = onSeekTo,
             onVolumeUp = { onRemoteKey("volume_up") },
             onVolumeDown = { onRemoteKey("volume_down") },
-            onPlayPauseToggle = { onBrowserControl("toggle_play") }
+            onPlayPauseToggle = onPlayPause
         )
-    } else {
-        VolumeRow(onVolumeUp = { onRemoteKey("volume_up") }, onVolumeDown = { onRemoteKey("volume_down") })
     }
 
-    BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
+    BrowserContextRow(onBrowserControl = onBrowserControl)
 }
 
 @Composable
 private fun ColumnScope.ModeBottomBar(
     ctx: RemoteContext,
-    dlnaMode: Boolean,
-    isLive: Boolean,
-    isSeekable: Boolean,
-    playbackState: String?,
-    onRemoteKey: (String) -> Unit,
     onBrowserControl: (String) -> Unit,
-    onPlayerControl: (String) -> Unit
+    onMore: () -> Unit,
 ) {
-    when (ctx) {
-        RemoteContext.BROWSER -> {
-            VolumeRow(onVolumeUp = { onRemoteKey("volume_up") }, onVolumeDown = { onRemoteKey("volume_down") })
-            BrowserContextRow(onBrowserControl = onBrowserControl, onRemoteKey = onRemoteKey)
-        }
-        RemoteContext.PLAYER -> MediaControlRow(
-            onPlayerControl = onPlayerControl,
-            showLoop = !dlnaMode,
-            showSeek = !isLive && isSeekable,
-        )
-        RemoteContext.IDLE -> { /* nothing to control */ }
+    if (ctx == RemoteContext.BROWSER) BrowserContextRow(onBrowserControl)
+    if (ctx == RemoteContext.PLAYER) {
+        TrackChipsRow(emptyList(), emptyList(), false, {}, {}, onMore)
     }
 }
 
 @Composable
 private fun IdleEmptyState(
     tvName: String?,
-    onShowControls: () -> Unit,
-    modifier: Modifier = Modifier
+    onBrowseLibrary: () -> Unit,
+    onOpenBrowser: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     Column(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.Center,
     ) {
-        Icon(
-            Icons.Default.Tv,
-            contentDescription = null,
-            modifier = Modifier.size(56.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
-        )
-        Spacer(modifier = Modifier.height(12.dp))
-        Text("Nothing playing", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Text("on ${tvName ?: "your TV"}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(modifier = Modifier.height(20.dp))
-        FilledTonalButton(onClick = onShowControls) {
-            Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Show touchpad & controls")
-        }
+        Icon(Icons.Default.Tv, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(16.dp))
+        Text("Nothing playing on ${tvName ?: "TV"}", style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+        Text("Controlling the TV home screen needs full TV control, coming later.",
+            style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, modifier = Modifier.padding(vertical = 16.dp))
+        Button(onClick = onBrowseLibrary) { Text("Browse Library") }
+        OutlinedButton(onClick = onOpenBrowser) { Text("Open browser") }
     }
 }
 
@@ -717,7 +862,7 @@ private fun KeyboardArea(onRemoteKey: (String) -> Unit) {
 
     Column(
         modifier = Modifier
-            .fillMaxSize()
+            .fillMaxWidth()
             .glassSurface(RoundedCornerShape(24.dp), alpha = 0.05f)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -743,6 +888,7 @@ private fun KeyboardArea(onRemoteKey: (String) -> Unit) {
                 }
             }
         )
+        TextButton(enabled = text.isNotEmpty(), onClick = { text = text.substring(0, text.offsetByCodePoints(text.length, -1)); sendText(text) }) { Text("Delete") }
         Button(onClick = { onRemoteKey("key_enter") }, modifier = Modifier.fillMaxWidth()) {
             Icon(Icons.Default.Done, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
@@ -753,26 +899,11 @@ private fun KeyboardArea(onRemoteKey: (String) -> Unit) {
     LaunchedEffect(Unit) { focusRequester.requestFocus() }
 }
 
-@Composable
-private fun VolumeRow(onVolumeUp: () -> Unit, onVolumeDown: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .glassSurface(RoundedCornerShape(16.dp), alpha = 0.05f)
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        IconButton(onClick = onVolumeDown) { Icon(Icons.Default.Remove, contentDescription = "Volume down") }
-        Icon(Icons.AutoMirrored.Filled.VolumeUp, contentDescription = null, modifier = Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        IconButton(onClick = onVolumeUp) { Icon(Icons.Default.Add, contentDescription = "Volume up") }
-    }
-}
 
 private enum class DragAxis { HORIZONTAL, VERTICAL }
 
 @Composable
-private fun SeekVolumeBar(
+internal fun SeekVolumeBar(
     positionMs: Long,
     durationMs: Long,
     isLive: Boolean,
@@ -796,64 +927,63 @@ private fun SeekVolumeBar(
     var isAggressive by remember { mutableStateOf(false) }
 
     val volumeStepPx = with(LocalDensity.current) { 28.dp.toPx() }
-    val seekStepPx = with(LocalDensity.current) { 16.dp.toPx() }
     // The wave canvas is inset by the arrow gutters (52dp each side); absolute
     // finger-follow scrubbing maps the pointer x within that span.
     val contentInsetPx = with(LocalDensity.current) { 52.dp.toPx() }
 
-    val view = LocalView.current
-    val tick: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK) }
-    val thud: () -> Unit = { view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) }
+    val ink = MaterialTheme.colorScheme.onSurface
+    val motion = LocalRemoteMotionPolicy.current
+    val haptics = rememberRemoteHaptics()
+    val latestSeek by rememberUpdatedState(onSeekTo)
+    val latestPlayPause by rememberUpdatedState(onPlayPauseToggle)
+    val latestVolumeUp by rememberUpdatedState(onVolumeUp)
+    val latestVolumeDown by rememberUpdatedState(onVolumeDown)
 
-    // Perf: one wave clock drives both phase + breath; values used only while
-    // there is something to animate (playing, or the user is dragging).
-    val waveActive = isPlaying || dragging
-    val waveTransition = rememberInfiniteTransition(label = "waveClocks")
-    val animatedPhase by waveTransition.animateFloat(
-        initialValue = 0f,
-        targetValue = (2 * Math.PI).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = if (isPlaying) 1500 else 3000, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "phase"
-    )
-    val animatedBreath by waveTransition.animateFloat(
-        initialValue = 0.8f,
-        targetValue = 1.2f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2600, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "breath"
-    )
-    val phase = if (waveActive) animatedPhase else 0f
-    val breathValue = if (waveActive) animatedBreath else 1f
+    // Remove the infinite transition from composition entirely while inactive.
+    val waveActive = motion.waveRuns(isPlaying)
+    val clocks = if (waveActive) remoteWaveClocks() else 0f to 1f
+    val phase = clocks.first
+    val breathValue = clocks.second
 
     val targetAmplitude = if (isPlaying && !dragging) 7.dp else 0.dp
-    val amplitude by animateDpAsState(targetValue = targetAmplitude, animationSpec = tween(durationMillis = 300), label = "amplitude")
+    val amplitude by animateDpAsState(targetValue = targetAmplitude, animationSpec = tween(durationMillis = if (motion.animate) 300 else 0), label = "amplitude")
 
-    val lift by animateDpAsState(targetValue = if (activeAxis != null) 12.dp else 0.dp, animationSpec = tween(durationMillis = 160), label = "seekBarLift")
+    val lift by animateDpAsState(targetValue = if (activeAxis != null) 12.dp else 0.dp, animationSpec = tween(durationMillis = if (motion.animate) 160 else 0), label = "seekBarLift")
 
     val displayMs = if (dragging && hasDuration) dragMs else currentPosition.toFloat()
     val fraction = if (hasDuration && durationMs > 0L) (displayMs / durationMs.toFloat()).coerceIn(0f, 1f) else 0f
 
     val primary = MaterialTheme.colorScheme.primary
     // Red "fast" tint only for hold-then-drag volume; seeking is absolute and has no fast mode.
-    val activeColor by animateColorAsState(targetValue = if (isAggressive && activeAxis == DragAxis.VERTICAL) Color(0xFFFF5252) else primary, animationSpec = tween(200), label = "activeColor")
-    val thumbScale by animateFloatAsState(targetValue = if (dragging) 1.5f else 1.0f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "thumbScale")
+    val activeColor by animateColorAsState(targetValue = if (isAggressive && activeAxis == DragAxis.VERTICAL) Color(0xFFFF5252) else primary, animationSpec = tween(if (motion.animate) 200 else 0), label = "activeColor")
+    val thumbScale by animateFloatAsState(targetValue = if (dragging) 1.5f else 1.0f, animationSpec = tween(if (motion.animate) 120 else 0), label = "thumbScale")
 
     val popupOffset = with(LocalDensity.current) { IntOffset(0, -180.dp.roundToPx()) }
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .offset(y = -lift)
+            .offset { IntOffset(0, -lift.roundToPx()) }
             .shadow(elevation = lift, shape = RoundedCornerShape(28.dp), clip = false)
-            .height(86.dp)
+            .heightIn(min = 86.dp)
             .glassSurface(RoundedCornerShape(28.dp), alpha = 0.05f)
             .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                if (!dragging && activeAxis == null) onPlayPauseToggle()
+                if (!dragging && activeAxis == null) latestPlayPause()
+            }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Playback seek and volume"
+                stateDescription = if (isPlaying) "Playing" else "Paused"
+                if (hasDuration) {
+                    progressBarRangeInfo = ProgressBarRangeInfo(displayMs, 0f..durationMs.toFloat())
+                    setProgress { target -> latestSeek(target.toLong().coerceIn(0L, durationMs)); true }
+                }
+                customActions = buildList {
+                    add(CustomAccessibilityAction(if (isPlaying) "Pause" else "Play") { latestPlayPause(); true })
+                    if (hasDuration) {
+                        add(CustomAccessibilityAction("Seek back 10 seconds") { latestSeek(relativeRemoteSeek(currentPosition, -10_000L, durationMs)); true })
+                        add(CustomAccessibilityAction("Seek forward 10 seconds") { latestSeek(relativeRemoteSeek(currentPosition, 10_000L, durationMs)); true })
+                    }
+                }
             }
             .onSizeChanged { widthPx = it.width.toFloat() }
             .pointerInput(Unit) {
@@ -865,7 +995,6 @@ private fun SeekVolumeBar(
             .pointerInput(hasDuration, enableVolume, durationMs) {
                 var axis: DragAxis? = null
                 var volAccum = 0f
-                var seekAccum = 0f
                 detectDragGestures(
                     onDragStart = {
                         // Hold-then-drag: horizontal becomes absolute finger-follow
@@ -873,8 +1002,7 @@ private fun SeekVolumeBar(
                         // the gentle relative seek.
                         val dragStartTime = System.currentTimeMillis()
                         isAggressive = (dragStartTime - touchDownTime) >= 400L
-                        if (isAggressive) thud()
-                        axis = null; volAccum = 0f; seekAccum = 0f
+                        axis = null; volAccum = 0f
                         dragMs = currentPosition.toFloat(); volumeDirection = null
                     },
                     onDrag = { change, drag ->
@@ -883,10 +1011,10 @@ private fun SeekVolumeBar(
                             axis = if (abs(drag.x) >= abs(drag.y)) DragAxis.HORIZONTAL else DragAxis.VERTICAL
                             activeAxis = axis
                             if (axis == DragAxis.HORIZONTAL && hasDuration) dragging = true
-                            tick()
                         }
                         when (axis) {
                             DragAxis.HORIZONTAL -> if (hasDuration && widthPx > 0f) {
+                                val previous = dragMs
                                 if (isAggressive) {
                                     // Scrub: map the finger's x directly onto the bar span
                                     // so the playhead tracks the finger 1:1.
@@ -900,21 +1028,20 @@ private fun SeekVolumeBar(
                                     val deltaMs = (drag.x / widthPx) * rangeMs
                                     dragMs = (dragMs + deltaMs).coerceIn(0f, durationMs.toFloat())
                                 }
-                                seekAccum += abs(drag.x)
-                                while (seekAccum >= seekStepPx) { tick(); seekAccum -= seekStepPx }
+                                if (crossedSeekBound(previous, dragMs, durationMs)) haptics.perform(RemoteFeedback.SEEK_BOUND)
                             }
                             DragAxis.VERTICAL -> if (enableVolume) {
                                 if (volumeDirection == null) volumeDirection = if (drag.y < 0) "up" else "down"
                                 volAccum -= drag.y
                                 val stepPx = if (isAggressive) volumeStepPx / 2.5f else volumeStepPx
-                                while (volAccum >= stepPx) { onVolumeUp(); tick(); volAccum -= stepPx; volumeDirection = "up" }
-                                while (volAccum <= -stepPx) { onVolumeDown(); tick(); volAccum += stepPx; volumeDirection = "down" }
+                                while (volAccum >= stepPx) { latestVolumeUp(); volAccum -= stepPx; volumeDirection = "up" }
+                                while (volAccum <= -stepPx) { latestVolumeDown(); volAccum += stepPx; volumeDirection = "down" }
                             }
                             else -> {}
                         }
                     },
                     onDragEnd = {
-                        if (axis == DragAxis.HORIZONTAL && hasDuration) onSeekTo(dragMs.toLong())
+                        if (axis == DragAxis.HORIZONTAL && hasDuration) latestSeek(dragMs.toLong())
                         dragging = false; activeAxis = null; axis = null; volumeDirection = null; isAggressive = false
                     },
                     onDragCancel = {
@@ -924,50 +1051,52 @@ private fun SeekVolumeBar(
             },
         contentAlignment = Alignment.CenterStart
     ) {
-        Box(
-            modifier = Modifier.fillMaxWidth().height(1.dp)
-                .background(Brush.horizontalGradient(listOf(Color.Transparent, Color.White.copy(alpha = if (activeAxis == DragAxis.HORIZONTAL) 0.5f else 0.1f), Color.Transparent)))
-                .align(Alignment.Center)
-        )
-        if (enableVolume) {
+        // Decorations follow the measured content; fillMaxHeight here would consume
+        // the enclosing Column's remaining height before its weighted spacer measures.
+        Box(Modifier.matchParentSize()) {
             Box(
-                modifier = Modifier.fillMaxHeight().width(1.dp)
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.White.copy(alpha = if (activeAxis == DragAxis.VERTICAL) 0.5f else 0.1f), Color.Transparent)))
+                modifier = Modifier.fillMaxWidth().height(1.dp)
+                    .background(Brush.horizontalGradient(listOf(Color.Transparent, ink.copy(alpha = if (activeAxis == DragAxis.HORIZONTAL) 0.5f else 0.1f), Color.Transparent)))
                     .align(Alignment.Center)
             )
+            if (enableVolume) {
+                Box(
+                    modifier = Modifier.fillMaxHeight().width(1.dp)
+                        .background(Brush.verticalGradient(listOf(Color.Transparent, ink.copy(alpha = if (activeAxis == DragAxis.VERTICAL) 0.5f else 0.1f), Color.Transparent)))
+                        .align(Alignment.Center)
+                )
+            }
         }
 
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, tint = if (activeAxis == DragAxis.HORIZONTAL) activeColor else Color.White.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp).size(24.dp))
-        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = if (activeAxis == DragAxis.HORIZONTAL) activeColor else Color.White.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp).size(24.dp))
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = null, tint = if (activeAxis == DragAxis.HORIZONTAL) activeColor else ink.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.CenterStart).padding(start = 12.dp).size(24.dp))
+        Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null, tint = if (activeAxis == DragAxis.HORIZONTAL) activeColor else ink.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.CenterEnd).padding(end = 12.dp).size(24.dp))
         
         if (enableVolume) {
-            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null, tint = if (activeAxis == DragAxis.VERTICAL) activeColor else Color.White.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp).size(16.dp))
-            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = if (activeAxis == DragAxis.VERTICAL) activeColor else Color.White.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp).size(16.dp))
+            Icon(Icons.Filled.KeyboardArrowUp, contentDescription = null, tint = if (activeAxis == DragAxis.VERTICAL) activeColor else ink.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.TopCenter).padding(top = 4.dp).size(16.dp))
+            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = if (activeAxis == DragAxis.VERTICAL) activeColor else ink.copy(alpha = 0.3f), modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp).size(16.dp))
         }
 
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 52.dp, vertical = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 52.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.SpaceBetween,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(
+            FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally)
             ) {
                 val seekLabel = if (activeAxis == DragAxis.HORIZONTAL) {
                     if (isAggressive) "SCRUBBING ◄►" else "SEEKING ◄►"
                 } else {
                     if (isPlaying) "◄► SEEK · TAP ❙❙" else "◄► SEEK · TAP ▶"
                 }
-                Text(seekLabel, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp), color = if (activeAxis == DragAxis.HORIZONTAL) activeColor else Color.White.copy(alpha = 0.5f), maxLines = 1)
+                Text(seekLabel, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp), color = if (activeAxis == DragAxis.HORIZONTAL) activeColor else ink.copy(alpha = 0.5f))
                 
                 if (enableVolume) {
-                    Text("  ·  ", style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), color = Color.White.copy(alpha = 0.2f))
                     val volumeLabel = if (activeAxis == DragAxis.VERTICAL) {
                         if (isAggressive) "FAST VOL ▲▼" else "VOLUME ▲▼"
                     } else "▲▼ VOLUME"
-                    Text(volumeLabel, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp), color = if (activeAxis == DragAxis.VERTICAL) activeColor else Color.White.copy(alpha = 0.5f), maxLines = 1)
+                    Text(volumeLabel, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp), color = if (activeAxis == DragAxis.VERTICAL) activeColor else ink.copy(alpha = 0.5f))
                 }
             }
 
@@ -994,7 +1123,7 @@ private fun SeekVolumeBar(
                     val tickSpacing = width / tickCount
                     for (i in 0..tickCount) {
                         val x = i * tickSpacing
-                        drawLine(color = Color.White.copy(alpha = 0.1f), start = Offset(x, centerY - tickHeight), end = Offset(x, centerY + tickHeight), strokeWidth = 1f)
+                        drawLine(color = ink.copy(alpha = 0.1f), start = Offset(x, centerY - tickHeight), end = Offset(x, centerY + tickHeight), strokeWidth = 1f)
                     }
 
                     fun waveY(x: Float, p: Float, a: Float, wl: Float): Float {
@@ -1014,14 +1143,14 @@ private fun SeekVolumeBar(
                     if (activeWidth < width) {
                         drawPath(
                             path = buildWave(activeWidth, width, phase, amp * 0.15f, wavelength),
-                            color = Color.White.copy(alpha = 0.15f),
+                            color = ink.copy(alpha = 0.15f),
                             style = Stroke(width = strokeInactiveWidth, cap = StrokeCap.Round)
                         )
                     }
 
                     if (activeWidth > 0f) {
                         val activeBrush = Brush.horizontalGradient(
-                            colors = listOf(activeColor.copy(alpha = 0.8f), Color.White),
+                            colors = listOf(activeColor.copy(alpha = 0.8f), ink),
                             startX = 0f, endX = activeWidth
                         )
                         val mainWave = buildWave(0f, activeWidth, phase, amp, wavelength)
@@ -1053,7 +1182,7 @@ private fun SeekVolumeBar(
                                 center = Offset(thumbX, centerY)
                             )
                             drawLine(
-                                color = Color.White,
+                                color = ink,
                                 start = Offset(thumbX, centerY - barHeight / 2),
                                 end = Offset(thumbX, centerY + barHeight / 2),
                                 strokeWidth = barWidth,
@@ -1063,12 +1192,12 @@ private fun SeekVolumeBar(
                     }
                 }
             } else {
-                Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(Color.White.copy(alpha = 0.2f)))
+                Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(ink.copy(alpha = 0.2f)))
             }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(if (hasDuration) formatTime(displayMs.toLong()) else formatTime(currentPosition), style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp), color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Visible)
-                Text(if (isLive) "● LIVE" else if (durationMs > 0L) formatTime(durationMs) else "--:--", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontWeight = if (isLive) FontWeight.Bold else FontWeight.Normal), color = if (isLive) activeColor else Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Visible)
+                Text(if (hasDuration) formatTime(displayMs.toLong()) else formatTime(currentPosition), style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontFeatureSettings = "tnum"), color = ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Visible)
+                Text(if (isLive) "● LIVE" else if (durationMs > 0L) formatTime(durationMs) else "--:--", style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp, fontFeatureSettings = "tnum", fontWeight = if (isLive) FontWeight.Bold else FontWeight.Normal), color = if (isLive) activeColor else ink.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Visible)
             }
         }
     }
@@ -1076,13 +1205,13 @@ private fun SeekVolumeBar(
     if (dragging && activeAxis == DragAxis.HORIZONTAL && hasDuration) {
         val deltaMs = dragMs.toLong() - currentPosition
         Popup(alignment = Alignment.Center, offset = popupOffset, properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
-            Surface(color = Color.Black.copy(alpha = 0.85f), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, activeColor.copy(alpha = 0.5f))) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, activeColor.copy(alpha = 0.5f))) {
                 Column(modifier = Modifier.padding(horizontal = 28.dp, vertical = 18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(if (isAggressive) "Scrub" else "Seek", color = activeColor, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
                     Spacer(modifier = Modifier.height(6.dp))
-                    Text("${formatTime(dragMs.toLong())} / ${formatTime(durationMs)}", color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    Text("${formatTime(dragMs.toLong())} / ${formatTime(durationMs)}", color = ink, style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
                     val sign = if (deltaMs >= 0) "+" else "-"
-                    Text("$sign${formatTime(abs(deltaMs))}", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium)
+                    Text("$sign${formatTime(abs(deltaMs))}", color = ink.copy(alpha = 0.8f), style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"))
                 }
             }
         }
@@ -1090,7 +1219,7 @@ private fun SeekVolumeBar(
 
     if (activeAxis == DragAxis.VERTICAL && enableVolume) {
         Popup(alignment = Alignment.Center, offset = popupOffset, properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = false)) {
-            Surface(color = Color.Black.copy(alpha = 0.85f), shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, activeColor.copy(alpha = 0.5f))) {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(20.dp), border = BorderStroke(1.dp, activeColor.copy(alpha = 0.5f))) {
                 Column(modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     val volumeIcon = when (volumeDirection) { "down" -> Icons.AutoMirrored.Filled.VolumeDown else -> Icons.AutoMirrored.Filled.VolumeUp }
                     Icon(volumeIcon, contentDescription = null, tint = activeColor, modifier = Modifier.size(32.dp))
@@ -1099,7 +1228,7 @@ private fun SeekVolumeBar(
                         "down" -> if (isAggressive) "Volume Down (Fast)" else "Volume Down"
                         else -> if (isAggressive) "Volume (Fast)" else "Volume"
                     }
-                    Text(volumeLabel, color = Color.White, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
+                    Text(volumeLabel, color = ink, style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp))
                 }
             }
         }
@@ -1110,6 +1239,7 @@ private enum class TwoFingerMode { UNDECIDED, SCROLL, ZOOM, ROTATE }
 
 @Composable
 private fun TouchpadArea(
+    enabled: Boolean = true,
     onMouseMove: (dx: Float, dy: Float) -> Unit,
     onMouseClick: () -> Unit,
     onMouseScroll: (dx: Float, dy: Float) -> Unit,
@@ -1122,23 +1252,27 @@ private fun TouchpadArea(
     onMouseUp: () -> Unit = {},
     onGestureEnd: () -> Unit = {},
 ) {
+    val ink = MaterialTheme.colorScheme.onSurface
     var isScrolling by remember { mutableStateOf(false) }
     var isDragging by remember { mutableStateOf(false) }
     val latestOnGestureEnd by rememberUpdatedState(onGestureEnd)
     DisposableEffect(Unit) {
-        onDispose { latestOnGestureEnd() }
+        onDispose { if (isDragging) onMouseUp(); latestOnGestureEnd() }
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .padding(horizontal = 12.dp)
+            .then(if (android.os.Build.VERSION.SDK_INT >= 29) Modifier.systemGestureExclusion() else Modifier)
             .glassSurface(RoundedCornerShape(24.dp), alpha = 0.05f),
         contentAlignment = Alignment.Center,
     ) {
         Box(
             modifier = Modifier
                 .matchParentSize()
-                .pointerInput(Unit) {
+                .pointerInput(enabled, imageGestures) {
+                if (!enabled) return@pointerInput
                 awaitPointerEventScope {
                     // Two-finger gesture is locked to one mode for its whole lifetime so a
                     // scroll never flips into a zoom (or vice-versa) mid-drag. We accumulate
@@ -1282,7 +1416,7 @@ private fun TouchpadArea(
                                     upTime - lastTapTime <= doubleTapTimeout &&
                                     (downPos - lastTapPosition).getDistance() <= doubleTapSlop
                                 if (isDoubleTap) {
-                                    onDoubleTap()
+                                    if (remoteDoubleTapAction(imageGestures) == "reset") onDoubleTap()
                                     lastTapTime = 0L
                                 } else {
                                     onMouseClick()
@@ -1303,7 +1437,8 @@ private fun TouchpadArea(
                     }
                 }
             }
-            .pointerInput(Unit) {
+            .pointerInput(enabled, imageGestures) {
+                if (!enabled) return@pointerInput
                 detectDragGesturesAfterLongPress(
                     onDragStart = { isDragging = true; onMouseDown() },
                     onDrag = { change, dragAmount -> change.consume(); onMouseMove(dragAmount.x * 1.5f, dragAmount.y * 1.5f) },
@@ -1314,7 +1449,7 @@ private fun TouchpadArea(
         ) {}
         // High-tech grid overlay for spatial awareness
         Canvas(modifier = Modifier.fillMaxSize()) {
-            val gridColor = Color.White.copy(alpha = 0.05f)
+            val gridColor = ink.copy(alpha = 0.05f)
             val cols = 3
             val rows = 3
             val colWidth = size.width / cols
@@ -1365,125 +1500,32 @@ private fun TouchpadArea(
 }
 
 @Composable
-private fun DpadArea(onRemoteKey: (String) -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            DpadBtn(Icons.Default.KeyboardArrowUp, "Up") { onRemoteKey("dpad_up") }
-
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                DpadBtn(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left") { onRemoteKey("dpad_left") }
-
-                FilledTonalButton(
-                    onClick = { onRemoteKey("dpad_center") },
-                    modifier = Modifier.size(80.dp).shadow(8.dp, CircleShape),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                ) {
-                    Text("OK", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                }
-
-                DpadBtn(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right") { onRemoteKey("dpad_right") }
-            }
-
-            DpadBtn(Icons.Default.KeyboardArrowDown, "Down") { onRemoteKey("dpad_down") }
-        }
-    }
-}
-
-@Composable
-private fun DpadBtn(icon: ImageVector, desc: String, onClick: () -> Unit) {
-    FilledTonalButton(
-        onClick = onClick,
-        modifier = Modifier.size(64.dp).shadow(4.dp, CircleShape),
-        shape = CircleShape,
-        contentPadding = PaddingValues(0.dp)
-    ) {
-        Icon(icon, contentDescription = desc, modifier = Modifier.size(32.dp))
-    }
-}
-
-@Composable
-private fun MediaControlRow(
-    onPlayerControl: (String) -> Unit,
-    showLoop: Boolean = true,
-    showSeek: Boolean = true,
-) {
-    var isLooping by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .glassSurface(RoundedCornerShape(16.dp), alpha = 0.05f)
-            .padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        if (showSeek) {
-            LabeledIconButton(icon = Icons.Default.Replay10, label = "-10s", tint = MaterialTheme.colorScheme.onSurface, onClick = { onPlayerControl("seek_back") })
-        }
-        if (showSeek) {
-            LabeledIconButton(icon = Icons.Default.Forward10, label = "+10s", tint = MaterialTheme.colorScheme.onSurface, onClick = { onPlayerControl("seek_forward") })
-        }
-        if (showLoop) {
-            LabeledIconButton(icon = Icons.Default.Repeat, label = "Loop", tint = if (isLooping) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, onClick = {
-                val next = !isLooping
-                onPlayerControl(if (next) "loop_on" else "loop_off")
-                isLooping = next
-            })
-        }
-        LabeledIconButton(icon = Icons.Default.Stop, label = "Stop", tint = MaterialTheme.colorScheme.error, onClick = { onPlayerControl("stop") })
-    }
-}
-
-@Composable
-private fun BrowserContextRow(onBrowserControl: (String) -> Unit, onRemoteKey: (String) -> Unit) {
-    var isVideoMaximized by remember { mutableStateOf(false) }
+private fun BrowserContextRow(onBrowserControl: (String) -> Unit) {
     var showMoreSheet by remember { mutableStateOf(false) }
-
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .glassSurface(RoundedCornerShape(16.dp), alpha = 0.05f)
-            .padding(vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().glassSurface(RoundedCornerShape(16.dp)).padding(vertical = 8.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        LabeledIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, label = "Back", tint = MaterialTheme.colorScheme.onSurface, onClick = { onRemoteKey("back") })
-        LabeledIconButton(icon = Icons.AutoMirrored.Filled.ArrowForward, label = "Forward", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("forward") })
-        LabeledIconButton(icon = Icons.Default.Refresh, label = "Refresh", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("refresh") })
-        LabeledIconButton(icon = if (isVideoMaximized) Icons.Default.FullscreenExit else Icons.Default.Fullscreen, label = if (isVideoMaximized) "Restore" else "Fullscreen", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = {
-            onBrowserControl(if (isVideoMaximized) "restore_video" else "maximize_video")
-            isVideoMaximized = !isVideoMaximized
-        })
-        LabeledIconButton(icon = Icons.Default.Home, label = "Home", tint = MaterialTheme.colorScheme.onSurface, onClick = { onRemoteKey("home") })
-        LabeledIconButton(icon = Icons.Default.MoreHoriz, label = "More", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { showMoreSheet = true })
+        LabeledIconButton(Icons.AutoMirrored.Filled.ArrowForward, "Forward", MaterialTheme.colorScheme.onSurface) { onBrowserControl("forward") }
+        LabeledIconButton(Icons.Default.Refresh, "Refresh", MaterialTheme.colorScheme.onSurface) { onBrowserControl("refresh") }
+        LabeledIconButton(Icons.Default.Fullscreen, "Fullscreen", MaterialTheme.colorScheme.onSurface) { onBrowserControl("maximize_video") }
+        LabeledIconButton(Icons.Default.FullscreenExit, "Restore", MaterialTheme.colorScheme.onSurface) { onBrowserControl("restore_video") }
+        LabeledIconButton(Icons.Default.MoreHoriz, "More", MaterialTheme.colorScheme.onSurface) { showMoreSheet = true }
     }
-
-    if (showMoreSheet) {
-        BrowserMoreSheet(onBrowserControl = onBrowserControl, onDismiss = { showMoreSheet = false })
-    }
+    if (showMoreSheet) BrowserMoreSheet(onBrowserControl) { showMoreSheet = false }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BrowserMoreSheet(onBrowserControl: (String) -> Unit, onDismiss: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        RemoteDialogVolumeKeys()
         Text("More controls", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 24.dp, bottom = 4.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            LabeledIconButton(icon = Icons.Default.Shield, label = "Ad Block", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("toggle_ublock"); onDismiss() })
             LabeledIconButton(icon = Icons.Default.Layers, label = "Source", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("video_target_cycle"); onDismiss() })
             LabeledIconButton(icon = Icons.AutoMirrored.Filled.VolumeUp, label = "Unmute", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("video_unmute"); onDismiss() })
             LabeledIconButton(icon = Icons.Default.Code, label = "Scripts", tint = MaterialTheme.colorScheme.onSurfaceVariant, onClick = { onBrowserControl("manage_user_scripts"); onDismiss() })
@@ -1495,8 +1537,9 @@ private fun BrowserMoreSheet(onBrowserControl: (String) -> Unit, onDismiss: () -
 
 @Composable
 private fun LabeledIconButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
     Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(horizontal = 4.dp)) {
-        IconButton(onClick = onClick) { Icon(icon, contentDescription = label, tint = tint) }
+        IconButton(onClick = onClick, interactionSource = interaction, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).remotePressFeedback(interaction)) { Icon(icon, contentDescription = label, tint = tint) }
         Text(label, style = MaterialTheme.typography.labelSmall, color = tint.copy(alpha = 0.7f), fontSize = 10.sp)
     }
 }
@@ -1597,7 +1640,7 @@ private fun EpisodesCarousel(
 }
 
 @Composable
-private fun TrackChipsRow(
+internal fun TrackChipsRow(
     audioTracks: List<MediaTrack>,
     subtitleTracks: List<MediaTrack>,
     showSubtitles: Boolean,
@@ -1614,17 +1657,17 @@ private fun TrackChipsRow(
             TrackChip(icon = Icons.Default.VolumeUp, label = "Audio", tracks = audioTracks, onSelect = onSelectAudio, modifier = Modifier.weight(1f))
         }
         if (showSubtitles) {
-            val selectedName = subtitleTracks.firstOrNull { it.selected }?.name ?: "—"
+            val selectedName = subtitleTracks.firstOrNull { it.selected }?.name ?: "Off"
             Surface(
                 onClick = onSubtitlesClick,
                 shape = RoundedCornerShape(20.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.weight(1f).height(40.dp)
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Subtitles: $selectedName" }
             ) {
                 Row(modifier = Modifier.padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Default.Subtitles, contentDescription = "Subtitles", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text(text = "Subs: $selectedName", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Icon(Icons.Default.Subtitles, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(text = selectedName, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                 }
             }
         }
@@ -1635,7 +1678,7 @@ private fun TrackChipsRow(
             onClick = onMore,
             shape = RoundedCornerShape(20.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.height(40.dp)
+            modifier = Modifier.heightIn(min = 48.dp)
         ) {
             Row(modifier = Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 Icon(Icons.Default.Tune, contentDescription = "More", modifier = Modifier.size(18.dp))
@@ -1654,7 +1697,7 @@ private fun TrackChip(
     modifier: Modifier = Modifier
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val selectedName = tracks.firstOrNull { it.selected }?.name ?: "—"
+    val selectedName = tracks.firstOrNull { it.selected }?.name ?: label
 
     Box(modifier = modifier) {
         Row(
@@ -1663,13 +1706,14 @@ private fun TrackChip(
                 .clip(RoundedCornerShape(20.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                 .clickable { expanded = true }
+                .semantics { contentDescription = "$label track: $selectedName" }
+                .heightIn(min = 48.dp)
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Icon(icon, contentDescription = label, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(text = "$label: $selectedName", style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(text = selectedName, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             tracks.forEach { track ->
@@ -1706,15 +1750,23 @@ private fun PlayerSettingsSheet(
     onToggleAudioBoost: () -> Unit,
     onAdjustSubtitleOffset: (Long) -> Unit,
     onSwitchEngine: (String) -> Unit,
+    showSettings: Boolean,
+    showLoop: Boolean,
+    onLoop: (Boolean) -> Unit,
+    onStop: () -> Unit,
+    showAddSubtitle: Boolean,
+    onAddSubtitle: () -> Unit,
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
+        RemoteDialogVolumeKeys()
         Column(
             modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
             Text("Player settings", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
 
+            if (showSettings) {
             if (settings.qualityAvailable && videoTracks.count { it.id != "auto" } > 1) {
                 SettingRow("Quality") {
                     ChipGroup(
@@ -1753,6 +1805,16 @@ private fun PlayerSettingsSheet(
             SettingRow("Player engine") {
                 ChipGroup(options = listOf("ExoPlayer" to "exo", "MPV" to "mpv"), selectedKey = settings.engine, onSelect = onSwitchEngine)
             }
+            }
+            if (showLoop) {
+                Text("Loop · TV state unavailable", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { onLoop(true) }) { Text("Enable loop") }
+                    OutlinedButton(onClick = { onLoop(false) }) { Text("Disable loop") }
+                }
+            }
+            if (showAddSubtitle) TextButton(onClick = onAddSubtitle) { Text("Add subtitle") }
+            Button(onClick = onStop) { Text("Stop playback") }
 
         }
     }
@@ -1809,7 +1871,7 @@ private fun AddSubtitleDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add subtitle") },
+        title = { RemoteDialogVolumeKeys(); Text("Add subtitle") },
         text = {
             Column(modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
                 SubtitleSourceTabs(sources = sources, selected = source, onSelect = { source = it })
@@ -1925,7 +1987,7 @@ private val LANG_TOKENS: Map<String, String> = buildMap {
     add("Slovenian", "slovenian", "sl", "slv")
     add("Indonesian", "indonesian", "id", "ind")
     add("Hebrew", "hebrew", "he", "heb")
-    add("Finnish", "finish", "fi", "fin")
+    add("Finnish", "finnish", "fi", "fin")
     add("Serbian", "serbian", "sr", "srp")
     add("Croatian", "croatian", "hr", "hrv")
     add("Norwegian", "norwegian", "no", "nor")
@@ -1935,7 +1997,7 @@ private val LANG_TOKENS: Map<String, String> = buildMap {
     add("Persian", "persian", "farsi", "fa", "per", "fas")
 }
 
-private fun languageOf(segment: String): String? = LANG_TOKENS[segment.trim().lowercase()]
+internal fun languageOf(segment: String): String? = LANG_TOKENS[segment.trim().lowercase()]
 
 private fun classifySub(t: MediaTrack): SubInfo {
     if (t.id.lowercase() in subtitleOffIds) return SubInfo(OFF_KEY, "Off", "Off")
@@ -1997,6 +2059,7 @@ private fun SubtitlesBottomSheet(
         containerColor = MaterialTheme.colorScheme.surface,
         dragHandle = { BottomSheetDefaults.DragHandle() }
     ) {
+        RemoteDialogVolumeKeys()
         Column(
             modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 24.dp)
         ) {

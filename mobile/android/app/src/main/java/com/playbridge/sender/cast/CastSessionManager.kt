@@ -220,6 +220,9 @@ class CastSessionManager(
     private val _activeExternalDevice = MutableStateFlow<TvDevice?>(null)
     val activeExternalDevice: StateFlow<TvDevice?> = _activeExternalDevice.asStateFlow()
 
+    private val _externalControlFailureVersion = MutableStateFlow(0L)
+    val externalControlFailureVersion: StateFlow<Long> = _externalControlFailureVersion.asStateFlow()
+
     private val _externalStatus = MutableStateFlow<PlaybackStatus?>(null)
     val externalStatus: StateFlow<PlaybackStatus?> = _externalStatus.asStateFlow()
 
@@ -1362,9 +1365,15 @@ class CastSessionManager(
 
     private fun controlExternal(operation: String, block: suspend (CastTarget) -> Unit) {
         val target = _externalTarget.value ?: return
+        val generation = externalLoadGeneration
         scope.launch {
             suspendRunCatchingLogged(TAG, "${target.kind} $operation failed") {
                 block(target)
+            }.onFailure { error ->
+                if (error !is CancellationException && _externalTarget.value === target &&
+                    generation == externalLoadGeneration) {
+                    _externalControlFailureVersion.value++
+                }
             }
         }
     }

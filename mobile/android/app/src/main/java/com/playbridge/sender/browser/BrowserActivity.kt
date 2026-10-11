@@ -220,6 +220,26 @@ fun AnimatedMenuItem(
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 class BrowserActivity : ComponentActivity() {
 
+    private val remoteVolumeKeys = com.playbridge.sender.cast.remote.RemoteVolumeKeyHandler()
+
+    internal fun registerRemoteVolumeKeys(onVolume: (Boolean) -> Unit): () -> Unit =
+        remoteVolumeKeys.register(onVolume)
+
+    internal fun dispatchRemoteVolumeKey(event: android.view.KeyEvent): Boolean =
+        (event.action == android.view.KeyEvent.ACTION_DOWN || event.action == android.view.KeyEvent.ACTION_UP) &&
+            remoteVolumeKeys.handle(
+                event.keyCode,
+                event.action == android.view.KeyEvent.ACTION_DOWN,
+                lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED),
+                repeat = event.repeatCount > 0,
+            )
+
+    // Activity's public override is inherited through androidx.core.ComponentActivity,
+    // whose legacy implementation is marked library-only. The required fallback is super.
+    @android.annotation.SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        dispatchRemoteVolumeKey(event) || super.dispatchKeyEvent(event)
+
     companion object {
         private const val TAG = "BrowserActivity"
     }
